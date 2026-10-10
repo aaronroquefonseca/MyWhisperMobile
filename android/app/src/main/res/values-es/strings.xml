@@ -230,6 +230,7 @@
     <string name="sync_add_addr">Dirección manual, p. ej. 192.168.1.31:42973 (opcional)</string>
     <string name="sync_add_name">Nombre (opcional)</string>
     <string name="sync_add_send">Enviar solicitud</string>
+    <string name="sync_request">Solicitar</string>
     <string name="sync_add_failed">falló: %1$s</string>
 
     <!-- IME -->

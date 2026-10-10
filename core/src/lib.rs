@@ -529,3 +529,101 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeSyncAll
     };
     jstr(&mut env, &out)
 }
+
+// -- dictionary (store-backed, desktop app_dictionary parity) --------
+
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeGetWords(
+    mut env: JNIEnv,
+    _cls: JClass,
+) -> jstring {
+    let out = with_engine(|e| e.words_json(), || "[]".to_string());
+    jstr(&mut env, &out)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeAddWord(
+    mut env: JNIEnv,
+    _cls: JClass,
+    word: JString,
+) -> jstring {
+    let out = (|| -> String {
+        let w = get_string(&mut env, &word).unwrap_or_default();
+        with_engine(
+            |e| match e.add_word(&w) {
+                Ok(()) => ok_json(serde_json::Value::Null),
+                Err(err) => err_json(err),
+            },
+            || err_json("engine not open"),
+        )
+    })();
+    jstr(&mut env, &out)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeDeleteWord(
+    mut env: JNIEnv,
+    _cls: JClass,
+    word: JString,
+) -> jstring {
+    let out = (|| -> String {
+        let w = get_string(&mut env, &word).unwrap_or_default();
+        with_engine(
+            |e| match e.delete_word(&w) {
+                Ok(()) => ok_json(serde_json::Value::Null),
+                Err(err) => err_json(err),
+            },
+            || err_json("engine not open"),
+        )
+    })();
+    jstr(&mut env, &out)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeGetSnippets(
+    mut env: JNIEnv,
+    _cls: JClass,
+) -> jstring {
+    let out = with_engine(|e| e.snippets_json(), || "[]".to_string());
+    jstr(&mut env, &out)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativePutSnippet(
+    mut env: JNIEnv,
+    _cls: JClass,
+    trigger: JString,
+    replacement: JString,
+) -> jstring {
+    let out = (|| -> String {
+        let t = get_string(&mut env, &trigger).unwrap_or_default();
+        let r = get_string(&mut env, &replacement).unwrap_or_default();
+        with_engine(
+            |e| match e.put_snippet(&t, &r) {
+                Ok(()) => ok_json(serde_json::Value::Null),
+                Err(err) => err_json(err),
+            },
+            || err_json("engine not open"),
+        )
+    })();
+    jstr(&mut env, &out)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeDeleteSnippet(
+    mut env: JNIEnv,
+    _cls: JClass,
+    trigger: JString,
+) -> jstring {
+    let out = (|| -> String {
+        let t = get_string(&mut env, &trigger).unwrap_or_default();
+        with_engine(
+            |e| match e.delete_snippet(&t) {
+                Ok(()) => ok_json(serde_json::Value::Null),
+                Err(err) => err_json(err),
+            },
+            || err_json("engine not open"),
+        )
+    })();
+    jstr(&mut env, &out)
+}

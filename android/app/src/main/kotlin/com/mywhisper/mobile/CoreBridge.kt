@@ -38,6 +38,12 @@ object CoreBridge {
     @JvmStatic external fun nativeSyncAllNow(): String
     @JvmStatic external fun nativeDisplayName(): String
     @JvmStatic external fun nativeSyncAdd(nodeId: String, address: String, name: String): String
+    @JvmStatic external fun nativeGetWords(): String
+    @JvmStatic external fun nativeAddWord(word: String): String
+    @JvmStatic external fun nativeDeleteWord(word: String): String
+    @JvmStatic external fun nativeGetSnippets(): String
+    @JvmStatic external fun nativePutSnippet(trigger: String, replacement: String): String
+    @JvmStatic external fun nativeDeleteSnippet(trigger: String): String
 
     /** Parse `{ok, data?, error?}`. Returns data or throws with error text. */
     fun dataOf(raw: String): Any? {
@@ -128,6 +134,48 @@ object CoreBridge {
 
     fun syncAdd(nodeId: String, address: String, name: String): Result<String> = runCatching {
         dataOf(nativeSyncAdd(nodeId, address, name)) as String
+    }
+
+    /** Store-backed dictionary (desktop app_dictionary parity). */
+    fun getWords(): List<String> {
+        return try {
+            val arr = JSONArray(nativeGetWords())
+            List(arr.length()) { arr.getString(it) }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    fun addWord(word: String): Result<Unit> = runCatching {
+        dataOf(nativeAddWord(word))
+        Unit
+    }
+
+    fun deleteWord(word: String): Result<Unit> = runCatching {
+        dataOf(nativeDeleteWord(word))
+        Unit
+    }
+
+    fun getSnippets(): List<Pair<String, String>> {
+        return try {
+            val arr = JSONArray(nativeGetSnippets())
+            List(arr.length()) {
+                val o = arr.getJSONObject(it)
+                o.getString("trigger") to o.getString("replacement")
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    fun putSnippet(trigger: String, replacement: String): Result<Unit> = runCatching {
+        dataOf(nativePutSnippet(trigger, replacement))
+        Unit
+    }
+
+    fun deleteSnippet(trigger: String): Result<Unit> = runCatching {
+        dataOf(nativeDeleteSnippet(trigger))
+        Unit
     }
 
     fun syncNow(nodeId: String): Result<String> = runCatching {

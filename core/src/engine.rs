@@ -374,6 +374,9 @@ impl Engine {
 
     pub fn finish_utterance(&mut self) -> Result<FinishOutcome, String> {
         let started = self.started_at.take();
+        // Fresh settings every utterance (mirrors desktop deliver):
+        // picks up UI edits and sync merges without a restart.
+        self.settings = self.store.load_settings();
         self.recorder.settle_release(Instant::now());
         let (samples, rate) = self.recorder.finish();
         let duration_secs = started
@@ -401,10 +404,14 @@ impl Engine {
         let Transcript { text: raw, engine } =
             transcribe_chain(&self.settings.stt, &pcm16, &words)?;
 
-        let snippets = self.store.load_snippets().unwrap_or_default();
-        let pairs: Vec<(String, String)> = snippets
+        // Snippets from settings (desktop deliver parity; hydrated
+        // from the store on load, comma-triggers expanded).
+        let pairs: Vec<(String, String)> = self
+            .settings
+            .dictionary
+            .snippets
             .iter()
-            .map(|s| (s.trigger.clone(), s.replacement.clone()))
+            .flat_map(|s| s.triggers().into_iter().map(|t| (t, s.replacement.clone())))
             .collect();
         let expanded = expand_snippets(&raw, &pairs);
         let text = post_process(&expanded, &self.settings.language_models, &words);
@@ -473,5 +480,56 @@ impl Engine {
         self.store
             .purge_old_history(days)
             .map_err(|e| format!("purge: {e}"))
+    }
+
+    // -- dictionary (store-backed, desktop app_dictionary parity) ----
+
+    pub fn words_json(&self) -> String {
+        let words = self.store.load_words().unwrap_or_default();
+        serde_json::to_string(&words).unwrap_or_else(|_| "[]".to_string())
+    }
+
+    pub fn add_word(&self, word: &str) -> Result<(), String> {
+        let word = word.trim();
+        if word.is_empty() {
+            return Err("empty word".to_string());
+        }
+        self.store
+            .upsert_word(word, &self.node_id)
+            .map_err(|e| format!("add word: {e}"))
+    }
+
+    pub fn delete_word(&self, word: &str) -> Result<(), String> {
+        self.store
+            .delete_word(word, &self.node_id)
+            .map_err(|e| format!("delete word: {e}"))
+    }
+
+    pub fn snippets_json(&self) -> String {
+        let snippets = self.store.load_snippets().unwrap_or_default();
+        let mapped: Vec<serde_json::Value> = snippets
+            .iter()
+            .map(|s| {
+                serde_json::json!({
+                    "trigger": s.trigger, "replacement": s.replacement,
+                })
+            })
+            .collect();
+        serde_json::to_string(&mapped).unwrap_or_else(|_| "[]".to_string())
+    }
+
+    pub fn put_snippet(&self, trigger: &str, replacement: &str) -> Result<(), String> {
+        if trigger.trim().is_empty() || replacement.trim().is_empty() {
+            return Err("trigger and replacement are required".to_string());
+        }
+        self.store
+            .upsert_snippet(trigger.trim(), replacement, &self.node_id)
+            .map_err(|e| format!("save snippet: {e}"))
+    }
+
+    pub fn delete_snippet(&self, trigger: &str) -> Result<(), String> {
+        self.store
+            .delete_snippet(trigger, &self.node_id)
+            .map_err(|e| format!("delete snippet: {e}"))
     }
 }

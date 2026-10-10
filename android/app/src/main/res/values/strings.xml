@@ -230,6 +230,7 @@
     <string name="sync_add_addr">Address override, e.g. 192.168.1.31:42973 (optional)</string>
     <string name="sync_add_name">Name (optional)</string>
     <string name="sync_add_send">Send pairing request</string>
+    <string name="sync_request">Request</string>
     <string name="sync_add_failed">failed: %1$s</string>
 
     <!-- IME -->

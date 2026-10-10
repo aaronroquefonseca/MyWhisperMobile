@@ -1157,8 +1157,8 @@ class MainActivity : ComponentActivity() {
         }
         var version by remember { mutableIntStateOf(0) }
         @Suppress("UNUSED_EXPRESSION") version
-        var snipDialog by remember { mutableStateOf<JSONObject?>(null) }
-        var snipIndex by remember { mutableIntStateOf(-1) }
+        var snipDialog by remember { mutableStateOf<Pair<String, String>?>(null) }
+        var snipOld by remember { mutableStateOf<String?>(null) }
         // Words / Snippets segments (desktop Dictionary tabs): one list
         // visible at a time so huge dictionaries stay usable.
         var dictTab by remember { mutableIntStateOf(0) }
@@ -1176,13 +1176,20 @@ class MainActivity : ComponentActivity() {
                 )
             }
             if (dictTab == 0) {
+            // Store-backed (desktop app_dictionary parity): edits hit
+            // the sync tables directly, so transcription and sync see
+            // them without a restart.
+            var words by remember { mutableStateOf(CoreBridge.getWords()) }
+            fun reloadWords() {
+                words = CoreBridge.getWords()
+            }
             Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(12.dp),
             ) {
                 Text(
-                    stringResource(R.string.dict_words_title, entriesOf(dict, "words").length()),
+                    stringResource(R.string.dict_words_title, words.size),
                     style = MaterialTheme.typography.titleMedium,
                 )
                 Text(
@@ -1190,7 +1197,6 @@ class MainActivity : ComponentActivity() {
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Spacer(Modifier.height(8.dp))
-                val arr = entriesOf(dict, "words")
                 var next by remember { mutableStateOf("") }
                 var dup by remember { mutableStateOf(false) }
                 var query by remember { mutableStateOf("") }
@@ -1204,15 +1210,16 @@ class MainActivity : ComponentActivity() {
                     Button(onClick = {
                         val w = next.trim()
                         if (w.isNotBlank()) {
-                            var exists = false
-                            for (i in 0 until arr.length()) {
-                                if (arr.optString(i).equals(w, ignoreCase = true)) exists = true
-                            }
-                            if (exists) {
+                            if (words.any { it.equals(w, ignoreCase = true) }) {
                                 dup = true
                             } else {
-                                arr.put(w); next = ""
-                                dict.put("words", arr); save(); version++
+                                try {
+                                    CoreBridge.addWord(w).getOrThrow()
+                                    next = ""
+                                } catch (e: Exception) {
+                                    toast(e.message ?: "failed")
+                                }
+                                reloadWords(); version++
                             }
                         }
                     }) { Text(stringResource(R.string.action_add)) }
@@ -1232,10 +1239,9 @@ class MainActivity : ComponentActivity() {
                     singleLine = true,
                 )
                 Spacer(Modifier.height(4.dp))
-                val shown = (0 until arr.length())
-                    .map { arr.optString(it) }
+                val shown = words
                     .filter { query.isBlank() || it.contains(query, ignoreCase = true) }
-                if (arr.length() == 0) {
+                if (words.isEmpty()) {
                     Text(
                         stringResource(R.string.dict_no_words),
                         style = MaterialTheme.typography.bodySmall,
@@ -1255,11 +1261,12 @@ class MainActivity : ComponentActivity() {
                             ) {
                                 Text(w, modifier = Modifier.weight(1f))
                                 IconButton(onClick = {
-                                    val n = JSONArray()
-                                    for (j in 0 until arr.length()) {
-                                        if (arr.optString(j) != w) n.put(arr.get(j))
+                                    try {
+                                        CoreBridge.deleteWord(w).getOrThrow()
+                                    } catch (e: Exception) {
+                                        toast(e.message ?: "failed")
                                     }
-                                    dict.put("words", n); save(); version++
+                                    reloadWords(); version++
                                 }) {
                                     Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.action_delete))
                                 }
@@ -1269,13 +1276,17 @@ class MainActivity : ComponentActivity() {
                 }
             }
             } else {
+            var snippets by remember { mutableStateOf(CoreBridge.getSnippets()) }
+            fun reloadSnippets() {
+                snippets = CoreBridge.getSnippets()
+            }
             Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(12.dp),
             ) {
                 Text(
-                    stringResource(R.string.dict_snippets_title, entriesOf(dict, "snippets").length()),
+                    stringResource(R.string.dict_snippets_title, snippets.size),
                     style = MaterialTheme.typography.titleMedium,
                 )
                 Text(
@@ -1283,7 +1294,6 @@ class MainActivity : ComponentActivity() {
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Spacer(Modifier.height(8.dp))
-                val arr = entriesOf(dict, "snippets")
                 var query by remember { mutableStateOf("") }
                 OutlinedTextField(
                     value = query, onValueChange = { query = it },
@@ -1292,14 +1302,13 @@ class MainActivity : ComponentActivity() {
                     singleLine = true,
                 )
                 Spacer(Modifier.height(4.dp))
-                val shown = (0 until arr.length())
-                    .mapNotNull { i -> arr.optJSONObject(i)?.let { i to it } }
-                    .filter { (_, sn) ->
+                val shown = snippets
+                    .filter { (trig, repl) ->
                         query.isBlank() ||
-                            sn.optString("trigger").contains(query, ignoreCase = true) ||
-                            sn.optString("replacement").contains(query, ignoreCase = true)
+                            trig.contains(query, ignoreCase = true) ||
+                            repl.contains(query, ignoreCase = true)
                     }
-                if (arr.length() == 0) {
+                if (snippets.isEmpty()) {
                     Text(stringResource(R.string.dict_no_snippets), style = MaterialTheme.typography.bodySmall)
                     Spacer(Modifier.height(4.dp))
                 } else if (shown.isEmpty()) {
@@ -1310,31 +1319,32 @@ class MainActivity : ComponentActivity() {
                             .fillMaxWidth()
                             .weight(1f),
                     ) {
-                        items(shown, key = { (_, sn) -> sn.optString("trigger") + sn.optString("replacement") }) { (i, sn) ->
+                        items(shown, key = { (trig, repl) -> trig + repl }) { (trig, repl) ->
                             Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth().padding(8.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
                                     Column(modifier = Modifier.weight(1f)) {
-                                        Text(sn.optString("trigger"))
+                                        Text(trig)
                                         Text(
-                                            "→ ${sn.optString("replacement")}",
+                                            "→ $repl",
                                             style = MaterialTheme.typography.bodySmall,
                                         )
                                     }
                                     IconButton(onClick = {
-                                        snipIndex = i
-                                        snipDialog = JSONObject(sn.toString())
+                                        snipOld = trig
+                                        snipDialog = trig to repl
                                     }) {
                                         Icon(Icons.Filled.Edit, contentDescription = stringResource(R.string.action_edit))
                                     }
                                     IconButton(onClick = {
-                                        val n = JSONArray()
-                                        for (j in 0 until arr.length()) {
-                                            if (j != i) n.put(arr.get(j))
+                                        try {
+                                            CoreBridge.deleteSnippet(trig).getOrThrow()
+                                        } catch (e: Exception) {
+                                            toast(e.message ?: "failed")
                                         }
-                                        dict.put("snippets", n); save(); version++
+                                        reloadSnippets(); version++
                                     }) {
                                         Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.action_delete))
                                     }
@@ -1344,22 +1354,23 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 OutlinedButton(onClick = {
-                    snipIndex = -1
-                    snipDialog = JSONObject().put("trigger", "").put("replacement", "")
+                    snipOld = null
+                    snipDialog = "" to ""
                 }) {
                     Icon(Icons.Filled.Add, contentDescription = null)
                     Spacer(Modifier.width(4.dp))
                     Text(stringResource(R.string.dict_add_snippet))
                 }
             }
+            }
         }
-        }
-        snipDialog?.let { d ->
-            var trig by remember { mutableStateOf(d.optString("trigger")) }
-            var repl by remember { mutableStateOf(d.optString("replacement")) }
+        snipDialog?.let { (initTrig, initRepl) ->
+            val isNew = snipOld == null
+            var trig by remember { mutableStateOf(initTrig) }
+            var repl by remember { mutableStateOf(initRepl) }
             AlertDialog(
                 onDismissRequest = { snipDialog = null },
-                title = { Text(if (snipIndex < 0) stringResource(R.string.dict_add_snippet) else stringResource(R.string.dict_edit_snippet)) },
+                title = { Text(if (isNew) stringResource(R.string.dict_add_snippet) else stringResource(R.string.dict_edit_snippet)) },
                 text = {
                     Column {
                         OutlinedTextField(value = trig, onValueChange = { trig = it },
@@ -1373,16 +1384,17 @@ class MainActivity : ComponentActivity() {
                 confirmButton = {
                     TextButton(onClick = {
                         if (trig.isNotBlank() && repl.isNotBlank()) {
-                            val arr = entriesOf(dict, "snippets")
-                            val obj = JSONObject()
-                                .put("trigger", trig.trim()).put("replacement", repl)
-                            if (snipIndex in 0 until arr.length()) {
-                                arr.put(snipIndex, obj)
-                            } else {
-                                arr.put(obj)
+                            try {
+                                // Trigger rename = tombstone old + insert new.
+                                val old = snipOld
+                                if (old != null && old != trig.trim()) {
+                                    CoreBridge.deleteSnippet(old).getOrThrow()
+                                }
+                                CoreBridge.putSnippet(trig, repl).getOrThrow()
+                                version++
+                            } catch (e: Exception) {
+                                toast(e.message ?: "failed")
                             }
-                            dict.put("snippets", arr); save()
-                            version++
                         }
                         snipDialog = null
                     }) { Text(stringResource(R.string.action_save)) }
@@ -2113,10 +2125,31 @@ getString(R.string.sync_running, shown)
                 nearby.forEach { p ->
                     val id = p.optString("nodeId")
                     val nm = p.optString("name").ifEmpty { id.take(12) + "…" }
+                    val addr = p.optJSONArray("discoveredAddrs")?.let { a ->
+                        if (a.length() > 0) a.optString(0) else ""
+                    } ?: ""
                     PeerRow(
                         p,
                         note = notes[id],
-                        onAccept = { acceptPeer(id, nm, { note(id, it) }) { refresh() } },
+                        onRequest = {
+                            workers.execute {
+                                try {
+                                    val msg = CoreBridge.syncAdd(id, addr, nm).getOrThrow()
+                                    runOnUiThread { note(id, msg) }
+                                    // A mutual round means both sides already
+                                    // consented: promote to trusted.
+                                    if (msg.startsWith("synced")) {
+                                        try {
+                                            CoreBridge.syncTrust(id, true).getOrThrow()
+                                        } catch (_: Exception) {
+                                        }
+                                    }
+                                } catch (e: Exception) {
+                                    runOnUiThread { note(id, getString(R.string.sync_add_failed, e.message)) }
+                                }
+                                runOnUiThread { refresh() }
+                            }
+                        },
                     )
                 }
                 Spacer(Modifier.height(4.dp))
@@ -2240,6 +2273,7 @@ getString(R.string.sync_running, shown)
         lastSync: String? = null,
         onSync: (() -> Unit)? = null,
         onAccept: (() -> Unit)? = null,
+        onRequest: (() -> Unit)? = null,
         onRemove: (() -> Unit)? = null,
     ) {
         Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
@@ -2266,6 +2300,7 @@ getString(R.string.sync_running, shown)
                     }
                     onSync?.let { TextButton(onClick = it) { Text(stringResource(R.string.action_sync)) } }
                     onAccept?.let { TextButton(onClick = it) { Text(stringResource(R.string.action_accept)) } }
+                    onRequest?.let { TextButton(onClick = it) { Text(stringResource(R.string.sync_request)) } }
                     onRemove?.let {
                         IconButton(onClick = it) {
                             Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.action_remove))
