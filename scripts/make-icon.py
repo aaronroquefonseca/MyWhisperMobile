@@ -101,13 +101,25 @@ def main():
     assert len(srects) == 4, srects
 
     def rrect(x, y, w, h, r):
+        # Start at the top-edge end so degenerate stadium bars
+        # (w == 2r, zero-length straights) stay anchored: starting
+        # the arc at the outer corner shifts the shape left by r.
+        # Zero-length straights are omitted entirely.
         hw, hh = w - 2 * r, h - 2 * r
-        return (
-            f"M{x:g},{y:g}h{hw:g}a{r:g},{r:g} 0 0,1 {r:g},{r:g}"
-            f"v{hh:g}a{r:g},{r:g} 0 0,1 {-r:g},{r:g}"
-            f"h{-hw:g}a{r:g},{r:g} 0 0,1 {-r:g},{-r:g}"
-            f"v{-hh:g}a{r:g},{r:g} 0 0,1 {r:g},{-r:g}z"
-        )
+        d = f"M{x + r:g},{y:g}"
+        if hw != 0:
+            d += f"h{hw:g}"
+        d += f"a{r:g},{r:g} 0 0,1 {r:g},{r:g}"
+        if hh != 0:
+            d += f"v{hh:g}"
+        d += f"a{r:g},{r:g} 0 0,1 {-r:g},{r:g}"
+        if hw != 0:
+            d += f"h{-hw:g}"
+        d += f"a{r:g},{r:g} 0 0,1 {-r:g},{-r:g}"
+        if hh != 0:
+            d += f"v{-hh:g}"
+        d += f"a{r:g},{r:g} 0 0,1 {r:g},{-r:g}z"
+        return d
 
     s2 = 20.0 / (1058.0 - 195.0)
     dx2 = 12 - 626.5 * s2
