@@ -129,6 +129,7 @@ class OverlayService : Service(), Dictation.Listener {
                 FloatState.onChange = { applyVisibility() }
                 applyVisibility()
                 return START_STICKY
+            }
         }
     }
 
