@@ -8,8 +8,8 @@ import android.view.View
 
 /**
  * Live mic-level bar visualizer for the floating pill (desktop
- * Visualizer look): white rounded bars driven by real capture peaks,
- * decaying smoothly when quiet.
+ * Visualizer defaults: 11 bars, 3px wide, 3px gap, 18px lanes,
+ * 4px resting height, white). Driven by real capture peaks.
  */
 class BarsView @JvmOverloads constructor(
     context: Context,
@@ -38,16 +38,16 @@ class BarsView @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+        val d = resources.displayMetrics.density
+        val bw = 3f * d
+        val gap = 3f * d
         val n = bars.size
-        val gap = 3f * resources.displayMetrics.density
-        val bw = (width - gap * (n - 1)) / n
         val mid = height / 2f
-        val maxHalf = height / 2f - 2f
+        val laneMax = 18f * d
+        val minHalf = 2f * d
         for (i in 0 until n) {
-            // Recency-weighted: newest bar full, older decayed (matches
-            // the push/decay model so motion flows left-to-right).
             val v = bars[i].coerceIn(0f, 1f)
-            val h = (4f * resources.displayMetrics.density).coerceAtLeast(v * maxHalf)
+            val h = (minHalf + v * (laneMax - minHalf)).coerceAtMost(mid - 1f)
             val x = i * (bw + gap)
             canvas.drawRoundRect(
                 x, mid - h, x + bw, mid + h,
@@ -57,7 +57,7 @@ class BarsView @JvmOverloads constructor(
     }
 
     companion object {
-        private const val BAR_COUNT = 24
+        private const val BAR_COUNT = 11
         private const val DECAY = 0.82f
     }
 }

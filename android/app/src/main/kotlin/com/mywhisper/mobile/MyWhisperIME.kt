@@ -164,16 +164,13 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
                 it.setMargins(dp(8), dp(4), dp(8), 0)
             }
         }
-        // Transparent expander: the window grows upward, the app
-        // behind stays visible.
-        root.addView(View(this).apply {
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
-        })
-        // Floating pill (desktop voice-pill look): dark rounded box,
-        // red rec dot, Listening label, live level bars. Only while
-        // recording.
-        val pillBg = 0xE81C1C22.toInt()
+        // No expanding spacer: the pill keeps its own measured
+        // slot (INVISIBLE idle) so the window never resizes.
+        // Floating pill (desktop compact/Listening look): dark
+        // rounded box with bars only — no buttons, no status dot.
+        // The container stays so future states (live text, etc.)
+        // can extend it.
+        val pillBg = 0xEB1C1C22.toInt()
         val pill = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -185,32 +182,13 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
             }
             setPadding(dp(14), dp(10), dp(14), dp(10))
             elevation = dp(6).toFloat()
-            visibility = View.GONE
-        }
-        val dot = View(this).apply {
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(0xFFFF5F57.toInt())
-            }
-            layoutParams = LinearLayout.LayoutParams(dp(9), dp(9)).also {
-                it.marginEnd = dp(10)
-            }
-        }
-        val listening = TextView(this).apply {
-            text = getString(R.string.ime_listening)
-            setTextColor(Color.WHITE)
-            textSize = 14f
-            setTypeface(typeface, android.graphics.Typeface.BOLD)
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).also { it.marginEnd = dp(12) }
+            // INVISIBLE (not GONE): the slot stays measured so the
+            // window never resizes when the pill appears.
+            visibility = View.INVISIBLE
         }
         val bars = BarsView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(dp(120), dp(28))
+            layoutParams = LinearLayout.LayoutParams(dp(66), dp(40))
         }
-        pill.addView(dot)
-        pill.addView(listening)
         pill.addView(bars)
         pillBox = pill
         barsView = bars
@@ -537,7 +515,7 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
             barsView?.clear()
             if (pill.visibility == View.VISIBLE) {
                 pill.animate().alpha(0f).setDuration(120).withEndAction {
-                    pill.visibility = View.GONE
+                    pill.visibility = View.INVISIBLE
                     pill.alpha = 1f
                 }.start()
             }
