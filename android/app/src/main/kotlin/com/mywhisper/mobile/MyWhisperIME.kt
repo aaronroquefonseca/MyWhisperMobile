@@ -34,6 +34,8 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
     private var micButton: ImageButton? = null
     private var hintText: TextView? = null
     private var spinner: ProgressBar? = null
+    private var pillBox: LinearLayout? = null
+    private var barsView: BarsView? = null
 
     private var lastState = Dictation.State.IDLE
     private var lastToggled = false
@@ -57,6 +59,12 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
             releaseDelayMs = { readReleaseDelayMs() },
         )
         dictation.listener = this
+        dictation.onLevel = { peak ->
+            try {
+                barsView?.post { barsView?.pushLevel(peak) }
+            } catch (_: Exception) {
+            }
+        }
     }
 
     override fun onDestroy() {
@@ -145,8 +153,75 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            // Opaque bar, rounded top corners only, flush with the
-            // screen bottom.
+            // Transparent shell: only the pill and the bar below are
+            // opaque, so the app shows through around them.
+            setBackgroundColor(Color.TRANSPARENT)
+            gravity = Gravity.CENTER_HORIZONTAL
+            layoutParams = android.widget.FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).also {
+                it.setMargins(dp(8), dp(4), dp(8), 0)
+            }
+        }
+        // Transparent expander: the window grows upward, the app
+        // behind stays visible.
+        root.addView(View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+        })
+        // Floating pill (desktop voice-pill look): dark rounded box,
+        // red rec dot, Listening label, live level bars. Only while
+        // recording.
+        val pillBg = 0xE81C1C22.toInt()
+        val pill = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                setColor(pillBg)
+                setStroke(dp(1), 0x1FFFFFFF)
+                cornerRadius = dp(16).toFloat()
+            }
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+            elevation = dp(6).toFloat()
+            visibility = View.GONE
+        }
+        val dot = View(this).apply {
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(0xFFFF5F57.toInt())
+            }
+            layoutParams = LinearLayout.LayoutParams(dp(9), dp(9)).also {
+                it.marginEnd = dp(10)
+            }
+        }
+        val listening = TextView(this).apply {
+            text = getString(R.string.ime_listening)
+            setTextColor(Color.WHITE)
+            textSize = 14f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).also { it.marginEnd = dp(12) }
+        }
+        val bars = BarsView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(120), dp(28))
+        }
+        pill.addView(dot)
+        pill.addView(listening)
+        pill.addView(bars)
+        pillBox = pill
+        barsView = bars
+        root.addView(pill, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+        ).also { it.bottomMargin = dp(10) })
+        // Opaque bar, rounded top corners only, flush with the
+        // screen bottom.
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
                 setColor(barBg)
@@ -158,15 +233,12 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
             }
             setPadding(dp(12), dp(10), dp(12), dp(14))
             gravity = Gravity.CENTER_HORIZONTAL
-            layoutParams = android.widget.FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).also {
-                it.setMargins(dp(8), dp(4), dp(8), 0)
-            }
         }
+        root.addView(bar, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT))
         // Hairline divider on top.
-        root.addView(View(this).apply {
+        bar.addView(View(this).apply {
             setBackgroundColor(if (night) 0xFF3A3A40.toInt() else 0xFFD9D4E5.toInt())
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(1))
@@ -288,7 +360,7 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
         row.addView(leftBox)
         row.addView(mic, LinearLayout.LayoutParams(dp(84), dp(84)))
         row.addView(rightBox)
-        root.addView(row, LinearLayout.LayoutParams(
+        bar.addView(row, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
         val status = LinearLayout(this).apply {
@@ -311,7 +383,7 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
         hintText = hint
         status.addView(spin)
         status.addView(hint)
-        root.addView(status)
+        bar.addView(status)
 
         refresh()
         return root
@@ -452,6 +524,26 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
         postRefresh()
     }
 
+    /** Floating pill: visible only while recording, bars live. */
+    private fun updatePill(recording: Boolean) {
+        val pill = pillBox ?: return
+        if (recording) {
+            if (pill.visibility != View.VISIBLE) {
+                pill.alpha = 0f
+                pill.visibility = View.VISIBLE
+                pill.animate().alpha(1f).setDuration(220).start()
+            }
+        } else {
+            barsView?.clear()
+            if (pill.visibility == View.VISIBLE) {
+                pill.animate().alpha(0f).setDuration(120).withEndAction {
+                    pill.visibility = View.GONE
+                    pill.alpha = 1f
+                }.start()
+            }
+        }
+    }
+
     private fun postRefresh() {
         try {
             micButton?.post { refresh() }
@@ -463,6 +555,7 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
         micButton?.setBackground(micBackground(lastState == Dictation.State.RECORDING))
         spinner?.visibility =
             if (lastState == Dictation.State.WORKING) View.VISIBLE else View.GONE
+        updatePill(lastState == Dictation.State.RECORDING)
         hintText?.text = when (lastState) {
             // While recording the escape hatch is sliding down, not a
             // button you cannot reach mid-hold.

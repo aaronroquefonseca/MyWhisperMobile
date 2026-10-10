@@ -26,6 +26,8 @@ class Dictation(
     }
 
     var listener: Listener? = null
+    /** Live mic peaks for the pill visualizer (capture thread). */
+    var onLevel: ((Float) -> Unit)? = null
     private val workers = Executors.newSingleThreadExecutor()
 
     private var state = State.IDLE
@@ -67,6 +69,7 @@ class Dictation(
                 }
             },
             onError = { listener?.onError(it); hardStop() },
+            onLevel = { onLevel?.invoke(it) },
         )
         if (!cap.start()) {
             return

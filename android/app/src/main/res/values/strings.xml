@@ -248,6 +248,7 @@
     <string name="ime_rec_smart">recording — release to stop, quick tap toggles</string>
     <string name="ime_working">transcribing…</string>
     <string name="ime_mic">Dictate</string>
+    <string name="ime_listening">Listening</string>
     <string name="ime_backspace">Backspace</string>
     <string name="ime_slide_cancel">↓ slide down to cancel · release to send</string>
     <string name="ime_cancelled">Cancelled</string>

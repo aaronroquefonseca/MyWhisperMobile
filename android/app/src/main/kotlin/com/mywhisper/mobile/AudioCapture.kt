@@ -14,6 +14,8 @@ class AudioCapture(
     private val sampleRate: Int = 16_000,
     var onPcm: ((ShortArray, Int) -> Unit)? = null,
     var onError: ((String) -> Unit)? = null,
+    /** 0..1 peak per read, for the pill visualizer. */
+    var onLevel: ((Float) -> Unit)? = null,
 ) {
     private var record: AudioRecord? = null
     private var thread: Thread? = null
@@ -61,6 +63,15 @@ class AudioCapture(
                     if (n > 0) {
                         try {
                             onPcm?.invoke(buf, n)
+                        } catch (_: Exception) {
+                        }
+                        try {
+                            var peak = 0
+                            for (i in 0 until n) {
+                                val a = kotlin.math.abs(buf[i].toInt())
+                                if (a > peak) peak = a
+                            }
+                            onLevel?.invoke((peak / 32768f).coerceIn(0f, 1f))
                         } catch (_: Exception) {
                         }
                     } else if (n < 0) {
