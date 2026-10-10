@@ -87,6 +87,9 @@
     <string name="stt_language">Language</string>
     <string name="stt_vad">Voice activity trim</string>
     <string name="stt_vad_gate">VAD gate: %1$.2f</string>
+    <string name="stt_delay">Extra listening delay</string>
+    <string name="stt_delay_sub">Keeps recording briefly after release so final sounds aren\'t cut.</string>
+    <string name="stt_delay_off">Off</string>
     <string name="stt_save_capture">Save capture</string>
     <string name="stt_apikey_note">Bearer token for reverse-proxy setups. Empty means no token.</string>
     <string name="stt_name">Name</string>

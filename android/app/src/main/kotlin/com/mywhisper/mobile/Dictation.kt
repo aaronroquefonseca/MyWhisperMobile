@@ -15,6 +15,7 @@ import java.util.concurrent.Executors
 class Dictation(
     private val smartTapMs: () -> Long = { 150L },
     private val mode: () -> String = { "Smart" },
+    private val releaseDelayMs: () -> Long = { 0L },
 ) {
     enum class State { IDLE, RECORDING, WORKING }
 
@@ -29,8 +30,9 @@ class Dictation(
 
     private var state = State.IDLE
     private var toggled = false
+    private var secondDown = false
     private var downAt = 0L
-    private var capture: AudioCapture? = null
+    @Volatile private var capture: AudioCapture? = null
 
     val current: State get() = state
 
@@ -44,8 +46,12 @@ class Dictation(
             State.WORKING -> return
             State.RECORDING -> {
                 if (toggled) {
-                    // Second press while toggled-on: finish.
-                    finish()
+                    // Second press while toggled-on: arm the stop,
+                    // decided on release (quick tap finishes, slide
+                    // cancels, hold+release finishes). Never finish
+                    // on DOWN so slide-to-cancel always gets a chance.
+                    secondDown = true
+                    downAt = System.currentTimeMillis()
                 }
                 return
             }
@@ -72,7 +78,15 @@ class Dictation(
     }
 
     fun pressUp() {
-        if (state != State.RECORDING || toggled) return
+        if (state != State.RECORDING) return
+        if (secondDown) {
+            // Stop press released (slide-cancel preempts via cancel()
+            // flipping to IDLE above).
+            secondDown = false
+            finish()
+            return
+        }
+        if (toggled) return
         val m = try {
             mode()
         } catch (_: Exception) {
@@ -121,19 +135,42 @@ class Dictation(
         }
         capture = null
         toggled = false
+        secondDown = false
         set(State.IDLE)
     }
 
     private fun finish() {
         if (state != State.RECORDING) return
-        try {
-            capture?.stop()
+        // Extra listening delay (desktop release tail). Runs on the
+        // worker so release stays responsive; the mic keeps capturing
+        // meanwhile and a slide-cancel during the tail still wins.
+        val tail = try {
+            releaseDelayMs().coerceIn(0L, 2000L)
         } catch (_: Exception) {
+            0L
         }
-        capture = null
         toggled = false
+        secondDown = false
         set(State.WORKING)
         workers.execute {
+            if (tail > 0) {
+                try {
+                    Thread.sleep(tail)
+                } catch (_: Exception) {
+                }
+            }
+            // Cancelled while tailing (cancel() nulls capture):
+            // drop without transcribing.
+            val cap = capture
+            if (cap == null) {
+                set(State.IDLE)
+                return@execute
+            }
+            try {
+                capture?.stop()
+            } catch (_: Exception) {
+            }
+            capture = null
             try {
                 val (text, _) = CoreBridge.finishUtterance()
                 if (text.isBlank()) {

@@ -87,6 +87,9 @@
     <string name="stt_language">Idioma</string>
     <string name="stt_vad">Recorte por actividad de voz</string>
     <string name="stt_vad_gate">Umbral VAD: %1$.2f</string>
+    <string name="stt_delay">Retraso extra de escucha</string>
+    <string name="stt_delay_sub">Sigue grabando un momento tras soltar para no cortar el final.</string>
+    <string name="stt_delay_off">Apagado</string>
     <string name="stt_save_capture">Guardar captura</string>
     <string name="stt_apikey_note">Token Bearer para proxies inversos. Vacío significa sin token.</string>
     <string name="stt_name">Nombre</string>

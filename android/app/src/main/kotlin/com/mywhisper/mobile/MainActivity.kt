@@ -683,6 +683,27 @@ class MainActivity : ComponentActivity() {
                     valueRange = 0f..0.5f,
                 )
                 Spacer(Modifier.height(4.dp))
+                val delayOptions = listOf(0L to getString(R.string.stt_delay_off), 100L to "100 ms", 250L to "250 ms", 500L to "500 ms", 1000L to "1 s")
+                var delayMs by remember { mutableStateOf(stt.optLong("release_delay_ms", 0L)) }
+                Text(stringResource(R.string.stt_delay), style = MaterialTheme.typography.bodyMedium)
+                Text(stringResource(R.string.stt_delay_sub), style = MaterialTheme.typography.bodySmall)
+                var delayOpen by remember { mutableStateOf(false) }
+                OutlinedButton(onClick = { delayOpen = true }, modifier = Modifier.fillMaxWidth()) {
+                    Text(delayOptions.firstOrNull { it.first == delayMs }?.second ?: "$delayMs ms")
+                }
+                DropdownMenu(expanded = delayOpen, onDismissRequest = { delayOpen = false }) {
+                    delayOptions.forEach { (ms, label) ->
+                        DropdownMenuItem(
+                            text = { Text(label) },
+                            onClick = {
+                                delayOpen = false
+                                delayMs = ms
+                                stt.put("release_delay_ms", ms); save(); version++
+                            },
+                        )
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
                 Button(onClick = {
                     stt.put("language", lang.ifBlank { "auto" }); save()
                 }) { Text(stringResource(R.string.stt_save_capture)) }

@@ -54,6 +54,7 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
         dictation = Dictation(
             smartTapMs = { readSmartTapMs() },
             mode = { readMicMode() },
+            releaseDelayMs = { readReleaseDelayMs() },
         )
         dictation.listener = this
     }
@@ -84,12 +85,36 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
             "Smart"
         }
     }
+    private fun readReleaseDelayMs(): Long {
+        return try {
+            val s = CoreBridge.getSettings().getOrThrow()
+            s.optJSONObject("stt")?.optLong("release_delay_ms", 0L) ?: 0L
+        } catch (_: Exception) {
+            0L
+        }
+    }
+
     private fun readSmartTapMs(): Long {
         return try {
             val s = CoreBridge.getSettings().getOrThrow()
             s.optJSONObject("hotkeys")?.optLong("smart_tap_ms", 150L) ?: 150L
         } catch (_: Exception) {
             150L
+        }
+    }
+
+    private fun isNight(): Boolean =
+        (resources.configuration.uiMode
+            and android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+            android.content.res.Configuration.UI_MODE_NIGHT_YES
+
+    /** Paint the navigation bar like the bar so no white strip shows. */
+    private fun applySystemBars() {
+        try {
+            val night = isNight()
+            window?.window?.navigationBarColor =
+                if (night) 0xFF1E1E22.toInt() else 0xFFF2F0F7.toInt()
+        } catch (_: Exception) {
         }
     }
 
@@ -101,6 +126,7 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
     @SuppressLint("ClickableViewAccessibility")
     override fun onCreateInputView(): View {
         android.util.Log.i("MyWhisperIME", "ime.onCreateInputView")
+        applySystemBars()
         // Usage flag: the config app cannot read the current IME on
         // targetSdk 34+, so the IME reports itself.
         try {
@@ -159,9 +185,19 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
         ) = ImageButton(this).apply {
             setImageResource(iconRes)
             contentDescription = description
-            setColorFilter(barFg)
-            setBackground(sideBackground(barBg, night))
-            setPadding(dp(12), dp(12), dp(12), dp(12))
+            // Transparent with ripple: reads as keyboard chrome, not
+            // muddy pills.
+            setColorFilter(barDim)
+            val ripple = android.util.TypedValue()
+            if (theme.resolveAttribute(
+                    android.R.attr.selectableItemBackgroundBorderless, ripple, true,
+                )
+            ) {
+                setBackgroundResource(ripple.resourceId)
+            } else {
+                setBackgroundColor(Color.TRANSPARENT)
+            }
+            setPadding(dp(10), dp(10), dp(10), dp(10))
             setOnClickListener { onClick() }
         }
         val switchBtn = iconButton(
@@ -230,16 +266,28 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
         }
         micButton = mic
 
-        val spacerL = View(this).apply { layoutParams = LinearLayout.LayoutParams(0, 1, 1f) }
-        val spacerR = View(this).apply { layoutParams = LinearLayout.LayoutParams(0, 1, 1f) }
-        row.addView(switchBtn, LinearLayout.LayoutParams(dp(52), dp(52)))
-        row.addView(spacerL)
+        // Balanced sides so the mic stays centered: one flexible box
+        // per side, mic fixed in the middle.
+        val leftBox = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.START or Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val rightBox = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.END or Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val sideParams = LinearLayout.LayoutParams(dp(48), dp(48))
+        leftBox.addView(switchBtn, sideParams)
+        val rightInner = LinearLayout.LayoutParams(dp(48), dp(48)).also {
+            it.leftMargin = dp(4)
+        }
+        rightBox.addView(backBtn, sideParams)
+        rightBox.addView(settingsBtn, rightInner)
+        row.addView(leftBox)
         row.addView(mic, LinearLayout.LayoutParams(dp(84), dp(84)))
-        row.addView(spacerR)
-        row.addView(backBtn, LinearLayout.LayoutParams(dp(52), dp(52)))
-        row.addView(settingsBtn, LinearLayout.LayoutParams(dp(52), dp(52)).also {
-            it.leftMargin = dp(8)
-        })
+        row.addView(rightBox)
         root.addView(row, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
@@ -269,9 +317,23 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
         return root
     }
 
-    /** "Cancelled" flash after a slide-down cancel. */
+    /** "Cancelled" flash + haptic tick after a slide-down cancel. */
     private fun showCancelled() {
         lastNote = getString(R.string.ime_cancelled)
+        try {
+            val vib = if (android.os.Build.VERSION.SDK_INT >= 31) {
+                getSystemService(android.os.VibratorManager::class.java)?.defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                getSystemService(VIBRATOR_SERVICE) as? android.os.Vibrator
+            }
+            vib?.vibrate(
+                android.os.VibrationEffect.createOneShot(
+                    60, android.os.VibrationEffect.DEFAULT_AMPLITUDE,
+                ),
+            )
+        } catch (_: Exception) {
+        }
         postRefresh()
     }
 
@@ -322,6 +384,7 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
     ) {
         android.util.Log.i("MyWhisperIME", "ime.onStartInputView")
         super.onStartInputView(info, restarting)
+        applySystemBars()
     }
 
     override fun onEvaluateInputViewShown(): Boolean {

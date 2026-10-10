@@ -471,6 +471,11 @@ pub struct SttSettings {
     pub language: String,
     pub vad_enabled: bool,
     pub vad_threshold: f32,
+    /// ANDROID PORT: extra listening delay after release (ms) before
+    /// the capture stops, mirroring the desktop release tail: keeps
+    /// recording briefly so the final sounds are not cut off.
+    #[serde(default)]
+    pub release_delay_ms: u64,
     /// Speculative streaming for non-streaming engines (whisper):
     /// background passes + local agreement while held, tail decode
     /// on release. Off by default; opt-in latency trade.
@@ -540,6 +545,7 @@ impl Default for SttSettings {
             language: "auto".to_string(),
             vad_enabled: false,
             vad_threshold: 0.1,
+            release_delay_ms: 0,
             spec_enabled: false,
             spec_update_secs: 2.0,
             spec_overlap_secs: 1.0,
