@@ -1,0 +1,332 @@
+//! Sync engine manager: listener + mDNS + periodic loops.
+//!
+//! Thin lifecycle wrapper over the verbatim-ported `net.rs` (same
+//! Noise_XX protocol as desktop, so phone and desktop sync directly).
+//! One manager per process; the config app and the IME each run their
+//! own (same `state.db`, same `device.key` identity).
+//!
+//! Android note: mDNS needs a MulticastLock — the Kotlin side
+//! acquires it before `nativeSyncStart` (see Sync UI).
+
+use crate::device::DeviceIdentity;
+use crate::net;
+use crate::store::Store;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+
+pub struct SyncManager {
+    creds: crate::device::SyncCreds,
+    db_path: PathBuf,
+    stop: Arc<AtomicBool>,
+    mdns: Option<net::MdnsHandles>,
+    discovered: Arc<Mutex<HashMap<String, net::Discovered>>>,
+    port: u16,
+    reports: Arc<Mutex<Vec<String>>>,
+}
+
+static SYNC: OnceLock<Mutex<Option<SyncManager>>> = OnceLock::new();
+
+fn slot() -> &'static Mutex<Option<SyncManager>> {
+    SYNC.get_or_init(|| Mutex::new(None))
+}
+
+fn push_report(reports: &Arc<Mutex<Vec<String>>>, line: String) {
+    let mut r = reports.lock().unwrap();
+    r.push(line);
+    while r.len() > 20 {
+        r.remove(0);
+    }
+}
+
+/// Start listener + mDNS + loops from the stored sync settings.
+/// Idempotent: stops the previous manager first.
+pub fn sync_start(dir: PathBuf) -> Result<String, String> {
+    sync_stop();
+    let db_path = dir.join("state.db");
+    let store = Store::open(&db_path).map_err(|e| format!("open db: {e}"))?;
+    let settings = store.load_settings();
+    if !settings.sync.enabled {
+        return Err("sync is disabled in settings".to_string());
+    }
+    let identity = DeviceIdentity::load_or_create(&dir.join("device.key"))
+        .map_err(|e| format!("identity: {e}"))?;
+    let creds = identity.creds();
+    let name = if settings.sync.device_name.trim().is_empty() {
+        crate::device::default_device_name(&identity.node_id)
+    } else {
+        settings.sync.device_name.clone()
+    };
+    let port = settings.sync.listen_port;
+    let stop = Arc::new(AtomicBool::new(false));
+    let discovered: Arc<Mutex<HashMap<String, net::Discovered>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+    let reports: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+
+    // Listener (port 0 = disabled).
+    let listener = net::listen(port).map_err(|e| format!("listen {port}: {e}"))?;
+    if let Some(l) = listener {
+        let db = db_path.clone();
+        let c = creds.clone();
+        let n = name.clone();
+        let s = stop.clone();
+        let r = reports.clone();
+        let addrs = vec![];
+        std::thread::spawn(move || {
+            net::serve(l, db, c, n, addrs, &s);
+            push_report(&r, "listener stopped".to_string());
+        });
+        push_report(&reports, format!("listening on port {port}"));
+    } else {
+        push_report(&reports, "listening disabled (port 0)".to_string());
+    }
+
+    // mDNS advertise + browse.
+    match net::start_mdns(
+        &identity.node_id,
+        &name,
+        port,
+        discovered.clone(),
+        settings.sync.advertise,
+    ) {
+        Ok(handles) => {
+            push_report(&reports, "mDNS discovery on".to_string());
+            let mgr = SyncManager {
+                creds,
+                db_path,
+                stop,
+                mdns: Some(handles),
+                discovered,
+                port,
+                reports,
+            };
+            mgr.spawn_loops(&name);
+            let summary = format!("sync on (port {port})");
+            *slot().lock().unwrap() = Some(mgr);
+            Ok(summary)
+        }
+        Err(e) => Err(format!("mDNS: {e}")),
+    }
+}
+
+impl SyncManager {
+    fn spawn_loops(&self, name: &str) {
+        // Periodic trusted-peer rounds (60s, desktop cadence).
+        {
+            let db = self.db_path.clone();
+            let c = self.creds.clone();
+            let s = self.stop.clone();
+            let r = self.reports.clone();
+            std::thread::spawn(move || {
+                net::auto_sync_loop(db, c, s.clone());
+                let _ = s;
+                push_report(&r, "auto-sync stopped".to_string());
+            });
+            let _ = name;
+        }
+        // Sync when a trusted peer appears on the LAN.
+        net::watch_discovered(
+            self.db_path.clone(),
+            self.creds.clone(),
+            self.discovered.clone(),
+            self.stop.clone(),
+        );
+        // Catch-up round shortly after start.
+        net::sync_on_startup(self.db_path.clone(), self.creds.clone());
+    }
+}
+
+pub fn sync_stop() {
+    if let Some(m) = slot().lock().unwrap().take() {
+        m.stop.store(true, Ordering::Relaxed);
+        if let Some(h) = m.mdns {
+            h.shutdown();
+        }
+    }
+}
+
+pub fn sync_status_json(dir: &std::path::Path) -> String {
+    let guard = slot().lock().unwrap();
+    let running = guard.is_some();
+    let (node_id, port, lan) = if let Some(m) = guard.as_ref() {
+        (
+            m.creds.node_id.clone(),
+            m.port,
+            net::lan_ip().map(|ip| ip.to_string()).unwrap_or_default(),
+        )
+    } else {
+        let node_id = DeviceIdentity::load_or_create(&dir.join("device.key"))
+            .map(|i| i.node_id)
+            .unwrap_or_default();
+        (node_id, 0, String::new())
+    };
+    let reports: Vec<String> = guard
+        .as_ref()
+        .map(|m| m.reports.lock().unwrap().clone())
+        .unwrap_or_default();
+    serde_json::json!({
+        "running": running,
+        "nodeId": node_id,
+        "port": port,
+        "lanIp": lan,
+        "reports": reports,
+    })
+    .to_string()
+}
+
+/// Peers from the store annotated with live discovery info.
+pub fn sync_peers_json(dir: &std::path::Path) -> String {
+    let db_path = dir.join("state.db");
+    let stored = Store::open(&db_path)
+        .ok()
+        .and_then(|s| s.list_peers().ok())
+        .unwrap_or_default();
+    let discovered: HashMap<String, net::Discovered> = slot()
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|m| m.discovered.lock().unwrap().clone())
+        .unwrap_or_default();
+    let mut out = Vec::new();
+    for p in stored {
+        let disc = discovered.get(&p.node_id);
+        out.push(serde_json::json!({
+            "nodeId": p.node_id,
+            "name": if p.name.is_empty() { short_id(&p.node_id) } else { p.name.clone() },
+            "addresses": p.addresses,
+            "trusted": p.trusted,
+            "pending": p.pending,
+            "introducer": p.introducer,
+            "lastSeen": p.last_seen,
+            "lastSync": p.last_sync,
+            "discovered": disc.is_some(),
+            "discoveredName": disc.map(|d| d.name.clone()).unwrap_or_default(),
+            "discoveredAddrs": disc.map(|d| d.addresses.clone()).unwrap_or_default(),
+        }));
+    }
+    // Discovered but unknown: pairing candidates.
+    for d in discovered.values() {
+        if !out.iter().any(|v| v["nodeId"] == d.node_id.as_str()) {
+            out.push(serde_json::json!({
+                "nodeId": d.node_id,
+                "name": if d.name.is_empty() { short_id(&d.node_id) } else { d.name.clone() },
+                "addresses": [],
+                "trusted": false,
+                "pending": false,
+                "introducer": false,
+                "lastSeen": 0,
+                "lastSync": 0,
+                "discovered": true,
+                "discoveredName": d.name,
+                "discoveredAddrs": d.addresses,
+            }));
+        }
+    }
+    serde_json::to_string(&out).unwrap_or_else(|_| "[]".to_string())
+}
+
+fn short_id(id: &str) -> String {
+    if id.len() > 12 {
+        format!("{}…{}", &id[..8], &id[id.len() - 4..])
+    } else {
+        id.to_string()
+    }
+}
+
+/// Accept (trust + introducer, then sync) or reject a peer.
+/// Unknown-but-discovered nodes are recorded first so the accept
+/// path has a row to promote (mirrors desktop trust flow).
+pub fn sync_set_trust(
+    dir: &std::path::Path,
+    node_id: &str,
+    accept: bool,
+) -> Result<String, String> {
+    let db_path = dir.join("state.db");
+    let store = Store::open(&db_path).map_err(|e| format!("open db: {e}"))?;
+    if store
+        .get_peer(node_id)
+        .map_err(|e| format!("peer lookup: {e}"))?
+        .is_none()
+    {
+        // Park discovered unknowns so decide_request can promote them.
+        let known: Option<net::Discovered> = slot()
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|m| m.discovered.lock().unwrap().get(node_id).cloned());
+        if let Some(d) = known {
+            store
+                .record_seen(&d.node_id, &d.name, &d.addresses)
+                .map_err(|e| format!("record contact: {e}"))?;
+        } else {
+            return Err("unknown peer (not discovered)".to_string());
+        }
+    }
+    store
+        .decide_request(node_id, accept)
+        .map_err(|e| format!("trust update: {e}"))?;
+    if accept {
+        let db = db_path.clone();
+        let creds = slot().lock().unwrap().as_ref().map(|m| m.creds.clone());
+        if let Some(c) = creds {
+            std::thread::spawn(move || {
+                net::sync_after_change(db, c);
+            });
+            return Ok("trusted; syncing now".to_string());
+        }
+        return Ok("trusted".to_string());
+    }
+    Ok("rejected".to_string())
+}
+
+/// One manual round with a single peer (tries stored + discovered
+/// addresses).
+pub fn sync_peer_now(dir: &std::path::Path, node_id: &str) -> Result<String, String> {
+    let db_path = dir.join("state.db");
+    let store = Store::open(&db_path).map_err(|e| format!("open db: {e}"))?;
+    let settings = store.load_settings();
+    let peer = store
+        .get_peer(node_id)
+        .map_err(|e| format!("peer lookup: {e}"))?
+        .ok_or_else(|| "unknown peer".to_string())?;
+    let mut addrs = peer.dial_targets();
+    if let Some(d) = slot()
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|m| m.discovered.lock().unwrap().get(node_id).cloned())
+    {
+        for a in d.addresses {
+            if !addrs.contains(&a) {
+                addrs.push(a);
+            }
+        }
+    }
+    let creds = slot()
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|m| m.creds.clone())
+        .ok_or_else(|| "sync is not running".to_string())?;
+    let name = if settings.sync.device_name.trim().is_empty() {
+        creds.node_id.clone()
+    } else {
+        settings.sync.device_name.clone()
+    };
+    let r = net::sync_now(&addrs, &db_path, &creds, &name, node_id)?;
+    Ok(format!(
+        "synced {}: {} words, {} snippets, {} history in, {} introduced",
+        r.peer_name, r.words_in, r.snippets_in, r.history_in, r.introduced
+    ))
+}
+
+/// Manual round with all trusted peers.
+pub fn sync_all_now(dir: &std::path::Path) -> Vec<String> {
+    let db_path = dir.join("state.db");
+    let creds = match slot().lock().unwrap().as_ref().map(|m| m.creds.clone()) {
+        Some(c) => c,
+        None => return vec!["sync is not running".to_string()],
+    };
+    net::sync_all_trusted(&db_path, &creds)
+}

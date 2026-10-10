@@ -201,6 +201,15 @@ pub struct Preferences {
     #[serde(default)]
     pub mic_release_delay_ms: u64,
     pub auto_learn_dictionary: bool,
+    /// ANDROID PORT: mic-button behavior (no hotkeys on mobile).
+    /// Tap = toggle, Push = hold to talk, Smart = quick tap toggles,
+    /// longer press holds (uses hotkeys.smart_tap_ms).
+    #[serde(default = "default_mic_mode")]
+    pub mic_mode: ActivationMode,
+}
+
+fn default_mic_mode() -> ActivationMode {
+    ActivationMode::Smart
 }
 
 impl Default for Preferences {
@@ -222,6 +231,7 @@ impl Default for Preferences {
             mic_warm_hold_secs: 0,
             mic_release_delay_ms: 0,
             auto_learn_dictionary: false,
+            mic_mode: ActivationMode::Smart,
         }
     }
 }

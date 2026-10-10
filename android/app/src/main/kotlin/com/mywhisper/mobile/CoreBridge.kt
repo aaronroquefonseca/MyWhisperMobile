@@ -1,5 +1,6 @@
 package com.mywhisper.mobile
 
+import org.json.JSONArray
 import org.json.JSONObject
 
 /**
@@ -24,6 +25,17 @@ object CoreBridge {
     @JvmStatic external fun nativeGetHistory(limit: Int): String
     @JvmStatic external fun nativeClearHistory(): String
     @JvmStatic external fun nativeDeleteHistory(uuid: String): String
+    @JvmStatic external fun nativeDefaultCleanupPrompt(): String
+    @JvmStatic external fun nativePurgeHistory(days: Int): String
+    @JvmStatic external fun nativeUsageStats(): String
+    @JvmStatic external fun nativeDailyActivity(days: Int): String
+    @JvmStatic external fun nativeSyncStart(): String
+    @JvmStatic external fun nativeSyncStop(): String
+    @JvmStatic external fun nativeSyncStatus(): String
+    @JvmStatic external fun nativeSyncPeers(): String
+    @JvmStatic external fun nativeSyncTrust(nodeId: String, accept: Boolean): String
+    @JvmStatic external fun nativeSyncNow(nodeId: String): String
+    @JvmStatic external fun nativeSyncAllNow(): String
 
     /** Parse `{ok, data?, error?}`. Returns data or throws with error text. */
     fun dataOf(raw: String): Any? {
@@ -66,5 +78,52 @@ object CoreBridge {
 
     fun cancelUtterance() {
         nativeCancelUtterance()
+    }
+
+    fun defaultCleanupPrompt(): Result<String> = runCatching {
+        dataOf(nativeDefaultCleanupPrompt()) as String
+    }
+
+    fun purgeHistory(days: Int): Result<Int> = runCatching {
+        (dataOf(nativePurgeHistory(days)) as JSONObject).getInt("removed")
+    }
+
+    fun usageStats(): Result<JSONObject> = runCatching {
+        dataOf(nativeUsageStats()) as JSONObject
+    }
+
+    fun dailyActivity(days: Int): Result<JSONArray> = runCatching {
+        dataOf(nativeDailyActivity(days)) as JSONArray
+    }
+
+    fun syncStart(): Result<String> = runCatching {
+        dataOf(nativeSyncStart()) as String
+    }
+
+    fun syncStop() {
+        nativeSyncStop()
+    }
+
+    fun syncStatus(): Result<JSONObject> = runCatching {
+        JSONObject(syncStatusRaw())
+    }
+
+    fun syncStatusRaw(): String = nativeSyncStatus()
+
+    fun syncPeersRaw(): String = nativeSyncPeers()
+
+    fun syncTrust(nodeId: String, accept: Boolean): Result<String> = runCatching {
+        dataOf(nativeSyncTrust(nodeId, accept)) as String
+    }
+
+    fun syncNow(nodeId: String): Result<String> = runCatching {
+        dataOf(nativeSyncNow(nodeId)) as String
+    }
+
+    fun syncAllNow(): Result<List<String>> = runCatching {
+        @Suppress("UNCHECKED_CAST")
+        (dataOf(nativeSyncAllNow()) as JSONArray).let { arr ->
+            List(arr.length()) { arr.getString(it) }
+        }
     }
 }

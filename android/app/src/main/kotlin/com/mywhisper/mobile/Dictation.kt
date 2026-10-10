@@ -4,15 +4,17 @@ import java.util.concurrent.Executors
 
 /**
  * Mic-button controller: hold-to-talk / toggle / smart, mirroring the
- * desktop activation modes. Default Smart: release before `smartTapMs`
- * keeps recording (toggle), release after stops; a second press while
- * toggled-on finishes.
+ * desktop activation modes. Mode comes from settings
+ * (`preferences.mic_mode`): Push = hold talks, Tap = press toggles,
+ * Smart (default) = release before `smartTapMs` toggles, release
+ * after stops; a second press while toggled-on finishes.
  *
  * All state transitions post to [listener] — the IME renders, the core
  * does the work. [finish] transcribes on a worker thread.
  */
 class Dictation(
     private val smartTapMs: () -> Long = { 150L },
+    private val mode: () -> String = { "Smart" },
 ) {
     enum class State { IDLE, RECORDING, WORKING }
 
@@ -71,13 +73,26 @@ class Dictation(
 
     fun pressUp() {
         if (state != State.RECORDING || toggled) return
-        val held = System.currentTimeMillis() - downAt
-        if (held < smartTapMs()) {
-            // Smart tap: keep recording as a toggle.
+        val m = try {
+            mode()
+        } catch (_: Exception) {
+            "Smart"
+        }
+        if (m == "Push") {
+            finish()
+        } else if (m == "Tap") {
+            // Toggle: keep recording; the next press finishes.
             toggled = true
             listener?.onState(state, true)
         } else {
-            finish()
+            // Smart: short press toggles, hold talks.
+            val held = System.currentTimeMillis() - downAt
+            if (held < smartTapMs()) {
+                toggled = true
+                listener?.onState(state, true)
+            } else {
+                finish()
+            }
         }
     }
 

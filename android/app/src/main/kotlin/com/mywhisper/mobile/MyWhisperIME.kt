@@ -44,7 +44,10 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
         super.onCreate()
         android.util.Log.i("MyWhisperIME", "ime.onCreate")
         ensureCore()
-        dictation = Dictation(smartTapMs = { readSmartTapMs() })
+        dictation = Dictation(
+            smartTapMs = { readSmartTapMs() },
+            mode = { readMicMode() },
+        )
         dictation.listener = this
     }
 
@@ -64,6 +67,15 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
         }
     }
 
+    private fun readMicMode(): String {
+        return try {
+            val s = CoreBridge.getSettings().getOrThrow()
+            s.optJSONObject("preferences")?.optString("mic_mode", "Smart")
+                ?.takeIf { it in setOf("Smart", "Push", "Tap") } ?: "Smart"
+        } catch (_: Exception) {
+            "Smart"
+        }
+    }
     private fun readSmartTapMs(): Long {
         return try {
             val s = CoreBridge.getSettings().getOrThrow()
@@ -89,30 +101,48 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
         } catch (_: Exception) {
         }
 
+        val night = (resources.configuration.uiMode
+            and android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+            android.content.res.Configuration.UI_MODE_NIGHT_YES
+        // Solid, opaque bar: readable over any app behind it.
+        val barBg = if (night) 0xFF1E1E22.toInt() else 0xFFF2F0F7.toInt()
+        val barFg = if (night) 0xFFE8E4F0.toInt() else 0xFF1D1B20.toInt()
+        val barDim = if (night) 0xFFA8A4B5.toInt() else 0xFF5F5B66.toInt()
+
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(8), dp(8), dp(8), dp(8))
+            setBackgroundColor(barBg)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
             gravity = Gravity.CENTER_HORIZONTAL
         }
+        // Hairline divider on top.
+        root.addView(View(this).apply {
+            setBackgroundColor(if (night) 0xFF3A3A40.toInt() else 0xFFD9D4E5.toInt())
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(1))
+        })
 
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(8), 0, 0)
         }
 
-        val switchBtn = Button(this).apply {
-            text = "ABC"
-            setOnClickListener { switchToPrevious() }
+        fun sideButton(label: String, onClick: () -> Unit) = Button(this).apply {
+            text = label
+            setTextColor(barFg)
+            setBackground(sideBackground(barBg, night))
+            setOnClickListener { onClick() }
         }
-        val settingsBtn = Button(this).apply {
-            text = "SET"
-            setOnClickListener { openConfig() }
-        }
+        val switchBtn = sideButton("ABC") { switchToPrevious() }
+        val settingsBtn = sideButton("SET") { openConfig() }
         val mic = ImageButton(this).apply {
             setImageResource(R.drawable.ic_mic)
             contentDescription = "Dictate"
             setBackground(micBackground(false))
             setColorFilter(Color.WHITE)
+            setPadding(dp(18), dp(18), dp(18), dp(18))
+            elevation = dp(4).toFloat()
             setOnTouchListener { _, ev ->
                 when (ev.actionMasked) {
                     MotionEvent.ACTION_DOWN -> {
@@ -137,7 +167,7 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
         val spacerR = View(this).apply { layoutParams = LinearLayout.LayoutParams(0, 1, 1f) }
         row.addView(switchBtn)
         row.addView(spacerL)
-        row.addView(mic, LinearLayout.LayoutParams(dp(72), dp(72)))
+        row.addView(mic, LinearLayout.LayoutParams(dp(80), dp(80)))
         row.addView(spacerR)
         row.addView(settingsBtn)
         root.addView(row, LinearLayout.LayoutParams(
@@ -146,7 +176,7 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
         val status = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL or Gravity.CENTER_HORIZONTAL
-            setPadding(0, dp(4), 0, 0)
+            setPadding(0, dp(6), 0, 0)
         }
         val spin = ProgressBar(this).apply {
             visibility = View.GONE
@@ -155,11 +185,17 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
             }
         }
         spinner = spin
-        val hint = TextView(this).apply { text = idleHint() }
+        val hint = TextView(this).apply {
+            text = idleHint()
+            setTextColor(barDim)
+            textSize = 13f
+        }
         hintText = hint
         val cancel = Button(this).apply {
             text = "Cancel"
             visibility = View.GONE
+            setTextColor(barFg)
+            setBackground(sideBackground(barBg, night))
             setOnClickListener { dictation.cancel() }
         }
         cancelButton = cancel
@@ -209,7 +245,19 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
             setColor(if (recording) 0xFFB3261E.toInt() else 0xFF6750A4.toInt())
         }
 
-    private fun idleHint(): String = "hold to talk · tap to toggle"
+    private fun sideBackground(barBg: Int, night: Boolean): GradientDrawable =
+        GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = dp(10).toFloat()
+            setColor(if (night) 0xFF2C2C31.toInt() else 0xFFE4E0EC.toInt())
+            setStroke(dp(1), if (night) 0xFF45454C.toInt() else 0xFFC9C4D6.toInt())
+        }
+
+    private fun idleHint(): String = when (readMicMode()) {
+        "Push" -> "hold to talk · release to stop"
+        "Tap" -> "tap to start · tap to stop"
+        else -> "hold to talk · tap to toggle"
+    }
 
     // -- Dictation.Listener (may arrive on a worker thread) ------------
 
@@ -249,10 +297,22 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
         hintText?.text = when (lastState) {
             Dictation.State.RECORDING ->
                 if (lastToggled) "recording — tap mic to finish"
-                else "recording — release to stop, quick tap toggles"
+                else when (readMicMode()) {
+                    "Push" -> "recording — release to stop"
+                    "Tap" -> "recording — tap mic to stop"
+                    else -> "recording — release to stop, quick tap toggles"
+                }
             Dictation.State.WORKING -> "transcribing…"
             Dictation.State.IDLE -> lastNote.ifEmpty { idleHint() }
         }
+        // Errors in red, status in the theme dim color.
+        val night = (resources.configuration.uiMode
+            and android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+            android.content.res.Configuration.UI_MODE_NIGHT_YES
+        hintText?.setTextColor(
+            if (lastState == Dictation.State.IDLE && lastNote.isNotEmpty()) 0xFFD92D20.toInt()
+            else if (night) 0xFFA8A4B5.toInt() else 0xFF5F5B66.toInt(),
+        )
     }
 
     private fun switchToPrevious() {

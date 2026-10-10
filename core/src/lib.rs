@@ -6,17 +6,20 @@
 //! (utterance pipeline), JNI bridge below (this file).
 
 pub mod audio;
+pub mod device;
 pub mod engine;
+pub mod net;
 pub mod server_stt;
 pub mod settings;
 pub mod store;
+pub mod sync_ctl;
 pub mod textnorm;
 pub mod viz_types;
 
 use engine::Engine;
+use jni::JNIEnv;
 use jni::objects::{JClass, JShortArray, JString};
 use jni::sys::{jint, jstring};
-use jni::JNIEnv;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
@@ -225,5 +228,216 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeDeleteH
             || err_json("engine not open"),
         )
     })();
+    jstr(&mut env, &out)
+}
+
+fn engine_dir() -> Result<PathBuf, String> {
+    with_engine(
+        |e| Ok(e.dir().to_path_buf()),
+        || Err("engine not open".to_string()),
+    )
+}
+
+/// The effective default cleanup prompt (desktop-identical).
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeDefaultCleanupPrompt(
+    mut env: JNIEnv,
+    _cls: JClass,
+) -> jstring {
+    jstr(
+        &mut env,
+        &ok_json(serde_json::Value::String(
+            engine::DEFAULT_CLEANUP_PROMPT.to_string(),
+        )),
+    )
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativePurgeHistory(
+    mut env: JNIEnv,
+    _cls: JClass,
+    days: jint,
+) -> jstring {
+    let out = with_engine(
+        |e| match e.purge_history(days.max(0) as u32) {
+            Ok(n) => ok_json(serde_json::json!({"removed": n})),
+            Err(err) => err_json(err),
+        },
+        || err_json("engine not open"),
+    );
+    jstr(&mut env, &out)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeUsageStats(
+    mut env: JNIEnv,
+    _cls: JClass,
+) -> jstring {
+    let out = with_engine(
+        |e| {
+            let dir = e.dir().to_path_buf();
+            let node = e.node_id().to_string();
+            match crate::store::Store::open(&dir.join("state.db")) {
+                Ok(s) => match s.usage_stats() {
+                    Ok(u) => ok_json(serde_json::json!({
+                        "wordsSpoken": u.words_spoken,
+                        "dictations": u.dictations,
+                        "wordsPerMinute": u.words_per_minute,
+                        "streakDays": u.streak_days,
+                        "nodeId": node,
+                    })),
+                    Err(err) => err_json(format!("stats: {err}")),
+                },
+                Err(err) => err_json(format!("open db: {err}")),
+            }
+        },
+        || err_json("engine not open"),
+    );
+    jstr(&mut env, &out)
+}
+
+/// Per-day aggregates for the trailing `days` days:
+/// `[{dayStart, words, utterances}]` (dayStart = epoch seconds).
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeDailyActivity(
+    mut env: JNIEnv,
+    _cls: JClass,
+    days: jint,
+) -> jstring {
+    let out = with_engine(
+        |e| {
+            let dir = e.dir().to_path_buf();
+            match crate::store::Store::open(&dir.join("state.db")) {
+                Ok(s) => match s.daily_aggregates(days.max(1) as u32) {
+                    Ok(rows) => {
+                        let mapped: Vec<serde_json::Value> = rows
+                            .iter()
+                            .map(|(day, words, n)| {
+                                serde_json::json!({
+                                    "dayStart": day * 86400,
+                                    "words": words,
+                                    "utterances": n,
+                                })
+                            })
+                            .collect();
+                        ok_json(serde_json::Value::Array(mapped))
+                    }
+                    Err(err) => err_json(format!("activity: {err}")),
+                },
+                Err(err) => err_json(format!("open db: {err}")),
+            }
+        },
+        || err_json("engine not open"),
+    );
+    jstr(&mut env, &out)
+}
+
+// -- sync ---------------------------------------------------------------
+
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeSyncStart(
+    mut env: JNIEnv,
+    _cls: JClass,
+) -> jstring {
+    let out = match engine_dir() {
+        Ok(dir) => match crate::sync_ctl::sync_start(dir) {
+            Ok(s) => ok_json(serde_json::Value::String(s)),
+            Err(err) => err_json(err),
+        },
+        Err(err) => err_json(err),
+    };
+    jstr(&mut env, &out)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeSyncStop(
+    mut env: JNIEnv,
+    _cls: JClass,
+) -> jstring {
+    crate::sync_ctl::sync_stop();
+    jstr(&mut env, &ok_json(serde_json::Value::Null))
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeSyncStatus(
+    mut env: JNIEnv,
+    _cls: JClass,
+) -> jstring {
+    let out = match engine_dir() {
+        Ok(dir) => crate::sync_ctl::sync_status_json(&dir),
+        Err(err) => err_json(err),
+    };
+    jstr(&mut env, &out)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeSyncPeers(
+    mut env: JNIEnv,
+    _cls: JClass,
+) -> jstring {
+    let out = match engine_dir() {
+        Ok(dir) => crate::sync_ctl::sync_peers_json(&dir),
+        Err(_) => "[]".to_string(),
+    };
+    jstr(&mut env, &out)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeSyncTrust(
+    mut env: JNIEnv,
+    _cls: JClass,
+    node_id: JString,
+    accept: jni::sys::jboolean,
+) -> jstring {
+    let out = (|| -> String {
+        let id = get_string(&mut env, &node_id).unwrap_or_default();
+        let dir = match engine_dir() {
+            Ok(d) => d,
+            Err(e) => return err_json(e),
+        };
+        match crate::sync_ctl::sync_set_trust(&dir, &id, accept != 0) {
+            Ok(s) => ok_json(serde_json::Value::String(s)),
+            Err(err) => err_json(err),
+        }
+    })();
+    jstr(&mut env, &out)
+}
+
+/// Blocking single-peer round (call off the UI thread).
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeSyncNow(
+    mut env: JNIEnv,
+    _cls: JClass,
+    node_id: JString,
+) -> jstring {
+    let out = (|| -> String {
+        let id = get_string(&mut env, &node_id).unwrap_or_default();
+        let dir = match engine_dir() {
+            Ok(d) => d,
+            Err(e) => return err_json(e),
+        };
+        match crate::sync_ctl::sync_peer_now(&dir, &id) {
+            Ok(s) => ok_json(serde_json::Value::String(s)),
+            Err(err) => err_json(err),
+        }
+    })();
+    jstr(&mut env, &out)
+}
+
+/// Blocking round with all trusted peers (call off the UI thread).
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeSyncAllNow(
+    mut env: JNIEnv,
+    _cls: JClass,
+) -> jstring {
+    let out = match engine_dir() {
+        Ok(dir) => ok_json(serde_json::Value::Array(
+            crate::sync_ctl::sync_all_now(&dir)
+                .into_iter()
+                .map(serde_json::Value::String)
+                .collect(),
+        )),
+        Err(err) => err_json(err),
+    };
     jstr(&mut env, &out)
 }

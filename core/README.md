@@ -6,13 +6,16 @@ Portable MyWhisper engine for Android, exposed over JNI (`lib.rs`).
 
 | File | Status | Notes |
 |---|---|---|
-| `settings.rs` | verbatim port | + `ANDROID PORT` import patch: pill enums come from `viz_types`, not GTK `viz` |
+| `settings.rs` | verbatim port | + `ANDROID PORT` patches: pill enums from `viz_types`, not GTK `viz`; `preferences.mic_mode` (mobile-only mic-button behavior) |
 | `audio.rs` | verbatim port | Recorder/resample/VAD/WAV all portable |
 | `textnorm.rs` | verbatim port | snippet expansion + whisper prompt budgets |
 | `store.rs` | verbatim port | + `ANDROID PORT` patch: `db_key()` reads `MYWHISPER_DB_KEY` (set by JNI from the Keystore key); keyring branch kept for host builds/tests |
+| `device.rs` | verbatim port | node identity (`device.key`), same keys as desktop |
+| `net.rs` | verbatim port | Noise_XX sync transport; same protocol version as desktop |
 | `viz_types.rs` | mobile-only | serde clones of desktop `viz.rs` pref enums (no pill on Android) |
 | `server_stt.rs` | mobile-only | server STT chain client; wire protocols mirror desktop `transcribe.rs` |
-| `engine.rs` | mobile-only | utterance pipeline mirroring desktop `deliver` (minus local servers, speculation, streaming partials) |
+| `sync_ctl.rs` | mobile-only | sync lifecycle (listener + mDNS + loops) over `net.rs` |
+| `engine.rs` | mobile-only | utterance pipeline mirroring desktop `deliver`; cleanup is a faithful `post_process` port (same default prompt, same endpoints, same failover) |
 | `lib.rs` | mobile-only | JNI bridge |
 
 Desktop source: `github:aaronroquefonseca/MyWhisper`, `src/`.
@@ -45,5 +48,9 @@ a `state.db` moved between devices opens with the same key.
 
 - On-device STT (sherpa-onnx/whisper JNI) → stop skipping `Local` chain entries.
 - Streaming partials (sherpa WS online pump while held).
-- Sync (`net.rs` port over `NsdManager` + same Noise protocol).
-- Gemini cloud STT + Claude/Google cleanup endpoints.
+- SQLCipher on Android (needs vendored OpenSSL; currently plaintext
+  `bundled` — app sandbox still isolates the file, Keystore key kept
+  for the switch).
+- Gemini cloud STT.
+- Foreground service for always-on sync (currently runs while the app
+  or IME process lives, plus manual/auto rounds).
