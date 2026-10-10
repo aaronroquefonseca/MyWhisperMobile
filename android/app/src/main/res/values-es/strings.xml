@@ -1,0 +1,253 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Español. Claves iguales que en values/strings.xml; copia tomada
+     del escritorio donde coincide para que ambas apps digan lo mismo. -->
+<resources>
+    <!-- Tabs -->
+    <string name="tab_setup">Configuración</string>
+    <string name="tab_stt">Transcripción</string>
+    <string name="tab_cleanup">Edición de texto</string>
+    <string name="tab_dict">Diccionario</string>
+    <string name="tab_activity">Actividad</string>
+    <string name="tab_history">Historial</string>
+    <string name="tab_devices">Dispositivos</string>
+
+    <!-- Shared actions -->
+    <string name="action_add">Añadir</string>
+    <string name="action_delete">Eliminar</string>
+    <string name="action_edit">Editar</string>
+    <string name="action_save">Guardar</string>
+    <string name="action_cancel">Cancelar</string>
+    <string name="action_close">Cerrar</string>
+    <string name="action_remove">Quitar</string>
+    <string name="action_reset">Restablecer</string>
+    <string name="action_accept">Aceptar</string>
+    <string name="action_start">Iniciar</string>
+    <string name="action_stop">Detener</string>
+    <string name="action_refresh">Actualizar</string>
+    <string name="action_clear">Borrar</string>
+    <string name="action_change">Cambiar</string>
+    <string name="action_show">Mostrar</string>
+    <string name="action_hide">Ocultar</string>
+    <string name="action_gotit">Entendido</string>
+    <string name="action_sync">Sincronizar</string>
+    <string name="action_sync_now">Sincronizar ahora</string>
+    <string name="action_show_less">Mostrar menos</string>
+    <string name="action_save_prompt">Guardar prompt</string>
+
+    <!-- Setup -->
+    <string name="setup_status">Estado</string>
+    <string name="setup_server_only">Versión solo-servidor: configura un servicio de voz autohospedado o en la nube en Transcripción. Los modelos locales llegarán después.</string>
+    <string name="setup_step1">1 · Activa el método de entrada</string>
+    <string name="setup_enabled_yes">MyWhisper está activado como método de entrada.</string>
+    <string name="setup_enabled_no">MyWhisper aún no está activado.</string>
+    <string name="setup_open_ime">Abrir ajustes del método de entrada</string>
+    <string name="setup_step2">2 · Cámbiate a él</string>
+    <string name="setup_active_now">MyWhisper está activo (%1$s).</string>
+    <string name="setup_active_how">Elige MyWhisper en la lista y abre cualquier campo de texto — la barra del micrófono indica que está activo.</string>
+    <string name="setup_pick">Elegir método de entrada</string>
+    <string name="setup_step3">3 · Micrófono</string>
+    <string name="setup_mic_yes">Micrófono concedido.</string>
+    <string name="setup_mic_no">El micrófono es necesario para dictar.</string>
+    <string name="setup_mic_grant">Conceder micrófono</string>
+    <string name="setup_mic_denied">El permiso del micrófono es necesario para dictar</string>
+    <string name="setup_step4">4 · Notificaciones</string>
+    <string name="setup_notif_body">Muestra el estado de sincronización mientras está activa.</string>
+    <string name="setup_notif_allow">Permitir notificaciones</string>
+    <string name="setup_notif_denied">Sin notificaciones el icono de estado queda oculto</string>
+    <string name="setup_notif_old">Las notificaciones siempre están activas antes de Android 13</string>
+    <string name="setup_mic_button">Botón del micrófono</string>
+    <string name="setup_mode_push">Mantén para hablar: pulsa, mantén y suelta para parar.</string>
+    <string name="setup_mode_tap">Alternar: toca para empezar, toca de nuevo para parar.</string>
+    <string name="setup_mode_smart">Inteligente: un toque rápido alterna, mantener y soltar para.</string>
+    <string name="setup_behavior">Comportamiento: %1$s</string>
+    <string name="setup_tap_ceiling">Límite de toque inteligente (ms)</string>
+    <string name="setup_tap_save">Guardar tiempo</string>
+    <string name="setup_theme">Tema</string>
+    <string name="setup_prefs">Preferencias</string>
+    <string name="setup_behavior_label">Comportamiento</string>
+    <string name="drag_reorder">Arrastra para reordenar</string>
+    <string name="sync_name_default">generado</string>
+    <string name="save_failed">falló al guardar: %1$s</string>
+    <string name="done">listo</string>
+    <string name="seen_just_now">activo hace un momento</string>
+    <string name="seen_min_ago">activo hace %1$d min</string>
+    <string name="seen_h_ago">activo hace %1$d h</string>
+
+    <!-- Transcription -->
+    <string name="stt_chain">Cadena (arriba = se prueba primero)</string>
+    <string name="stt_chain_sub">Las entradas se prueban de arriba abajo; gana la primera que funciona. Las entradas locales se omiten hasta que llegue la inferencia local.</string>
+    <string name="stt_local_summary">local · no disponible en esta versión</string>
+    <string name="stt_local_note">Llegará después — no necesita configuración.</string>
+    <string name="stt_local_why">¿Por qué?</string>
+    <string name="stt_local_title">Voz local</string>
+    <string name="stt_local_body">La entrada Local usa la configuración local en vivo (modelos de este teléfono). La inferencia local aún no está disponible en esta versión, así que se omite. Añade una entrada autohospedada o en la nube encima para dictar ahora — el orden decide la prioridad.</string>
+    <string name="stt_selfhosted">Autohospedado</string>
+    <string name="stt_cloud">Nube</string>
+    <string name="stt_capture">Captura</string>
+    <string name="stt_language">Idioma</string>
+    <string name="stt_vad">Recorte por actividad de voz</string>
+    <string name="stt_vad_gate">Umbral VAD: %1$.2f</string>
+    <string name="stt_save_capture">Guardar captura</string>
+    <string name="stt_apikey_note">Token Bearer para proxies inversos. Vacío significa sin token.</string>
+    <string name="stt_name">Nombre</string>
+    <string name="stt_provider">Proveedor</string>
+    <string name="stt_url_server">URL del servidor (http(s) o ws(s))</string>
+    <string name="stt_url_cloud">URL base (vacío = valor del proveedor)</string>
+    <string name="stt_model">Modelo</string>
+    <string name="stt_apikey">Clave API</string>
+    <string name="stt_apikey_show">mostrar</string>
+    <string name="stt_apikey_hide">ocultar</string>
+    <string name="stt_streaming">Streaming (servidores ws)</string>
+    <string name="stt_streaming_note">Las URL http(s) siempre usan petición/respuesta; las ws(s) usan el protocolo sherpa.</string>
+    <string name="stt_enabled">Activada</string>
+    <string name="stt_gemini_note">La voz de Gemini aún no está disponible en esta versión.</string>
+    <string name="stt_dialog_title">Servicio de voz</string>
+
+    <!-- Cleanup -->
+    <string name="cleanup_title">Limpieza</string>
+    <string name="cleanup_enable">Mejorar transcripciones con un LLM</string>
+    <string name="cleanup_default_state">Usando el prompt integrado.</string>
+    <string name="cleanup_custom_state">Usando tu prompt personalizado.</string>
+    <string name="cleanup_show_all">Mostrar las %1$d líneas</string>
+    <string name="cleanup_customize">Personalizar</string>
+    <string name="cleanup_edit">Editar</string>
+    <string name="cleanup_reset">Volver al original</string>
+    <string name="cleanup_dialog_title">Prompt de limpieza</string>
+    <string name="cleanup_dialog_note">Se guarda como tu prompt personalizado. Restablecer vuelve al integrado.</string>
+    <string name="cleanup_models">Modelos (se prueban en orden, gana la primera respuesta)</string>
+    <string name="cleanup_models_sub">Si el primer modelo activado falla o no responde, se prueba el siguiente. Las entradas locales aún no tienen motor (igual que en escritorio) y se omiten.</string>
+    <string name="cleanup_local_summary">Local · aún sin motor</string>
+    <string name="cleanup_local_title">Modelo de lenguaje local</string>
+    <string name="cleanup_local_body">La limpieza local tampoco tiene motor en escritorio — la entrada se omite y la cadena continúa. Apunta a un servidor Ollama o a un modelo en la nube.</string>
+    <string name="cleanup_add">Añadir modelo</string>
+    <string name="llm_kind">Tipo</string>
+    <string name="llm_local_note">Local aún no tiene motor (igual que en escritorio) — la entrada se omitirá.</string>
+    <string name="llm_url">URL</string>
+    <string name="llm_url_cloud">URL (vacío = valor del proveedor)</string>
+    <string name="llm_keepalive">Keep-alive (vacío, -1, 0, 5m…)</string>
+    <string name="llm_thinking">Razonamiento</string>
+    <string name="llm_thinking_default">Por defecto</string>
+    <string name="llm_thinking_on">Activado</string>
+    <string name="llm_thinking_off">Desactivado</string>
+
+    <!-- Dictionary -->
+    <string name="dict_words_title">Palabras (%1$d)</string>
+    <string name="dict_words_sub">La ortografía exacta orienta el reconocimiento.</string>
+    <string name="dict_new_word">Nueva palabra</string>
+    <string name="dict_dup">Esa palabra ya está en la lista.</string>
+    <string name="dict_search_words">Buscar palabras</string>
+    <string name="dict_no_words">Sin palabras — añade nombres y términos que el reconocedor confunde.</string>
+    <string name="dict_no_match">Sin resultados.</string>
+    <string name="dict_snippets_title">Fragmentos (%1$d)</string>
+    <string name="dict_snippets_sub">Di el activador y obtén el reemplazo.</string>
+    <string name="dict_search_snippets">Buscar fragmentos</string>
+    <string name="dict_no_snippets">Sin fragmentos.</string>
+    <string name="dict_add_snippet">Añadir fragmento</string>
+    <string name="dict_edit_snippet">Editar fragmento</string>
+    <string name="dict_trigger">Activador (se permiten comas)</string>
+    <string name="dict_replacement">Reemplazo</string>
+    <string name="dict_tab_words">Palabras</string>
+    <string name="dict_tab_snippets">Fragmentos</string>
+
+    <!-- Activity -->
+    <string name="act_sub">Tus dictados guardados, calculados en este dispositivo. Borrar el historial también cambia estos totales.</string>
+    <string name="act_words">Palabras dictadas</string>
+    <string name="act_saved">Historial guardado</string>
+    <string name="act_wpm">Palabras por minuto</string>
+    <string name="act_wpm_cap">Dictados con duración registrada</string>
+    <string name="act_dictations">Dictados</string>
+    <string name="act_streak">Racha actual</string>
+    <string name="act_streak_one">1 día</string>
+    <string name="act_streak_n">%1$d días</string>
+    <string name="act_streak_cap">Días consecutivos con actividad</string>
+    <string name="act_chart">Actividad de habla</string>
+    <string name="act_empty">Nada todavía — dicta algo primero.</string>
+    <string name="act_less">Menos</string>
+    <string name="act_more">Más</string>
+    <string name="act_day_title">%1$s</string>
+    <string name="act_day_body">%1$d %2$s · %3$d %4$s</string>
+    <string name="act_word_one">palabra</string>
+    <string name="act_word_many">palabras</string>
+    <string name="act_dict_one">dictado</string>
+    <string name="act_dict_many">dictados</string>
+    <string name="act_wpm_none">–</string>
+
+    <!-- History + privacy -->
+    <string name="hist_privacy">Privacidad y retención</string>
+    <string name="hist_keep">Guardar historial</string>
+    <string name="hist_keep_sub">Apagado = dicta sin guardar.</string>
+    <string name="hist_cancelled">Guardar dictados cancelados</string>
+    <string name="hist_cancelled_sub">Guarda filas de grabaciones canceladas.</string>
+    <string name="hist_days">Borrar transcripciones tras N días (0 = guardar)</string>
+    <string name="hist_delete_older">Borrar antiguas ahora</string>
+    <string name="hist_set_days">indica N días primero</string>
+    <string name="hist_purged">%1$d entradas antiguas borradas</string>
+    <string name="hist_purge_failed">falló el borrado: %1$s</string>
+    <string name="hist_count">%1$d entradas</string>
+    <string name="hist_clear_done">falló el borrado: %1$s</string>
+    <string name="hist_delete_failed">falló al eliminar: %1$s</string>
+    <string name="hist_search">Buscar transcripciones</string>
+    <string name="hist_words">%1$d palabras</string>
+
+    <!-- Devices (sync) -->
+    <string name="sync_this">Este dispositivo</string>
+    <string name="sync_running">Sincronización activa · %1$s</string>
+    <string name="sync_stopped">Sincronización detenida.</string>
+    <string name="sync_lan">Dirección LAN: %1$s</string>
+    <string name="sync_name_hint">Nombre del dispositivo (vacío = %1$s)</string>
+    <string name="sync_port">Puerto de escucha (0 = sin entrantes)</string>
+    <string name="sync_advertise">Anunciar en LAN (mDNS)</string>
+    <string name="sync_advertise_sub">Apagado = invisible, aún ve a otros.</string>
+    <string name="sync_enabled">Sincronización activada</string>
+    <string name="sync_boot">Iniciar al arrancar</string>
+    <string name="sync_boot_sub">Relanza la sincronización al reiniciar si está activada.</string>
+    <string name="sync_saved">guardado</string>
+    <string name="sync_restarted">guardado — sincronización reiniciada</string>
+    <string name="sync_failed">falló la sincronización: %1$s</string>
+    <string name="sync_start_failed">falló el inicio: %1$s</string>
+    <string name="sync_trusted">De confianza (%1$d)</string>
+    <string name="sync_none">Ninguno todavía.</string>
+    <string name="sync_noaddr">sin dirección todavía</string>
+    <string name="sync_lastsync">última sincronización %1$s</string>
+    <string name="sync_ago_never">nunca</string>
+    <string name="sync_ago_now">ahora mismo</string>
+    <string name="sync_ago_min">hace %1$d min</string>
+    <string name="sync_ago_h">hace %1$d h</string>
+    <string name="sync_ago_d">hace %1$d d</string>
+    <string name="sync_remove_failed">falló al quitar: %1$s</string>
+    <string name="sync_requests">Solicitudes (%1$d)</string>
+    <string name="sync_requests_none">Ninguna.</string>
+    <string name="sync_accept_failed">falló al aceptar: %1$s</string>
+    <string name="sync_waiting">esperando a que %1$s acepte — pídele que acepte en el otro dispositivo</string>
+    <string name="sync_nearby">Cercanos (%1$d)</string>
+    <string name="sync_nearby_sub">Descubiertos en la LAN. Acepta para confiar y sincronizar (vale con escritorios y otros teléfonos).</string>
+    <string name="sync_nobody">Nadie por aquí.</string>
+    <string name="sync_add_title">Añadir dispositivo manualmente</string>
+    <string name="sync_add_sub">Copia el ID de MyWhisper en tu otro dispositivo. Envía una solicitud y acéptala allí. Ambos deben ser accesibles.</string>
+    <string name="sync_add_button">Añadir por ID</string>
+    <string name="sync_add_dialog">Añadir dispositivo</string>
+    <string name="sync_add_id">ID del otro dispositivo (64 hex)</string>
+    <string name="sync_add_addr">Dirección manual, p. ej. 192.168.1.31:42973 (opcional)</string>
+    <string name="sync_add_name">Nombre (opcional)</string>
+    <string name="sync_add_send">Enviar solicitud</string>
+    <string name="sync_add_failed">falló: %1$s</string>
+
+    <!-- IME -->
+    <string name="ime_hint_smart">mantén para hablar · toca para alternar</string>
+    <string name="ime_hint_push">mantén para hablar · suelta para parar</string>
+    <string name="ime_hint_tap">toca para empezar · toca para parar</string>
+    <string name="ime_rec_toggle">grabando — toca el micro para terminar</string>
+    <string name="ime_rec_push">grabando — suelta para parar</string>
+    <string name="ime_rec_tap">grabando — toca el micro para parar</string>
+    <string name="ime_rec_smart">grabando — suelta para parar, un toque rápido alterna</string>
+    <string name="ime_working">transcribiendo…</string>
+    <string name="ime_mic">Dictar</string>
+    <string name="ime_keyboard">Teclado</string>
+    <string name="ime_settings">Ajustes</string>
+    <string name="ime_cancel">Cancelar</string>
+
+    <!-- Sync service notification -->
+    <string name="notif_sync_title">Sincronización MyWhisper</string>
+    <string name="notif_sync_text">Escuchando sincronización</string>
+    <string name="notif_stop">Detener</string>
+</resources>

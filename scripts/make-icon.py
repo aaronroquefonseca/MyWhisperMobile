@@ -21,7 +21,6 @@ def main():
     svg = open(DESK).read()
     mark = re.search(r"<g fill=\"url\(#mark\)\">.*?</g>", svg, re.S).group(0)
     grads = re.search(r"<defs>.*?</defs>", svg, re.S).group(0)
-    # Mark bbox in 1254 space (bars + swoosh).
     x0, x1, y0, y1 = 195.0, 1058.0, 273.0, 953.0
     s = MARK_W_DP / (x1 - x0)
     w_dp = 108.0
@@ -49,6 +48,37 @@ def main():
                 "-h",
                 str(px),
                 "/tmp/mwicon/fg.svg",
+                "-o",
+                out,
+            ],
+            check=True,
+        )
+        print("wrote", out)
+
+    # Navy tile background, edge-to-edge (viewBox cropped to the tile
+    # itself). Full PNG: the VectorDrawable arc equivalent failed to
+    # render on device, so no vectors for launcher art at all.
+    tile = re.search(
+        r'<rect x="84" y="84" width="1086" height="1086" rx="272" fill="url\(#tile\)"/>',
+        svg,
+    ).group(0)
+    bg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="84 84 1086 1086" '
+        'width="864" height="864" fill="none" shape-rendering="geometricPrecision">'
+        f"{grads}{tile}</svg>"
+    )
+    open("/tmp/mwicon/bg.svg", "w").write(bg)
+    for name, px in DENSITIES.items():
+        d = f"{RES}/mipmap-{name}"
+        out = f"{d}/ic_launcher_background.png"
+        subprocess.run(
+            [
+                "rsvg-convert",
+                "-w",
+                str(px),
+                "-h",
+                str(px),
+                "/tmp/mwicon/bg.svg",
                 "-o",
                 out,
             ],

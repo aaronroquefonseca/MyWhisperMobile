@@ -20,7 +20,8 @@
         android:theme="@style/Theme.MyWhisper"
         android:allowBackup="false"
         android:usesCleartextTraffic="true"
-        android:supportsRtl="true">
+        android:supportsRtl="true"
+        android:localeConfig="@xml/locales">
 
         <activity
             android:name=".MainActivity"

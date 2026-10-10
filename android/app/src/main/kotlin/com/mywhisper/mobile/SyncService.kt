@@ -100,12 +100,12 @@ class SyncService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val notif: Notification = NotificationCompat.Builder(this, CHANNEL)
-            .setContentTitle("MyWhisper sync")
-            .setContentText("Listening for device sync")
+            .setContentTitle(getString(R.string.notif_sync_title))
+            .setContentText(getString(R.string.notif_sync_text))
             .setSmallIcon(R.drawable.ic_stat_sync)
             .setContentIntent(openIntent)
             .setOngoing(true)
-            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Stop", stopIntent)
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, getString(R.string.notif_stop), stopIntent)
             .build()
         if (Build.VERSION.SDK_INT >= 29) {
             startForeground(

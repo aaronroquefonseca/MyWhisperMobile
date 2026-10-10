@@ -111,19 +111,22 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            // Opaque bar with rounded bottom corners (no straight
-            // screen-edge slab).
+            // Opaque floating card: side/bottom margins + fully
+            // rounded corners so no straight screen-edge slab shows.
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
                 setColor(barBg)
-                cornerRadii = floatArrayOf(
-                    0f, 0f, 0f, 0f,
-                    dp(20).toFloat(), dp(20).toFloat(),
-                    dp(20).toFloat(), dp(20).toFloat(),
-                )
+                cornerRadius = dp(22).toFloat()
             }
             setPadding(dp(12), dp(10), dp(12), dp(14))
             gravity = Gravity.CENTER_HORIZONTAL
+            val cardMargin = dp(8)
+            layoutParams = android.widget.FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).also {
+                it.setMargins(cardMargin, dp(4), cardMargin, cardMargin)
+            }
         }
         // Hairline divider on top.
         root.addView(View(this).apply {
@@ -148,7 +151,7 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
         val settingsBtn = sideButton("SET") { openConfig() }
         val mic = ImageButton(this).apply {
             setImageResource(R.drawable.ic_mic)
-            contentDescription = "Dictate"
+            contentDescription = getString(R.string.ime_mic)
             setBackground(micBackground(false))
             setColorFilter(Color.WHITE)
             setPadding(dp(18), dp(18), dp(18), dp(18))
@@ -202,7 +205,7 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
         }
         hintText = hint
         val cancel = Button(this).apply {
-            text = "Cancel"
+            text = getString(R.string.ime_cancel)
             visibility = View.GONE
             setTextColor(barFg)
             setBackground(sideBackground(barBg, night))
@@ -264,9 +267,9 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
         }
 
     private fun idleHint(): String = when (readMicMode()) {
-        "Push" -> "hold to talk · release to stop"
-        "Tap" -> "tap to start · tap to stop"
-        else -> "hold to talk · tap to toggle"
+        "Push" -> getString(R.string.ime_hint_push)
+        "Tap" -> getString(R.string.ime_hint_tap)
+        else -> getString(R.string.ime_hint_smart)
     }
 
     // -- Dictation.Listener (may arrive on a worker thread) ------------
@@ -306,13 +309,13 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
             if (lastState == Dictation.State.RECORDING) View.VISIBLE else View.GONE
         hintText?.text = when (lastState) {
             Dictation.State.RECORDING ->
-                if (lastToggled) "recording — tap mic to finish"
+                if (lastToggled) getString(R.string.ime_rec_toggle)
                 else when (readMicMode()) {
-                    "Push" -> "recording — release to stop"
-                    "Tap" -> "recording — tap mic to stop"
-                    else -> "recording — release to stop, quick tap toggles"
+                    "Push" -> getString(R.string.ime_rec_push)
+                    "Tap" -> getString(R.string.ime_rec_tap)
+                    else -> getString(R.string.ime_rec_smart)
                 }
-            Dictation.State.WORKING -> "transcribing…"
+            Dictation.State.WORKING -> getString(R.string.ime_working)
             Dictation.State.IDLE -> lastNote.ifEmpty { idleHint() }
         }
         // Errors in red, status in the theme dim color.
@@ -324,6 +327,13 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
             else if (night) 0xFFA8A4B5.toInt() else 0xFF5F5B66.toInt(),
         )
     }
+
+    /**
+     * No system globe key (see method.xml
+     * supportsSwitchingToNextInputMethod): it can strand the user
+     * with no visible input method. Our ABC button opens the picker
+     * instead.
+     */
 
     /**
      * Keyboard switch: open the system picker (always works) instead

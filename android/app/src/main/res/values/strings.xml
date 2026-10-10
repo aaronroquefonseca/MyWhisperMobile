@@ -1,0 +1,253 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- English (default fallback). Keys reuse the desktop i18n keys
+     wherever the copy matches so both apps say the same things. -->
+<resources>
+    <!-- Tabs -->
+    <string name="tab_setup">Setup</string>
+    <string name="tab_stt">Transcription</string>
+    <string name="tab_cleanup">Text cleanup</string>
+    <string name="tab_dict">Dictionary</string>
+    <string name="tab_activity">Activity</string>
+    <string name="tab_history">History</string>
+    <string name="tab_devices">Devices</string>
+
+    <!-- Shared actions -->
+    <string name="action_add">Add</string>
+    <string name="action_delete">Delete</string>
+    <string name="action_edit">Edit</string>
+    <string name="action_save">Save</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_close">Close</string>
+    <string name="action_remove">Remove</string>
+    <string name="action_reset">Reset</string>
+    <string name="action_accept">Accept</string>
+    <string name="action_start">Start</string>
+    <string name="action_stop">Stop</string>
+    <string name="action_refresh">Refresh</string>
+    <string name="action_clear">Clear</string>
+    <string name="action_change">Change</string>
+    <string name="action_show">Show</string>
+    <string name="action_hide">Hide</string>
+    <string name="action_gotit">Got it</string>
+    <string name="action_sync">Sync</string>
+    <string name="action_sync_now">Sync now</string>
+    <string name="action_show_less">Show less</string>
+    <string name="action_save_prompt">Save prompt</string>
+
+    <!-- Setup -->
+    <string name="setup_status">Status</string>
+    <string name="setup_server_only">Server-only build: configure a self-hosted or cloud speech service under Transcription. On-device models come later.</string>
+    <string name="setup_step1">1 · Enable the input method</string>
+    <string name="setup_enabled_yes">MyWhisper is enabled as an input method.</string>
+    <string name="setup_enabled_no">MyWhisper is not enabled yet.</string>
+    <string name="setup_open_ime">Open input-method settings</string>
+    <string name="setup_step2">2 · Switch to it</string>
+    <string name="setup_active_now">MyWhisper is active (%1$s).</string>
+    <string name="setup_active_how">Pick MyWhisper from the list, then open any text field — the mic bar means it\'s active.</string>
+    <string name="setup_pick">Choose input method</string>
+    <string name="setup_step3">3 · Microphone</string>
+    <string name="setup_mic_yes">Microphone granted.</string>
+    <string name="setup_mic_no">Microphone is required for dictation.</string>
+    <string name="setup_mic_grant">Grant microphone</string>
+    <string name="setup_mic_denied">Mic permission is required for dictation</string>
+    <string name="setup_step4">4 · Notifications</string>
+    <string name="setup_notif_body">Shows the sync status while sync runs.</string>
+    <string name="setup_notif_allow">Allow notifications</string>
+    <string name="setup_notif_denied">Without notifications the sync status icon stays hidden</string>
+    <string name="setup_notif_old">Notifications are always on below Android 13</string>
+    <string name="setup_mic_button">Mic button</string>
+    <string name="setup_mode_push">Hold to talk: press and hold, release to stop.</string>
+    <string name="setup_mode_tap">Toggle: tap to start, tap again to stop.</string>
+    <string name="setup_mode_smart">Smart: quick tap toggles, hold-and-release stops.</string>
+    <string name="setup_behavior">Behavior: %1$s</string>
+    <string name="setup_tap_ceiling">Smart tap ceiling (ms)</string>
+    <string name="setup_tap_save">Save tap timing</string>
+    <string name="setup_theme">Theme</string>
+    <string name="setup_prefs">Preferences</string>
+    <string name="setup_behavior_label">Behavior</string>
+    <string name="drag_reorder">Drag to reorder</string>
+    <string name="sync_name_default">generated</string>
+    <string name="save_failed">save failed: %1$s</string>
+    <string name="done">done</string>
+    <string name="seen_just_now">seen active just now</string>
+    <string name="seen_min_ago">seen active %1$d min ago</string>
+    <string name="seen_h_ago">seen active %1$d h ago</string>
+
+    <!-- Transcription -->
+    <string name="stt_chain">Chain (top = first tried)</string>
+    <string name="stt_chain_sub">Entries are tried top-down; the first success wins. On-device (Local) entries are skipped until on-device inference lands.</string>
+    <string name="stt_local_summary">on-device · not available in this build</string>
+    <string name="stt_local_note">Coming later — needs no configuration.</string>
+    <string name="stt_local_why">Why?</string>
+    <string name="stt_local_title">On-device speech</string>
+    <string name="stt_local_body">The Local entry uses the live local configuration (models on this phone). On-device inference is not implemented in this build yet, so the entry is skipped. Add a Self-hosted or Cloud entry above it to dictate now — order decides priority.</string>
+    <string name="stt_selfhosted">Self-hosted</string>
+    <string name="stt_cloud">Cloud</string>
+    <string name="stt_capture">Capture</string>
+    <string name="stt_language">Language</string>
+    <string name="stt_vad">Voice activity trim</string>
+    <string name="stt_vad_gate">VAD gate: %1$.2f</string>
+    <string name="stt_save_capture">Save capture</string>
+    <string name="stt_apikey_note">Bearer token for reverse-proxy setups. Empty means no token.</string>
+    <string name="stt_name">Name</string>
+    <string name="stt_provider">Provider</string>
+    <string name="stt_url_server">Server URL (http(s) or ws(s))</string>
+    <string name="stt_url_cloud">Base URL (blank = vendor default)</string>
+    <string name="stt_model">Model</string>
+    <string name="stt_apikey">API key</string>
+    <string name="stt_apikey_show">show</string>
+    <string name="stt_apikey_hide">hide</string>
+    <string name="stt_streaming">Streaming (ws servers)</string>
+    <string name="stt_streaming_note">http(s) URLs always use request/response; ws(s) URLs use the sherpa protocol.</string>
+    <string name="stt_enabled">Enabled</string>
+    <string name="stt_gemini_note">Gemini speech is not implemented in this build yet.</string>
+    <string name="stt_dialog_title">Speech service</string>
+
+    <!-- Cleanup -->
+    <string name="cleanup_title">Cleanup</string>
+    <string name="cleanup_enable">Polish transcripts with an LLM</string>
+    <string name="cleanup_default_state">Using the built-in default prompt.</string>
+    <string name="cleanup_custom_state">Using your customized prompt.</string>
+    <string name="cleanup_show_all">Show all %1$d lines</string>
+    <string name="cleanup_customize">Customize</string>
+    <string name="cleanup_edit">Edit</string>
+    <string name="cleanup_reset">Reset to default</string>
+    <string name="cleanup_dialog_title">Cleanup prompt</string>
+    <string name="cleanup_dialog_note">Saved as your custom prompt. Reset returns to the built-in default.</string>
+    <string name="cleanup_models">Models (tried in order, first answer wins)</string>
+    <string name="cleanup_models_sub">If the first enabled model fails or returns nothing, the next one is tried. Local entries have no engine yet (same as desktop) and are skipped.</string>
+    <string name="cleanup_local_summary">Local · no engine yet</string>
+    <string name="cleanup_local_title">Local language model</string>
+    <string name="cleanup_local_body">Local LLM cleanup has no engine on desktop either — the entry is skipped and the chain moves on. Point at an Ollama server or a cloud model instead.</string>
+    <string name="cleanup_add">Add model</string>
+    <string name="llm_kind">Kind</string>
+    <string name="llm_local_note">Local has no engine yet (same as desktop) — the entry will be skipped.</string>
+    <string name="llm_url">URL</string>
+    <string name="llm_url_cloud">URL (blank = vendor default)</string>
+    <string name="llm_keepalive">Keep-alive (blank, -1, 0, 5m…)</string>
+    <string name="llm_thinking">Thinking</string>
+    <string name="llm_thinking_default">Default</string>
+    <string name="llm_thinking_on">On</string>
+    <string name="llm_thinking_off">Off</string>
+
+    <!-- Dictionary -->
+    <string name="dict_words_title">Words (%1$d)</string>
+    <string name="dict_words_sub">Exact spellings bias recognition.</string>
+    <string name="dict_new_word">New word</string>
+    <string name="dict_dup">That word is already listed.</string>
+    <string name="dict_search_words">Search words</string>
+    <string name="dict_no_words">No words yet — add names and terms the recognizer mishears.</string>
+    <string name="dict_no_match">No matches.</string>
+    <string name="dict_snippets_title">Snippets (%1$d)</string>
+    <string name="dict_snippets_sub">Say the trigger, get the replacement.</string>
+    <string name="dict_search_snippets">Search snippets</string>
+    <string name="dict_no_snippets">No snippets yet.</string>
+    <string name="dict_add_snippet">Add snippet</string>
+    <string name="dict_edit_snippet">Edit snippet</string>
+    <string name="dict_trigger">Trigger (comma-separated allowed)</string>
+    <string name="dict_replacement">Replacement</string>
+    <string name="dict_tab_words">Words</string>
+    <string name="dict_tab_snippets">Snippets</string>
+
+    <!-- Activity -->
+    <string name="act_sub">Your saved dictations, calculated on this device. Deleting history also updates these totals.</string>
+    <string name="act_words">Words spoken</string>
+    <string name="act_saved">Saved history</string>
+    <string name="act_wpm">Words per minute</string>
+    <string name="act_wpm_cap">Dictations with a recorded duration</string>
+    <string name="act_dictations">Dictations</string>
+    <string name="act_streak">Current streak</string>
+    <string name="act_streak_one">1 day</string>
+    <string name="act_streak_n">%1$d days</string>
+    <string name="act_streak_cap">Consecutive active days</string>
+    <string name="act_chart">Speaking activity</string>
+    <string name="act_empty">Nothing yet — dictate something first.</string>
+    <string name="act_less">Less</string>
+    <string name="act_more">More</string>
+    <string name="act_day_title">%1$s</string>
+    <string name="act_day_body">%1$d %2$s · %3$d %4$s</string>
+    <string name="act_word_one">word</string>
+    <string name="act_word_many">words</string>
+    <string name="act_dict_one">dictation</string>
+    <string name="act_dict_many">dictations</string>
+    <string name="act_wpm_none">–</string>
+
+    <!-- History + privacy -->
+    <string name="hist_privacy">Privacy &amp; retention</string>
+    <string name="hist_keep">Keep history</string>
+    <string name="hist_keep_sub">Off = dictate without storing.</string>
+    <string name="hist_cancelled">Keep cancelled dictations</string>
+    <string name="hist_cancelled_sub">Store rows for cancelled recordings.</string>
+    <string name="hist_days">Auto-delete transcripts after N days (0 = keep)</string>
+    <string name="hist_delete_older">Delete older now</string>
+    <string name="hist_set_days">set N days first</string>
+    <string name="hist_purged">deleted %1$d old entries</string>
+    <string name="hist_purge_failed">purge failed: %1$s</string>
+    <string name="hist_count">%1$d entries</string>
+    <string name="hist_clear_done">clear failed: %1$s</string>
+    <string name="hist_delete_failed">delete failed: %1$s</string>
+    <string name="hist_search">Search transcripts</string>
+    <string name="hist_words">%1$d words</string>
+
+    <!-- Devices (sync) -->
+    <string name="sync_this">This device</string>
+    <string name="sync_running">Sync running · %1$s</string>
+    <string name="sync_stopped">Sync stopped.</string>
+    <string name="sync_lan">LAN address: %1$s</string>
+    <string name="sync_name_hint">Device name (blank = %1$s)</string>
+    <string name="sync_port">Listen port (0 = no incoming)</string>
+    <string name="sync_advertise">Advertise on LAN (mDNS)</string>
+    <string name="sync_advertise_sub">Off = invisible, still sees others.</string>
+    <string name="sync_enabled">Sync enabled</string>
+    <string name="sync_boot">Start on boot</string>
+    <string name="sync_boot_sub">Relaunch sync after reboot when enabled.</string>
+    <string name="sync_saved">saved</string>
+    <string name="sync_restarted">saved — sync restarted</string>
+    <string name="sync_failed">sync failed: %1$s</string>
+    <string name="sync_start_failed">start failed: %1$s</string>
+    <string name="sync_trusted">Trusted (%1$d)</string>
+    <string name="sync_none">None yet.</string>
+    <string name="sync_noaddr">no address yet</string>
+    <string name="sync_lastsync">last sync %1$s</string>
+    <string name="sync_ago_never">never</string>
+    <string name="sync_ago_now">just now</string>
+    <string name="sync_ago_min">%1$d min ago</string>
+    <string name="sync_ago_h">%1$d h ago</string>
+    <string name="sync_ago_d">%1$d d ago</string>
+    <string name="sync_remove_failed">remove failed: %1$s</string>
+    <string name="sync_requests">Pairing requests (%1$d)</string>
+    <string name="sync_requests_none">None.</string>
+    <string name="sync_accept_failed">accept failed: %1$s</string>
+    <string name="sync_waiting">waiting for %1$s to accept — ask them to accept on the other device</string>
+    <string name="sync_nearby">Nearby (%1$d)</string>
+    <string name="sync_nearby_sub">Discovered on the LAN. Accept to trust and sync (works with desktops and other phones).</string>
+    <string name="sync_nobody">Nobody around.</string>
+    <string name="sync_add_title">Add device manually</string>
+    <string name="sync_add_sub">Copy the Device ID from MyWhisper on your other device. Send a pairing request, then accept it there. Both devices must be reachable.</string>
+    <string name="sync_add_button">Add by ID</string>
+    <string name="sync_add_dialog">Add device</string>
+    <string name="sync_add_id">Other device\u2019s ID (64 hex chars)</string>
+    <string name="sync_add_addr">Address override, e.g. 192.168.1.31:42973 (optional)</string>
+    <string name="sync_add_name">Name (optional)</string>
+    <string name="sync_add_send">Send pairing request</string>
+    <string name="sync_add_failed">failed: %1$s</string>
+
+    <!-- IME -->
+    <string name="ime_hint_smart">hold to talk · tap to toggle</string>
+    <string name="ime_hint_push">hold to talk · release to stop</string>
+    <string name="ime_hint_tap">tap to start · tap to stop</string>
+    <string name="ime_rec_toggle">recording — tap mic to finish</string>
+    <string name="ime_rec_push">recording — release to stop</string>
+    <string name="ime_rec_tap">recording — tap mic to stop</string>
+    <string name="ime_rec_smart">recording — release to stop, quick tap toggles</string>
+    <string name="ime_working">transcribing…</string>
+    <string name="ime_mic">Dictate</string>
+    <string name="ime_keyboard">Keyboard</string>
+    <string name="ime_settings">Settings</string>
+    <string name="ime_cancel">Cancel</string>
+
+    <!-- Sync service notification -->
+    <string name="notif_sync_title">MyWhisper sync</string>
+    <string name="notif_sync_text">Listening for device sync</string>
+    <string name="notif_stop">Stop</string>
+</resources>

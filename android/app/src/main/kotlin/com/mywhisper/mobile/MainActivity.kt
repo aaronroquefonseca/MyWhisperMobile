@@ -58,6 +58,7 @@ import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
@@ -79,6 +80,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.zIndex
@@ -126,13 +128,13 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
         micGranted.value = granted
-        if (!granted) toast("Mic permission is required for dictation")
+        if (!granted) toast(getString(R.string.setup_mic_denied))
     }
 
     private val notifPerm = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
-        if (!granted) toast("Without notifications the sync status icon stays hidden")
+        if (!granted) toast(getString(R.string.setup_notif_denied))
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -174,7 +176,7 @@ class MainActivity : ComponentActivity() {
         try {
             CoreBridge.putSettings(s).getOrThrow()
         } catch (e: Exception) {
-            toast("save failed: ${e.message}")
+            toast(getString(R.string.save_failed, e.message))
         }
     }
 
@@ -200,9 +202,9 @@ class MainActivity : ComponentActivity() {
         if (ts <= 0L) return ""
         val ago = (System.currentTimeMillis() - ts) / 1000
         return when {
-            ago < 60 -> "seen active just now"
-            ago < 3600 -> "seen active ${ago / 60}m ago"
-            else -> "seen active ${ago / 3600}h ago"
+            ago < 60 -> getString(R.string.seen_just_now)
+            ago < 3600 -> getString(R.string.seen_min_ago, ago / 60)
+            else -> getString(R.string.seen_h_ago, ago / 3600)
         }
     }
 
@@ -218,7 +220,15 @@ class MainActivity : ComponentActivity() {
             },
         ) {
             var tab by remember { mutableIntStateOf(0) }
-            val tabs = listOf("Setup", "Speech", "Cleanup", "Words", "Activity", "History", "Sync")
+            val tabs = listOf(
+                                getString(R.string.tab_setup),
+                                getString(R.string.tab_stt),
+                                getString(R.string.tab_cleanup),
+                                getString(R.string.tab_dict),
+                                getString(R.string.tab_activity),
+                                getString(R.string.tab_history),
+                                getString(R.string.tab_devices),
+                            )
             Scaffold { pad ->
                 Column(
                     modifier = Modifier
@@ -279,7 +289,7 @@ class MainActivity : ComponentActivity() {
         Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
             Text("$label: $value", style = MaterialTheme.typography.bodyMedium)
             Row {
-                OutlinedButton(onClick = { open = true }) { Text("Change") }
+                OutlinedButton(onClick = { open = true }) { Text(stringResource(R.string.action_change)) }
                 DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
                     options.forEach { o ->
                         DropdownMenuItem(
@@ -342,7 +352,7 @@ class MainActivity : ComponentActivity() {
                     row(item) {
                         Icon(
                             Icons.Filled.Menu,
-                            contentDescription = "Drag to reorder",
+                            contentDescription = stringResource(R.string.drag_reorder),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.pointerInput(id) {
                                 detectDragGestures(
@@ -392,7 +402,7 @@ class MainActivity : ComponentActivity() {
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState()),
         ) {
-            Section("Status") {
+            Section(stringResource(R.string.setup_status)) {
                 Text(statusState.value, style = MaterialTheme.typography.bodyMedium)
                 Spacer(Modifier.height(4.dp))
                 Text(
@@ -409,20 +419,20 @@ class MainActivity : ComponentActivity() {
                 Spacer(Modifier.height(8.dp))
                 Button(onClick = {
                     startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
-                }) { Text("Open input-method settings") }
+                }) { Text(stringResource(R.string.setup_open_ime)) }
             }
             Section("2 · Switch to it") {
                 val seen = imeSeenActive()
                 Text(
-                    if (seen.isNotEmpty()) "MyWhisper is active ($seen)."
-                    else "Pick MyWhisper from the list, then open any text field — the mic bar means it's active.",
+                    if (seen.isNotEmpty()) getString(R.string.setup_active_now, seen)
+                    else getString(R.string.setup_active_how),
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Spacer(Modifier.height(8.dp))
                 Button(onClick = {
                     (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager)
                         .showInputMethodPicker()
-                }) { Text("Choose input method") }
+                }) { Text(stringResource(R.string.setup_pick)) }
             }
             Section("3 · Microphone") {
                 Text(
@@ -432,7 +442,7 @@ class MainActivity : ComponentActivity() {
                 )
                 Spacer(Modifier.height(8.dp))
                 Button(onClick = { micPerm.launch(Manifest.permission.RECORD_AUDIO) }) {
-                    Text("Grant microphone")
+                    Text(stringResource(R.string.setup_mic_grant))
                 }
             }
             Section("4 · Notifications") {
@@ -445,24 +455,24 @@ class MainActivity : ComponentActivity() {
                     if (android.os.Build.VERSION.SDK_INT >= 33) {
                         notifPerm.launch(Manifest.permission.POST_NOTIFICATIONS)
                     } else {
-                        toast("Notifications are always on below Android 13")
+                        toast(getString(R.string.setup_notif_old))
                     }
                 }) {
-                    Text("Allow notifications")
+                    Text(stringResource(R.string.setup_notif_allow))
                 }
             }
-            Section("Mic button") {
+            Section(stringResource(R.string.setup_mic_button)) {
                 val prefs = s.optJSONObject("preferences") ?: JSONObject()
                 val mode = prefs.optString("mic_mode", "Smart")
                 Text(
                     when (mode) {
-                        "Push" -> "Hold to talk: press and hold, release to stop."
-                        "Tap" -> "Toggle: tap to start, tap again to stop."
-                        else -> "Smart: quick tap toggles, hold-and-release stops."
+                        "Push" -> getString(R.string.setup_mode_push)
+                        "Tap" -> getString(R.string.setup_mode_tap)
+                        else -> getString(R.string.setup_mode_smart)
                     },
                     style = MaterialTheme.typography.bodyMedium,
                 )
-                DropDown("Behavior", mode, listOf("Smart", "Push", "Tap")) {
+                DropDown(getString(R.string.setup_behavior_label), mode, listOf("Smart", "Push", "Tap")) {
                     prefs.put("mic_mode", it)
                     s.put("preferences", prefs)
                     save()
@@ -475,7 +485,7 @@ class MainActivity : ComponentActivity() {
                 OutlinedTextField(
                     value = tapMs,
                     onValueChange = { tapMs = it.filter(Char::isDigit).take(4) },
-                    label = { Text("Smart tap ceiling (ms)") },
+                    label = { Text(stringResource(R.string.setup_tap_ceiling)) },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -484,12 +494,12 @@ class MainActivity : ComponentActivity() {
                     hotkeys.put("smart_tap_ms", tapMs.toLongOrNull() ?: 150L)
                     s.put("hotkeys", hotkeys)
                     save()
-                }) { Text("Save tap timing") }
+                }) { Text(stringResource(R.string.setup_tap_save)) }
             }
-            Section("Preferences") {
+            Section(stringResource(R.string.setup_prefs)) {
                 val prefs = s.optJSONObject("preferences") ?: JSONObject()
                 DropDown(
-                    "Theme", prefs.optString("theme", "System"),
+                    getString(R.string.setup_theme), prefs.optString("theme", "System"),
                     listOf("System", "Light", "Dark"),
                 ) {
                     prefs.put("theme", it)
@@ -528,7 +538,7 @@ class MainActivity : ComponentActivity() {
 
     private fun entrySummary(e: JSONObject): String {
         return when (e.optString("kind")) {
-            "Local" -> "on-device · not available in this build"
+            "Local" -> getString(R.string.stt_local_summary)
             "SelfHosted" -> "${e.optString("url")} · ${e.optString("model")}"
             else -> "${e.optString("provider")} · ${e.optString("model")}"
         }
@@ -546,10 +556,9 @@ class MainActivity : ComponentActivity() {
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState()),
         ) {
-            Section("Chain (top = first tried)") {
+            Section(stringResource(R.string.stt_chain)) {
                 Text(
-                    "Entries are tried top-down; the first success wins. " +
-                        "On-device (Local) entries are skipped until on-device inference lands.",
+                    stringResource(R.string.stt_chain_sub),
                     style = MaterialTheme.typography.bodySmall,
                 )
                 val entries = entriesOf(stt, "entries")
@@ -591,10 +600,10 @@ class MainActivity : ComponentActivity() {
                                     },
                                 )
                                 IconButton(onClick = { dialog = JSONObject(e.toString()) }) {
-                                    Icon(Icons.Filled.Edit, contentDescription = "Edit")
+                                    Icon(Icons.Filled.Edit, contentDescription = stringResource(R.string.action_edit))
                                 }
                             } else {
-                                TextButton(onClick = { localInfo = true }) { Text("Why?") }
+                                TextButton(onClick = { localInfo = true }) { Text(stringResource(R.string.stt_local_why)) }
                             }
                             IconButton(onClick = {
                                 val next = JSONArray()
@@ -605,7 +614,7 @@ class MainActivity : ComponentActivity() {
                                 }
                                 stt.put("entries", next); save(); version++
                             }) {
-                                Icon(Icons.Filled.Delete, contentDescription = "Delete")
+                                Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.action_delete))
                             }
                         }
                     }
@@ -616,19 +625,19 @@ class MainActivity : ComponentActivity() {
                     }) {
                         Icon(Icons.Filled.Add, contentDescription = null)
                         Spacer(Modifier.width(4.dp))
-                        Text("Self-hosted")
+                        Text(stringResource(R.string.stt_selfhosted))
                     }
                     Spacer(Modifier.width(8.dp))
                     OutlinedButton(onClick = { dialog = newSttEntry("Cloud") }) {
                         Icon(Icons.Filled.Add, contentDescription = null)
                         Spacer(Modifier.width(4.dp))
-                        Text("Cloud")
+                        Text(stringResource(R.string.stt_cloud))
                     }
                 }
             }
-            Section("Capture") {
+            Section(stringResource(R.string.stt_capture)) {
                 var lang by remember { mutableStateOf(stt.optString("language", "auto")) }
-                Text("Language", style = MaterialTheme.typography.bodyMedium)
+                Text(stringResource(R.string.stt_language), style = MaterialTheme.typography.bodyMedium)
                 var langOpen by remember { mutableStateOf(false) }
                 val langLabel = langs.firstOrNull { it.first == lang }?.second ?: lang
                 OutlinedButton(onClick = { langOpen = true }, modifier = Modifier.fillMaxWidth()) {
@@ -644,13 +653,13 @@ class MainActivity : ComponentActivity() {
                 }
                 val vad = stt.optBoolean("vad_enabled", false)
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Voice activity trim", modifier = Modifier.weight(1f))
+                    Text(stringResource(R.string.stt_vad), modifier = Modifier.weight(1f))
                     Switch(checked = vad, onCheckedChange = {
                         stt.put("vad_enabled", it); save(); version++
                     })
                 }
                 var gate by remember { mutableStateOf(stt.optDouble("vad_threshold", 0.1).toFloat()) }
-                Text("VAD gate: ${"%.2f".format(gate)}")
+                Text(stringResource(R.string.stt_vad_gate, gate))
                 Slider(
                     value = gate, onValueChange = { gate = it },
                     onValueChangeFinished = {
@@ -661,13 +670,13 @@ class MainActivity : ComponentActivity() {
                 Spacer(Modifier.height(4.dp))
                 Button(onClick = {
                     stt.put("language", lang.ifBlank { "auto" }); save()
-                }) { Text("Save capture") }
+                }) { Text(stringResource(R.string.stt_save_capture)) }
             }
         }
         if (localInfo) {
             AlertDialog(
                 onDismissRequest = { localInfo = false },
-                title = { Text("On-device speech") },
+                title = { Text(stringResource(R.string.stt_local_title)) },
                 text = {
                     Text(
                         "The Local entry uses the live local configuration (models on this phone). " +
@@ -676,10 +685,10 @@ class MainActivity : ComponentActivity() {
                             "order decides priority.",
                     )
                 },
-                confirmButton = { TextButton(onClick = { localInfo = false }) { Text("Got it") } },
+                confirmButton = { TextButton(onClick = { localInfo = false }) { Text(stringResource(R.string.action_gotit)) } },
             )
         }
-        dialog?.let { EntryDialog(it, "Speech service", onClose = { dialog = null }) { edited ->
+        dialog?.let { EntryDialog(getString(R.string.stt_dialog_title), it, onClose = { dialog = null }) { edited ->
             upsertEntry(stt, "entries", edited)
             save(); version++; dialog = null
         } }
@@ -716,8 +725,8 @@ class MainActivity : ComponentActivity() {
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable
     private fun EntryDialog(
-        e: JSONObject,
         title: String,
+        e: JSONObject,
         onClose: () -> Unit,
         onSave: (JSONObject) -> Unit,
     ) {
@@ -732,13 +741,13 @@ class MainActivity : ComponentActivity() {
         val kind = e.optString("kind")
         AlertDialog(
             onDismissRequest = onClose,
-            title = { Text("$title · $kind") },
+            title = { Text("${stringResource(R.string.stt_dialog_title)} · $kind") },
             text = {
                 Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     OutlinedTextField(value = name, onValueChange = { name = it },
-                        label = { Text("Name") }, modifier = Modifier.fillMaxWidth())
+                        label = { Text(stringResource(R.string.stt_name)) }, modifier = Modifier.fillMaxWidth())
                     if (kind == "Cloud") {
-                        DropDown("Provider", provider,
+                        DropDown(getString(R.string.stt_provider), provider,
                             listOf("OpenAI", "Groq", "Mistral", "Deepgram", "Gemini")) {
                             provider = it
                         }
@@ -760,10 +769,10 @@ class MainActivity : ComponentActivity() {
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                         modifier = Modifier.fillMaxWidth())
                     OutlinedTextField(value = model, onValueChange = { model = it },
-                        label = { Text("Model") }, modifier = Modifier.fillMaxWidth())
+                        label = { Text(stringResource(R.string.stt_model)) }, modifier = Modifier.fillMaxWidth())
                     OutlinedTextField(
                         value = key, onValueChange = { key = it },
-                        label = { Text("API key") },
+                        label = { Text(stringResource(R.string.stt_apikey)) },
                         visualTransformation = if (showKey) VisualTransformation.None
                         else PasswordVisualTransformation(),
                         trailingIcon = {
@@ -781,7 +790,7 @@ class MainActivity : ComponentActivity() {
                     }
                     if (kind == "SelfHosted") {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("Streaming (ws servers)", modifier = Modifier.weight(1f))
+                            Text(stringResource(R.string.stt_streaming), modifier = Modifier.weight(1f))
                             Switch(checked = streaming, onCheckedChange = { streaming = it })
                         }
                         Text(
@@ -790,7 +799,7 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Enabled", modifier = Modifier.weight(1f))
+                        Text(stringResource(R.string.stt_enabled), modifier = Modifier.weight(1f))
                         Switch(checked = enabled, onCheckedChange = { enabled = it })
                     }
                 }
@@ -802,9 +811,9 @@ class MainActivity : ComponentActivity() {
                         .put("api_key", key).put("streaming", streaming)
                         .put("enabled", enabled)
                     onSave(e)
-                }) { Text("Save") }
+                }) { Text(stringResource(R.string.action_save)) }
             },
-            dismissButton = { TextButton(onClick = onClose) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = onClose) { Text(stringResource(R.string.action_cancel)) } },
         )
     }
 
@@ -824,10 +833,10 @@ class MainActivity : ComponentActivity() {
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState()),
         ) {
-            Section("Cleanup") {
+            Section(stringResource(R.string.cleanup_title)) {
                 val on = lm.optBoolean("cleanup_enabled", true)
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Polish transcripts with an LLM", modifier = Modifier.weight(1f))
+                    Text(stringResource(R.string.cleanup_enable), modifier = Modifier.weight(1f))
                     Switch(checked = on, onCheckedChange = {
                         lm.put("cleanup_enabled", it); save(); version++
                     })
@@ -869,7 +878,7 @@ class MainActivity : ComponentActivity() {
                         )
                         if (lines.size > 6) {
                             TextButton(onClick = { expanded = !expanded }) {
-                                Text(if (expanded) "Show less" else "Show all ${lines.size} lines")
+                                Text(if (expanded) stringResource(R.string.action_show_less) else stringResource(R.string.cleanup_show_all, lines.size))
                             }
                         }
                     }
@@ -877,21 +886,21 @@ class MainActivity : ComponentActivity() {
                 Spacer(Modifier.height(4.dp))
                 Row {
                     Button(onClick = { editor = true }) {
-                        Text(if (isDefault) "Customize" else "Edit")
+                        Text(if (isDefault) stringResource(R.string.cleanup_customize) else stringResource(R.string.cleanup_edit))
                     }
                     Spacer(Modifier.width(8.dp))
                     OutlinedButton(
                         enabled = !isDefault,
                         onClick = { lm.put("cleanup_prompt", ""); save(); version++ },
                     ) {
-                        Text("Reset to default")
+                        Text(stringResource(R.string.cleanup_reset))
                     }
                 }
                 if (editor) {
                     var draft by remember { mutableStateOf(effective) }
                     AlertDialog(
                         onDismissRequest = { editor = false },
-                        title = { Text("Cleanup prompt") },
+                        title = { Text(stringResource(R.string.cleanup_dialog_title)) },
                         text = {
                             Column(
                                 modifier = Modifier
@@ -921,15 +930,15 @@ class MainActivity : ComponentActivity() {
                                     if (draft.trim() == def.trim() || draft.isBlank()) "" else draft,
                                 )
                                 save(); version++; editor = false
-                            }) { Text("Save") }
+                            }) { Text(stringResource(R.string.action_save)) }
                         },
                         dismissButton = {
-                            TextButton(onClick = { editor = false }) { Text("Cancel") }
+                            TextButton(onClick = { editor = false }) { Text(stringResource(R.string.action_cancel)) }
                         },
                     )
                 }
             }
-            Section("Models (tried in order, first answer wins)") {
+            Section(stringResource(R.string.cleanup_models)) {
                 Text(
                     "If the first enabled model fails or returns nothing, the next one is tried. " +
                         "Local entries have no engine yet (same as desktop) and are skipped.",
@@ -958,7 +967,7 @@ class MainActivity : ComponentActivity() {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(e.optString("name", "model"))
                                 Text(
-                                    if (isLocal) "Local · no engine yet"
+                                    if (isLocal) getString(R.string.cleanup_local_summary)
                                     else "${e.optString("kind")} · ${e.optString("model")}",
                                     style = MaterialTheme.typography.bodySmall,
                                 )
@@ -971,10 +980,10 @@ class MainActivity : ComponentActivity() {
                                     },
                                 )
                                 IconButton(onClick = { dialog = JSONObject(e.toString()) }) {
-                                    Icon(Icons.Filled.Edit, contentDescription = "Edit")
+                                    Icon(Icons.Filled.Edit, contentDescription = stringResource(R.string.action_edit))
                                 }
                             } else {
-                                TextButton(onClick = { localInfo = true }) { Text("Why?") }
+                                TextButton(onClick = { localInfo = true }) { Text(stringResource(R.string.stt_local_why)) }
                             }
                             IconButton(onClick = {
                                 val next = JSONArray()
@@ -985,7 +994,7 @@ class MainActivity : ComponentActivity() {
                                 }
                                 lm.put("entries", next); save(); version++
                             }) {
-                                Icon(Icons.Filled.Delete, contentDescription = "Delete")
+                                Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.action_delete))
                             }
                         }
                     }
@@ -1004,14 +1013,14 @@ class MainActivity : ComponentActivity() {
                 }) {
                     Icon(Icons.Filled.Add, contentDescription = null)
                     Spacer(Modifier.width(4.dp))
-                    Text("Add model")
+                    Text(stringResource(R.string.cleanup_add))
                 }
             }
         }
         if (localInfo) {
             AlertDialog(
                 onDismissRequest = { localInfo = false },
-                title = { Text("Local language model") },
+                title = { Text(stringResource(R.string.cleanup_local_title)) },
                 text = {
                     Text(
                         "Local LLM cleanup has no engine on desktop either — " +
@@ -1019,7 +1028,7 @@ class MainActivity : ComponentActivity() {
                             "Point at an Ollama server or a cloud model instead.",
                     )
                 },
-                confirmButton = { TextButton(onClick = { localInfo = false }) { Text("Got it") } },
+                confirmButton = { TextButton(onClick = { localInfo = false }) { Text(stringResource(R.string.action_gotit)) } },
             )
         }
         dialog?.let { d ->
@@ -1043,6 +1052,12 @@ class MainActivity : ComponentActivity() {
         var provider by remember { mutableStateOf(e.optString("provider", "OpenAI")) }
         var key by remember { mutableStateOf(e.optString("api_key")) }
         var keepAlive by remember { mutableStateOf(e.optString("keep_alive", "")) }
+        // Internal values stay English (persisted); display is localized.
+        val thinkLabels = mapOf(
+            "Default" to getString(R.string.llm_thinking_default),
+            "On" to getString(R.string.llm_thinking_on),
+            "Off" to getString(R.string.llm_thinking_off),
+        )
         var thinking by remember {
             mutableStateOf(
                 when {
@@ -1055,12 +1070,12 @@ class MainActivity : ComponentActivity() {
         var enabled by remember { mutableStateOf(e.optBoolean("enabled", true)) }
         AlertDialog(
             onDismissRequest = onClose,
-            title = { Text("Language model · $kind") },
+            title = { Text(kind) },
             text = {
                 Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     OutlinedTextField(value = name, onValueChange = { name = it },
-                        label = { Text("Name") }, modifier = Modifier.fillMaxWidth())
-                    DropDown("Kind", kind, listOf("Ollama", "Local", "Cloud")) {
+                        label = { Text(stringResource(R.string.stt_name)) }, modifier = Modifier.fillMaxWidth())
+                    DropDown(getString(R.string.llm_kind), kind, listOf("Ollama", "Local", "Cloud")) {
                         kind = it
                     }
                     if (kind == "Local") {
@@ -1071,28 +1086,28 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                     if (kind == "Cloud") {
-                        DropDown("Provider", provider,
+                        DropDown(getString(R.string.stt_provider), provider,
                             listOf("Groq", "OpenRouter", "OpenAI", "Claude", "Google")) {
                             provider = it
                         }
                     }
                     if (kind != "Local") {
                         OutlinedTextField(value = url, onValueChange = { url = it },
-                            label = { Text(if (kind == "Cloud") "URL (blank = vendor default)" else "URL") },
+                            label = { Text(if (kind == "Cloud") stringResource(R.string.llm_url_cloud) else stringResource(R.string.llm_url)) },
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                             modifier = Modifier.fillMaxWidth())
                         OutlinedTextField(value = model, onValueChange = { model = it },
-                            label = { Text("Model") }, modifier = Modifier.fillMaxWidth())
+                            label = { Text(stringResource(R.string.stt_model)) }, modifier = Modifier.fillMaxWidth())
                     }
                     if (kind == "Cloud") {
                         OutlinedTextField(value = key, onValueChange = { key = it },
-                            label = { Text("API key") },
+                            label = { Text(stringResource(R.string.stt_apikey)) },
                             visualTransformation = PasswordVisualTransformation(),
                             modifier = Modifier.fillMaxWidth())
                     }
                     if (kind == "Ollama") {
                         OutlinedTextField(value = key, onValueChange = { key = it },
-                            label = { Text("API key") },
+                            label = { Text(stringResource(R.string.stt_apikey)) },
                             visualTransformation = PasswordVisualTransformation(),
                             modifier = Modifier.fillMaxWidth())
                         Text(
@@ -1102,14 +1117,14 @@ class MainActivity : ComponentActivity() {
                     }
                     if (kind == "Ollama") {
                         OutlinedTextField(value = keepAlive, onValueChange = { keepAlive = it },
-                            label = { Text("Keep-alive (blank, -1, 0, 5m…)") },
+                            label = { Text(stringResource(R.string.llm_keepalive)) },
                             modifier = Modifier.fillMaxWidth())
-                        DropDown("Thinking", thinking, listOf("Default", "On", "Off")) {
-                            thinking = it
+                        DropDown(getString(R.string.llm_thinking), thinkLabels[thinking] ?: thinking, thinkLabels.values.toList()) { picked ->
+                            thinking = thinkLabels.entries.firstOrNull { e -> e.value == picked }?.key ?: thinking
                         }
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Enabled", modifier = Modifier.weight(1f))
+                        Text(stringResource(R.string.stt_enabled), modifier = Modifier.weight(1f))
                         Switch(checked = enabled, onCheckedChange = { enabled = it })
                     }
                 }
@@ -1127,9 +1142,9 @@ class MainActivity : ComponentActivity() {
                         else -> e.remove("thinking")
                     }
                     onSave(e)
-                }) { Text("Save") }
+                }) { Text(stringResource(R.string.action_save)) }
             },
-            dismissButton = { TextButton(onClick = onClose) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = onClose) { Text(stringResource(R.string.action_cancel)) } },
         )
     }
 
@@ -1144,16 +1159,37 @@ class MainActivity : ComponentActivity() {
         @Suppress("UNUSED_EXPRESSION") version
         var snipDialog by remember { mutableStateOf<JSONObject?>(null) }
         var snipIndex by remember { mutableIntStateOf(-1) }
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState()),
-        ) {
-            Section("Words (${entriesOf(dict, "words").length()})") {
+        // Words / Snippets segments (desktop Dictionary tabs): one list
+        // visible at a time so huge dictionaries stay usable.
+        var dictTab by remember { mutableIntStateOf(0) }
+        Column(modifier = Modifier.fillMaxSize()) {
+            TabRow(selectedTabIndex = dictTab) {
+                Tab(
+                    selected = dictTab == 0,
+                    onClick = { dictTab = 0 },
+                    text = { Text(stringResource(R.string.dict_tab_words)) },
+                )
+                Tab(
+                    selected = dictTab == 1,
+                    onClick = { dictTab = 1 },
+                    text = { Text(stringResource(R.string.dict_tab_snippets)) },
+                )
+            }
+            if (dictTab == 0) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(12.dp),
+            ) {
                 Text(
-                    "Exact spellings bias recognition.",
+                    stringResource(R.string.dict_words_title, entriesOf(dict, "words").length()),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    stringResource(R.string.dict_words_sub),
                     style = MaterialTheme.typography.bodySmall,
                 )
+                Spacer(Modifier.height(8.dp))
                 val arr = entriesOf(dict, "words")
                 var next by remember { mutableStateOf("") }
                 var dup by remember { mutableStateOf(false) }
@@ -1161,7 +1197,7 @@ class MainActivity : ComponentActivity() {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     OutlinedTextField(
                         value = next, onValueChange = { next = it; dup = false },
-                        label = { Text("New word") },
+                        label = { Text(stringResource(R.string.dict_new_word)) },
                         modifier = Modifier.weight(1f),
                     )
                     Spacer(Modifier.width(8.dp))
@@ -1179,11 +1215,11 @@ class MainActivity : ComponentActivity() {
                                 dict.put("words", arr); save(); version++
                             }
                         }
-                    }) { Text("Add") }
+                    }) { Text(stringResource(R.string.action_add)) }
                 }
                 if (dup) {
                     Text(
-                        "That word is already listed.",
+                        stringResource(R.string.dict_dup),
                         color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -1191,7 +1227,7 @@ class MainActivity : ComponentActivity() {
                 Spacer(Modifier.height(4.dp))
                 OutlinedTextField(
                     value = query, onValueChange = { query = it },
-                    label = { Text("Search words") },
+                    label = { Text(stringResource(R.string.dict_search_words)) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                 )
@@ -1201,16 +1237,16 @@ class MainActivity : ComponentActivity() {
                     .filter { query.isBlank() || it.contains(query, ignoreCase = true) }
                 if (arr.length() == 0) {
                     Text(
-                        "No words yet — add names and terms the recognizer mishears.",
+                        stringResource(R.string.dict_no_words),
                         style = MaterialTheme.typography.bodySmall,
                     )
                 } else if (shown.isEmpty()) {
-                    Text("No matches.", style = MaterialTheme.typography.bodySmall)
+                    Text(stringResource(R.string.dict_no_match), style = MaterialTheme.typography.bodySmall)
                 } else {
                     LazyColumn(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .heightIn(max = 320.dp),
+                            .weight(1f),
                     ) {
                         items(shown, key = { it }) { w ->
                             Row(
@@ -1225,23 +1261,33 @@ class MainActivity : ComponentActivity() {
                                     }
                                     dict.put("words", n); save(); version++
                                 }) {
-                                    Icon(Icons.Filled.Delete, contentDescription = "Delete")
+                                    Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.action_delete))
                                 }
                             }
                         }
                     }
                 }
             }
-            Section("Snippets (${entriesOf(dict, "snippets").length()})") {
+            } else {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(12.dp),
+            ) {
                 Text(
-                    "Say the trigger, get the replacement.",
+                    stringResource(R.string.dict_snippets_title, entriesOf(dict, "snippets").length()),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    stringResource(R.string.dict_snippets_sub),
                     style = MaterialTheme.typography.bodySmall,
                 )
+                Spacer(Modifier.height(8.dp))
                 val arr = entriesOf(dict, "snippets")
                 var query by remember { mutableStateOf("") }
                 OutlinedTextField(
                     value = query, onValueChange = { query = it },
-                    label = { Text("Search snippets") },
+                    label = { Text(stringResource(R.string.dict_search_snippets)) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                 )
@@ -1254,15 +1300,15 @@ class MainActivity : ComponentActivity() {
                             sn.optString("replacement").contains(query, ignoreCase = true)
                     }
                 if (arr.length() == 0) {
-                    Text("No snippets yet.", style = MaterialTheme.typography.bodySmall)
+                    Text(stringResource(R.string.dict_no_snippets), style = MaterialTheme.typography.bodySmall)
                     Spacer(Modifier.height(4.dp))
                 } else if (shown.isEmpty()) {
-                    Text("No matches.", style = MaterialTheme.typography.bodySmall)
+                    Text(stringResource(R.string.dict_no_match), style = MaterialTheme.typography.bodySmall)
                 } else {
                     LazyColumn(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .heightIn(max = 420.dp),
+                            .weight(1f),
                     ) {
                         items(shown, key = { (_, sn) -> sn.optString("trigger") + sn.optString("replacement") }) { (i, sn) ->
                             Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
@@ -1281,7 +1327,7 @@ class MainActivity : ComponentActivity() {
                                         snipIndex = i
                                         snipDialog = JSONObject(sn.toString())
                                     }) {
-                                        Icon(Icons.Filled.Edit, contentDescription = "Edit")
+                                        Icon(Icons.Filled.Edit, contentDescription = stringResource(R.string.action_edit))
                                     }
                                     IconButton(onClick = {
                                         val n = JSONArray()
@@ -1290,7 +1336,7 @@ class MainActivity : ComponentActivity() {
                                         }
                                         dict.put("snippets", n); save(); version++
                                     }) {
-                                        Icon(Icons.Filled.Delete, contentDescription = "Delete")
+                                        Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.action_delete))
                                     }
                                 }
                             }
@@ -1303,23 +1349,24 @@ class MainActivity : ComponentActivity() {
                 }) {
                     Icon(Icons.Filled.Add, contentDescription = null)
                     Spacer(Modifier.width(4.dp))
-                    Text("Add snippet")
+                    Text(stringResource(R.string.dict_add_snippet))
                 }
             }
+        }
         }
         snipDialog?.let { d ->
             var trig by remember { mutableStateOf(d.optString("trigger")) }
             var repl by remember { mutableStateOf(d.optString("replacement")) }
             AlertDialog(
                 onDismissRequest = { snipDialog = null },
-                title = { Text(if (snipIndex < 0) "Add snippet" else "Edit snippet") },
+                title = { Text(if (snipIndex < 0) stringResource(R.string.dict_add_snippet) else stringResource(R.string.dict_edit_snippet)) },
                 text = {
                     Column {
                         OutlinedTextField(value = trig, onValueChange = { trig = it },
-                            label = { Text("Trigger (comma-separated allowed)") },
+                            label = { Text(stringResource(R.string.dict_trigger)) },
                             modifier = Modifier.fillMaxWidth())
                         OutlinedTextField(value = repl, onValueChange = { repl = it },
-                            label = { Text("Replacement") },
+                            label = { Text(stringResource(R.string.dict_replacement)) },
                             modifier = Modifier.fillMaxWidth())
                     }
                 },
@@ -1338,9 +1385,9 @@ class MainActivity : ComponentActivity() {
                             version++
                         }
                         snipDialog = null
-                    }) { Text("Save") }
+                    }) { Text(stringResource(R.string.action_save)) }
                 },
-                dismissButton = { TextButton(onClick = { snipDialog = null }) { Text("Cancel") } },
+                dismissButton = { TextButton(onClick = { snipDialog = null }) { Text(stringResource(R.string.action_cancel)) } },
             )
         }
     }
@@ -1398,32 +1445,33 @@ class MainActivity : ComponentActivity() {
             Column(modifier = Modifier.padding(horizontal = 8.dp)) {
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     StatCard(
-                        "Words spoken", compactWords(w), "Saved history",
+                        stringResource(R.string.act_words), compactWords(w), stringResource(R.string.act_saved),
                         modifier = Modifier.weight(1f),
                     )
                     StatCard(
-                        "Words per minute", if (wpm > 0) "${wpm.toInt()}" else "–",
-                        "Dictations with a recorded duration",
+                        stringResource(R.string.act_wpm),
+                        if (wpm > 0) "${wpm.toInt()}" else stringResource(R.string.act_wpm_none),
+                        stringResource(R.string.act_wpm_cap),
                         modifier = Modifier.weight(1f),
                     )
                 }
                 Spacer(Modifier.height(8.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     StatCard(
-                        "Dictations", "$u", "Saved history",
+                        stringResource(R.string.act_dictations), "$u", stringResource(R.string.act_saved),
                         modifier = Modifier.weight(1f),
                     )
                     StatCard(
-                        "Current streak",
-                        if (streak == 1) "1 day" else "$streak days",
-                        "Consecutive active days",
+                        stringResource(R.string.act_streak),
+                        if (streak == 1) stringResource(R.string.act_streak_one) else stringResource(R.string.act_streak_n, streak),
+                        stringResource(R.string.act_streak_cap),
                         modifier = Modifier.weight(1f),
                     )
                 }
             }
-            Section("Speaking activity") {
+            Section(stringResource(R.string.act_chart)) {
                 if (days.isEmpty()) {
-                    Text("Nothing yet — dictate something first.", style = MaterialTheme.typography.bodySmall)
+                    Text(stringResource(R.string.act_empty), style = MaterialTheme.typography.bodySmall)
                 } else {
                     var tapped by remember { mutableStateOf<Day?>(null) }
                     Heatmap(days, onDayTap = { tapped = it })
@@ -1436,13 +1484,17 @@ class MainActivity : ComponentActivity() {
                         }
                         AlertDialog(
                             onDismissRequest = { tapped = null },
-                            title = { Text(date.ifEmpty { "Day" }) },
+                            title = { Text(date.ifEmpty { "·" }) },
                             text = {
-                                Text("${d.words} ${if (d.words == 1) "word" else "words"} · " +
-                                    "${d.utterances} ${if (d.utterances == 1) "dictation" else "dictations"}")
+                                Text(stringResource(R.string.act_day_body,
+                                    d.words,
+                                    if (d.words == 1) getString(R.string.act_word_one) else getString(R.string.act_word_many),
+                                    d.utterances,
+                                    if (d.utterances == 1) getString(R.string.act_dict_one) else getString(R.string.act_dict_many),
+                                ))
                             },
                             confirmButton = {
-                                TextButton(onClick = { tapped = null }) { Text("Close") }
+                                TextButton(onClick = { tapped = null }) { Text(stringResource(R.string.action_close)) }
                             },
                         )
                     }
@@ -1450,7 +1502,7 @@ class MainActivity : ComponentActivity() {
                     OutlinedButton(onClick = { version++ }) {
                         Icon(Icons.Filled.Refresh, contentDescription = null)
                         Spacer(Modifier.width(4.dp))
-                        Text("Refresh")
+                        Text(stringResource(R.string.action_refresh))
                     }
                 }
             }
@@ -1589,7 +1641,7 @@ class MainActivity : ComponentActivity() {
             horizontalArrangement = Arrangement.End,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("Less", style = MaterialTheme.typography.bodySmall)
+            Text(stringResource(R.string.act_less), style = MaterialTheme.typography.bodySmall)
             Spacer(Modifier.width(4.dp))
             for (l in 0..3) {
                 Box(
@@ -1600,7 +1652,7 @@ class MainActivity : ComponentActivity() {
                 )
                 Spacer(Modifier.width(3.dp))
             }
-            Text("More", style = MaterialTheme.typography.bodySmall)
+            Text(stringResource(R.string.act_more), style = MaterialTheme.typography.bodySmall)
         }
     }
 
@@ -1632,7 +1684,7 @@ class MainActivity : ComponentActivity() {
                             modifier = Modifier.weight(1f),
                         )
                         TextButton(onClick = { privOpen = !privOpen }) {
-                            Text(if (privOpen) "Hide" else "Show")
+                            Text(if (privOpen) stringResource(R.string.action_hide) else stringResource(R.string.action_show))
                         }
                     }
                     if (privOpen) {
@@ -1642,7 +1694,7 @@ class MainActivity : ComponentActivity() {
                         }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(modifier = Modifier.weight(1f)) {
-                            Text("Keep history")
+                            Text(stringResource(R.string.hist_keep))
                             Text(
                                 "Off = dictate without storing.",
                                 style = MaterialTheme.typography.bodySmall,
@@ -1657,7 +1709,7 @@ class MainActivity : ComponentActivity() {
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(modifier = Modifier.weight(1f)) {
-                            Text("Keep cancelled dictations")
+                            Text(stringResource(R.string.hist_cancelled))
                             Text(
                                 "Store rows for cancelled recordings.",
                                 style = MaterialTheme.typography.bodySmall,
@@ -1676,7 +1728,7 @@ class MainActivity : ComponentActivity() {
                     OutlinedTextField(
                         value = daysStr,
                         onValueChange = { daysStr = it.filter(Char::isDigit).take(4) },
-                        label = { Text("Auto-delete transcripts after N days (0 = keep)") },
+                        label = { Text(stringResource(R.string.hist_days)) },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         modifier = Modifier.fillMaxWidth(),
                     )
@@ -1685,7 +1737,7 @@ class MainActivity : ComponentActivity() {
                         Button(onClick = {
                             priv.put("transcript_auto_delete_days", daysStr.toIntOrNull() ?: 0)
                             save()
-                        }) { Text("Save") }
+                        }) { Text(stringResource(R.string.action_save)) }
                         Spacer(Modifier.width(8.dp))
                         OutlinedButton(onClick = {
                             val days = daysStr.toIntOrNull() ?: 0
@@ -1693,16 +1745,16 @@ class MainActivity : ComponentActivity() {
                                 workers.execute {
                                     try {
                                         val n = CoreBridge.purgeHistory(days).getOrThrow()
-                                        bgToast("deleted $n old entries")
+                                        bgToast(getString(R.string.hist_purged, n))
                                     } catch (e: Exception) {
-                                        bgToast("purge failed: ${e.message}")
+                                        bgToast(getString(R.string.hist_purge_failed, e.message))
                                     }
                                     runOnUiThread { items = loadHist() }
                                 }
                             } else {
-                                toast("set N days first")
+                                toast(getString(R.string.hist_set_days))
                             }
-                        }) { Text("Delete older now") }
+                        }) { Text(stringResource(R.string.hist_delete_older)) }
                     }
                 }
             }
@@ -1712,23 +1764,23 @@ class MainActivity : ComponentActivity() {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("${items.size} entries", style = MaterialTheme.typography.titleMedium)
+                Text(stringResource(R.string.hist_count, items.size), style = MaterialTheme.typography.titleMedium)
                 Row {
-                    TextButton(onClick = { items = loadHist() }) { Text("Refresh") }
+                    TextButton(onClick = { items = loadHist() }) { Text(stringResource(R.string.action_refresh)) }
                     TextButton(onClick = {
                         try {
                             CoreBridge.dataOf(CoreBridge.nativeClearHistory())
                             items = loadHist()
                         } catch (e: Exception) {
-                            toast("clear failed: ${e.message}")
+                            toast(getString(R.string.hist_clear_done, e.message))
                         }
-                    }) { Text("Clear") }
+                    }) { Text(stringResource(R.string.action_clear)) }
                 }
             }
             var histQuery by remember { mutableStateOf("") }
             OutlinedTextField(
                 value = histQuery, onValueChange = { histQuery = it },
-                label = { Text("Search transcripts") },
+                label = { Text(stringResource(R.string.hist_search)) },
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
                 singleLine = true,
             )
@@ -1747,7 +1799,7 @@ class MainActivity : ComponentActivity() {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(h.text)
                                 Text(
-                                    "${h.date} · ${h.words} words",
+                                    getString(R.string.hist_words, h.words).let { "${h.date} · $it" },
                                     style = MaterialTheme.typography.bodySmall,
                                 )
                             }
@@ -1756,10 +1808,10 @@ class MainActivity : ComponentActivity() {
                                     CoreBridge.dataOf(CoreBridge.nativeDeleteHistory(h.uuid))
                                     items = loadHist()
                                 } catch (e: Exception) {
-                                    toast("delete failed: ${e.message}")
+                                    toast(getString(R.string.hist_delete_failed, e.message))
                                 }
                             }) {
-                                Icon(Icons.Filled.Delete, contentDescription = "Delete")
+                                Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.action_delete))
                             }
                         }
                     }
@@ -1858,12 +1910,12 @@ class MainActivity : ComponentActivity() {
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState()),
         ) {
-            Section("This device") {
+            Section(stringResource(R.string.sync_this)) {
                 val running = status?.optBoolean("running", false) == true
                 Text(
                     if (running) {
                         val shown = displayName.ifEmpty { status?.optString("nodeId", "")?.take(12) + "…" }
-                        "Sync running · $shown"
+getString(R.string.sync_running, shown)
                     } else {
                         "Sync stopped."
                     },
@@ -1871,12 +1923,12 @@ class MainActivity : ComponentActivity() {
                 )
                 val lan = status?.optString("lanIp", "") ?: ""
                 if (lan.isNotEmpty()) {
-                    Text("LAN address: $lan", style = MaterialTheme.typography.bodySmall)
+                    Text(stringResource(R.string.sync_lan, lan), style = MaterialTheme.typography.bodySmall)
                 }
                 var name by remember { mutableStateOf(sync.optString("device_name", "")) }
                 OutlinedTextField(
                     value = name, onValueChange = { name = it },
-                    label = { Text("Device name (blank = ${displayName.ifEmpty { "generated" }})") },
+                    label = { Text(stringResource(R.string.sync_name_hint, displayName.ifEmpty { getString(R.string.sync_name_default) })) },
                     modifier = Modifier.fillMaxWidth(),
                 )
                 var portStr by remember {
@@ -1884,14 +1936,14 @@ class MainActivity : ComponentActivity() {
                 }
                 OutlinedTextField(
                     value = portStr, onValueChange = { portStr = it.filter(Char::isDigit).take(5) },
-                    label = { Text("Listen port (0 = no incoming)") },
+                    label = { Text(stringResource(R.string.sync_port)) },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.fillMaxWidth(),
                 )
                 val adv = sync.optBoolean("advertise", true)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("Advertise on LAN (mDNS)")
+                        Text(stringResource(R.string.sync_advertise))
                         Text(
                             "Off = invisible, still sees others.",
                             style = MaterialTheme.typography.bodySmall,
@@ -1904,7 +1956,7 @@ class MainActivity : ComponentActivity() {
                 }
                 val enabled = sync.optBoolean("enabled", true)
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Sync enabled", modifier = Modifier.weight(1f))
+                    Text(stringResource(R.string.sync_enabled), modifier = Modifier.weight(1f))
                     Switch(checked = enabled, onCheckedChange = {
                         sync.put("enabled", it); save(); version++
                         if (!it && running) {
@@ -1919,7 +1971,7 @@ class MainActivity : ComponentActivity() {
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("Start on boot")
+                        Text(stringResource(R.string.sync_boot))
                         Text(
                             "Relaunch sync after reboot when enabled.",
                             style = MaterialTheme.typography.bodySmall,
@@ -1939,7 +1991,7 @@ class MainActivity : ComponentActivity() {
                         sync.put("listen_port", portStr.toIntOrNull() ?: 42973)
                         save()
                         restartSyncIfRunning(running)
-                    }) { Text("Save") }
+                    }) { Text(stringResource(R.string.action_save)) }
                     Spacer(Modifier.width(8.dp))
                     if (!running) {
                         Button(onClick = {
@@ -1955,14 +2007,14 @@ class MainActivity : ComponentActivity() {
                                 }
                                 runOnUiThread { refresh() }
                             }
-                        }) { Text("Start") }
+                        }) { Text(stringResource(R.string.action_start)) }
                     } else {
                         OutlinedButton(onClick = {
                             SyncService.stop(this@MainActivity)
                             CoreBridge.syncStop()
                             releaseMulticast()
                             refresh()
-                        }) { Text("Stop") }
+                        }) { Text(stringResource(R.string.action_stop)) }
                     }
                     Spacer(Modifier.width(8.dp))
                     OutlinedButton(
@@ -1972,9 +2024,9 @@ class MainActivity : ComponentActivity() {
                             workers.execute {
                                 try {
                                     val lines = CoreBridge.syncAllNow().getOrThrow()
-                                    bgToast(lines.firstOrNull() ?: "done")
+                                    bgToast(lines.firstOrNull() ?: getString(R.string.done))
                                 } catch (e: Exception) {
-                                    bgToast("sync failed: ${e.message}")
+                                    bgToast(getString(R.string.sync_failed, e.message))
                                 }
                                 busy = ""
                                 runOnUiThread { refresh() }
@@ -1996,8 +2048,8 @@ class MainActivity : ComponentActivity() {
             val nearby = peers.filter {
                 !it.optBoolean("trusted") && !it.optBoolean("pending") && it.optBoolean("discovered")
             }
-            Section("Trusted (${trusted.size})") {
-                if (trusted.isEmpty()) Text("None yet.", style = MaterialTheme.typography.bodySmall)
+            Section(stringResource(R.string.sync_trusted, trusted.size)) {
+                if (trusted.isEmpty()) Text(stringResource(R.string.sync_none), style = MaterialTheme.typography.bodySmall)
                 trusted.forEach { p ->
                     val id = p.optString("nodeId")
                     PeerRow(
@@ -2022,7 +2074,7 @@ class MainActivity : ComponentActivity() {
                                 try {
                                     CoreBridge.syncTrust(id, false).getOrThrow()
                                 } catch (e: Exception) {
-                                    bgToast("remove failed: ${e.message}")
+                                    bgToast(getString(R.string.sync_remove_failed, e.message))
                                 }
                                 runOnUiThread { refresh() }
                             }
@@ -2030,8 +2082,8 @@ class MainActivity : ComponentActivity() {
                     )
                 }
             }
-            Section("Pairing requests (${requests.size})") {
-                if (requests.isEmpty()) Text("None.", style = MaterialTheme.typography.bodySmall)
+            Section(stringResource(R.string.sync_requests, requests.size)) {
+                if (requests.isEmpty()) Text(stringResource(R.string.sync_requests_none), style = MaterialTheme.typography.bodySmall)
                 requests.forEach { p ->
                     val id = p.optString("nodeId")
                     val nm = p.optString("name").ifEmpty { id.take(12) + "…" }
@@ -2051,13 +2103,13 @@ class MainActivity : ComponentActivity() {
                     )
                 }
             }
-            Section("Nearby (${nearby.size})") {
+            Section(stringResource(R.string.sync_nearby, nearby.size)) {
                 Text(
                     "Discovered on the LAN. Accept to trust and sync " +
                         "(works with desktops and other phones).",
                     style = MaterialTheme.typography.bodySmall,
                 )
-                if (nearby.isEmpty()) Text("Nobody around.", style = MaterialTheme.typography.bodySmall)
+                if (nearby.isEmpty()) Text(stringResource(R.string.sync_nobody), style = MaterialTheme.typography.bodySmall)
                 nearby.forEach { p ->
                     val id = p.optString("nodeId")
                     val nm = p.optString("name").ifEmpty { id.take(12) + "…" }
@@ -2068,7 +2120,7 @@ class MainActivity : ComponentActivity() {
                     )
                 }
                 Spacer(Modifier.height(4.dp))
-                OutlinedButton(onClick = { refresh() }) { Text("Refresh") }
+                OutlinedButton(onClick = { refresh() }) { Text(stringResource(R.string.action_refresh)) }
             }
             Section("Add device manually") {
                 Text(
@@ -2078,7 +2130,7 @@ class MainActivity : ComponentActivity() {
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Spacer(Modifier.height(4.dp))
-                OutlinedButton(onClick = { addOpen = true }) { Text("Add by ID") }
+                OutlinedButton(onClick = { addOpen = true }) { Text(stringResource(R.string.sync_add_button)) }
                 notes["__add"]?.let {
                     Spacer(Modifier.height(4.dp))
                     Text(it, style = MaterialTheme.typography.bodySmall)
@@ -2091,23 +2143,23 @@ class MainActivity : ComponentActivity() {
             var nm by remember { mutableStateOf("") }
             AlertDialog(
                 onDismissRequest = { addOpen = false },
-                title = { Text("Add device") },
+                title = { Text(stringResource(R.string.sync_add_dialog)) },
                 text = {
                     Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                         OutlinedTextField(
                             value = id, onValueChange = { id = it },
-                            label = { Text("Other device's ID (64 hex chars)") },
+                            label = { Text(stringResource(R.string.sync_add_id)) },
                             modifier = Modifier.fillMaxWidth(),
                         )
                         OutlinedTextField(
                             value = addr, onValueChange = { addr = it },
-                            label = { Text("Address override, e.g. 192.168.1.31:42973 (optional)") },
+                            label = { Text(stringResource(R.string.sync_add_addr)) },
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                             modifier = Modifier.fillMaxWidth(),
                         )
                         OutlinedTextField(
                             value = nm, onValueChange = { nm = it },
-                            label = { Text("Name (optional)") },
+                            label = { Text(stringResource(R.string.sync_add_name)) },
                             modifier = Modifier.fillMaxWidth(),
                         )
                     }
@@ -2123,9 +2175,9 @@ class MainActivity : ComponentActivity() {
                             }
                             runOnUiThread { refresh(); addOpen = false }
                         }
-                    }) { Text("Send pairing request") }
+                    }) { Text(stringResource(R.string.sync_add_send)) }
                 },
-                dismissButton = { TextButton(onClick = { addOpen = false }) { Text("Cancel") } },
+                dismissButton = { TextButton(onClick = { addOpen = false }) { Text(stringResource(R.string.action_cancel)) } },
             )
         }
     }
@@ -2136,7 +2188,7 @@ class MainActivity : ComponentActivity() {
             try {
                 CoreBridge.syncTrust(id, true).getOrThrow()
             } catch (e: Exception) {
-                runOnUiThread { setNote("accept failed: ${e.message}"); refresh() }
+                runOnUiThread { setNote(getString(R.string.sync_accept_failed, e.message)); refresh() }
                 return@execute
             }
             try {
@@ -2146,7 +2198,7 @@ class MainActivity : ComponentActivity() {
                 // The usual case: we dialed, they recorded us as
                 // pending, and rejected until they accept there.
                 runOnUiThread {
-                    setNote("waiting for $name to accept — ask them to accept on the other device")
+                    setNote(getString(R.string.sync_waiting, name))
                 }
             }
             runOnUiThread { refresh() }
@@ -2156,7 +2208,7 @@ class MainActivity : ComponentActivity() {
     /** Apply Name/Port/Advertise/Enabled edits without a manual restart. */
     private fun restartSyncIfRunning(running: Boolean) {
         if (!running) {
-            toast("saved")
+            toast(getString(R.string.sync_saved))
             return
         }
         try {
@@ -2169,7 +2221,7 @@ class MainActivity : ComponentActivity() {
         }
         acquireMulticast()
         SyncService.start(this)
-        toast("saved — sync restarted")
+        toast(getString(R.string.sync_restarted))
     }
 
     private fun loadPeers(): List<JSONObject> {
@@ -2212,11 +2264,11 @@ class MainActivity : ComponentActivity() {
                             Text(lastSync, style = MaterialTheme.typography.bodySmall)
                         }
                     }
-                    onSync?.let { TextButton(onClick = it) { Text("Sync") } }
-                    onAccept?.let { TextButton(onClick = it) { Text("Accept") } }
+                    onSync?.let { TextButton(onClick = it) { Text(stringResource(R.string.action_sync)) } }
+                    onAccept?.let { TextButton(onClick = it) { Text(stringResource(R.string.action_accept)) } }
                     onRemove?.let {
                         IconButton(onClick = it) {
-                            Icon(Icons.Filled.Delete, contentDescription = "Remove")
+                            Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.action_remove))
                         }
                     }
                 }
