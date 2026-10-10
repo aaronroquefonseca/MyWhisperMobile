@@ -423,7 +423,7 @@ impl Engine {
                 .store
                 .purge_old_history(self.settings.privacy.transcript_auto_delete_days);
         }
-        if self.settings.privacy.history_enabled {
+        if self.settings.privacy.history_enabled && !text.trim().is_empty() {
             let word_count = text.split_whitespace().count() as u32;
             let _ = self
                 .store
