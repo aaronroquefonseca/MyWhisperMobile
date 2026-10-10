@@ -5,8 +5,8 @@
 use mywhisper_core::device::DeviceIdentity;
 use mywhisper_core::net;
 use mywhisper_core::store::Store;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 fn setup(dir: &std::path::Path) -> (Store, DeviceIdentity) {
     std::fs::create_dir_all(dir).unwrap();
@@ -55,6 +55,40 @@ fn untrusted_dialer_gets_clean_rejection_and_pending_row() {
 }
 
 #[test]
+fn unresolvable_first_address_does_not_abort_round() {
+    let base = std::env::temp_dir().join(format!("mw-sync-skip-{}", std::process::id()));
+    let (alice_store, alice_id) = setup(&base.join("alice"));
+    let (_bob_store, bob_id) = setup(&base.join("bob"));
+
+    alice_store
+        .upsert_peer(&bob_id.node_id, "bob", "127.0.0.1:44976", true)
+        .unwrap();
+    let listener = net::listen(44976).unwrap().unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let s = stop.clone();
+    let db = base.join("alice").join("state.db");
+    let creds = alice_id.creds();
+    std::thread::spawn(move || net::serve(listener, db, creds, "alice".into(), vec![], &s));
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    // Garbage first: must be skipped, live second tried.
+    let bob_db = base.join("bob").join("state.db");
+    let report = net::sync_now(
+        &[
+            "no-such-host.invalid:9".to_string(),
+            "127.0.0.1:44976".to_string(),
+        ],
+        &bob_db,
+        &bob_id.creds(),
+        "bob",
+        &alice_id.node_id,
+    )
+    .expect("round survives a bad first address");
+    assert_eq!(report.peer_name, "alice");
+    stop.store(true, Ordering::Relaxed);
+}
+
+#[test]
 fn trusted_peers_merge_words_and_history_both_ways() {
     let base = std::env::temp_dir().join(format!("mw-sync-merge-{}", std::process::id()));
     let (alice_store, alice_id) = setup(&base.join("alice"));
@@ -96,12 +130,10 @@ fn trusted_peers_merge_words_and_history_both_ways() {
     assert_eq!(report.peer_name, "alice");
 
     // Bob merged alice's word + history.
-    assert!(
-        bob_store
-            .load_words()
-            .unwrap()
-            .contains(&"kwyjibo".to_string())
-    );
+    assert!(bob_store
+        .load_words()
+        .unwrap()
+        .contains(&"kwyjibo".to_string()));
     let hist = bob_store.load_history(10, false).unwrap();
     assert!(hist.iter().any(|h| h.text == "Hello from alice"));
 

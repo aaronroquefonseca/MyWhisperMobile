@@ -318,8 +318,11 @@ pub fn sync_add(
     };
     match net::sync_now(&addrs, &db_path, &creds, &own_name, &node_id) {
         Ok(r) => Ok(format!("synced {}: {} words in", r.peer_name, r.words_in)),
-        Err(e) if e.contains("not trusted") || e.contains("no known address") => {
+        Err(e) if e.contains("not trusted") => {
             Ok("pairing request sent — accept it on the other device, then sync".to_string())
+        }
+        Err(_) if addrs.is_empty() => {
+            Ok("saved — syncs automatically once the device is discovered on the LAN".to_string())
         }
         Err(e) => Err(e),
     }
@@ -334,7 +337,9 @@ pub fn sync_peer_now(dir: &std::path::Path, node_id: &str) -> Result<String, Str
         .get_peer(node_id)
         .map_err(|e| format!("peer lookup: {e}"))?
         .ok_or_else(|| "unknown peer".to_string())?;
-    let mut addrs = peer.dial_targets();
+    // Fresh observations first: a stored address may be stale
+    // (peer rebooted onto a new port), discovered ones are live.
+    let mut addrs: Vec<String> = Vec::new();
     if let Some(d) = slot()
         .lock()
         .unwrap()
@@ -345,6 +350,11 @@ pub fn sync_peer_now(dir: &std::path::Path, node_id: &str) -> Result<String, Str
             if !addrs.contains(&a) {
                 addrs.push(a);
             }
+        }
+    }
+    for a in peer.dial_targets() {
+        if !addrs.contains(&a) {
+            addrs.push(a);
         }
     }
     let creds = slot()
@@ -358,7 +368,13 @@ pub fn sync_peer_now(dir: &std::path::Path, node_id: &str) -> Result<String, Str
     } else {
         settings.sync.device_name.clone()
     };
-    let r = net::sync_now(&addrs, &db_path, &creds, &name, node_id)?;
+    let display = if peer.name.is_empty() {
+        short_id(node_id)
+    } else {
+        peer.name.clone()
+    };
+    let r = net::sync_now(&addrs, &db_path, &creds, &name, node_id)
+        .map_err(|e| format!("{display}: {e} — is the device online with sync running?"))?;
     Ok(format!(
         "synced {}: {} words, {} snippets, {} history in, {} introduced",
         r.peer_name, r.words_in, r.snippets_in, r.history_in, r.introduced

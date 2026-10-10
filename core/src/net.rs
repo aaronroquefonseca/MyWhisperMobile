@@ -480,14 +480,18 @@ pub fn sync_now(
     }
     let mut last_err = String::new();
     for address in addresses {
-        let addr = match address
-            .to_socket_addrs()
-            .map_err(|e| format!("resolve {address}: {e}"))?
-            .next()
-        {
-            Some(a) => a,
-            None => {
-                last_err = format!("no address for {address}");
+        // ANDROID PORT: a single unresolvable entry must not abort
+        // the whole round (desktop `?` here); skip and try the next.
+        let addr = match address.to_socket_addrs() {
+            Ok(mut it) => match it.next() {
+                Some(a) => a,
+                None => {
+                    last_err = format!("no address for {address}");
+                    continue;
+                }
+            },
+            Err(e) => {
+                last_err = format!("resolve {address}: {e}");
                 continue;
             }
         };
@@ -501,7 +505,7 @@ pub fn sync_now(
         let (mut session, hash, _remote_static) =
             NoiseStream::handshake(stream, &creds.noise_static, true)?;
         let store = Store::open(db_path).map_err(|e| format!("open db: {e}"))?;
-        return exchange(
+        let report = exchange(
             &mut session,
             &hash,
             &store,
@@ -511,7 +515,11 @@ pub fn sync_now(
             true,
             Some(expect_node),
             None,
-        );
+        )?;
+        // ANDROID PORT: persist the working address so the next round
+        // tries the live one first instead of a stale stored entry.
+        let _ = store.record_seen(expect_node, &report.peer_name, &[address.clone()]);
+        return Ok(report);
     }
     Err(last_err)
 }
