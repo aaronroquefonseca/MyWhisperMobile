@@ -14,7 +14,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -74,9 +74,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -122,6 +126,12 @@ class MainActivity : ComponentActivity() {
     ) { granted ->
         micGranted.value = granted
         if (!granted) toast("Mic permission is required for dictation")
+    }
+
+    private val notifPerm = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (!granted) toast("Without notifications the sync status icon stays hidden")
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -282,9 +292,9 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Chain list with a left grab handle: long-press and drag to
-     * reorder (standard reorder UX). Calls [onMove] with the JSON
-     * array indices; the caller persists.
+     * Chain list with a left grab handle: press and drag immediately
+     * to reorder (no long-press needed — the handle is dedicated).
+     * Calls [onMove] with the JSON array indices; the caller persists.
      */
     @Composable
     private fun ReorderableEntries(
@@ -305,15 +315,23 @@ class MainActivity : ComponentActivity() {
         ) {
             items(items, key = { idOf(it) }) { item ->
                 val id = idOf(item)
+                val isDrag = dragging == id
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .animateItem()
                         .onGloballyPositioned {
                             tops[id] = it.positionInParent().y
                             heights[id] = it.size.height.toFloat()
                         }
+                        .graphicsLayer {
+                            shadowElevation = if (isDrag) 12f else 0f
+                            scaleX = if (isDrag) 1.02f else 1f
+                            scaleY = if (isDrag) 1.02f else 1f
+                        }
+                        .zIndex(if (isDrag) 1f else 0f)
                         .background(
-                            if (dragging == id) MaterialTheme.colorScheme.primaryContainer
+                            if (isDrag) MaterialTheme.colorScheme.primaryContainer
                             else Color.Transparent,
                         ),
                 ) {
@@ -323,7 +341,7 @@ class MainActivity : ComponentActivity() {
                             contentDescription = "Drag to reorder",
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.pointerInput(id) {
-                                detectDragGesturesAfterLongPress(
+                                detectDragGestures(
                                     onDragStart = {
                                         dragging = id
                                         dragIdx = items.indexOfFirst { idOf(it) == id }
@@ -333,10 +351,10 @@ class MainActivity : ComponentActivity() {
                                     onDragCancel = { dragging = null; dragIdx = -1 },
                                     onDrag = { change, dragAmount ->
                                         change.consume()
-                                        if (dragging == null) return@detectDragGesturesAfterLongPress
+                                        if (dragging == null) return@detectDragGestures
                                         accumulated += dragAmount.y
-                                        val h = heights[id] ?: return@detectDragGesturesAfterLongPress
-                                        if (h <= 0f) return@detectDragGesturesAfterLongPress
+                                        val h = heights[id] ?: return@detectDragGestures
+                                        if (h <= 0f) return@detectDragGestures
                                         val center = (tops[id] ?: 0f) + h / 2f + accumulated
                                         val ordered = tops.entries.sortedBy { it.value }
                                         var target = dragIdx
@@ -416,6 +434,22 @@ class MainActivity : ComponentActivity() {
                 Spacer(Modifier.height(8.dp))
                 Button(onClick = { micPerm.launch(Manifest.permission.RECORD_AUDIO) }) {
                     Text("Grant microphone")
+                }
+            }
+            Section("4 · Notifications") {
+                Text(
+                    "Shows the sync status while sync runs.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Spacer(Modifier.height(8.dp))
+                Button(onClick = {
+                    if (android.os.Build.VERSION.SDK_INT >= 33) {
+                        notifPerm.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    } else {
+                        toast("Notifications are always on below Android 13")
+                    }
+                }) {
+                    Text("Allow notifications")
                 }
             }
             Section("Mic button") {
@@ -741,6 +775,12 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier.fillMaxWidth(),
                     )
                     if (kind == "SelfHosted") {
+                        Text(
+                            "Bearer token for reverse-proxy setups. Empty means no token.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    if (kind == "SelfHosted") {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text("Streaming (ws servers)", modifier = Modifier.weight(1f))
                             Switch(checked = streaming, onCheckedChange = { streaming = it })
@@ -801,6 +841,16 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxWidth(), minLines = 2,
                 )
                 Spacer(Modifier.height(4.dp))
+                var defaultText by remember { mutableStateOf<String?>(null) }
+                if (defaultText == null) {
+                    LaunchedEffect(Unit) {
+                        defaultText = try {
+                            CoreBridge.defaultCleanupPrompt().getOrThrow()
+                        } catch (_: Exception) {
+                            ""
+                        }
+                    }
+                }
                 Row {
                     Button(onClick = { lm.put("cleanup_prompt", prompt); save() }) {
                         Text("Save prompt")
@@ -808,6 +858,15 @@ class MainActivity : ComponentActivity() {
                     Spacer(Modifier.width(8.dp))
                     OutlinedButton(onClick = { prompt = ""; lm.put("cleanup_prompt", ""); save() }) {
                         Text("Reset to default")
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
+                Row {
+                    OutlinedButton(
+                        enabled = !defaultText.isNullOrEmpty(),
+                        onClick = { prompt = defaultText ?: prompt },
+                    ) {
+                        Text("Edit a copy of the default")
                     }
                     Spacer(Modifier.width(8.dp))
                     TextButton(onClick = { showDefault = true }) { Text("View default") }
@@ -993,6 +1052,16 @@ class MainActivity : ComponentActivity() {
                             label = { Text("API key") },
                             visualTransformation = PasswordVisualTransformation(),
                             modifier = Modifier.fillMaxWidth())
+                    }
+                    if (kind == "Ollama") {
+                        OutlinedTextField(value = key, onValueChange = { key = it },
+                            label = { Text("Bearer token (optional)") },
+                            visualTransformation = PasswordVisualTransformation(),
+                            modifier = Modifier.fillMaxWidth())
+                        Text(
+                            "Sent as a Bearer token (reverse-proxy setups). Empty means no token.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
                     }
                     if (kind == "Ollama") {
                         OutlinedTextField(value = keepAlive, onValueChange = { keepAlive = it },
@@ -1193,9 +1262,20 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // -- Activity -------------------------------------------------------
+    // -- Activity (mirrors desktop insights: stat cards + heatmap) ----
 
     private data class Day(val dayStart: Long, val words: Int, val utterances: Int)
+
+    /** Desktop compact word counts: 1500 -> 1.5K. */
+    private fun compactWords(n: Long): String {
+        if (n < 1000) return n.toString()
+        val k = n / 1000.0
+        return when {
+            k >= 100.0 -> "${k.toInt()}K"
+            k >= 10.0 -> "${"%.1f".format(k)}K"
+            else -> "${(kotlin.math.round(k * 10) / 10)}K".trimEnd('0').trimEnd('.') + "K"
+        }
+    }
 
     @Composable
     private fun ActivityScreen() {
@@ -1206,7 +1286,7 @@ class MainActivity : ComponentActivity() {
         LaunchedEffect(version) {
             try {
                 stats = CoreBridge.usageStats().getOrThrow()
-                val arr = CoreBridge.dailyActivity(30).getOrThrow()
+                val arr = CoreBridge.dailyActivity(200).getOrThrow()
                 days = List(arr.length()) { i ->
                     val o = arr.getJSONObject(i)
                     Day(o.getLong("dayStart"), o.getInt("words"), o.getInt("utterances"))
@@ -1220,96 +1300,192 @@ class MainActivity : ComponentActivity() {
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState()),
         ) {
-            Section("Totals") {
-                if (err.isNotEmpty()) {
-                    Text(err, color = MaterialTheme.colorScheme.error)
+            Text(
+                "Your saved dictations, calculated on this device. Deleting history also updates these totals.",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            )
+            if (err.isNotEmpty()) {
+                Text(
+                    err,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
+            }
+            val u = stats?.optLong("dictations", 0L) ?: 0L
+            val w = stats?.optLong("wordsSpoken", 0L) ?: 0L
+            val wpm = stats?.optDouble("wordsPerMinute", 0.0) ?: 0.0
+            val streak = stats?.optInt("streakDays", 0) ?: 0
+            Column(modifier = Modifier.padding(horizontal = 8.dp)) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    StatCard(
+                        "Words spoken", compactWords(w), "Saved history",
+                        modifier = Modifier.weight(1f),
+                    )
+                    StatCard(
+                        "Words per minute", if (wpm > 0) "${wpm.toInt()}" else "–",
+                        "Dictations with a recorded duration",
+                        modifier = Modifier.weight(1f),
+                    )
                 }
-                val u = stats?.optLong("dictations", 0L) ?: 0L
-                val w = stats?.optLong("wordsSpoken", 0L) ?: 0L
-                val wpm = stats?.optDouble("wordsPerMinute", 0.0) ?: 0.0
-                val streak = stats?.optInt("streakDays", 0) ?: 0
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                    Stat("$u", "dictations")
-                    Stat("$w", "words")
-                    Stat(if (wpm > 0) "${wpm.toInt()}" else "–", "wpm")
-                    Stat("$streak", "day streak")
-                }
-                Spacer(Modifier.height(4.dp))
-                OutlinedButton(onClick = { version++ }) {
-                    Icon(Icons.Filled.Refresh, contentDescription = null)
-                    Spacer(Modifier.width(4.dp))
-                    Text("Refresh")
+                Spacer(Modifier.height(8.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    StatCard(
+                        "Dictations", "$u", "Saved history",
+                        modifier = Modifier.weight(1f),
+                    )
+                    StatCard(
+                        "Current streak",
+                        if (streak == 1) "1 day" else "$streak days",
+                        "Consecutive active days",
+                        modifier = Modifier.weight(1f),
+                    )
                 }
             }
-            Section("Last 14 days (words)") {
+            Section("Speaking activity") {
                 if (days.isEmpty()) {
                     Text("Nothing yet — dictate something first.", style = MaterialTheme.typography.bodySmall)
                 } else {
-                    DayBars(days.takeLast(14))
+                    val byDay = days.associate { (it.dayStart / 86400) to it.words }
+                    Heatmap(byDay)
+                    Spacer(Modifier.height(4.dp))
+                    OutlinedButton(onClick = { version++ }) {
+                        Icon(Icons.Filled.Refresh, contentDescription = null)
+                        Spacer(Modifier.width(4.dp))
+                        Text("Refresh")
+                    }
                 }
             }
         }
     }
 
     @Composable
-    private fun Stat(value: String, label: String) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(value, style = MaterialTheme.typography.headlineSmall)
-            Text(label, style = MaterialTheme.typography.bodySmall)
+    private fun StatCard(label: String, value: String, caption: String, modifier: Modifier = Modifier) {
+        Card(modifier = modifier) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Text(label, style = MaterialTheme.typography.bodySmall)
+                Text(value, style = MaterialTheme.typography.headlineSmall)
+                Text(caption, style = MaterialTheme.typography.bodySmall)
+            }
         }
     }
 
+    /** GitHub-style level from a real word count (desktop thresholds). */
+    private fun heatLevel(words: Int): Int = when {
+        words <= 0 -> 0
+        words < 50 -> 1
+        words < 200 -> 2
+        else -> 3
+    }
+
+    /**
+     * 24-week activity heatmap like desktop: columns oldest → newest,
+     * rows Sunday → Saturday, month labels, less → more legend.
+     */
     @Composable
-    private fun DayBars(days: List<Day>) {
-        val max = (days.maxOfOrNull { it.words } ?: 0).coerceAtLeast(1)
-        val bar = MaterialTheme.colorScheme.primary
-        val axis = MaterialTheme.colorScheme.onSurfaceVariant
-        Canvas(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(160.dp)
-                .padding(top = 8.dp),
+    private fun Heatmap(byDay: Map<Long, Int>) {
+        val weeks = 24
+        val today = java.time.LocalDate.now().toEpochDay()
+        // Saturday-anchored grid, same math as desktop cell_epoch_day.
+        val saturday = today + (6 - Math.floorMod(today + 4, 7))
+        data class Cell(val epoch: Long, val level: Int)
+        val grid = List(weeks) { week ->
+            List(7) { day ->
+                val epoch = saturday - ((weeks - 1 - week) * 7 + (6 - day))
+                Cell(epoch, heatLevel(byDay[epoch] ?: 0))
+            }
+        }
+        val empty = MaterialTheme.colorScheme.surfaceVariant
+        val full = MaterialTheme.colorScheme.primary
+        val shades = listOf(
+            empty,
+            full.copy(alpha = 0.35f),
+            full.copy(alpha = 0.65f),
+            full,
+        )
+        val measurer = rememberTextMeasurer()
+        val labelStyle = MaterialTheme.typography.bodySmall.copy(
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        androidx.compose.foundation.layout.BoxWithConstraints(
+            modifier = Modifier.fillMaxWidth(),
         ) {
-            val n = days.size
-            if (n == 0) return@Canvas
-            val gap = size.width / (n * 2f)
-            val bw = gap * 1.2f
-            days.forEachIndexed { i, d ->
-                val x = gap + i * 2 * gap
-                val h = (d.words.toFloat() / max) * (size.height - 24f)
-                drawRect(
-                    color = bar,
-                    topLeft = Offset(x - bw / 2f, size.height - 20f - h),
-                    size = androidx.compose.ui.geometry.Size(bw, h),
-                )
+            val density = androidx.compose.ui.platform.LocalDensity.current
+            val gapPx = with(density) { 3.dp.toPx() }
+            val cellPx = with(density) {
+                ((maxWidth.toPx() - gapPx * (weeks - 1)) / weeks)
+                    .coerceIn(8.dp.toPx(), 64f)
             }
-            drawLine(
-                color = axis,
-                start = Offset(0f, size.height - 20f),
-                end = Offset(size.width, size.height - 20f),
-                strokeWidth = 2f,
-            )
-        }
-        val first = days.firstOrNull()
-        val last = days.lastOrNull()
-        if (first != null && last != null) {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(dayLabel(first.dayStart), style = MaterialTheme.typography.bodySmall)
-                Text(
-                    "${days.sumOf { it.words }} words · ${days.sumOf { it.utterances }} dictations",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                Text(dayLabel(last.dayStart), style = MaterialTheme.typography.bodySmall)
+            val labelH = with(density) { 18.dp.toPx() }
+            val totalH = with(density) {
+                ((cellPx + gapPx) * 7 + labelH + 8.dp.toPx()).toDp()
+            }
+            Canvas(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(totalH),
+            ) {
+                // Month labels on the first column where the month changes.
+                // Like desktop, skip a cramped first label and any label
+                // that would overlap the previous one.
+                var prevMonth = -1
+                var lastLabelEnd = -1f
+                for (week in 0 until weeks) {
+                    val weekMonth = java.time.LocalDate.ofEpochDay(grid[week][0].epoch).monthValue
+                    val nextMonth = if (week + 1 < weeks) {
+                        java.time.LocalDate.ofEpochDay(grid[week + 1][0].epoch).monthValue
+                    } else weekMonth
+                    if (week == 0 && nextMonth != weekMonth) {
+                        prevMonth = weekMonth
+                        continue
+                    }
+                    if (week == 0 || weekMonth != prevMonth) {
+                        val name = java.time.LocalDate.ofEpochDay(grid[week][0].epoch)
+                            .month.getDisplayName(java.time.format.TextStyle.SHORT, java.util.Locale.getDefault())
+                        val x = week * (cellPx + gapPx)
+                        val layout = measurer.measure(name, labelStyle)
+                        if (x >= lastLabelEnd) {
+                            drawText(layout, topLeft = Offset(x, 0f))
+                            lastLabelEnd = x + layout.size.width + gapPx * 2
+                        }
+                    }
+                    prevMonth = weekMonth
+                }
+                for (week in 0 until weeks) {
+                    for (day in 0 until 7) {
+                        val c = grid[week][day]
+                        drawRoundRect(
+                            color = shades[c.level],
+                            topLeft = Offset(
+                                week * (cellPx + gapPx),
+                                labelH + day * (cellPx + gapPx),
+                            ),
+                            size = androidx.compose.ui.geometry.Size(cellPx, cellPx),
+                            cornerRadius = androidx.compose.ui.geometry.CornerRadius(
+                                cellPx * 0.2f, cellPx * 0.2f,
+                            ),
+                        )
+                    }
+                }
             }
         }
-    }
-
-    private fun dayLabel(epochSec: Long): String {
-        return try {
-            val f = java.text.SimpleDateFormat("d MMM", java.util.Locale.getDefault())
-            f.format(java.util.Date(epochSec * 1000))
-        } catch (_: Exception) {
-            ""
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Less", style = MaterialTheme.typography.bodySmall)
+            Spacer(Modifier.width(4.dp))
+            for (l in 0..3) {
+                Box(
+                    modifier = Modifier
+                        .width(12.dp)
+                        .height(12.dp)
+                        .background(shades[l], androidx.compose.foundation.shape.RoundedCornerShape(3.dp)),
+                )
+                Spacer(Modifier.width(3.dp))
+            }
+            Text("More", style = MaterialTheme.typography.bodySmall)
         }
     }
 
@@ -1328,13 +1504,27 @@ class MainActivity : ComponentActivity() {
         var version by remember { mutableIntStateOf(0) }
         @Suppress("UNUSED_EXPRESSION") version
         Column(modifier = Modifier.fillMaxSize()) {
+            var privOpen by remember { mutableStateOf(false) }
             Card(modifier = Modifier.fillMaxWidth().padding(8.dp)) {
                 Column(modifier = Modifier.padding(12.dp)) {
-                    Text("Privacy & retention", style = MaterialTheme.typography.titleMedium)
-                    Spacer(Modifier.height(8.dp))
-                    val priv = s.optJSONObject("privacy") ?: JSONObject().also {
-                        s.put("privacy", it)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            "Privacy & retention",
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = { privOpen = !privOpen }) {
+                            Text(if (privOpen) "Hide" else "Show")
+                        }
                     }
+                    if (privOpen) {
+                        Spacer(Modifier.height(8.dp))
+                        val priv = s.optJSONObject("privacy") ?: JSONObject().also {
+                            s.put("privacy", it)
+                        }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("Keep history")
@@ -1400,6 +1590,7 @@ class MainActivity : ComponentActivity() {
                         }) { Text("Delete older now") }
                     }
                 }
+            }
             }
             Row(
                 modifier = Modifier.fillMaxWidth().padding(8.dp),
@@ -1583,18 +1774,21 @@ class MainActivity : ComponentActivity() {
                     if (!running) {
                         Button(onClick = {
                             acquireMulticast()
+                            // Foreground service keeps the listener,
+                            // discovery and rounds alive + shows status.
+                            SyncService.start(this@MainActivity)
                             workers.execute {
+                                // Fallback if the service path is slow.
                                 try {
-                                    val msg = CoreBridge.syncStart().getOrThrow()
-                                    bgToast(msg)
-                                } catch (e: Exception) {
-                                    bgToast("start failed: ${e.message}")
+                                    CoreBridge.syncStart()
+                                } catch (_: Exception) {
                                 }
                                 runOnUiThread { refresh() }
                             }
                         }) { Text("Start") }
                     } else {
                         OutlinedButton(onClick = {
+                            SyncService.stop(this@MainActivity)
                             CoreBridge.syncStop()
                             releaseMulticast()
                             refresh()

@@ -43,6 +43,37 @@ fn jstr(env: &mut JNIEnv, s: &str) -> jstring {
         .unwrap_or(std::ptr::null_mut())
 }
 
+/// Consecutive active days ending today or yesterday (desktop
+/// `app::streak` port over the local-day `active_days` list, desc).
+/// UTC day is used for the today/yesterday touch check (1-day
+/// tolerance covers the local-bucket skew).
+fn streak_days(store: &crate::store::Store) -> u32 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let days = store.active_days().unwrap_or_default();
+    let today_utc = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64 / 86400)
+        .unwrap_or(0);
+    let max = match days.first() {
+        Some(m) => *m,
+        None => return 0,
+    };
+    if max < today_utc - 1 {
+        return 0;
+    }
+    let mut run = 0u32;
+    let mut expected = max;
+    for d in days.iter() {
+        if *d == expected {
+            run += 1;
+            expected -= 1;
+        } else if *d < expected {
+            break;
+        }
+    }
+    run
+}
+
 fn ok_json(value: serde_json::Value) -> String {
     serde_json::json!({"ok": true, "data": value}).to_string()
 }
@@ -279,13 +310,17 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeUsageSt
             let node = e.node_id().to_string();
             match crate::store::Store::open(&dir.join("state.db")) {
                 Ok(s) => match s.usage_stats() {
-                    Ok(u) => ok_json(serde_json::json!({
-                        "wordsSpoken": u.words_spoken,
-                        "dictations": u.dictations,
-                        "wordsPerMinute": u.words_per_minute,
-                        "streakDays": u.streak_days,
-                        "nodeId": node,
-                    })),
+                    Ok(mut u) => {
+                        // Desktop refresh_stats derives streak separately.
+                        u.streak_days = streak_days(&s);
+                        ok_json(serde_json::json!({
+                            "wordsSpoken": u.words_spoken,
+                            "dictations": u.dictations,
+                            "wordsPerMinute": u.words_per_minute,
+                            "streakDays": u.streak_days,
+                            "nodeId": node,
+                        }))
+                    }
                     Err(err) => err_json(format!("stats: {err}")),
                 },
                 Err(err) => err_json(format!("open db: {err}")),
