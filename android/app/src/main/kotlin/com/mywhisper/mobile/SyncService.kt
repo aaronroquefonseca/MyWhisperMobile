@@ -153,6 +153,9 @@ class BootReceiver : BroadcastReceiver() {
             ) {
                 SyncService.start(ctx.applicationContext)
             }
+            if (s.optJSONObject("preferences")?.optBoolean("float_enabled", false) == true) {
+                OverlayService.start(ctx.applicationContext)
+            }
         } catch (_: Exception) {
         }
     }

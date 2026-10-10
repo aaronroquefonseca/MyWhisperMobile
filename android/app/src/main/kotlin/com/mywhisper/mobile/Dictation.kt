@@ -28,6 +28,7 @@ class Dictation(
     var listener: Listener? = null
     /** Live mic peaks for the pill visualizer (capture thread). */
     var onLevel: ((Float) -> Unit)? = null
+    private var maxPeak = 0f
     private val workers = Executors.newSingleThreadExecutor()
 
     private var state = State.IDLE
@@ -69,7 +70,10 @@ class Dictation(
                 }
             },
             onError = { listener?.onError(it); hardStop() },
-            onLevel = { onLevel?.invoke(it) },
+            onLevel = {
+                if (it > maxPeak) maxPeak = it
+                onLevel?.invoke(it)
+            },
         )
         if (!cap.start()) {
             return
@@ -77,6 +81,7 @@ class Dictation(
         capture = cap
         toggled = false
         downAt = System.currentTimeMillis()
+        maxPeak = 0f
         set(State.RECORDING)
     }
 
@@ -176,6 +181,7 @@ class Dictation(
             capture = null
             try {
                 val (text, _) = CoreBridge.finishUtterance()
+                android.util.Log.i("MwDict", "utterance max peak=%.2f".format(maxPeak))
                 if (text.isBlank()) {
                     listener?.onError("empty transcript")
                 } else {

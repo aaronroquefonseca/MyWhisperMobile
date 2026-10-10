@@ -277,10 +277,12 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
             R.drawable.ic_ime_settings, getString(R.string.ime_settings),
         ) { openConfig() }
         val mic = ImageButton(this).apply {
-            setImageResource(R.mipmap.ic_launcher_foreground)
+            // White mark on brand purple: the gradient mark on purple
+            // clashed.
+            setImageResource(R.drawable.ic_stat_sync)
             contentDescription = getString(R.string.ime_mic)
             setBackground(micBackground(false))
-            setPadding(dp(10), dp(10), dp(10), dp(10))
+            setPadding(dp(20), dp(20), dp(20), dp(20))
             elevation = dp(4).toFloat()
             setOnTouchListener { _, ev ->
                 when (ev.actionMasked) {
@@ -425,6 +427,8 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
 
     override fun onFinishInputView(finishingInput: Boolean) {
         stopBackspaceRepeat()
+        FloatState.imeActive = false
+        FloatState.refresh()
         super.onFinishInputView(finishingInput)
     }
 
@@ -435,6 +439,9 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
         android.util.Log.i("MyWhisperIME", "ime.onStartInputView")
         super.onStartInputView(info, restarting)
         applySystemBars()
+        // Our bar is up: the floating bubble stands down.
+        FloatState.imeActive = true
+        FloatState.refresh()
     }
 
     override fun onEvaluateInputViewShown(): Boolean {
@@ -502,10 +509,16 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
         postRefresh()
     }
 
-    /** Floating pill: visible only while recording, bars live. */
+    /** Floating pill: visible only while recording and enabled. */
     private fun updatePill(recording: Boolean) {
         val pill = pillBox ?: return
-        if (recording) {
+        val enabled = try {
+            CoreBridge.getSettings().getOrThrow()
+                .optJSONObject("preferences")?.optBoolean("show_pill", true) != false
+        } catch (_: Exception) {
+            true
+        }
+        if (recording && enabled) {
             if (pill.visibility != View.VISIBLE) {
                 pill.alpha = 0f
                 pill.visibility = View.VISIBLE

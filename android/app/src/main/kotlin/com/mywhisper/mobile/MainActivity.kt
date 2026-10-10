@@ -493,6 +493,24 @@ class MainActivity : ComponentActivity() {
                     save()
                     reload()
                 }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(stringResource(R.string.setup_pill))
+                        Text(
+                            stringResource(R.string.setup_pill_sub),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    Switch(
+                        checked = prefs.optBoolean("show_pill", true),
+                        onCheckedChange = {
+                            prefs.put("show_pill", it)
+                            s.put("preferences", prefs)
+                            save()
+                            reload()
+                        },
+                    )
+                }
                 val hotkeys = s.optJSONObject("hotkeys") ?: JSONObject()
                 var tapMs by remember {
                     mutableStateOf(hotkeys.optLong("smart_tap_ms", 150L).toString())
@@ -510,6 +528,48 @@ class MainActivity : ComponentActivity() {
                     s.put("hotkeys", hotkeys)
                     save()
                 }) { Text(stringResource(R.string.setup_tap_save)) }
+            }
+            Section(stringResource(R.string.setup_float)) {
+                val prefs = s.optJSONObject("preferences") ?: JSONObject()
+                val on = prefs.optBoolean("float_enabled", false)
+                Text(
+                    stringResource(R.string.setup_float_sub),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    if (on) stringResource(R.string.setup_float_on)
+                    else stringResource(R.string.setup_float_off),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Spacer(Modifier.height(8.dp))
+                Button(onClick = {
+                    startActivity(Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION))
+                }) { Text(stringResource(R.string.setup_float_overlay)) }
+                Spacer(Modifier.height(4.dp))
+                Button(onClick = {
+                    startActivity(Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                }) { Text(stringResource(R.string.setup_float_a11y)) }
+                Text(
+                    stringResource(R.string.setup_float_a11y_sub),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(stringResource(R.string.setup_float), modifier = Modifier.weight(1f))
+                    Switch(checked = on, onCheckedChange = {
+                        android.util.Log.i("MwFloat", "toggle -> $it")
+                        prefs.put("float_enabled", it)
+                        s.put("preferences", prefs)
+                        save()
+                        if (it) {
+                            OverlayService.start(this@MainActivity)
+                        } else {
+                            OverlayService.stop(this@MainActivity)
+                        }
+                        reload()
+                    })
+                }
             }
             Section(stringResource(R.string.setup_prefs)) {
                 val prefs = s.optJSONObject("preferences") ?: JSONObject()

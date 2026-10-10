@@ -211,6 +211,13 @@ pub struct Preferences {
     /// longer press holds (uses hotkeys.smart_tap_ms).
     #[serde(default = "default_mic_mode")]
     pub mic_mode: ActivationMode,
+    /// ANDROID PORT: show the floating pill while recording.
+    #[serde(default = "default_true")]
+    pub show_pill: bool,
+    /// ANDROID PORT: floating bubble dictation (overlay +
+    /// accessibility commit) as an alternative to the IME.
+    #[serde(default)]
+    pub float_enabled: bool,
 }
 
 fn default_mic_mode() -> ActivationMode {
@@ -237,6 +244,8 @@ impl Default for Preferences {
             mic_release_delay_ms: 0,
             auto_learn_dictionary: false,
             mic_mode: ActivationMode::Smart,
+            show_pill: true,
+            float_enabled: false,
         }
     }
 }
@@ -750,6 +759,14 @@ impl SttSettings {
         }
         if entry.name.trim().is_empty() {
             entry.name = "Legacy option".to_string();
+        }
+        // ANDROID PORT: on-device inference isn't implemented yet, so
+        // a Local default would be a dead row (desktop seeds one
+        // here). Leave the chain empty instead; existing user rows
+        // are untouched (early return above when non-empty).
+        #[cfg(target_os = "android")]
+        if entry.kind == SttEntryKind::Local {
+            return;
         }
         self.entries.push(entry);
     }
