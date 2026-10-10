@@ -138,6 +138,8 @@
     <string name="dict_search_words">Search words</string>
     <string name="dict_no_words">No words yet — add names and terms the recognizer mishears.</string>
     <string name="dict_no_match">No matches.</string>
+    <string name="confirm_delete_title">Delete this entry?</string>
+    <string name="confirm_delete_body">This cannot be undone. The deletion also applies to devices that sync this data.</string>
     <string name="dict_snippets_title">Snippets (%1$d)</string>
     <string name="dict_snippets_sub">Say the trigger, get the replacement.</string>
     <string name="dict_search_snippets">Search snippets</string>

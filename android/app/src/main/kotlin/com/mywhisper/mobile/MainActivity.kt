@@ -185,6 +185,21 @@ class MainActivity : ComponentActivity() {
 
     private fun bgToast(msg: String) = runOnUiThread { toast(msg) }
 
+    /**
+     * Push local mutations out immediately (desktop sync_after_change
+     * parity): dictionary/history edits only reach peers on a round,
+     * and the 60s loop is too slow to feel instant. No-op when sync
+     * is stopped.
+     */
+    private fun kickSync() {
+        workers.execute {
+            try {
+                CoreBridge.syncAllNow()
+            } catch (_: Exception) {
+            }
+        }
+    }
+
     private fun imeEnabled(): Boolean {
         // NOTE: Settings.Secure ENABLED_INPUT_METHODS is unreadable for
         // targetSdk 34+. InputMethodManager is the allowed path.
@@ -1159,6 +1174,14 @@ class MainActivity : ComponentActivity() {
         @Suppress("UNUSED_EXPRESSION") version
         var snipDialog by remember { mutableStateOf<Pair<String, String>?>(null) }
         var snipOld by remember { mutableStateOf<String?>(null) }
+        var pendingDeleteWord by remember { mutableStateOf<String?>(null) }
+        var pendingDeleteSnippet by remember { mutableStateOf<String?>(null) }
+        var words by remember { mutableStateOf(CoreBridge.getWords()) }
+        var snippets by remember { mutableStateOf(CoreBridge.getSnippets()) }
+        fun reloadDict() {
+            words = CoreBridge.getWords()
+            snippets = CoreBridge.getSnippets()
+        }
         // Words / Snippets segments (desktop Dictionary tabs): one list
         // visible at a time so huge dictionaries stay usable.
         var dictTab by remember { mutableIntStateOf(0) }
@@ -1179,10 +1202,6 @@ class MainActivity : ComponentActivity() {
             // Store-backed (desktop app_dictionary parity): edits hit
             // the sync tables directly, so transcription and sync see
             // them without a restart.
-            var words by remember { mutableStateOf(CoreBridge.getWords()) }
-            fun reloadWords() {
-                words = CoreBridge.getWords()
-            }
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -1219,7 +1238,8 @@ class MainActivity : ComponentActivity() {
                                 } catch (e: Exception) {
                                     toast(e.message ?: "failed")
                                 }
-                                reloadWords(); version++
+                                reloadDict(); version++
+                                kickSync()
                             }
                         }
                     }) { Text(stringResource(R.string.action_add)) }
@@ -1260,14 +1280,7 @@ class MainActivity : ComponentActivity() {
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Text(w, modifier = Modifier.weight(1f))
-                                IconButton(onClick = {
-                                    try {
-                                        CoreBridge.deleteWord(w).getOrThrow()
-                                    } catch (e: Exception) {
-                                        toast(e.message ?: "failed")
-                                    }
-                                    reloadWords(); version++
-                                }) {
+                                IconButton(onClick = { pendingDeleteWord = w }) {
                                     Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.action_delete))
                                 }
                             }
@@ -1276,10 +1289,6 @@ class MainActivity : ComponentActivity() {
                 }
             }
             } else {
-            var snippets by remember { mutableStateOf(CoreBridge.getSnippets()) }
-            fun reloadSnippets() {
-                snippets = CoreBridge.getSnippets()
-            }
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -1339,12 +1348,7 @@ class MainActivity : ComponentActivity() {
                                         Icon(Icons.Filled.Edit, contentDescription = stringResource(R.string.action_edit))
                                     }
                                     IconButton(onClick = {
-                                        try {
-                                            CoreBridge.deleteSnippet(trig).getOrThrow()
-                                        } catch (e: Exception) {
-                                            toast(e.message ?: "failed")
-                                        }
-                                        reloadSnippets(); version++
+                                        pendingDeleteSnippet = trig
                                     }) {
                                         Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.action_delete))
                                     }
@@ -1392,6 +1396,7 @@ class MainActivity : ComponentActivity() {
                                 }
                                 CoreBridge.putSnippet(trig, repl).getOrThrow()
                                 version++
+                                kickSync()
                             } catch (e: Exception) {
                                 toast(e.message ?: "failed")
                             }
@@ -1400,6 +1405,47 @@ class MainActivity : ComponentActivity() {
                     }) { Text(stringResource(R.string.action_save)) }
                 },
                 dismissButton = { TextButton(onClick = { snipDialog = null }) { Text(stringResource(R.string.action_cancel)) } },
+            )
+        }
+        // Desktop-style delete guard: deletions propagate to sync peers.
+        pendingDeleteWord?.let { w ->
+            AlertDialog(
+                onDismissRequest = { pendingDeleteWord = null },
+                title = { Text(stringResource(R.string.confirm_delete_title)) },
+                text = { Text(stringResource(R.string.confirm_delete_body)) },
+                confirmButton = {
+                    TextButton(onClick = {
+                        try {
+                            CoreBridge.deleteWord(w).getOrThrow()
+                            kickSync()
+                        } catch (e: Exception) {
+                            toast(e.message ?: "failed")
+                        }
+                        pendingDeleteWord = null
+                        reloadDict(); version++
+                    }) { Text(stringResource(R.string.action_delete)) }
+                },
+                dismissButton = { TextButton(onClick = { pendingDeleteWord = null }) { Text(stringResource(R.string.action_cancel)) } },
+            )
+        }
+        pendingDeleteSnippet?.let { t ->
+            AlertDialog(
+                onDismissRequest = { pendingDeleteSnippet = null },
+                title = { Text(stringResource(R.string.confirm_delete_title)) },
+                text = { Text(stringResource(R.string.confirm_delete_body)) },
+                confirmButton = {
+                    TextButton(onClick = {
+                        try {
+                            CoreBridge.deleteSnippet(t).getOrThrow()
+                            kickSync()
+                        } catch (e: Exception) {
+                            toast(e.message ?: "failed")
+                        }
+                        pendingDeleteSnippet = null
+                        reloadDict(); version++
+                    }) { Text(stringResource(R.string.action_delete)) }
+                },
+                dismissButton = { TextButton(onClick = { pendingDeleteSnippet = null }) { Text(stringResource(R.string.action_cancel)) } },
             )
         }
     }
@@ -1762,6 +1808,7 @@ class MainActivity : ComponentActivity() {
                                         bgToast(getString(R.string.hist_purge_failed, e.message))
                                     }
                                     runOnUiThread { items = loadHist() }
+                                    kickSync()
                                 }
                             } else {
                                 toast(getString(R.string.hist_set_days))
@@ -1783,6 +1830,7 @@ class MainActivity : ComponentActivity() {
                         try {
                             CoreBridge.dataOf(CoreBridge.nativeClearHistory())
                             items = loadHist()
+                            kickSync()
                         } catch (e: Exception) {
                             toast(getString(R.string.hist_clear_done, e.message))
                         }
@@ -1819,6 +1867,7 @@ class MainActivity : ComponentActivity() {
                                 try {
                                     CoreBridge.dataOf(CoreBridge.nativeDeleteHistory(h.uuid))
                                     items = loadHist()
+                                    kickSync()
                                 } catch (e: Exception) {
                                     toast(getString(R.string.hist_delete_failed, e.message))
                                 }

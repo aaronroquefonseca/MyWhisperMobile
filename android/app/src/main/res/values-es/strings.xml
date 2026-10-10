@@ -138,6 +138,8 @@
     <string name="dict_search_words">Buscar palabras</string>
     <string name="dict_no_words">Sin palabras — añade nombres y términos que el reconocedor confunde.</string>
     <string name="dict_no_match">Sin resultados.</string>
+    <string name="confirm_delete_title">¿Eliminar esta entrada?</string>
+    <string name="confirm_delete_body">Esto no se puede deshacer. La eliminación también se aplica a los dispositivos con los que se sincroniza.</string>
     <string name="dict_snippets_title">Fragmentos (%1$d)</string>
     <string name="dict_snippets_sub">Di el activador y obtén el reemplazo.</string>
     <string name="dict_search_snippets">Buscar fragmentos</string>
