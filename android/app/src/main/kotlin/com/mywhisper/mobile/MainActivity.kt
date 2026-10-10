@@ -15,6 +15,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -295,6 +296,12 @@ class MainActivity : ComponentActivity() {
      * Chain list with a left grab handle: press and drag immediately
      * to reorder (no long-press needed — the handle is dedicated).
      * Calls [onMove] with the JSON array indices; the caller persists.
+     *
+     * Targeting reads the LazyColumn's live layout info every event
+     * (never a cached map), the drag offset resets on each swap, and
+     * only one drag runs at a time — no runaway multi-row dragging.
+     * The dragged row lifts with a soft tonal wash + shadow instead
+     * of a hard full-bleed highlight.
      */
     @Composable
     private fun ReorderableEntries(
@@ -303,12 +310,12 @@ class MainActivity : ComponentActivity() {
         onMove: (from: Int, to: Int) -> Unit,
         row: @Composable (entry: JSONObject, handle: @Composable () -> Unit) -> Unit,
     ) {
+        val listState = androidx.compose.foundation.lazy.rememberLazyListState()
         var dragging by remember { mutableStateOf<String?>(null) }
         var dragIdx by remember { mutableIntStateOf(-1) }
         var accumulated by remember { mutableFloatStateOf(0f) }
-        val tops = remember { mutableMapOf<String, Float>() }
-        val heights = remember { mutableMapOf<String, Float>() }
         LazyColumn(
+            state = listState,
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(max = 560.dp),
@@ -320,19 +327,16 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier
                         .fillMaxWidth()
                         .animateItem()
-                        .onGloballyPositioned {
-                            tops[id] = it.positionInParent().y
-                            heights[id] = it.size.height.toFloat()
-                        }
                         .graphicsLayer {
-                            shadowElevation = if (isDrag) 12f else 0f
-                            scaleX = if (isDrag) 1.02f else 1f
-                            scaleY = if (isDrag) 1.02f else 1f
+                            shadowElevation = if (isDrag) 14f else 0f
+                            scaleX = if (isDrag) 1.015f else 1f
+                            scaleY = if (isDrag) 1.015f else 1f
                         }
                         .zIndex(if (isDrag) 1f else 0f)
                         .background(
-                            if (isDrag) MaterialTheme.colorScheme.primaryContainer
+                            if (isDrag) MaterialTheme.colorScheme.surfaceContainerHighest
                             else Color.Transparent,
+                            androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
                         ),
                 ) {
                     row(item) {
@@ -343,6 +347,7 @@ class MainActivity : ComponentActivity() {
                             modifier = Modifier.pointerInput(id) {
                                 detectDragGestures(
                                     onDragStart = {
+                                        if (dragging != null) return@detectDragGestures
                                         dragging = id
                                         dragIdx = items.indexOfFirst { idOf(it) == id }
                                         accumulated = 0f
@@ -351,28 +356,22 @@ class MainActivity : ComponentActivity() {
                                     onDragCancel = { dragging = null; dragIdx = -1 },
                                     onDrag = { change, dragAmount ->
                                         change.consume()
-                                        if (dragging == null) return@detectDragGestures
-                                        accumulated += dragAmount.y
-                                        val h = heights[id] ?: return@detectDragGestures
-                                        if (h <= 0f) return@detectDragGestures
-                                        val center = (tops[id] ?: 0f) + h / 2f + accumulated
-                                        val ordered = tops.entries.sortedBy { it.value }
-                                        var target = dragIdx
-                                        for ((i, e) in ordered.withIndex()) {
-                                            val eh = heights[e.key] ?: h
-                                            if (center >= e.value && center <= e.value + eh) {
-                                                target = i
-                                                break
-                                            }
-                                            if (center < e.value) {
-                                                target = i
-                                                break
-                                            }
-                                            target = i
+                                        val active = dragging
+                                        if (active == null || active != id || dragIdx < 0) {
+                                            return@detectDragGestures
                                         }
-                                        if (target in items.indices && target != dragIdx && dragIdx >= 0) {
+                                        accumulated += dragAmount.y
+                                        val visible = listState.layoutInfo.visibleItemsInfo
+                                        val info = visible.firstOrNull { it.key == active }
+                                            ?: return@detectDragGestures
+                                        val center = info.offset + info.size / 2f + accumulated
+                                        val target = visible.firstOrNull { v ->
+                                            center >= v.offset && center < v.offset + v.size
+                                        }?.index ?: dragIdx
+                                        if (target in items.indices && target != dragIdx) {
                                             onMove(dragIdx, target)
                                             dragIdx = target
+                                            accumulated = 0f
                                         }
                                     },
                                 )
@@ -817,7 +816,6 @@ class MainActivity : ComponentActivity() {
             s.put("language_models", it)
         }
         var dialog by remember { mutableStateOf<JSONObject?>(null) }
-        var showDefault by remember { mutableStateOf(false) }
         var localInfo by remember { mutableStateOf(false) }
         var version by remember { mutableIntStateOf(0) }
         @Suppress("UNUSED_EXPRESSION") version
@@ -834,13 +832,7 @@ class MainActivity : ComponentActivity() {
                         lm.put("cleanup_enabled", it); save(); version++
                     })
                 }
-                var prompt by remember { mutableStateOf(lm.optString("cleanup_prompt", "")) }
-                OutlinedTextField(
-                    value = prompt, onValueChange = { prompt = it },
-                    label = { Text("Custom prompt (blank = built-in default)") },
-                    modifier = Modifier.fillMaxWidth(), minLines = 2,
-                )
-                Spacer(Modifier.height(4.dp))
+                // Effective prompt state: blank stored = built-in default.
                 var defaultText by remember { mutableStateOf<String?>(null) }
                 if (defaultText == null) {
                     LaunchedEffect(Unit) {
@@ -851,25 +843,90 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }
-                Row {
-                    Button(onClick = { lm.put("cleanup_prompt", prompt); save() }) {
-                        Text("Save prompt")
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    OutlinedButton(onClick = { prompt = ""; lm.put("cleanup_prompt", ""); save() }) {
-                        Text("Reset to default")
+                val stored = lm.optString("cleanup_prompt", "")
+                val isDefault = stored.isBlank()
+                val effective = if (isDefault) (defaultText ?: "") else stored
+                var expanded by remember { mutableStateOf(false) }
+                var editor by remember { mutableStateOf(false) }
+                Text(
+                    if (isDefault) "Using the built-in default prompt."
+                    else "Using your customized prompt.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Spacer(Modifier.height(4.dp))
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(modifier = Modifier.padding(10.dp)) {
+                        val lines = effective.lines()
+                        val shown = if (expanded) lines else lines.take(6)
+                        Text(
+                            shown.joinToString("\n").ifEmpty { "…" },
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        if (lines.size > 6) {
+                            TextButton(onClick = { expanded = !expanded }) {
+                                Text(if (expanded) "Show less" else "Show all ${lines.size} lines")
+                            }
+                        }
                     }
                 }
                 Spacer(Modifier.height(4.dp))
                 Row {
-                    OutlinedButton(
-                        enabled = !defaultText.isNullOrEmpty(),
-                        onClick = { prompt = defaultText ?: prompt },
-                    ) {
-                        Text("Edit a copy of the default")
+                    Button(onClick = { editor = true }) {
+                        Text(if (isDefault) "Customize" else "Edit")
                     }
                     Spacer(Modifier.width(8.dp))
-                    TextButton(onClick = { showDefault = true }) { Text("View default") }
+                    OutlinedButton(
+                        enabled = !isDefault,
+                        onClick = { lm.put("cleanup_prompt", ""); save(); version++ },
+                    ) {
+                        Text("Reset to default")
+                    }
+                }
+                if (editor) {
+                    var draft by remember { mutableStateOf(effective) }
+                    AlertDialog(
+                        onDismissRequest = { editor = false },
+                        title = { Text("Cleanup prompt") },
+                        text = {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .verticalScroll(rememberScrollState()),
+                            ) {
+                                Text(
+                                    "Saved as your custom prompt. Reset returns to the built-in default.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                                Spacer(Modifier.height(4.dp))
+                                OutlinedTextField(
+                                    value = draft,
+                                    onValueChange = { draft = it },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(min = 200.dp, max = 420.dp),
+                                )
+                            }
+                        },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                // Unchanged-from-default stays blank (= default).
+                                val def = defaultText ?: ""
+                                lm.put(
+                                    "cleanup_prompt",
+                                    if (draft.trim() == def.trim() || draft.isBlank()) "" else draft,
+                                )
+                                save(); version++; editor = false
+                            }) { Text("Save") }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { editor = false }) { Text("Cancel") }
+                        },
+                    )
                 }
             }
             Section("Models (tried in order, first answer wins)") {
@@ -965,26 +1022,6 @@ class MainActivity : ComponentActivity() {
                 confirmButton = { TextButton(onClick = { localInfo = false }) { Text("Got it") } },
             )
         }
-        if (showDefault) {
-            var text by remember { mutableStateOf("loading…") }
-            LaunchedEffect(Unit) {
-                text = try {
-                    CoreBridge.defaultCleanupPrompt().getOrThrow()
-                } catch (e: Exception) {
-                    "unavailable: ${e.message}"
-                }
-            }
-            AlertDialog(
-                onDismissRequest = { showDefault = false },
-                title = { Text("Built-in cleanup prompt") },
-                text = {
-                    Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                        Text(text, style = MaterialTheme.typography.bodySmall)
-                    }
-                },
-                confirmButton = { TextButton(onClick = { showDefault = false }) { Text("Close") } },
-            )
-        }
         dialog?.let { d ->
             LlmDialog(d, onClose = { dialog = null }) { edited ->
                 upsertEntry(lm, "entries", edited)
@@ -1055,11 +1092,11 @@ class MainActivity : ComponentActivity() {
                     }
                     if (kind == "Ollama") {
                         OutlinedTextField(value = key, onValueChange = { key = it },
-                            label = { Text("Bearer token (optional)") },
+                            label = { Text("API key") },
                             visualTransformation = PasswordVisualTransformation(),
                             modifier = Modifier.fillMaxWidth())
                         Text(
-                            "Sent as a Bearer token (reverse-proxy setups). Empty means no token.",
+                            "Bearer token for reverse-proxy setups. Empty means no token.",
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
@@ -1096,9 +1133,8 @@ class MainActivity : ComponentActivity() {
         )
     }
 
-    // -- Dictionary -----------------------------------------------------
+    // -- Dictionary (searchable lazy lists: scales to big dicts) ----
 
-    @OptIn(ExperimentalLayoutApi::class)
     @Composable
     private fun DictionaryScreen(s: JSONObject) {
         val dict = s.optJSONObject("dictionary") ?: JSONObject().also {
@@ -1113,10 +1149,15 @@ class MainActivity : ComponentActivity() {
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState()),
         ) {
-            Section("Words (exact spellings bias recognition)") {
+            Section("Words (${entriesOf(dict, "words").length()})") {
+                Text(
+                    "Exact spellings bias recognition.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
                 val arr = entriesOf(dict, "words")
                 var next by remember { mutableStateOf("") }
                 var dup by remember { mutableStateOf(false) }
+                var query by remember { mutableStateOf("") }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     OutlinedTextField(
                         value = next, onValueChange = { next = it; dup = false },
@@ -1147,72 +1188,114 @@ class MainActivity : ComponentActivity() {
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
-                Spacer(Modifier.height(8.dp))
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    for (i in 0 until arr.length()) {
-                        val w = arr.optString(i)
-                        AssistChip(
-                            onClick = {},
-                            label = { Text(w) },
-                            trailingIcon = {
-                                TextButton(onClick = {
-                                    val n = JSONArray()
-                                    for (j in 0 until arr.length()) {
-                                        if (j != i) n.put(arr.get(j))
-                                    }
-                                    dict.put("words", n); save(); version++
-                                }) { Text("×") }
-                            },
-                        )
-                    }
-                }
+                Spacer(Modifier.height(4.dp))
+                OutlinedTextField(
+                    value = query, onValueChange = { query = it },
+                    label = { Text("Search words") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                )
+                Spacer(Modifier.height(4.dp))
+                val shown = (0 until arr.length())
+                    .map { arr.optString(it) }
+                    .filter { query.isBlank() || it.contains(query, ignoreCase = true) }
                 if (arr.length() == 0) {
                     Text(
                         "No words yet — add names and terms the recognizer mishears.",
                         style = MaterialTheme.typography.bodySmall,
                     )
-                }
-            }
-            Section("Snippets (say the trigger, get the replacement)") {
-                val arr = entriesOf(dict, "snippets")
-                for (i in 0 until arr.length()) {
-                    val sn = arr.optJSONObject(i) ?: continue
-                    Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(sn.optString("trigger"))
-                                Text(
-                                    "→ ${sn.optString("replacement")}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
-                            }
-                            IconButton(onClick = {
-                                snipIndex = i
-                                snipDialog = JSONObject(sn.toString())
-                            }) {
-                                Icon(Icons.Filled.Edit, contentDescription = "Edit")
-                            }
-                            IconButton(onClick = {
-                                val n = JSONArray()
-                                for (j in 0 until arr.length()) {
-                                    if (j != i) n.put(arr.get(j))
+                } else if (shown.isEmpty()) {
+                    Text("No matches.", style = MaterialTheme.typography.bodySmall)
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 320.dp),
+                    ) {
+                        items(shown, key = { it }) { w ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(w, modifier = Modifier.weight(1f))
+                                IconButton(onClick = {
+                                    val n = JSONArray()
+                                    for (j in 0 until arr.length()) {
+                                        if (arr.optString(j) != w) n.put(arr.get(j))
+                                    }
+                                    dict.put("words", n); save(); version++
+                                }) {
+                                    Icon(Icons.Filled.Delete, contentDescription = "Delete")
                                 }
-                                dict.put("snippets", n); save(); version++
-                            }) {
-                                Icon(Icons.Filled.Delete, contentDescription = "Delete")
                             }
                         }
                     }
                 }
+            }
+            Section("Snippets (${entriesOf(dict, "snippets").length()})") {
+                Text(
+                    "Say the trigger, get the replacement.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                val arr = entriesOf(dict, "snippets")
+                var query by remember { mutableStateOf("") }
+                OutlinedTextField(
+                    value = query, onValueChange = { query = it },
+                    label = { Text("Search snippets") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                )
+                Spacer(Modifier.height(4.dp))
+                val shown = (0 until arr.length())
+                    .mapNotNull { i -> arr.optJSONObject(i)?.let { i to it } }
+                    .filter { (_, sn) ->
+                        query.isBlank() ||
+                            sn.optString("trigger").contains(query, ignoreCase = true) ||
+                            sn.optString("replacement").contains(query, ignoreCase = true)
+                    }
                 if (arr.length() == 0) {
-                    Text(
-                        "No snippets yet.",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
+                    Text("No snippets yet.", style = MaterialTheme.typography.bodySmall)
                     Spacer(Modifier.height(4.dp))
+                } else if (shown.isEmpty()) {
+                    Text("No matches.", style = MaterialTheme.typography.bodySmall)
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 420.dp),
+                    ) {
+                        items(shown, key = { (_, sn) -> sn.optString("trigger") + sn.optString("replacement") }) { (i, sn) ->
+                            Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(sn.optString("trigger"))
+                                        Text(
+                                            "→ ${sn.optString("replacement")}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                        )
+                                    }
+                                    IconButton(onClick = {
+                                        snipIndex = i
+                                        snipDialog = JSONObject(sn.toString())
+                                    }) {
+                                        Icon(Icons.Filled.Edit, contentDescription = "Edit")
+                                    }
+                                    IconButton(onClick = {
+                                        val n = JSONArray()
+                                        for (j in 0 until arr.length()) {
+                                            if (j != i) n.put(arr.get(j))
+                                        }
+                                        dict.put("snippets", n); save(); version++
+                                    }) {
+                                        Icon(Icons.Filled.Delete, contentDescription = "Delete")
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
                 OutlinedButton(onClick = {
                     snipIndex = -1
@@ -1270,11 +1353,7 @@ class MainActivity : ComponentActivity() {
     private fun compactWords(n: Long): String {
         if (n < 1000) return n.toString()
         val k = n / 1000.0
-        return when {
-            k >= 100.0 -> "${k.toInt()}K"
-            k >= 10.0 -> "${"%.1f".format(k)}K"
-            else -> "${(kotlin.math.round(k * 10) / 10)}K".trimEnd('0').trimEnd('.') + "K"
-        }
+        return if (k >= 100.0) "${k.toInt()}K" else "%.1f".format(k) + "K"
     }
 
     @Composable
@@ -1346,8 +1425,27 @@ class MainActivity : ComponentActivity() {
                 if (days.isEmpty()) {
                     Text("Nothing yet — dictate something first.", style = MaterialTheme.typography.bodySmall)
                 } else {
-                    val byDay = days.associate { (it.dayStart / 86400) to it.words }
-                    Heatmap(byDay)
+                    var tapped by remember { mutableStateOf<Day?>(null) }
+                    Heatmap(days, onDayTap = { tapped = it })
+                    tapped?.let { d ->
+                        val date = try {
+                            java.time.LocalDate.ofEpochDay(d.dayStart / 86400)
+                                .format(java.time.format.DateTimeFormatter.ofPattern("d MMM yyyy"))
+                        } catch (_: Exception) {
+                            ""
+                        }
+                        AlertDialog(
+                            onDismissRequest = { tapped = null },
+                            title = { Text(date.ifEmpty { "Day" }) },
+                            text = {
+                                Text("${d.words} ${if (d.words == 1) "word" else "words"} · " +
+                                    "${d.utterances} ${if (d.utterances == 1) "dictation" else "dictations"}")
+                            },
+                            confirmButton = {
+                                TextButton(onClick = { tapped = null }) { Text("Close") }
+                            },
+                        )
+                    }
                     Spacer(Modifier.height(4.dp))
                     OutlinedButton(onClick = { version++ }) {
                         Icon(Icons.Filled.Refresh, contentDescription = null)
@@ -1381,9 +1479,11 @@ class MainActivity : ComponentActivity() {
     /**
      * 24-week activity heatmap like desktop: columns oldest → newest,
      * rows Sunday → Saturday, month labels, less → more legend.
+     * Cells are tappable and report their day via [onDayTap].
      */
     @Composable
-    private fun Heatmap(byDay: Map<Long, Int>) {
+    private fun Heatmap(days: List<Day>, onDayTap: (Day) -> Unit) {
+        val byDay = days.associate { (it.dayStart / 86400) to it }
         val weeks = 24
         val today = java.time.LocalDate.now().toEpochDay()
         // Saturday-anchored grid, same math as desktop cell_epoch_day.
@@ -1392,7 +1492,7 @@ class MainActivity : ComponentActivity() {
         val grid = List(weeks) { week ->
             List(7) { day ->
                 val epoch = saturday - ((weeks - 1 - week) * 7 + (6 - day))
-                Cell(epoch, heatLevel(byDay[epoch] ?: 0))
+                Cell(epoch, heatLevel(byDay[epoch]?.words ?: 0))
             }
         }
         val empty = MaterialTheme.colorScheme.surfaceVariant
@@ -1423,7 +1523,22 @@ class MainActivity : ComponentActivity() {
             Canvas(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(totalH),
+                    .height(totalH)
+                    .pointerInput(grid) {
+                        detectTapGestures { offset ->
+                            val relY = offset.y - labelH
+                            if (relY < 0) return@detectTapGestures
+                            val week = (offset.x / (cellPx + gapPx)).toInt()
+                            val day = (relY / (cellPx + gapPx)).toInt()
+                            if (week in 0 until weeks && day in 0..6) {
+                                val epoch = grid[week][day].epoch
+                                onDayTap(
+                                    byDay[epoch]
+                                        ?: Day(epoch * 86400, 0, 0),
+                                )
+                            }
+                        }
+                    },
             ) {
                 // Month labels on the first column where the month changes.
                 // Like desktop, skip a cramped first label and any label
@@ -1610,8 +1725,20 @@ class MainActivity : ComponentActivity() {
                     }) { Text("Clear") }
                 }
             }
+            var histQuery by remember { mutableStateOf("") }
+            OutlinedTextField(
+                value = histQuery, onValueChange = { histQuery = it },
+                label = { Text("Search transcripts") },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                singleLine = true,
+            )
             LazyColumn(modifier = Modifier.fillMaxSize()) {
-                items(items, key = { it.uuid }) { h ->
+                items(
+                    items.filter { h ->
+                        histQuery.isBlank() || h.text.contains(histQuery, ignoreCase = true)
+                    },
+                    key = { it.uuid },
+                ) { h ->
                     Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)) {
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(8.dp),
@@ -1681,6 +1808,17 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun agoText(epochSecs: Long): String {
+        if (epochSecs <= 0) return "never"
+        val dt = System.currentTimeMillis() / 1000 - epochSecs
+        return when {
+            dt < 60 -> "just now"
+            dt < 3600 -> "${dt / 60} min ago"
+            dt < 86400 -> "${dt / 3600} h ago"
+            else -> "${dt / 86400} d ago"
+        }
+    }
+
     @Composable
     private fun SyncScreen(s: JSONObject) {
         val sync = s.optJSONObject("sync") ?: JSONObject().also { s.put("sync", it) }
@@ -1688,13 +1826,20 @@ class MainActivity : ComponentActivity() {
         var peers by remember { mutableStateOf(loadPeers()) }
         var version by remember { mutableIntStateOf(0) }
         var busy by remember { mutableStateOf("") }
+        var notes by remember { mutableStateOf(mapOf<String, String>()) }
+        var displayName by remember { mutableStateOf("") }
+        var addOpen by remember { mutableStateOf(false) }
         fun refresh() {
             try {
                 status = CoreBridge.syncStatus().getOrThrow()
             } catch (_: Exception) {
             }
             peers = loadPeers()
+            displayName = CoreBridge.displayName()
             version++
+        }
+        fun note(id: String, text: String) {
+            notes = notes + (id to text)
         }
         @Suppress("UNUSED_EXPRESSION") version
         LaunchedEffect(Unit) {
@@ -1717,7 +1862,8 @@ class MainActivity : ComponentActivity() {
                 val running = status?.optBoolean("running", false) == true
                 Text(
                     if (running) {
-                        "Sync running · node ${status?.optString("nodeId", "")?.take(12)}…"
+                        val shown = displayName.ifEmpty { status?.optString("nodeId", "")?.take(12) + "…" }
+                        "Sync running · $shown"
                     } else {
                         "Sync stopped."
                     },
@@ -1730,7 +1876,7 @@ class MainActivity : ComponentActivity() {
                 var name by remember { mutableStateOf(sync.optString("device_name", "")) }
                 OutlinedTextField(
                     value = name, onValueChange = { name = it },
-                    label = { Text("Device name (shown to peers)") },
+                    label = { Text("Device name (blank = ${displayName.ifEmpty { "generated" }})") },
                     modifier = Modifier.fillMaxWidth(),
                 )
                 var portStr by remember {
@@ -1753,6 +1899,7 @@ class MainActivity : ComponentActivity() {
                     }
                     Switch(checked = adv, onCheckedChange = {
                         sync.put("advertise", it); save(); version++
+                        restartSyncIfRunning(running)
                     })
                 }
                 val enabled = sync.optBoolean("enabled", true)
@@ -1760,7 +1907,30 @@ class MainActivity : ComponentActivity() {
                     Text("Sync enabled", modifier = Modifier.weight(1f))
                     Switch(checked = enabled, onCheckedChange = {
                         sync.put("enabled", it); save(); version++
+                        if (!it && running) {
+                            SyncService.stop(this@MainActivity)
+                            CoreBridge.syncStop()
+                            releaseMulticast()
+                            refresh()
+                        } else {
+                            restartSyncIfRunning(running && it)
+                        }
                     })
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Start on boot")
+                        Text(
+                            "Relaunch sync after reboot when enabled.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    Switch(
+                        checked = sync.optBoolean("start_on_boot", true),
+                        onCheckedChange = {
+                            sync.put("start_on_boot", it); save(); version++
+                        },
+                    )
                 }
                 Spacer(Modifier.height(4.dp))
                 Row {
@@ -1768,7 +1938,7 @@ class MainActivity : ComponentActivity() {
                         sync.put("device_name", name.trim())
                         sync.put("listen_port", portStr.toIntOrNull() ?: 42973)
                         save()
-                        toast("saved — restart sync to apply")
+                        restartSyncIfRunning(running)
                     }) { Text("Save") }
                     Spacer(Modifier.width(8.dp))
                     if (!running) {
@@ -1829,77 +1999,177 @@ class MainActivity : ComponentActivity() {
             Section("Trusted (${trusted.size})") {
                 if (trusted.isEmpty()) Text("None yet.", style = MaterialTheme.typography.bodySmall)
                 trusted.forEach { p ->
-                    PeerRow(p, onSync = {
-                        busy = "syncing…"
-                        workers.execute {
-                            try {
-                                val msg = CoreBridge.syncNow(p.optString("nodeId")).getOrThrow()
-                                bgToast(msg)
-                            } catch (e: Exception) {
-                                bgToast("sync failed: ${e.message}")
+                    val id = p.optString("nodeId")
+                    PeerRow(
+                        p,
+                        note = notes[id],
+                        lastSync = "last sync ${agoText(p.optLong("lastSync", 0))}",
+                        onSync = {
+                            busy = "syncing…"
+                            workers.execute {
+                                try {
+                                    val msg = CoreBridge.syncNow(id).getOrThrow()
+                                    runOnUiThread { note(id, msg) }
+                                } catch (e: Exception) {
+                                    runOnUiThread { note(id, "sync failed: ${e.message}") }
+                                }
+                                busy = ""
+                                runOnUiThread { refresh() }
                             }
-                            busy = ""
-                            runOnUiThread { refresh() }
-                        }
-                    }, onRemove = {
-                        workers.execute {
-                            try {
-                                CoreBridge.syncTrust(p.optString("nodeId"), false).getOrThrow()
-                            } catch (e: Exception) {
-                                bgToast("remove failed: ${e.message}")
+                        },
+                        onRemove = {
+                            workers.execute {
+                                try {
+                                    CoreBridge.syncTrust(id, false).getOrThrow()
+                                } catch (e: Exception) {
+                                    bgToast("remove failed: ${e.message}")
+                                }
+                                runOnUiThread { refresh() }
                             }
-                            runOnUiThread { refresh() }
-                        }
-                    })
+                        },
+                    )
                 }
             }
             Section("Pairing requests (${requests.size})") {
                 if (requests.isEmpty()) Text("None.", style = MaterialTheme.typography.bodySmall)
                 requests.forEach { p ->
-                    PeerRow(p, onAccept = {
-                        workers.execute {
-                            try {
-                                val msg = CoreBridge.syncTrust(p.optString("nodeId"), true).getOrThrow()
-                                bgToast(msg)
-                            } catch (e: Exception) {
-                                bgToast("accept failed: ${e.message}")
+                    val id = p.optString("nodeId")
+                    val nm = p.optString("name").ifEmpty { id.take(12) + "…" }
+                    PeerRow(
+                        p,
+                        note = notes[id],
+                        onAccept = { acceptPeer(id, nm, { note(id, it) }) { refresh() } },
+                        onRemove = {
+                            workers.execute {
+                                try {
+                                    CoreBridge.syncTrust(id, false).getOrThrow()
+                                } catch (_: Exception) {
+                                }
+                                runOnUiThread { refresh() }
                             }
-                            runOnUiThread { refresh() }
-                        }
-                    }, onRemove = {
-                        workers.execute {
-                            try {
-                                CoreBridge.syncTrust(p.optString("nodeId"), false).getOrThrow()
-                            } catch (_: Exception) {
-                            }
-                            runOnUiThread { refresh() }
-                        }
-                    })
+                        },
+                    )
                 }
             }
             Section("Nearby (${nearby.size})") {
                 Text(
-                    "Discovered on the LAN. Accept to trust and sync (same protocol as desktop).",
+                    "Discovered on the LAN. Accept to trust and sync " +
+                        "(works with desktops and other phones).",
                     style = MaterialTheme.typography.bodySmall,
                 )
                 if (nearby.isEmpty()) Text("Nobody around.", style = MaterialTheme.typography.bodySmall)
                 nearby.forEach { p ->
-                    PeerRow(p, onAccept = {
-                        workers.execute {
-                            try {
-                                val msg = CoreBridge.syncTrust(p.optString("nodeId"), true).getOrThrow()
-                                bgToast(msg)
-                            } catch (e: Exception) {
-                                bgToast("accept failed: ${e.message}")
-                            }
-                            runOnUiThread { refresh() }
-                        }
-                    })
+                    val id = p.optString("nodeId")
+                    val nm = p.optString("name").ifEmpty { id.take(12) + "…" }
+                    PeerRow(
+                        p,
+                        note = notes[id],
+                        onAccept = { acceptPeer(id, nm, { note(id, it) }) { refresh() } },
+                    )
                 }
                 Spacer(Modifier.height(4.dp))
                 OutlinedButton(onClick = { refresh() }) { Text("Refresh") }
             }
+            Section("Add device manually") {
+                Text(
+                    "Copy the Device ID from MyWhisper on your other device. " +
+                        "Send a pairing request, then accept it there. " +
+                        "Both devices must be reachable.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Spacer(Modifier.height(4.dp))
+                OutlinedButton(onClick = { addOpen = true }) { Text("Add by ID") }
+                notes["__add"]?.let {
+                    Spacer(Modifier.height(4.dp))
+                    Text(it, style = MaterialTheme.typography.bodySmall)
+                }
+            }
         }
+        if (addOpen) {
+            var id by remember { mutableStateOf("") }
+            var addr by remember { mutableStateOf("") }
+            var nm by remember { mutableStateOf("") }
+            AlertDialog(
+                onDismissRequest = { addOpen = false },
+                title = { Text("Add device") },
+                text = {
+                    Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                        OutlinedTextField(
+                            value = id, onValueChange = { id = it },
+                            label = { Text("Other device's ID (64 hex chars)") },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        OutlinedTextField(
+                            value = addr, onValueChange = { addr = it },
+                            label = { Text("Address override, e.g. 192.168.1.31:42973 (optional)") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        OutlinedTextField(
+                            value = nm, onValueChange = { nm = it },
+                            label = { Text("Name (optional)") },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        workers.execute {
+                            try {
+                                val msg = CoreBridge.syncAdd(id, addr, nm).getOrThrow()
+                                runOnUiThread { notes = notes + ("__add" to msg) }
+                            } catch (e: Exception) {
+                                runOnUiThread { notes = notes + ("__add" to "failed: ${e.message}") }
+                            }
+                            runOnUiThread { refresh(); addOpen = false }
+                        }
+                    }) { Text("Send pairing request") }
+                },
+                dismissButton = { TextButton(onClick = { addOpen = false }) { Text("Cancel") } },
+            )
+        }
+    }
+
+    /** Trust then immediately run one round, reporting the outcome inline. */
+    private fun acceptPeer(id: String, name: String, setNote: (String) -> Unit, refresh: () -> Unit) {
+        workers.execute {
+            try {
+                CoreBridge.syncTrust(id, true).getOrThrow()
+            } catch (e: Exception) {
+                runOnUiThread { setNote("accept failed: ${e.message}"); refresh() }
+                return@execute
+            }
+            try {
+                val msg = CoreBridge.syncNow(id).getOrThrow()
+                runOnUiThread { setNote(msg) }
+            } catch (e: Exception) {
+                // The usual case: we dialed, they recorded us as
+                // pending, and rejected until they accept there.
+                runOnUiThread {
+                    setNote("waiting for $name to accept — ask them to accept on the other device")
+                }
+            }
+            runOnUiThread { refresh() }
+        }
+    }
+
+    /** Apply Name/Port/Advertise/Enabled edits without a manual restart. */
+    private fun restartSyncIfRunning(running: Boolean) {
+        if (!running) {
+            toast("saved")
+            return
+        }
+        try {
+            SyncService.stop(this)
+        } catch (_: Exception) {
+        }
+        try {
+            CoreBridge.syncStop()
+        } catch (_: Exception) {
+        }
+        acquireMulticast()
+        SyncService.start(this)
+        toast("saved — sync restarted")
     }
 
     private fun loadPeers(): List<JSONObject> {
@@ -1914,34 +2184,48 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun PeerRow(
         p: JSONObject,
+        note: String? = null,
+        lastSync: String? = null,
         onSync: (() -> Unit)? = null,
         onAccept: (() -> Unit)? = null,
         onRemove: (() -> Unit)? = null,
     ) {
         Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(p.optString("name", "?"))
-                    val addrs = p.optJSONArray("addresses")?.let { a ->
-                        List(a.length()) { a.optString(it) }
-                    } ?: emptyList()
-                    val disc = p.optJSONArray("discoveredAddrs")?.let { a ->
-                        List(a.length()) { a.optString(it) }
-                    } ?: emptyList()
-                    Text(
-                        (addrs + disc).distinct().take(2).joinToString(" · ").ifEmpty { "no address yet" },
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-                onSync?.let { TextButton(onClick = it) { Text("Sync") } }
-                onAccept?.let { TextButton(onClick = it) { Text("Accept") } }
-                onRemove?.let {
-                    IconButton(onClick = it) {
-                        Icon(Icons.Filled.Delete, contentDescription = "Remove")
+            Column(modifier = Modifier.fillMaxWidth().padding(8.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(p.optString("name", "?"))
+                        val addrs = p.optJSONArray("addresses")?.let { a ->
+                            List(a.length()) { a.optString(it) }
+                        } ?: emptyList()
+                        val disc = p.optJSONArray("discoveredAddrs")?.let { a ->
+                            List(a.length()) { a.optString(it) }
+                        } ?: emptyList()
+                        Text(
+                            (addrs + disc).distinct().take(2).joinToString(" · ").ifEmpty { "no address yet" },
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        if (lastSync != null) {
+                            Text(lastSync, style = MaterialTheme.typography.bodySmall)
+                        }
                     }
+                    onSync?.let { TextButton(onClick = it) { Text("Sync") } }
+                    onAccept?.let { TextButton(onClick = it) { Text("Accept") } }
+                    onRemove?.let {
+                        IconButton(onClick = it) {
+                            Icon(Icons.Filled.Delete, contentDescription = "Remove")
+                        }
+                    }
+                }
+                if (!note.isNullOrEmpty()) {
+                    Text(
+                        note,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         }

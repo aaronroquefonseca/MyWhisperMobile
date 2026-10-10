@@ -111,8 +111,18 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(barBg)
-            setPadding(dp(12), dp(10), dp(12), dp(10))
+            // Opaque bar with rounded bottom corners (no straight
+            // screen-edge slab).
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                setColor(barBg)
+                cornerRadii = floatArrayOf(
+                    0f, 0f, 0f, 0f,
+                    dp(20).toFloat(), dp(20).toFloat(),
+                    dp(20).toFloat(), dp(20).toFloat(),
+                )
+            }
+            setPadding(dp(12), dp(10), dp(12), dp(14))
             gravity = Gravity.CENTER_HORIZONTAL
         }
         // Hairline divider on top.
@@ -134,7 +144,7 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
             setBackground(sideBackground(barBg, night))
             setOnClickListener { onClick() }
         }
-        val switchBtn = sideButton("ABC") { switchToPrevious() }
+        val switchBtn = sideButton("ABC") { showKeyboardPicker() }
         val settingsBtn = sideButton("SET") { openConfig() }
         val mic = ImageButton(this).apply {
             setImageResource(R.drawable.ic_mic)
@@ -313,6 +323,20 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
             if (lastState == Dictation.State.IDLE && lastNote.isNotEmpty()) 0xFFD92D20.toInt()
             else if (night) 0xFFA8A4B5.toInt() else 0xFF5F5B66.toInt(),
         )
+    }
+
+    /**
+     * Keyboard switch: open the system picker (always works) instead
+     * of guessing prev/next — the old chain could leave no input
+     * method visible at all.
+     */
+    private fun showKeyboardPicker() {
+        try {
+            val imm = getSystemService(INPUT_METHOD_SERVICE)
+                as android.view.inputmethod.InputMethodManager
+            imm.showInputMethodPicker()
+        } catch (_: Exception) {
+        }
     }
 
     private fun switchToPrevious() {

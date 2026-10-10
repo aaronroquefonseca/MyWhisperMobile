@@ -14,8 +14,8 @@
 //! entries have no engine on desktop either ("local engines not
 //! implemented") and are skipped by the chain.
 
-use crate::audio::{self, MIN_SAMPLES_16K, Recorder};
-use crate::server_stt::{Transcript, transcribe_chain};
+use crate::audio::{self, Recorder, MIN_SAMPLES_16K};
+use crate::server_stt::{transcribe_chain, Transcript};
 use crate::settings::{AppSettings, HistoryEntry, LlmEntry};
 use crate::store::Store;
 use crate::textnorm::expand_snippets;

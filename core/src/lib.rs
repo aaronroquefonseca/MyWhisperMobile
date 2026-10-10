@@ -17,9 +17,9 @@ pub mod textnorm;
 pub mod viz_types;
 
 use engine::Engine;
-use jni::JNIEnv;
 use jni::objects::{JClass, JShortArray, JString};
 use jni::sys::{jint, jstring};
+use jni::JNIEnv;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
@@ -414,6 +414,59 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeSyncPee
         Ok(dir) => crate::sync_ctl::sync_peers_json(&dir),
         Err(_) => "[]".to_string(),
     };
+    jstr(&mut env, &out)
+}
+
+/// This device's display name: explicit setting wins, otherwise the
+/// generated adjective-noun name (same as desktop).
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeDisplayName(
+    mut env: JNIEnv,
+    _cls: JClass,
+) -> jstring {
+    let out = with_engine(
+        |e| {
+            let s = e.settings_json();
+            let name: String = serde_json::from_str::<serde_json::Value>(&s)
+                .ok()
+                .and_then(|v| {
+                    v.pointer("/sync/device_name")
+                        .and_then(|n| n.as_str())
+                        .map(|s| s.to_string())
+                })
+                .unwrap_or_default();
+            ok_json(serde_json::Value::String(crate::device::display_name(
+                &name,
+                e.node_id(),
+            )))
+        },
+        || err_json("engine not open"),
+    );
+    jstr(&mut env, &out)
+}
+
+/// Manual pairing by ID (see sync_ctl::sync_add).
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeSyncAdd(
+    mut env: JNIEnv,
+    _cls: JClass,
+    node_id: JString,
+    address: JString,
+    name: JString,
+) -> jstring {
+    let out = (|| -> String {
+        let id = get_string(&mut env, &node_id).unwrap_or_default();
+        let addr = get_string(&mut env, &address).unwrap_or_default();
+        let nm = get_string(&mut env, &name).unwrap_or_default();
+        let dir = match engine_dir() {
+            Ok(d) => d,
+            Err(e) => return err_json(e),
+        };
+        match crate::sync_ctl::sync_add(&dir, &id, &addr, &nm) {
+            Ok(s) => ok_json(serde_json::Value::String(s)),
+            Err(err) => err_json(err),
+        }
+    })();
     jstr(&mut env, &out)
 }
 

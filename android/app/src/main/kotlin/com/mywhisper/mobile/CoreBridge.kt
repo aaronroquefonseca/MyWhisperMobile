@@ -36,6 +36,8 @@ object CoreBridge {
     @JvmStatic external fun nativeSyncTrust(nodeId: String, accept: Boolean): String
     @JvmStatic external fun nativeSyncNow(nodeId: String): String
     @JvmStatic external fun nativeSyncAllNow(): String
+    @JvmStatic external fun nativeDisplayName(): String
+    @JvmStatic external fun nativeSyncAdd(nodeId: String, address: String, name: String): String
 
     /** Parse `{ok, data?, error?}`. Returns data or throws with error text. */
     fun dataOf(raw: String): Any? {
@@ -114,6 +116,18 @@ object CoreBridge {
 
     fun syncTrust(nodeId: String, accept: Boolean): Result<String> = runCatching {
         dataOf(nativeSyncTrust(nodeId, accept)) as String
+    }
+
+    fun displayName(): String {
+        return try {
+            dataOf(nativeDisplayName()) as String
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
+    fun syncAdd(nodeId: String, address: String, name: String): Result<String> = runCatching {
+        dataOf(nativeSyncAdd(nodeId, address, name)) as String
     }
 
     fun syncNow(nodeId: String): Result<String> = runCatching {

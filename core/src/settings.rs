@@ -57,6 +57,10 @@ pub struct SyncSettings {
     /// (we still browse and see others).
     #[serde(default = "default_true")]
     pub advertise: bool,
+    /// ANDROID PORT: start the sync engine on boot when enabled.
+    /// Desktop gets this from systemd; mobile needs the flag.
+    #[serde(default = "default_true")]
+    pub start_on_boot: bool,
 }
 
 impl Default for SyncSettings {
@@ -66,6 +70,7 @@ impl Default for SyncSettings {
             device_name: String::new(),
             listen_port: DEFAULT_SYNC_PORT,
             advertise: true,
+            start_on_boot: true,
         }
     }
 }

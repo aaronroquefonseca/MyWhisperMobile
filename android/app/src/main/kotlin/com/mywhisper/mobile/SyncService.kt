@@ -101,8 +101,8 @@ class SyncService : Service() {
         )
         val notif: Notification = NotificationCompat.Builder(this, CHANNEL)
             .setContentTitle("MyWhisper sync")
-            .setContentText("Listening for desktop sync")
-            .setSmallIcon(R.drawable.ic_mic)
+            .setContentText("Listening for device sync")
+            .setSmallIcon(R.drawable.ic_stat_sync)
             .setContentIntent(openIntent)
             .setOngoing(true)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Stop", stopIntent)
@@ -137,7 +137,10 @@ class BootReceiver : BroadcastReceiver() {
         if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
         try {
             val s = CoreBridge.getSettings().getOrThrow()
-            if (s.optJSONObject("sync")?.optBoolean("enabled", true) == true) {
+            val sync = s.optJSONObject("sync")
+            if (sync?.optBoolean("enabled", true) == true &&
+                sync.optBoolean("start_on_boot", true)
+            ) {
                 SyncService.start(ctx.applicationContext)
             }
         } catch (_: Exception) {

@@ -280,6 +280,50 @@ pub fn sync_set_trust(
     Ok("rejected".to_string())
 }
 
+/// Manual pairing by ID (mirrors desktop Add device): park the row,
+/// dial once. The expected outcome is the remote's "not trusted"
+/// verdict — that verdict IS the delivered pairing request (the
+/// remote records us as pending). Reported as such so the UI can say
+/// "accept it on the other device".
+pub fn sync_add(
+    dir: &std::path::Path,
+    node_id: &str,
+    address: &str,
+    name: &str,
+) -> Result<String, String> {
+    let node_id = node_id.trim().to_lowercase();
+    if node_id.len() != 64 || !node_id.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("enter the other device's full 64-character hexadecimal ID".to_string());
+    }
+    let db_path = dir.join("state.db");
+    let store = Store::open(&db_path).map_err(|e| format!("open db: {e}"))?;
+    let mut addrs = Vec::new();
+    if !address.trim().is_empty() {
+        addrs.push(address.trim().to_string());
+    }
+    store
+        .record_seen(&node_id, name.trim(), &addrs)
+        .map_err(|e| format!("record contact: {e}"))?;
+    let settings = store.load_settings();
+    let creds = slot()
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|m| m.creds.clone())
+        .ok_or_else(|| "sync is not running".to_string())?;
+    let own_name = if settings.sync.device_name.trim().is_empty() {
+        creds.node_id.clone()
+    } else {
+        settings.sync.device_name.clone()
+    };
+    match net::sync_now(&addrs, &db_path, &creds, &own_name, &node_id) {
+        Ok(r) => Ok(format!("synced {}: {} words in", r.peer_name, r.words_in)),
+        Err(e) if e.contains("not trusted") || e.contains("no known address") => {
+            Ok("pairing request sent — accept it on the other device, then sync".to_string())
+        }
+        Err(e) => Err(e),
+    }
+}
 /// One manual round with a single peer (tries stored + discovered
 /// addresses).
 pub fn sync_peer_now(dir: &std::path::Path, node_id: &str) -> Result<String, String> {
