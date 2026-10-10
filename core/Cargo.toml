@@ -1,0 +1,28 @@
+[package]
+name = "mywhisper-core"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "mywhisper_core"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+jni = "0.21"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "multipart", "rustls", "webpki-roots"] }
+tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
+base64 = "0.23"
+getrandom = "0.4"
+
+# ANDROID PORT: bundled-sqlcipher needs OpenSSL headers the NDK does not
+# ship, so Android builds use plaintext `bundled` for now (app sandbox
+# still isolates the file; the Keystore key is kept for the cipher
+# switch — see core/README.md). Host keeps bundled-sqlcipher.
+[target.'cfg(target_os = "android")'.dependencies]
+rusqlite = { version = "0.40", features = ["bundled"] }
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+rusqlite = { version = "0.40", features = ["bundled", "bundled-sqlcipher"] }
+keyring = "4.2.0"
