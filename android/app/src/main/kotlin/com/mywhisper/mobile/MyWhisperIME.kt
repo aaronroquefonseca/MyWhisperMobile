@@ -59,6 +59,7 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
     }
 
     override fun onDestroy() {
+        stopBackspaceRepeat()
         try {
             dictation.shutdown()
         } catch (_: Exception) {
@@ -282,30 +283,37 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
         }
     }
 
-    /** Hold-to-repeat backspace while long-pressed. */
+    /** Hold-to-repeat backspace while long-pressed. Single shared
+     * Handler: removeCallbacks only cancels runnables posted through
+     * the SAME instance, a fresh Handler per call never stops. */
+    private val repeatHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private var backRepeat: Runnable? = null
     private fun startBackspaceRepeat() {
         stopBackspaceRepeat()
         backspaceOnce()
-        val handler = android.os.Handler(mainLooper)
         val tick = object : Runnable {
             override fun run() {
                 backspaceOnce()
-                handler.postDelayed(this, 60)
+                repeatHandler.postDelayed(this, 60)
             }
         }
         backRepeat = tick
-        handler.postDelayed(tick, 400)
+        repeatHandler.postDelayed(tick, 400)
     }
 
     private fun stopBackspaceRepeat() {
         backRepeat?.let {
             try {
-                android.os.Handler(mainLooper).removeCallbacks(it)
+                repeatHandler.removeCallbacks(it)
             } catch (_: Exception) {
             }
         }
         backRepeat = null
+    }
+
+    override fun onFinishInputView(finishingInput: Boolean) {
+        stopBackspaceRepeat()
+        super.onFinishInputView(finishingInput)
     }
 
     override fun onStartInputView(
