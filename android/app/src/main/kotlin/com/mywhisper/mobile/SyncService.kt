@@ -76,14 +76,24 @@ class SyncService : Service() {
                 return START_STICKY
             }
             else -> {
-                startForegroundWithType()
+                // Foreground is best-effort: Android forbids dataSync
+                // FGS from background starts (boot redelivery,
+                // reinstall). The engine still runs opportunistically
+                // without it; the Sync tab promotes to foreground.
+                val fgOk = try {
+                    startForegroundWithType()
+                    true
+                } catch (e: Exception) {
+                    android.util.Log.i("MwSync", "fg denied, engine only: ${e.message}")
+                    false
+                }
                 workers.execute {
                     try {
                         CoreBridge.syncStart()
                     } catch (_: Exception) {
                     }
                 }
-                return START_STICKY
+                return if (fgOk) START_STICKY else START_NOT_STICKY
             }
         }
     }

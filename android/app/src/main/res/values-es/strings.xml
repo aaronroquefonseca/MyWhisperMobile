@@ -245,6 +245,9 @@
     <string name="ime_rec_smart">grabando — suelta para parar, un toque rápido alterna</string>
     <string name="ime_working">transcribiendo…</string>
     <string name="ime_mic">Dictar</string>
+    <string name="ime_backspace">Retroceso</string>
+    <string name="ime_slide_cancel">↓ desliza abajo para cancelar · suelta para enviar</string>
+    <string name="ime_cancelled">Cancelado</string>
     <string name="ime_keyboard">Teclado</string>
     <string name="ime_settings">Ajustes</string>
     <string name="ime_cancel">Cancelar</string>

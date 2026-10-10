@@ -34,11 +34,18 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
     private var micButton: ImageButton? = null
     private var hintText: TextView? = null
     private var spinner: ProgressBar? = null
-    private var cancelButton: Button? = null
 
     private var lastState = Dictation.State.IDLE
     private var lastToggled = false
     private var lastNote = ""
+
+    private var micDownRawY = 0f
+    private var micCancelled = false
+
+    companion object {
+        /** Slide-down distance that cancels a hold (dp). */
+        private const val SLIDE_CANCEL_DP = 90
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -111,21 +118,24 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            // Opaque floating card: side/bottom margins + fully
-            // rounded corners so no straight screen-edge slab shows.
+            // Opaque bar, rounded top corners only, flush with the
+            // screen bottom.
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
                 setColor(barBg)
-                cornerRadius = dp(22).toFloat()
+                cornerRadii = floatArrayOf(
+                    dp(22).toFloat(), dp(22).toFloat(),
+                    dp(22).toFloat(), dp(22).toFloat(),
+                    0f, 0f, 0f, 0f,
+                )
             }
             setPadding(dp(12), dp(10), dp(12), dp(14))
             gravity = Gravity.CENTER_HORIZONTAL
-            val cardMargin = dp(8)
             layoutParams = android.widget.FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
             ).also {
-                it.setMargins(cardMargin, dp(4), cardMargin, cardMargin)
+                it.setMargins(dp(8), dp(4), dp(8), 0)
             }
         }
         // Hairline divider on top.
@@ -141,25 +151,68 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
             setPadding(0, dp(8), 0, 0)
         }
 
-        fun sideButton(label: String, onClick: () -> Unit) = Button(this).apply {
-            text = label
-            setTextColor(barFg)
+        fun iconButton(
+            iconRes: Int,
+            description: String,
+            onClick: () -> Unit,
+        ) = ImageButton(this).apply {
+            setImageResource(iconRes)
+            contentDescription = description
+            setColorFilter(barFg)
             setBackground(sideBackground(barBg, night))
+            setPadding(dp(12), dp(12), dp(12), dp(12))
             setOnClickListener { onClick() }
         }
-        val switchBtn = sideButton("ABC") { showKeyboardPicker() }
-        val settingsBtn = sideButton("SET") { openConfig() }
+        val switchBtn = iconButton(
+            R.drawable.ic_ime_keyboard, getString(R.string.ime_keyboard),
+        ) { showKeyboardPicker() }
+        // Backspace: tap deletes one char, hold repeats (no full
+        // keyboard while dictating).
+        val backBtn = iconButton(
+            R.drawable.ic_ime_backspace, getString(R.string.ime_backspace),
+        ) { backspaceOnce() }
+        backBtn.setOnTouchListener { _, ev ->
+            // DOWN deletes once and arms repeat; UP before the first
+            // tick means exactly one delete, holding repeats.
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    startBackspaceRepeat()
+                    true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    stopBackspaceRepeat()
+                    true
+                }
+                else -> false
+            }
+        }
+        val settingsBtn = iconButton(
+            R.drawable.ic_ime_settings, getString(R.string.ime_settings),
+        ) { openConfig() }
         val mic = ImageButton(this).apply {
-            setImageResource(R.drawable.ic_mic)
+            setImageResource(R.mipmap.ic_launcher_foreground)
             contentDescription = getString(R.string.ime_mic)
             setBackground(micBackground(false))
-            setColorFilter(Color.WHITE)
-            setPadding(dp(18), dp(18), dp(18), dp(18))
+            setPadding(dp(10), dp(10), dp(10), dp(10))
             elevation = dp(4).toFloat()
             setOnTouchListener { _, ev ->
                 when (ev.actionMasked) {
                     MotionEvent.ACTION_DOWN -> {
+                        micDownRawY = ev.rawY
+                        micCancelled = false
                         dictation.pressDown()
+                        true
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        // Slide down to cancel (WhatsApp-style): once
+                        // past the threshold the utterance is dropped.
+                        if (!micCancelled && lastState == Dictation.State.RECORDING &&
+                            ev.rawY - micDownRawY > dp(SLIDE_CANCEL_DP)
+                        ) {
+                            micCancelled = true
+                            dictation.cancel()
+                            showCancelled()
+                        }
                         true
                     }
                     MotionEvent.ACTION_UP -> {
@@ -178,11 +231,14 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
 
         val spacerL = View(this).apply { layoutParams = LinearLayout.LayoutParams(0, 1, 1f) }
         val spacerR = View(this).apply { layoutParams = LinearLayout.LayoutParams(0, 1, 1f) }
-        row.addView(switchBtn)
+        row.addView(switchBtn, LinearLayout.LayoutParams(dp(52), dp(52)))
         row.addView(spacerL)
-        row.addView(mic, LinearLayout.LayoutParams(dp(80), dp(80)))
+        row.addView(mic, LinearLayout.LayoutParams(dp(84), dp(84)))
         row.addView(spacerR)
-        row.addView(settingsBtn)
+        row.addView(backBtn, LinearLayout.LayoutParams(dp(52), dp(52)))
+        row.addView(settingsBtn, LinearLayout.LayoutParams(dp(52), dp(52)).also {
+            it.leftMargin = dp(8)
+        })
         root.addView(row, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
@@ -204,21 +260,52 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
             textSize = 13f
         }
         hintText = hint
-        val cancel = Button(this).apply {
-            text = getString(R.string.ime_cancel)
-            visibility = View.GONE
-            setTextColor(barFg)
-            setBackground(sideBackground(barBg, night))
-            setOnClickListener { dictation.cancel() }
-        }
-        cancelButton = cancel
         status.addView(spin)
         status.addView(hint)
-        status.addView(cancel)
         root.addView(status)
 
         refresh()
         return root
+    }
+
+    /** "Cancelled" flash after a slide-down cancel. */
+    private fun showCancelled() {
+        lastNote = getString(R.string.ime_cancelled)
+        postRefresh()
+    }
+
+    /** Delete one char before the cursor through the input connection. */
+    private fun backspaceOnce() {
+        try {
+            currentInputConnection?.deleteSurroundingText(1, 0)
+        } catch (_: Exception) {
+        }
+    }
+
+    /** Hold-to-repeat backspace while long-pressed. */
+    private var backRepeat: Runnable? = null
+    private fun startBackspaceRepeat() {
+        stopBackspaceRepeat()
+        backspaceOnce()
+        val handler = android.os.Handler(mainLooper)
+        val tick = object : Runnable {
+            override fun run() {
+                backspaceOnce()
+                handler.postDelayed(this, 60)
+            }
+        }
+        backRepeat = tick
+        handler.postDelayed(tick, 400)
+    }
+
+    private fun stopBackspaceRepeat() {
+        backRepeat?.let {
+            try {
+                android.os.Handler(mainLooper).removeCallbacks(it)
+            } catch (_: Exception) {
+            }
+        }
+        backRepeat = null
     }
 
     override fun onStartInputView(
@@ -305,16 +392,10 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
         micButton?.setBackground(micBackground(lastState == Dictation.State.RECORDING))
         spinner?.visibility =
             if (lastState == Dictation.State.WORKING) View.VISIBLE else View.GONE
-        cancelButton?.visibility =
-            if (lastState == Dictation.State.RECORDING) View.VISIBLE else View.GONE
         hintText?.text = when (lastState) {
-            Dictation.State.RECORDING ->
-                if (lastToggled) getString(R.string.ime_rec_toggle)
-                else when (readMicMode()) {
-                    "Push" -> getString(R.string.ime_rec_push)
-                    "Tap" -> getString(R.string.ime_rec_tap)
-                    else -> getString(R.string.ime_rec_smart)
-                }
+            // While recording the escape hatch is sliding down, not a
+            // button you cannot reach mid-hold.
+            Dictation.State.RECORDING -> getString(R.string.ime_slide_cancel)
             Dictation.State.WORKING -> getString(R.string.ime_working)
             Dictation.State.IDLE -> lastNote.ifEmpty { idleHint() }
         }
