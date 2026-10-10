@@ -21,6 +21,24 @@ class MyWhisperApp : Application() {
         } catch (e: Exception) {
             coreError = e.message
             android.util.Log.i("MyWhisperIME", "app.onCreate err=${e.message}")
+            return
         }
+        // Opportunistic convergence: one round per process start so
+        // recent changes (including kickSync races) land without
+        // waiting for the 60s loop. Background thread, no-op idle.
+        Thread({
+            try {
+                CoreBridge.syncAllNow()
+            } catch (_: Exception) {
+            }
+            // Keep the bubble alive across process death when enabled.
+            try {
+                val s = CoreBridge.getSettings().getOrThrow()
+                if (s.optJSONObject("preferences")?.optBoolean("float_enabled", false) == true) {
+                    OverlayService.start(this)
+                }
+            } catch (_: Exception) {
+            }
+        }, "mw-startup").start()
     }
 }

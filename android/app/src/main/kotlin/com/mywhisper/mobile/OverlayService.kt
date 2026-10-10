@@ -224,12 +224,14 @@ class OverlayService : Service(), Dictation.Listener {
         } catch (_: Exception) {
             false
         }
+        android.util.Log.i("MwFloat", "apply on=$on ime=${FloatState.imeActive} focus=${FloatState.hasTextFocus}")
         if (!on) {
             removeBubble()
             return
         }
         val show = !FloatState.imeActive &&
             (!MyWhisperAccessibility.isOn(this) || FloatState.hasTextFocus)
+        android.util.Log.i("MwFloat", "apply show=$show holder=${holder != null}")
         if (show) {
             if (holder == null) showBubble()
         } else {
@@ -438,7 +440,11 @@ class OverlayService : Service(), Dictation.Listener {
     /** Commit runs here (not in onResult) to keep the result text. */
     fun deliver(text: String) {
         bgWorkers.execute {
-            val ok = MyWhisperAccessibility.commit(text)
+            val t = text.trim()
+            android.util.Log.i("MwFloat", "deliver len=${t.length}")
+            if (t.isEmpty()) return@execute
+            val ok = MyWhisperAccessibility.commit(t)
+            android.util.Log.i("MwFloat", "commit ok=$ok")
             if (!ok) {
                 try {
                     Toast.makeText(

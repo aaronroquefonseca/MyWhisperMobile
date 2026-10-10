@@ -182,6 +182,7 @@ class Dictation(
             try {
                 val (text, _) = CoreBridge.finishUtterance()
                 android.util.Log.i("MwDict", "utterance max peak=%.2f".format(maxPeak))
+                android.util.Log.i("MwDict", "utterance text len=${text.length} hasListener=${listener != null}")
                 if (text.isBlank()) {
                     listener?.onError("empty transcript")
                 } else {
