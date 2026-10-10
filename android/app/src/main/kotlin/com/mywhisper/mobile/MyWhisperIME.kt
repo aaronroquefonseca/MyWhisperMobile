@@ -289,6 +289,7 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
                     MotionEvent.ACTION_DOWN -> {
                         micDownRawY = ev.rawY
                         micCancelled = false
+                        tick()
                         dictation.pressDown()
                         true
                     }
@@ -305,6 +306,7 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
                         true
                     }
                     MotionEvent.ACTION_UP -> {
+                        tick()
                         dictation.pressUp()
                         true
                     }
@@ -372,6 +374,11 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
     /** "Cancelled" flash + haptic tick after a slide-down cancel. */
     private fun showCancelled() {
         lastNote = getString(R.string.ime_cancelled)
+        tick(60)
+        postRefresh()
+    }
+
+    private fun tick(ms: Long = 25L) {
         try {
             val vib = if (android.os.Build.VERSION.SDK_INT >= 31) {
                 getSystemService(android.os.VibratorManager::class.java)?.defaultVibrator
@@ -381,12 +388,11 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
             }
             vib?.vibrate(
                 android.os.VibrationEffect.createOneShot(
-                    60, android.os.VibrationEffect.DEFAULT_AMPLITUDE,
+                    ms, android.os.VibrationEffect.DEFAULT_AMPLITUDE,
                 ),
             )
         } catch (_: Exception) {
         }
-        postRefresh()
     }
 
     /** Delete one char before the cursor through the input connection. */

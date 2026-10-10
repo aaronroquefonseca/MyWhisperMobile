@@ -65,6 +65,50 @@ class OverlayService : Service(), Dictation.Listener {
     private var baseY = 0
     private var moved = false
     private var micCancelled = false
+    private var workPulse: android.animation.ObjectAnimator? = null
+
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    /** Short haptic tick (press / release / toggle). */
+    private fun tick(ms: Long = 25L) {
+        try {
+            val vib = if (android.os.Build.VERSION.SDK_INT >= 31) {
+                getSystemService(android.os.VibratorManager::class.java)?.defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                getSystemService(VIBRATOR_SERVICE) as? android.os.Vibrator
+            }
+            vib?.vibrate(
+                android.os.VibrationEffect.createOneShot(ms, android.os.VibrationEffect.DEFAULT_AMPLITUDE),
+            )
+        } catch (_: Exception) {
+        }
+    }
+
+    /**
+     * Visibility watchdog: accessibility events miss focus loss
+     * (tapping dead space, keyboard dismiss, app switch), leaving
+     * the bubble stuck. Re-check the live tree every 2.5s.
+     */
+    private val watchTick = object : Runnable {
+        override fun run() {
+            try {
+                val focused = try {
+                    MyWhisperAccessibility.live?.rootInActiveWindow
+                        ?.findFocus(android.view.accessibility.AccessibilityNodeInfo.FOCUS_INPUT)
+                        ?.isEditable == true
+                } catch (_: Exception) {
+                    FloatState.hasTextFocus
+                }
+                if (!focused && FloatState.hasTextFocus) {
+                    FloatState.hasTextFocus = false
+                    FloatState.refresh()
+                }
+            } catch (_: Exception) {
+            }
+            mainHandler.postDelayed(this, 2500)
+        }
+    }
 
     private fun dp(n: Int): Int =
         TypedValue.applyDimension(
@@ -128,6 +172,8 @@ class OverlayService : Service(), Dictation.Listener {
                 ensureCore()
                 FloatState.onChange = { applyVisibility() }
                 applyVisibility()
+                mainHandler.removeCallbacks(watchTick)
+                mainHandler.postDelayed(watchTick, 2500)
                 return START_STICKY
             }
         }
@@ -220,7 +266,8 @@ class OverlayService : Service(), Dictation.Listener {
                 shape = GradientDrawable.OVAL
                 setColor(0xFF6750A4.toInt())
             }
-            setPadding(dp(14), dp(14), dp(14), dp(14))
+            // Big mark: padding trimmed so the glyph fills the button.
+            setPadding(dp(7), dp(7), dp(7), dp(7))
             elevation = dp(6).toFloat()
             layoutParams = FrameLayout.LayoutParams(size, size)
             setOnTouchListener { v, ev -> onBubbleTouch(v, ev) }
@@ -246,6 +293,7 @@ class OverlayService : Service(), Dictation.Listener {
                 params?.let { baseX = it.x; baseY = it.y }
                 moved = false
                 micCancelled = false
+                tick()
                 dictation.pressDown()
                 return true
             }
@@ -272,6 +320,7 @@ class OverlayService : Service(), Dictation.Listener {
                 if (!micCancelled && ev.rawY - downRawY > dp(90)) {
                     micCancelled = true
                     dictation.cancel()
+                    tick(60)
                     Toast.makeText(this, getString(R.string.ime_cancelled), Toast.LENGTH_SHORT).show()
                 }
                 return true
@@ -289,6 +338,7 @@ class OverlayService : Service(), Dictation.Listener {
                     moved = false
                     return true
                 }
+                tick()
                 dictation.pressUp()
                 return true
             }
@@ -326,7 +376,44 @@ class OverlayService : Service(), Dictation.Listener {
     // -- Dictation.Listener ----------------------------------------------
 
     override fun onState(s: Dictation.State, toggled: Boolean) {
-        micBtn?.post { refreshMic(s == Dictation.State.RECORDING) }
+        micBtn?.post {
+            refreshMic(s == Dictation.State.RECORDING)
+            // Processing feedback: pulse while transcribing.
+            if (s == Dictation.State.WORKING) {
+                startWorkPulse()
+            } else {
+                stopWorkPulse()
+            }
+        }
+    }
+
+    /** Gentle alpha pulse while the server works. */
+    private fun startWorkPulse() {
+        if (workPulse != null) return
+        val btn = micBtn ?: return
+        try {
+            workPulse = android.animation.ObjectAnimator
+                .ofFloat(btn, View.ALPHA, 1f, 0.55f)
+                .apply {
+                    duration = 600
+                    repeatCount = android.animation.ValueAnimator.INFINITE
+                    repeatMode = android.animation.ValueAnimator.REVERSE
+                    start()
+                }
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun stopWorkPulse() {
+        try {
+            workPulse?.cancel()
+        } catch (_: Exception) {
+        }
+        workPulse = null
+        try {
+            micBtn?.alpha = 1f
+        } catch (_: Exception) {
+        }
     }
 
     override fun onResult(text: String) {
@@ -366,6 +453,14 @@ class OverlayService : Service(), Dictation.Listener {
     }
 
     override fun onDestroy() {
+        try {
+            mainHandler.removeCallbacks(watchTick)
+        } catch (_: Exception) {
+        }
+        try {
+            FloatState.onChange = null
+        } catch (_: Exception) {
+        }
         removeBubble()
         bgWorkers.shutdownNow()
         super.onDestroy()
