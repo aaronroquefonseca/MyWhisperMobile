@@ -1,0 +1,19 @@
+{
+  "pack": "sherpa-onnx-whisper-tiny.en (int8)",
+  "source": "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-tiny.en",
+  "dir": "models/sherpa-tiny.en",
+  "files": {
+    "tiny.en-encoder.int8.onnx": {
+      "sha256": "0ce578b827c94a961aacb8fa14b02f096504b337e5c94be37c36238cbe3e8bc6",
+      "bytes": 12937772
+    },
+    "tiny.en-decoder.int8.onnx": {
+      "sha256": "06c0e6ff6348d427e51839219d1c886c18cfdf411e629e33f5e1679bff9c1527",
+      "bytes": 89853865
+    },
+    "tiny.en-tokens.txt": {
+      "sha256": "306cd27f03c1a714eca7108e03d66b7dc042abe8c258b44c199a7ed9838dd930",
+      "bytes": 835554
+    }
+  }
+}

@@ -8,6 +8,7 @@
 pub mod audio;
 pub mod device;
 pub mod engine;
+pub mod local_stt;
 pub mod net;
 pub mod server_stt;
 pub mod settings;

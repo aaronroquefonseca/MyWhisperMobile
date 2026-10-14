@@ -444,6 +444,31 @@ impl Engine {
         let pcm16 = audio::f32_to_i16(&selected);
 
         let words = self.store.load_words().unwrap_or_default();
+        // On-device first: Local entries attempt the filesDir pack
+        // (Kotlin LocalStt does the real sherpa decode; Rust verifies
+        // the pack here so a future runtime can hook in). Any Err
+        // falls through to the server chain — fallback intact.
+        if self
+            .settings
+            .stt
+            .entries
+            .iter()
+            .any(|e| e.enabled && matches!(e.kind, crate::settings::SttEntryKind::Local))
+        {
+            if let Ok(text) = crate::local_stt::try_transcribe(&self._dir, &pcm16) {
+                let raw = text.clone();
+                let expanded = expand_snippets(&raw, &[]);
+                let text = post_process(&expanded, &self.settings.language_models, &words);
+                let word_count = text.split_whitespace().count() as u32;
+                return Ok(FinishOutcome {
+                    words: word_count,
+                    text,
+                    raw,
+                    engine: "local sherpa-tiny.en".to_string(),
+                    duration_secs,
+                });
+            }
+        }
         let Transcript { text: raw, engine } =
             transcribe_chain(&self.settings.stt, &pcm16, &words)?;
 

@@ -34,6 +34,12 @@ class Dictation(
     },
     private val finishTranscription: () -> Pair<String, String> = { CoreBridge.finishUtterance() },
     private val cancelTranscription: () -> Unit = { CoreBridge.cancelUtterance() },
+    /**
+     * Local-first hook (sherpa-onnx via LocalStt): receives the utterance
+     * PCM (16 kHz i16) and returns (text, engine) on hit, null on miss.
+     * Default null = server chain only. Any throw = server fallback.
+     */
+    private val localTranscribe: ((ShortArray) -> Pair<String, String>?) = { null },
     private val log: (String) -> Unit = { msg -> android.util.Log.i("MwDict", msg) },
     private val workers: ExecutorService = Executors.newSingleThreadExecutor(),
 ) {
@@ -54,6 +60,11 @@ class Dictation(
     /** Live mic peaks for the pill visualizer (capture thread). */
     var onLevel: ((Float) -> Unit)? = null
     private var maxPeak = 0f
+    /**
+     * Utterance PCM copy for the local-first hook (cap ~60s @16kHz =
+     * ~2MB). Cleared on every pressDown.
+     */
+    private val localPcm = ArrayList<Short>(16_000 * 10)
 
     private var state = State.IDLE
     private var toggled = false
@@ -97,6 +108,11 @@ class Dictation(
             { buf, n ->
                 // Copy: the buffer is reused by the read loop.
                 val copy = buf.copyOf(n)
+                synchronized(localPcm) {
+                    if (localPcm.size < 16_000 * 60) {
+                        for (i in 0 until n) localPcm.add(copy[i])
+                    }
+                }
                 try {
                     CoreBridge.pushPcm(copy, n)
                 } catch (_: Exception) {
@@ -114,6 +130,7 @@ class Dictation(
         toggled = false
         downAt = System.currentTimeMillis()
         maxPeak = 0f
+        synchronized(localPcm) { localPcm.clear() }
         set(State.RECORDING)
     }
 
@@ -217,7 +234,14 @@ class Dictation(
             capture = null
             val text: String
             try {
-                text = finishTranscription().first
+                // Local-first: sherpa-onnx on the utterance PCM; miss or
+                // throw → server chain (fallback intact).
+                val pcm: ShortArray = synchronized(localPcm) { localPcm.toShortArray() }
+                text = try {
+                    localTranscribe(pcm)?.first ?: finishTranscription().first
+                } catch (_: Exception) {
+                    finishTranscription().first
+                }
             } catch (e: Exception) {
                 if (gen == session.get()) {
                     listener?.onError(e.message ?: "transcription failed")

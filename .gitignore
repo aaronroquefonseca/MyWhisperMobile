@@ -8,3 +8,9 @@ build/
 *.hprof
 target/
 .DS_Store
+# On-device STT binaries: AAR runtime + model packs, fetched never committed.
+android/app/libs/*.aar
+android/app/libs/*.jar
+**/models/*.onnx
+**/models/*.txt
+!**/models/*.manifest.json
