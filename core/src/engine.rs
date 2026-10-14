@@ -15,7 +15,10 @@
 //! implemented") and are skipped by the chain.
 
 use crate::audio::{self, Recorder, MIN_SAMPLES_16K};
-use crate::server_stt::{transcribe_chain, Transcript};
+use crate::server_stt::{
+    record_stop, server_status as chain_status, stt_fingerprint, stt_primary_id, stt_watcher_tick,
+    transcribe_chain, TickOutcome, Transcript,
+};
 use crate::settings::{AppSettings, HistoryEntry, LlmEntry};
 use crate::store::Store;
 use crate::textnorm::expand_snippets;
@@ -332,6 +335,15 @@ pub struct Engine {
     started_at: Option<Instant>,
     node_id: String,
     _dir: PathBuf,
+    /// Last applied STT `(primary, auto)` pair (desktop #11 watcher
+    /// parity): only successful reconciles advance it, so deferred or
+    /// failed ticks retry on the next poll.
+    last_stt_primary: String,
+    last_stt_auto: bool,
+    /// True while an utterance is admitted (recording or
+    /// transcribing). Mirrors the `ACTIVE_UTTERANCES` counter in
+    /// `server_stt` so reconcile defers mid-utterance.
+    utterance_active: bool,
 }
 
 impl Engine {
@@ -356,6 +368,8 @@ impl Engine {
             let days = settings.privacy.transcript_auto_delete_days;
             let _ = with_busy_retry(|| store.purge_old_history(days));
         }
+        let last_stt_primary = stt_primary_id(&settings.stt);
+        let last_stt_auto = settings.stt.auto_start_server;
         Ok(Self {
             store,
             settings,
@@ -364,6 +378,9 @@ impl Engine {
             started_at: None,
             node_id,
             _dir: dir,
+            last_stt_primary,
+            last_stt_auto,
+            utterance_active: false,
         })
     }
 
@@ -386,13 +403,61 @@ impl Engine {
             serde_json::from_str(json).map_err(|e| format!("parse settings: {e}"))?;
         with_busy_retry(|| self.store.save_settings(&s)).map_err(|e| format!("save: {e}"))?;
         self.settings = s;
+        // Deliberate caller (no window): reconcile synchronously with a
+        // fresh derivation. Defers without advancing markers when an
+        // utterance is active; the next `poll_stt` retries.
+        stt_watcher_tick(
+            &self.settings.stt,
+            &mut self.last_stt_primary,
+            &mut self.last_stt_auto,
+            None,
+        );
         Ok(())
+    }
+
+    /// Watcher poll (service/Kotlin drives it after settings edits and
+    /// sync merges): reload, discard torn snapshots, then reconcile
+    /// once on change with carried attested authority. Deferred polls
+    /// leave the markers untouched so the next poll retries.
+    pub fn poll_stt(&mut self) -> TickOutcome {
+        let generation_before = crate::server_stt::server_generation();
+        // Test seam (cfg(test) only): park after the witness, before
+        // the reload, so a test can land a control transition strictly
+        // inside the snapshot window. Production builds contain no hook.
+        #[cfg(test)]
+        crate::server_stt::poll_snapshot_pause_point();
+        self.settings = self.store.load_settings();
+        if crate::server_stt::server_generation() != generation_before {
+            // Torn snapshot: a Stop/switch landed mid-read. Apply
+            // nothing and retry next poll with a fresh snapshot.
+            return TickOutcome::Deferred;
+        }
+        let auth = crate::server_stt::ReconcileAuthority {
+            witness: generation_before,
+            snapshot_fp: stt_fingerprint(&self.settings.stt),
+        };
+        stt_watcher_tick(
+            &self.settings.stt,
+            &mut self.last_stt_primary,
+            &mut self.last_stt_auto,
+            Some(auth),
+        )
+    }
+
+    /// Single-listener chain status: at most the primary remote entry
+    /// plus liveness (desktop #11 parity, never one row per engine).
+    pub fn server_status(&self) -> Vec<(String, bool)> {
+        chain_status(&self.settings.stt)
     }
 
     pub fn start_utterance(&mut self, rate: u32) {
         self.recorder.start(rate);
         self.rate = rate;
         self.started_at = Some(Instant::now());
+        if !self.utterance_active {
+            self.utterance_active = true;
+            crate::server_stt::active_inc();
+        }
     }
 
     pub fn push_pcm(&mut self, samples: &[i16]) {
@@ -406,6 +471,15 @@ impl Engine {
             .unwrap_or(0);
         self.recorder = Recorder::default();
         self.started_at = None;
+        if self.utterance_active {
+            self.utterance_active = false;
+            crate::server_stt::active_dec();
+        }
+        // Explicit Stop (desktop #11 parity): bump the generation so
+        // queued reconciles abort, and suppress auto-restart of this
+        // fingerprint until a deliberate settings change expires it.
+        // Recorded even when idle (empty chain still bumps).
+        record_stop(&stt_fingerprint(&self.settings.stt));
         // Mirrors desktop: cancelled rows only when the privacy flag says so.
         if self.settings.privacy.save_discarded_transcriptions {
             let secs = secs.max(1);
@@ -416,6 +490,21 @@ impl Engine {
     }
 
     pub fn finish_utterance(&mut self) -> Result<FinishOutcome, String> {
+        if !self.utterance_active {
+            // Finish without start (or re-entrant): guard the transcribe
+            // window the same way so reconcile still defers across it.
+            self.utterance_active = true;
+            crate::server_stt::active_inc();
+        }
+        let out = self.finish_inner();
+        if self.utterance_active {
+            self.utterance_active = false;
+            crate::server_stt::active_dec();
+        }
+        out
+    }
+
+    fn finish_inner(&mut self) -> Result<FinishOutcome, String> {
         let started = self.started_at.take();
         // Fresh settings every utterance (mirrors desktop deliver):
         // picks up UI edits and sync merges without a restart.
@@ -444,8 +533,21 @@ impl Engine {
         let pcm16 = audio::f32_to_i16(&selected);
 
         let words = self.store.load_words().unwrap_or_default();
+        // Witness before the blocking chain: a provider switch or Stop
+        // applied mid-transcribe bumps the generation; stale results
+        // then settle instead of delivering for a dead chain.
+        let generation_at_entry = crate::server_stt::server_generation();
         let Transcript { text: raw, engine } =
             transcribe_chain(&self.settings.stt, &pcm16, &words)?;
+        // Test seam (cfg(test) only): park after a successful
+        // transcribe, before the guard, so a test can land a
+        // switch/Stop inside the window. Production builds contain no
+        // hook.
+        #[cfg(test)]
+        crate::server_stt::finish_guard_pause_point();
+        if crate::server_stt::server_generation() != generation_at_entry {
+            return Err("superseded (provider switched mid-utterance)".to_string());
+        }
 
         // Snippets from settings (desktop deliver parity; hydrated
         // from the store on load, comma-triggers expanded).
@@ -653,5 +755,248 @@ mod tests {
         drop(conn);
         drop(holder);
         let _ = std::fs::remove_file(&path);
+    }
+
+    // -- desktop #11 port: status + provider-switch reconcile --------
+
+    use crate::server_stt::{
+        clear_finish_guard_pause, clear_poll_snapshot_pause, reset_status_state, server_generation,
+        set_finish_guard_pause, set_poll_snapshot_pause, status_test_lock,
+    };
+    use crate::settings::{SttChainEntry, SttEntryKind, SttSettings};
+    use std::sync::mpsc;
+
+    static STT_TEST_SEQ: AtomicU64 = AtomicU64::new(0);
+
+    fn tmp_engine_dir() -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "mywhisper-stt-test-{}-{}",
+            std::process::id(),
+            STT_TEST_SEQ.fetch_add(1, Ordering::SeqCst)
+        ));
+        let _ = std::fs::remove_dir_all(&path);
+        path
+    }
+
+    fn open_engine() -> Engine {
+        let dir = tmp_engine_dir();
+        Engine::open(dir, &"ab".repeat(32)).expect("open test engine")
+    }
+
+    fn cloud_entry(name: &str, provider: &str, model: &str) -> SttChainEntry {
+        SttChainEntry {
+            id: format!("stt-{name}"),
+            name: name.to_string(),
+            kind: SttEntryKind::Cloud,
+            enabled: true,
+            provider: provider.to_string(),
+            url: String::new(),
+            model: model.to_string(),
+            api_key: String::new(),
+            streaming: true,
+        }
+    }
+
+    fn settings_with(entry: SttChainEntry) -> String {
+        let s = AppSettings {
+            stt: SttSettings {
+                entries: vec![entry],
+                auto_start_server: true,
+                ..SttSettings::default()
+            },
+            ..AppSettings::default()
+        };
+        serde_json::to_string(&s).unwrap()
+    }
+
+    #[test]
+    fn cancel_records_stop_and_switch_restarts() {
+        let _guard = status_test_lock();
+        reset_status_state();
+        let mut eng = open_engine();
+        eng.put_settings(&settings_with(cloud_entry("OpenAI", "openai", "whisper-1")))
+            .unwrap();
+        // Deliberate put reconciles synchronously: the follow-up poll
+        // is a steady-state no-op.
+        assert_eq!(eng.poll_stt(), TickOutcome::Unchanged);
+        let status = eng.server_status();
+        assert_eq!(status.len(), 1);
+        assert_eq!(status[0], ("OpenAI".to_string(), true));
+        // Explicit Stop: same chain settles cold.
+        eng.start_utterance(16000);
+        eng.cancel_utterance();
+        let status = eng.server_status();
+        assert_eq!(status.len(), 1);
+        assert_eq!(status[0], ("OpenAI".to_string(), false));
+        // Deliberate provider switch expires the suppression: kills the
+        // old chain (generation moves) and lights the new one.
+        let generation = server_generation();
+        eng.put_settings(&settings_with(cloud_entry(
+            "Groq",
+            "groq",
+            "whisper-large-v3",
+        )))
+        .unwrap();
+        assert!(server_generation() > generation);
+        let status = eng.server_status();
+        assert_eq!(status, vec![("Groq".to_string(), true)]);
+    }
+
+    #[test]
+    fn put_while_active_defers_and_poll_retries() {
+        let _guard = status_test_lock();
+        reset_status_state();
+        let mut eng = open_engine();
+        eng.put_settings(&settings_with(cloud_entry("OpenAI", "openai", "whisper-1")))
+            .unwrap();
+        assert_eq!(eng.poll_stt(), TickOutcome::Unchanged);
+        let generation = server_generation();
+        // Switch saved mid-utterance: persisted, but the chain cannot
+        // bounce yet — no kill, no relaunch.
+        eng.start_utterance(16000);
+        eng.put_settings(&settings_with(cloud_entry(
+            "Groq",
+            "groq",
+            "whisper-large-v3",
+        )))
+        .unwrap();
+        assert_eq!(server_generation(), generation);
+        // Short audio: finish fails before any network, and the active
+        // window closes without recording a Stop.
+        assert!(eng.finish_utterance().is_err());
+        // Idle poll retries the pending switch exactly once.
+        assert_eq!(eng.poll_stt(), TickOutcome::Applied);
+        assert!(server_generation() > generation);
+        assert_eq!(eng.server_status(), vec![("Groq".to_string(), true)]);
+        assert_eq!(eng.poll_stt(), TickOutcome::Unchanged);
+    }
+
+    #[test]
+    fn torn_poll_snapshot_defers_without_advancing_markers() {
+        let _guard = status_test_lock();
+        reset_status_state();
+        let mut eng = open_engine();
+        eng.put_settings(&settings_with(cloud_entry("OpenAI", "openai", "whisper-1")))
+            .unwrap();
+        assert_eq!(eng.poll_stt(), TickOutcome::Unchanged);
+        // Park after the witness, before the reload; land a control
+        // transition strictly inside the snapshot window.
+        let (tx_entered, rx_entered) = mpsc::channel();
+        let (tx_proceed, rx_proceed) = mpsc::channel();
+        set_poll_snapshot_pause(tx_entered, rx_proceed);
+        let handle = std::thread::spawn(move || {
+            let outcome = eng.poll_stt();
+            (eng, outcome)
+        });
+        rx_entered.recv_timeout(Duration::from_secs(10)).unwrap();
+        crate::server_stt::record_stop("");
+        tx_proceed.send(()).unwrap();
+        let (mut eng, outcome) = handle.join().unwrap();
+        clear_poll_snapshot_pause();
+        assert_eq!(outcome, TickOutcome::Deferred);
+        // Markers untouched: the follow-up poll is a steady-state
+        // no-op, not a stale apply.
+        assert_eq!(eng.poll_stt(), TickOutcome::Unchanged);
+    }
+
+    /// Single-shot stub answering OpenAI-style `{text}` transcriptions.
+    fn stub_transcription_server() -> (u16, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let handle = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            let mut buf = Vec::new();
+            let mut tmp = [0u8; 4096];
+            loop {
+                let n = sock.read(&mut tmp).unwrap();
+                buf.extend_from_slice(&tmp[..n]);
+                if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let head_end = buf.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+            let headers = String::from_utf8_lossy(&buf[..head_end]);
+            let len: usize = headers
+                .lines()
+                .find_map(|l| {
+                    let (k, v) = l.split_once(':')?;
+                    if k.trim().eq_ignore_ascii_case("content-length") {
+                        v.trim().parse().ok()
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(0);
+            while buf.len() - head_end < len {
+                let n = sock.read(&mut tmp).unwrap();
+                if n == 0 {
+                    break;
+                }
+                buf.extend_from_slice(&tmp[..n]);
+            }
+            let body = r#"{"text":"hello world"}"#;
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            sock.write_all(resp.as_bytes()).unwrap();
+        });
+        (port, handle)
+    }
+
+    fn self_hosted_entry(name: &str, url: &str) -> SttChainEntry {
+        SttChainEntry {
+            id: format!("stt-{name}"),
+            name: name.to_string(),
+            kind: SttEntryKind::SelfHosted,
+            enabled: true,
+            provider: String::new(),
+            url: url.to_string(),
+            model: "test".to_string(),
+            api_key: String::new(),
+            streaming: true,
+        }
+    }
+
+    #[test]
+    fn finish_discards_result_superseded_mid_transcribe() {
+        let _guard = status_test_lock();
+        reset_status_state();
+        let (port, stub) = stub_transcription_server();
+        let mut eng = open_engine();
+        eng.put_settings(&settings_with(self_hosted_entry(
+            "Stub",
+            &format!("http://127.0.0.1:{port}"),
+        )))
+        .unwrap();
+        assert_eq!(eng.poll_stt(), TickOutcome::Unchanged);
+        // Park after a successful transcribe, before the guard; land a
+        // switch/Stop strictly inside the window.
+        let (tx_entered, rx_entered) = mpsc::channel();
+        let (tx_proceed, rx_proceed) = mpsc::channel();
+        set_finish_guard_pause(tx_entered, rx_proceed);
+        eng.start_utterance(16000);
+        eng.push_pcm(&vec![1000i16; 8000]);
+        let handle = std::thread::spawn(move || {
+            let history_before = eng.history_json(10);
+            let out = eng.finish_utterance();
+            (history_before, out)
+        });
+        rx_entered.recv_timeout(Duration::from_secs(10)).unwrap();
+        crate::server_stt::record_stop("");
+        tx_proceed.send(()).unwrap();
+        let (history_before, out) = handle.join().unwrap();
+        clear_finish_guard_pause();
+        stub.join().unwrap();
+        match out {
+            Ok(_) => panic!("stale result must settle, not deliver"),
+            Err(err) => assert!(
+                err.contains("superseded"),
+                "stale result must settle, got: {err}"
+            ),
+        }
+        // Nothing delivered, nothing stored.
+        assert_eq!(history_before, "[]");
     }
 }
