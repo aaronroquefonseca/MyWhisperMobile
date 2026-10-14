@@ -20,7 +20,46 @@ use crate::settings::{AppSettings, HistoryEntry, LlmEntry};
 use crate::store::Store;
 use crate::textnorm::expand_snippets;
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+/// Multi-proc SQLite contention budget (App + IME are separate
+/// processes on the same `state.db`: dictate-finish writes race
+/// sync-merge writes -> SQLITE_BUSY with no busy_timeout on the
+/// Store connection). Engine-side equivalent: retry BUSY up to 5s.
+/// (The Store connection itself lives in store.rs, owned by a
+/// sibling thread, so the timeout is applied here via retry.)
+const BUSY_RETRY_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// True when `e` is SQLITE_BUSY (primary code; covers extended
+/// BUSY_SNAPSHOT etc.), with a message fallback for wrapped errors.
+fn is_busy_err(e: &rusqlite::Error) -> bool {
+    match e {
+        rusqlite::Error::SqliteFailure(err, _) => err.code == rusqlite::ErrorCode::DatabaseBusy,
+        _ => format!("{e:?}").to_lowercase().contains("busy"),
+    }
+}
+
+/// Re-run `f` while it fails with SQLITE_BUSY, up to `timeout`.
+/// Non-BUSY errors return immediately.
+fn with_busy_retry_timeout<T>(
+    timeout: Duration,
+    mut f: impl FnMut() -> Result<T, rusqlite::Error>,
+) -> Result<T, rusqlite::Error> {
+    let start = Instant::now();
+    loop {
+        match f() {
+            Ok(v) => return Ok(v),
+            Err(e) if is_busy_err(&e) && start.elapsed() < timeout => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+fn with_busy_retry<T>(f: impl FnMut() -> Result<T, rusqlite::Error>) -> Result<T, rusqlite::Error> {
+    with_busy_retry_timeout(BUSY_RETRY_TIMEOUT, f)
+}
 
 /// Default cleanup prompt. Byte-identical to desktop
 /// `transcribe.rs::DEFAULT_CLEANUP_PROMPT` so phone and desktop polish
@@ -301,7 +340,10 @@ impl Engine {
         unsafe { std::env::set_var("MYWHISPER_DB_KEY", key_hex.trim()) };
         std::fs::create_dir_all(&dir).map_err(|e| format!("data dir: {e}"))?;
         let db = dir.join("state.db");
-        let store = Store::open(&db).map_err(|e| format!("open db: {e}"))?;
+        // App + IME open the same file from separate processes; a
+        // sync-merge write can hold the lock here -> retry BUSY
+        // instead of failing open.
+        let store = with_busy_retry(|| Store::open(&db)).map_err(|e| format!("open db: {e}"))?;
         let settings = store.load_settings();
         // Sync identity doubles as the history author id (same as
         // desktop: history rows attribute to the sync node id).
@@ -311,7 +353,8 @@ impl Engine {
         // Retention runs on open too (desktop runs it per deliver;
         // open covers IME processes that never deliver locally).
         if settings.privacy.transcript_auto_delete_days > 0 {
-            let _ = store.purge_old_history(settings.privacy.transcript_auto_delete_days);
+            let days = settings.privacy.transcript_auto_delete_days;
+            let _ = with_busy_retry(|| store.purge_old_history(days));
         }
         Ok(Self {
             store,
@@ -341,9 +384,7 @@ impl Engine {
     pub fn put_settings(&mut self, json: &str) -> Result<(), String> {
         let s: AppSettings =
             serde_json::from_str(json).map_err(|e| format!("parse settings: {e}"))?;
-        self.store
-            .save_settings(&s)
-            .map_err(|e| format!("save: {e}"))?;
+        with_busy_retry(|| self.store.save_settings(&s)).map_err(|e| format!("save: {e}"))?;
         self.settings = s;
         Ok(())
     }
@@ -367,7 +408,9 @@ impl Engine {
         self.started_at = None;
         // Mirrors desktop: cancelled rows only when the privacy flag says so.
         if self.settings.privacy.save_discarded_transcriptions {
-            let _ = self.store.add_discarded(secs.max(1), &self.node_id);
+            let secs = secs.max(1);
+            let node = self.node_id.clone();
+            let _ = with_busy_retry(|| self.store.add_discarded(secs, &node));
         }
         secs
     }
@@ -419,16 +462,17 @@ impl Engine {
         // Retention first, then store only when history is on
         // (mirrors desktop deliver).
         if self.settings.privacy.transcript_auto_delete_days > 0 {
-            let _ = self
-                .store
-                .purge_old_history(self.settings.privacy.transcript_auto_delete_days);
+            let days = self.settings.privacy.transcript_auto_delete_days;
+            let _ = with_busy_retry(|| self.store.purge_old_history(days));
         }
         if self.settings.privacy.history_enabled && !text.trim().is_empty() {
             let word_count = text.split_whitespace().count() as u32;
-            let _ = self
-                .store
-                .add_history(&raw, &text, word_count, duration_secs, &self.node_id);
-            let _ = self.store.checkpoint();
+            let node = self.node_id.clone();
+            let _ = with_busy_retry(|| {
+                self.store
+                    .add_history(&raw, &text, word_count, duration_secs, &node)
+            });
+            let _ = with_busy_retry(|| self.store.checkpoint());
             Ok(FinishOutcome {
                 text,
                 raw,
@@ -465,21 +509,15 @@ impl Engine {
     }
 
     pub fn clear_history(&self) -> Result<usize, String> {
-        self.store
-            .clear_history()
-            .map_err(|e| format!("clear: {e}"))
+        with_busy_retry(|| self.store.clear_history()).map_err(|e| format!("clear: {e}"))
     }
 
     pub fn delete_history(&self, uuid: &str) -> Result<(), String> {
-        self.store
-            .delete_history(uuid)
-            .map_err(|e| format!("delete: {e}"))
+        with_busy_retry(|| self.store.delete_history(uuid)).map_err(|e| format!("delete: {e}"))
     }
 
     pub fn purge_history(&self, days: u32) -> Result<usize, String> {
-        self.store
-            .purge_old_history(days)
-            .map_err(|e| format!("purge: {e}"))
+        with_busy_retry(|| self.store.purge_old_history(days)).map_err(|e| format!("purge: {e}"))
     }
 
     // -- dictionary (store-backed, desktop app_dictionary parity) ----
@@ -494,14 +532,12 @@ impl Engine {
         if word.is_empty() {
             return Err("empty word".to_string());
         }
-        self.store
-            .upsert_word(word, &self.node_id)
+        with_busy_retry(|| self.store.upsert_word(word, &self.node_id))
             .map_err(|e| format!("add word: {e}"))
     }
 
     pub fn delete_word(&self, word: &str) -> Result<(), String> {
-        self.store
-            .delete_word(word, &self.node_id)
+        with_busy_retry(|| self.store.delete_word(word, &self.node_id))
             .map_err(|e| format!("delete word: {e}"))
     }
 
@@ -522,14 +558,100 @@ impl Engine {
         if trigger.trim().is_empty() || replacement.trim().is_empty() {
             return Err("trigger and replacement are required".to_string());
         }
-        self.store
-            .upsert_snippet(trigger.trim(), replacement, &self.node_id)
-            .map_err(|e| format!("save snippet: {e}"))
+        with_busy_retry(|| {
+            self.store
+                .upsert_snippet(trigger.trim(), replacement, &self.node_id)
+        })
+        .map_err(|e| format!("save snippet: {e}"))
     }
 
     pub fn delete_snippet(&self, trigger: &str) -> Result<(), String> {
-        self.store
-            .delete_snippet(trigger, &self.node_id)
+        with_busy_retry(|| self.store.delete_snippet(trigger, &self.node_id))
             .map_err(|e| format!("delete snippet: {e}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static BUSY_TEST_SEQ: AtomicU64 = AtomicU64::new(0);
+
+    fn tmp_db() -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "mywhisper-busy-test-{}-{}",
+            std::process::id(),
+            BUSY_TEST_SEQ.fetch_add(1, Ordering::SeqCst)
+        ));
+        let _ = std::fs::remove_file(&path);
+        path
+    }
+
+    /// Lock-holder: separate connection with an uncommitted write
+    /// (RESERVED lock), i.e. the sync-merge writer in miniature.
+    fn locked_db(path: &std::path::Path) -> rusqlite::Connection {
+        let holder = rusqlite::Connection::open(path).unwrap();
+        holder.execute_batch("CREATE TABLE t (x INTEGER)").unwrap();
+        holder.execute_batch("BEGIN IMMEDIATE").unwrap();
+        holder.execute("INSERT INTO t VALUES (1)", []).unwrap();
+        holder
+    }
+
+    #[test]
+    fn busy_budget_is_five_seconds() {
+        assert_eq!(BUSY_RETRY_TIMEOUT, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn non_busy_errors_are_not_retried() {
+        let r = with_busy_retry_timeout(Duration::from_millis(50), || {
+            Err::<i32, _>(rusqlite::Error::InvalidQuery)
+        });
+        assert!(r.is_err());
+        assert!(!is_busy_err(&rusqlite::Error::InvalidQuery));
+    }
+
+    /// A write racing a held lock (dictate-finish vs sync-merge)
+    /// succeeds once the holder commits instead of failing BUSY.
+    #[test]
+    fn busy_write_retries_until_lock_released() {
+        let path = tmp_db();
+        let holder = locked_db(&path);
+        let second = path.clone();
+        let writer = std::thread::spawn(move || {
+            let conn = rusqlite::Connection::open(&second).unwrap();
+            with_busy_retry_timeout(Duration::from_secs(5), || {
+                conn.execute("INSERT INTO t VALUES (2)", [])
+            })
+            .unwrap()
+        });
+        std::thread::sleep(Duration::from_millis(300));
+        holder.execute_batch("COMMIT").unwrap();
+        writer.join().unwrap();
+        let check = rusqlite::Connection::open(&path).unwrap();
+        let n: i64 = check
+            .query_row("SELECT COUNT(*) FROM t", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 2);
+        drop(check);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The retry gives up (returns BUSY) when the lock outlives the
+    /// budget instead of blocking forever.
+    #[test]
+    fn busy_retry_gives_up_after_timeout() {
+        let path = tmp_db();
+        let holder = locked_db(&path);
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        let err = with_busy_retry_timeout(Duration::from_millis(100), || {
+            conn.execute("INSERT INTO t VALUES (2)", [])
+        })
+        .unwrap_err();
+        assert!(is_busy_err(&err), "expected BUSY, got {err:?}");
+        drop(conn);
+        drop(holder);
+        let _ = std::fs::remove_file(&path);
     }
 }
