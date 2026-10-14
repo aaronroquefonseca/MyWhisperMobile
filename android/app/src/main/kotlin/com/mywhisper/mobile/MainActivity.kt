@@ -1064,20 +1064,12 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }
-                Row {
-                    OutlinedButton(onClick = {
-                        dialog = newSttEntry("SelfHosted")
-                    }) {
-                        Icon(Icons.Filled.Add, contentDescription = null)
-                        Spacer(Modifier.width(4.dp))
-                        Text(stringResource(R.string.stt_selfhosted))
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    OutlinedButton(onClick = { dialog = newSttEntry("Cloud") }) {
-                        Icon(Icons.Filled.Add, contentDescription = null)
-                        Spacer(Modifier.width(4.dp))
-                        Text(stringResource(R.string.stt_cloud))
-                    }
+                OutlinedButton(onClick = {
+                    dialog = newSttEntry("SelfHosted")
+                }) {
+                    Icon(Icons.Filled.Add, contentDescription = null)
+                    Spacer(Modifier.width(4.dp))
+                    Text(stringResource(R.string.stt_add))
                 }
             }
             Section(stringResource(R.string.stt_capture)) {
@@ -1197,6 +1189,9 @@ class MainActivity : ComponentActivity() {
         onSave: (JSONObject) -> Unit,
     ) {
         var name by remember { mutableStateOf(e.optString("name")) }
+        var kind by remember {
+            mutableStateOf(e.optString("kind", "SelfHosted").takeIf { it == "Cloud" } ?: "SelfHosted")
+        }
         var url by remember { mutableStateOf(e.optString("url")) }
         var model by remember { mutableStateOf(e.optString("model")) }
         var provider by remember { mutableStateOf(e.optString("provider", "OpenAI")) }
@@ -1205,7 +1200,6 @@ class MainActivity : ComponentActivity() {
         var enabled by remember { mutableStateOf(e.optBoolean("enabled", true)) }
         var showKey by remember { mutableStateOf(false) }
         var testStatus by remember { mutableStateOf<String?>(null) }
-        val kind = e.optString("kind")
         val urlRequired = kind == "SelfHosted"
         val urlBlank = url.isBlank() && urlRequired
         val modelBlank = model.isBlank()
@@ -1235,6 +1229,9 @@ class MainActivity : ComponentActivity() {
                 Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     OutlinedTextField(value = name, onValueChange = { name = it },
                         label = { Text(stringResource(R.string.stt_name)) }, modifier = Modifier.fillMaxWidth())
+                    DropDown(getString(R.string.llm_kind), kind, listOf("SelfHosted", "Cloud")) {
+                        kind = it; testStatus = null
+                    }
                     if (kind == "Cloud") {
                         DropDown(getString(R.string.stt_provider), provider,
                             listOf("OpenAI", "Groq", "Mistral", "Deepgram", "Gemini")) {
@@ -1251,8 +1248,8 @@ class MainActivity : ComponentActivity() {
                     OutlinedTextField(value = url, onValueChange = { url = it; testStatus = null },
                         label = {
                             Text(
-                                if (kind == "Cloud") "Base URL (blank = vendor default)"
-                                else "Server URL (http(s) or ws(s))",
+                                if (kind == "Cloud") stringResource(R.string.stt_url_cloud)
+                                else stringResource(R.string.stt_url_server),
                             )
                         },
                         isError = urlBlank,
@@ -1261,6 +1258,12 @@ class MainActivity : ComponentActivity() {
                         },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                         modifier = Modifier.fillMaxWidth())
+                    if (kind == "SelfHosted") {
+                        Text(
+                            stringResource(R.string.stt_selfhosted_compat),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
                     OutlinedTextField(value = model, onValueChange = { model = it; testStatus = null },
                         label = { Text(stringResource(R.string.stt_model)) },
                         isError = modelBlank,
@@ -1319,7 +1322,7 @@ class MainActivity : ComponentActivity() {
                 TextButton(
                     enabled = canSave,
                     onClick = {
-                        e.put("name", name).put("url", url.trim())
+                        e.put("name", name).put("kind", kind).put("url", url.trim())
                             .put("model", model.trim()).put("provider", provider)
                             .put("api_key", key).put("streaming", streaming)
                             .put("enabled", enabled)
