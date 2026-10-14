@@ -48,6 +48,13 @@ class FloatBubbleTest {
         assertEquals(900, FloatState.snapToEdge(899, 40, 900))
     }
 
+    @Test
+    fun snap_degenerateRangeCollapsesOntoMin() {
+        // Fold mid-transition (maxX < minX): never persists off-screen.
+        assertEquals(0, FloatState.snapToEdge(0, 0, -100))
+        assertEquals(40, FloatState.snapToEdge(500, 40, 40))
+    }
+
     // -- Clamp -----------------------------------------------------
 
     @Test

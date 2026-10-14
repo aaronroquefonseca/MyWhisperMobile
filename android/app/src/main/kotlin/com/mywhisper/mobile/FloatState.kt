@@ -90,8 +90,12 @@ object FloatState {
      * Edge snap: nearest horizontal safe bound. Ties go right (most
      * users are right-handed; the bubble rests out of the way).
      */
-    fun snapToEdge(x: Int, minX: Int, maxX: Int): Int =
-        if (x - minX < maxX - x) minX else maxX
+    fun snapToEdge(x: Int, minX: Int, maxX: Int): Int {
+        // Degenerate range (fold mid-transition): collapse onto min so
+        // the persisted x never lands off-screen despite clampBubble.
+        if (maxX <= minX) return minX
+        return if (x - minX < maxX - x) minX else maxX
+    }
 
     /**
      * Clamp a bubble origin into the safe bounds. Degenerate ranges
