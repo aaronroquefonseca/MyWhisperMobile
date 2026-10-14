@@ -40,6 +40,34 @@ fn push_report(reports: &Arc<Mutex<Vec<String>>>, line: String) {
     }
 }
 
+/// Pre-dial authorization gate (desktop #18 `require_sync_authorized`
+/// at the control layer): sync must be explicitly enabled in a fresh
+/// settings read, and the peer must be trusted and unrevoked. The
+/// responder re-checks inside its commit transaction — this gate only
+/// fails fast locally so a revoked/disabled round never puts payload
+/// on the wire. No permissive defaults: an unreadable settings blob
+/// refuses.
+fn require_dial_authorized(store: &Store, node_id: &str) -> Result<(), String> {
+    if !store.load_settings().sync.enabled {
+        return Err("sync is disabled in settings".to_string());
+    }
+    if store
+        .is_revoked(node_id)
+        .map_err(|e| format!("revocation lookup: {e}"))?
+    {
+        return Err("peer revoked".to_string());
+    }
+    let trusted = store
+        .get_peer(node_id)
+        .map_err(|e| format!("peer lookup: {e}"))?
+        .map(|p| p.trusted)
+        .unwrap_or(false);
+    if !trusted {
+        return Err("peer is not trusted".to_string());
+    }
+    Ok(())
+}
+
 /// Start listener + mDNS + loops from the stored sync settings.
 /// Idempotent: stops the previous manager first.
 pub fn sync_start(dir: PathBuf) -> Result<String, String> {
@@ -297,6 +325,14 @@ pub fn sync_add(
     }
     let db_path = dir.join("state.db");
     let store = Store::open(&db_path).map_err(|e| format!("open db: {e}"))?;
+    // Pairing dials an untrusted peer by design (the dial IS the
+    // request), but a revoked id is refused before any contact.
+    if store
+        .is_revoked(&node_id)
+        .map_err(|e| format!("revocation lookup: {e}"))?
+    {
+        return Err("peer revoked".to_string());
+    }
     let mut addrs = Vec::new();
     if !address.trim().is_empty() {
         addrs.push(address.trim().to_string());
@@ -333,6 +369,9 @@ pub fn sync_peer_now(dir: &std::path::Path, node_id: &str) -> Result<String, Str
     let db_path = dir.join("state.db");
     let store = Store::open(&db_path).map_err(|e| format!("open db: {e}"))?;
     let settings = store.load_settings();
+    // Fail fast on disabled sync, revoked or untrusted peers before
+    // any payload moves (the responder re-checks authoritatively).
+    require_dial_authorized(&store, node_id)?;
     let peer = store
         .get_peer(node_id)
         .map_err(|e| format!("peer lookup: {e}"))?
