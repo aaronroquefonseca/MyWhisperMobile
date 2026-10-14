@@ -2,6 +2,7 @@ package com.mywhisper.mobile
 
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * JNI bridge to `mywhisper-core` (core/src/lib.rs).
@@ -186,6 +187,64 @@ object CoreBridge {
         @Suppress("UNCHECKED_CAST")
         (dataOf(nativeSyncAllNow()) as JSONArray).let { arr ->
             List(arr.length()) { arr.getString(it) }
+        }
+    }
+
+    /**
+     * Generation-aware cancellable job plumbing (desktop settings-page
+     * jobs parity: `ServerProbeTask` / `ModelLoad` / `CHECK_EPOCH`).
+     *
+     * Screens claim a generation before running a worker; the worker
+     * commits its result on the UI thread only when its generation is
+     * still current. Config changes, navigation or a newer job bump
+     * the generation, so stale results are dropped instead of
+     * clobbering newer committed state.
+     *
+     * Everything here is pure JVM (no JNI) for unit tests. Keep it
+     * that way: members must never touch `native*` nor trigger the
+     * outer object's `loadLibrary` init.
+     */
+    object SettingsJobs {
+        private val epoch = AtomicLong(0)
+
+        /** Committed-store warning meaning "reset left a retry behind". */
+        const val RESET_INCOMPLETE_WARNING = "settings.reset.incomplete"
+
+        /** Claim the next generation for a new job. */
+        @JvmStatic
+        fun claim(): Long = epoch.incrementAndGet()
+
+        /** True when [gen] is still the latest claimed generation. */
+        @JvmStatic
+        fun isCurrent(gen: Long): Boolean = gen != 0L && gen == epoch.get()
+
+        /** Cancel all in-flight jobs: stale workers drop their results. */
+        @JvmStatic
+        fun invalidate() {
+            epoch.incrementAndGet()
+        }
+
+        /**
+         * Per-screen generation guard (desktop `Rc::ptr_eq` parity):
+         * a worker commits only when its generation still equals the
+         * screen's current one.
+         */
+        @JvmStatic
+        fun jobApplies(currentGen: Long, jobGen: Long): Boolean = currentGen == jobGen
+
+        /** Next per-screen generation (wraps past Long.MAX_VALUE, never 0). */
+        @JvmStatic
+        fun nextJobGen(currentGen: Long): Long =
+            if (currentGen == Long.MAX_VALUE || currentGen + 1L == 0L) 1L else currentGen + 1L
+
+        /** True when the committed warning leaves a retryable reset behind. */
+        @JvmStatic
+        fun resetNeedsRetry(warning: String?): Boolean = warning == RESET_INCOMPLETE_WARNING
+
+        /** Test-only reset of the shared epoch. */
+        @JvmStatic
+        fun resetForTests() {
+            epoch.set(0)
         }
     }
 }
