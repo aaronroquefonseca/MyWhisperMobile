@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.net.wifi.WifiManager
 import android.os.Bundle
 import android.provider.Settings
@@ -91,6 +92,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.core.app.ActivityCompat
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import org.json.JSONArray
@@ -110,8 +112,67 @@ class MainActivity : ComponentActivity() {
     private val settingsState: MutableState<JSONObject?> = mutableStateOf(null)
     private val statusState = mutableStateOf("")
     private val micGranted = mutableStateOf(false)
+    private val overlayGranted = mutableStateOf(false)
+    private val a11yOn = mutableStateOf(false)
+    private val micRationale = mutableStateOf(false)
+    private val micBlocked = mutableStateOf(false)
+    private var micDeniedBefore = false
     private val workers = Executors.newSingleThreadExecutor()
     private var multicastLock: WifiManager.MulticastLock? = null
+
+    companion object {
+        /** Next step when the mic request is denied. Pure for unit tests. */
+        internal enum class MicDenyOutcome { RATIONALE, SETTINGS, TRANSIENT }
+
+        /** Which floating-button prerequisite to ask for next. Pure for unit tests. */
+        internal enum class OverlayCta { OVERLAY, A11Y, READY }
+
+        @JvmStatic
+        internal fun onboardingDoneCount(ime: Boolean, mic: Boolean, server: Boolean): Int =
+            listOf(ime, mic, server).count { it }
+
+        /**
+         * True when at least one enabled, non-Local STT entry has a model
+         * (SelfHosted additionally needs a URL; Cloud allows blank URL =
+         * vendor default). Pure for unit tests.
+         */
+        @JvmStatic
+        internal fun isServerConfigured(s: JSONObject?): Boolean {
+            val entries = s?.optJSONObject("stt")?.optJSONArray("entries") ?: return false
+            for (i in 0 until entries.length()) {
+                val e = entries.optJSONObject(i) ?: continue
+                if (!e.optBoolean("enabled", true)) continue
+                if (e.optString("kind") == "Local") continue
+                if (e.optString("model").isBlank()) continue
+                if (e.optString("kind") == "SelfHosted" && e.optString("url").isBlank()) continue
+                return true
+            }
+            return false
+        }
+
+        /**
+         * Denied + rationale visible -> explain and retry; denied +
+         * no rationale + previously denied -> permanently blocked, send
+         * to Settings; otherwise a transient toast (e.g. first deny).
+         * Pure for unit tests.
+         */
+        @JvmStatic
+        internal fun micDenyOutcome(shouldShowRationale: Boolean, deniedBefore: Boolean): MicDenyOutcome =
+            when {
+                shouldShowRationale -> MicDenyOutcome.RATIONALE
+                deniedBefore -> MicDenyOutcome.SETTINGS
+                else -> MicDenyOutcome.TRANSIENT
+            }
+
+        /** Overlay first, then the accessibility commit path. Pure for unit tests. */
+        @JvmStatic
+        internal fun overlayCta(overlay: Boolean, a11y: Boolean): OverlayCta =
+            when {
+                !overlay -> OverlayCta.OVERLAY
+                !a11y -> OverlayCta.A11Y
+                else -> OverlayCta.READY
+            }
+    }
 
     /** Speech language codes (stored code, shown label). */
     private val langs = listOf(
@@ -131,7 +192,24 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
         micGranted.value = granted
-        if (!granted) toast(getString(R.string.setup_mic_denied))
+        if (granted) {
+            micRationale.value = false
+            micBlocked.value = false
+            return@registerForActivityResult
+        }
+        val showRationale = ActivityCompat.shouldShowRequestPermissionRationale(
+            this, Manifest.permission.RECORD_AUDIO,
+        )
+        when (micDenyOutcome(showRationale, micDeniedBefore)) {
+            MicDenyOutcome.RATIONALE -> micRationale.value = true
+            MicDenyOutcome.SETTINGS -> micBlocked.value = true
+            MicDenyOutcome.TRANSIENT -> toast(getString(R.string.setup_mic_denied))
+        }
+        if (!micDeniedBefore) {
+            micDeniedBefore = true
+            getSharedPreferences("mw_state", MODE_PRIVATE).edit()
+                .putBoolean("mic_denied_before", true).apply()
+        }
     }
 
     private val notifPerm = registerForActivityResult(
@@ -142,15 +220,16 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        micGranted.value = ContextCompat.checkSelfPermission(
-            this, Manifest.permission.RECORD_AUDIO,
-        ) == PackageManager.PERMISSION_GRANTED
+        micDeniedBefore = getSharedPreferences("mw_state", MODE_PRIVATE)
+            .getBoolean("mic_denied_before", false)
+        refreshPermStates()
         reload()
         setContent { Root() }
     }
 
     override fun onResume() {
         super.onResume()
+        refreshPermStates()
         reload()
     }
 
@@ -162,6 +241,36 @@ class MainActivity : ComponentActivity() {
         multicastLock = null
         workers.shutdownNow()
         super.onDestroy()
+    }
+
+    /** Re-read runtime grants that can change in system Settings. */
+    private fun refreshPermStates() {
+        micGranted.value = ContextCompat.checkSelfPermission(
+            this, Manifest.permission.RECORD_AUDIO,
+        ) == PackageManager.PERMISSION_GRANTED
+        overlayGranted.value = try {
+            Settings.canDrawOverlays(this)
+        } catch (_: Exception) {
+            false
+        }
+        a11yOn.value = try {
+            MyWhisperAccessibility.isOn(this)
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun openAppSettings() {
+        try {
+            startActivity(
+                Intent(
+                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.fromParts("package", packageName, null),
+                ).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) },
+            )
+        } catch (_: Exception) {
+            toast(getString(R.string.setup_mic_denied))
+        }
     }
 
     private fun reload() {
@@ -430,6 +539,31 @@ class MainActivity : ComponentActivity() {
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState()),
         ) {
+            val imeDone = imeEnabled()
+            val micDone = micGranted.value
+            val serverDone = isServerConfigured(s)
+            val doneCount = onboardingDoneCount(imeDone, micDone, serverDone)
+            Section("Setup progress: $doneCount of 3") {
+                if (doneCount == 3) {
+                    Text(
+                        "You're ready to dictate.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                }
+                Text(
+                    (if (imeDone) "✓ " else "○ ") + "Enable + switch input method",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    (if (micDone) "✓ " else "○ ") + "Microphone granted",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    (if (serverDone) "✓ " else "○ ") + "Speech server configured",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
             Section(stringResource(R.string.setup_status)) {
                 Text(statusState.value, style = MaterialTheme.typography.bodyMedium)
                 Spacer(Modifier.height(4.dp))
@@ -472,6 +606,42 @@ class MainActivity : ComponentActivity() {
                 Button(onClick = { micPerm.launch(Manifest.permission.RECORD_AUDIO) }) {
                     Text(stringResource(R.string.setup_mic_grant))
                 }
+            }
+            if (micRationale.value) {
+                AlertDialog(
+                    onDismissRequest = { micRationale.value = false },
+                    title = { Text(stringResource(R.string.setup_step3)) },
+                    text = { Text(stringResource(R.string.setup_mic_no)) },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            micRationale.value = false
+                            micPerm.launch(Manifest.permission.RECORD_AUDIO)
+                        }) { Text(stringResource(R.string.setup_mic_grant)) }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { micRationale.value = false }) {
+                            Text(stringResource(R.string.action_cancel))
+                        }
+                    },
+                )
+            }
+            if (micBlocked.value) {
+                AlertDialog(
+                    onDismissRequest = { micBlocked.value = false },
+                    title = { Text(stringResource(R.string.setup_step3)) },
+                    text = { Text(stringResource(R.string.setup_mic_denied)) },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            micBlocked.value = false
+                            openAppSettings()
+                        }) { Text(stringResource(R.string.action_change)) }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { micBlocked.value = false }) {
+                            Text(stringResource(R.string.action_cancel))
+                        }
+                    },
+                )
             }
             Section("4 · Notifications") {
                 Text(
@@ -556,13 +726,29 @@ class MainActivity : ComponentActivity() {
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Spacer(Modifier.height(8.dp))
-                Button(onClick = {
-                    startActivity(Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION))
-                }) { Text(stringResource(R.string.setup_float_overlay)) }
-                Spacer(Modifier.height(4.dp))
-                Button(onClick = {
-                    startActivity(Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                }) { Text(stringResource(R.string.setup_float_a11y)) }
+                val overlayOk = overlayGranted.value
+                val a11yOk = a11yOn.value
+                Text(
+                    (if (overlayOk) "✓ " else "○ ") + stringResource(R.string.setup_float_overlay),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    (if (a11yOk) "✓ " else "○ ") + stringResource(R.string.setup_float_a11y),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Spacer(Modifier.height(8.dp))
+                when (overlayCta(overlayOk, a11yOk)) {
+                    OverlayCta.OVERLAY -> Button(onClick = {
+                        startActivity(Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION))
+                    }) { Text(stringResource(R.string.setup_float_overlay)) }
+                    OverlayCta.A11Y -> Button(onClick = {
+                        startActivity(Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                    }) { Text(stringResource(R.string.setup_float_a11y)) }
+                    OverlayCta.READY -> Text(
+                        stringResource(R.string.setup_float_on),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
                 Text(
                     stringResource(R.string.setup_float_a11y_sub),
                     style = MaterialTheme.typography.bodySmall,
