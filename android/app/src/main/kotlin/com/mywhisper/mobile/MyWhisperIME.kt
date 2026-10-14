@@ -32,6 +32,7 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
     private lateinit var dictation: Dictation
 
     private var micButton: ImageButton? = null
+    private var cancelButton: Button? = null
     private var hintText: TextView? = null
     private var spinner: ProgressBar? = null
     private var pillBox: LinearLayout? = null
@@ -41,6 +42,8 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
     private var lastToggled = false
     private var lastNote = ""
     private var lastAnnounced = ""
+    /** First-hold slide hint: once per process, never blocking. */
+    private var slideHintShown = false
 
     private var micDownRawY = 0f
     private var micCancelled = false
@@ -48,6 +51,49 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
     companion object {
         /** Slide-down distance that cancels a hold (dp). */
         private const val SLIDE_CANCEL_DP = 90
+
+        /** Mic press/release visual transition (ms): owner wants ~150-250. */
+        const val MIC_ANIM_MS = 180L
+        /** Slide-hint nudge distance (dp): gentle, never blocking. */
+        const val SLIDE_HINT_DP = 10
+
+        /**
+         * State-driven mic visuals. Pure (no views): unit-tested, and
+         * [Dictation.State] stays the single source of truth — callers
+         * only render what this returns.
+         */
+        data class MicVisual(val color: Int, val scale: Float, val elevationDp: Int)
+
+        fun micVisualFor(s: Dictation.State): MicVisual = when (s) {
+            Dictation.State.IDLE -> MicVisual(0xFF6750A4.toInt(), 1.0f, 4)
+            Dictation.State.RECORDING -> MicVisual(0xFFB3261E.toInt(), 1.12f, 8)
+            Dictation.State.WORKING -> MicVisual(0xFF7C4D00.toInt(), 0.94f, 2)
+        }
+
+        /** TalkBack label per state (R.string id). */
+        fun micDescResFor(s: Dictation.State): Int = when (s) {
+            Dictation.State.IDLE -> R.string.ime_mic
+            Dictation.State.RECORDING -> R.string.ime_listening
+            Dictation.State.WORKING -> R.string.ime_working
+        }
+
+        /**
+         * Explicit cancel affordance: visible while RECORDING/WORKING so
+         * toggle mode (finger off the mic) can cancel without committing.
+         * Tap = [Dictation.cancel], never commit.
+         */
+        fun cancelVisible(s: Dictation.State): Boolean = s != Dictation.State.IDLE
+
+        /**
+         * First-hold discovery hint: RECORDING + still held (not toggled)
+         * + never shown this process. Toggle sessions (toggled=true) and
+         * repeats skip it — subtle, never blocking.
+         */
+        fun shouldShowSlideHint(
+            s: Dictation.State,
+            toggled: Boolean,
+            alreadyShown: Boolean,
+        ): Boolean = s == Dictation.State.RECORDING && !toggled && !alreadyShown
     }
 
     override fun onCreate() {
@@ -150,6 +196,7 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
         }
         pillBox = null
         barsView = null
+        cancelButton = null
         applySystemBars()
         // Usage flag: the config app cannot read the current IME on
         // targetSdk 34+, so the IME reports itself.
@@ -297,7 +344,7 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
             // clashed.
             setImageResource(R.drawable.ic_stat_sync)
             contentDescription = getString(R.string.ime_mic)
-            setBackground(micBackground(false))
+            setBackground(micBackground(Dictation.State.IDLE))
             setPadding(dp(20), dp(20), dp(20), dp(20))
             elevation = dp(4).toFloat()
             setOnTouchListener { _, ev ->
@@ -361,6 +408,24 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
         bar.addView(row, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
+        // Explicit cancel below the mic: toggle mode's finger is off the
+        // button, so slide-down alone is unreachable. Visible only while
+        // RECORDING/WORKING; tap = Dictation.cancel(), never commits.
+        val cancel = Button(this).apply {
+            text = getString(R.string.ime_cancel)
+            contentDescription = getString(R.string.ime_cancel)
+            visibility = View.GONE
+            setOnClickListener {
+                micCancelled = true
+                dictation.cancel()
+                showCancelled()
+            }
+        }
+        cancelButton = cancel
+        bar.addView(cancel, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT).also { it.topMargin = dp(2) })
+
         val status = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL or Gravity.CENTER_HORIZONTAL
@@ -392,6 +457,37 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
         lastNote = getString(R.string.ime_cancelled)
         tick(60)
         postRefresh()
+    }
+
+    /**
+     * First-hold discovery hint: the mic gently nudges down and the
+     * "slide down to cancel" label fades in/out. Subtle, never blocking:
+     * view animations only, no touch interception, no session change.
+     */
+    private fun playSlideHint() {
+        try {
+            val mic = micButton ?: return
+            val label = hintText
+            val dip = dp(SLIDE_HINT_DP).toFloat()
+            mic.animate()?.translationYBy(dip)?.setDuration(MIC_ANIM_MS)
+                ?.withEndAction {
+                    try {
+                        mic.animate()?.translationYBy(-dip)
+                            ?.setDuration(MIC_ANIM_MS)?.start()
+                    } catch (_: Exception) {
+                    }
+                }?.start()
+            label?.let {
+                it.animate()?.alpha(0.35f)?.setDuration(MIC_ANIM_MS)
+                    ?.withEndAction {
+                        try {
+                            it.animate()?.alpha(1f)?.setDuration(MIC_ANIM_MS)?.start()
+                        } catch (_: Exception) {
+                        }
+                    }?.start()
+            }
+        } catch (_: Exception) {
+        }
     }
 
     private fun tick(ms: Long = 25L) {
@@ -489,10 +585,10 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
         super.onStartInput(attribute, restarting)
     }
 
-    private fun micBackground(recording: Boolean): GradientDrawable =
+    private fun micBackground(s: Dictation.State): GradientDrawable =
         GradientDrawable().apply {
             shape = GradientDrawable.OVAL
-            setColor(if (recording) 0xFFB3261E.toInt() else 0xFF6750A4.toInt())
+            setColor(micVisualFor(s).color)
         }
 
     /**
@@ -594,14 +690,39 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
     }
 
     private fun refresh() {
-        micButton?.setBackground(micBackground(lastState == Dictation.State.RECORDING))
+        // State-driven mic: Dictation.State is the single source of truth.
+        // Idle/record/working each distinct (color/scale/glow), animated
+        // ~180ms; TalkBack label follows the state.
+        val visual = micVisualFor(lastState)
+        micButton?.setBackground(micBackground(lastState))
+        try {
+            micButton?.animate()?.scaleX(visual.scale)?.scaleY(visual.scale)
+                ?.setDuration(MIC_ANIM_MS)?.start()
+            micButton?.elevation = dp(visual.elevationDp).toFloat()
+        } catch (_: Exception) {
+        }
+        try {
+            micButton?.contentDescription = getString(micDescResFor(lastState))
+        } catch (_: Exception) {
+        }
+        // Toggle-mode escape hatch: explicit cancel while RECORDING or
+        // WORKING. Tap cancels via Dictation.cancel() (no commit); the
+        // slide gesture stays for hold mode.
+        cancelButton?.visibility =
+            if (cancelVisible(lastState)) View.VISIBLE else View.GONE
+        // First-hold discovery: gentle nudge + label pulse, once per
+        // process, never blocking (pure view animation, no input eaten).
+        if (shouldShowSlideHint(lastState, lastToggled, slideHintShown)) {
+            slideHintShown = true
+            playSlideHint()
+        }
         spinner?.visibility =
             if (lastState == Dictation.State.WORKING) View.VISIBLE else View.GONE
         updatePill(lastState == Dictation.State.RECORDING)
         val hint = hintText
         hint?.text = when (lastState) {
-            // While recording the escape hatch is sliding down, not a
-            // button you cannot reach mid-hold.
+            // Recording: slide-down cancels mid-hold; the explicit Cancel
+            // button below covers toggle mode (finger off the mic).
             Dictation.State.RECORDING -> getString(R.string.ime_slide_cancel)
             Dictation.State.WORKING -> getString(R.string.ime_working)
             Dictation.State.IDLE -> lastNote.ifEmpty { idleHint() }
