@@ -186,6 +186,7 @@ class OverlayService : Service(), Dictation.Listener {
                     return START_NOT_STICKY
                 }
                 ensureCore()
+                dictation.listener = this
                 FloatState.onChange = { applyVisibility() }
                 applyVisibility()
                 mainHandler.removeCallbacks(watchTick)
