@@ -158,4 +158,47 @@ class DictationCancelTest {
             h.shutdown()
         }
     }
+
+    @Test
+    fun shutdownDuringBlockedTranscribe_dropsResult() {
+        val h = Harness(transcribeBlock = CountDownLatch(1))
+        try {
+            h.dictation.pressDown()
+            h.dictation.pressUp() // WORKING, worker blocks
+            assertEquals(Dictation.State.WORKING, h.dictation.current)
+            assertTrue(h.enteredTranscribe.await(10, TimeUnit.SECONDS))
+
+            h.dictation.shutdown() // destroy invalidates the worker first
+            assertTrue(h.executor.awaitTermination(10, TimeUnit.SECONDS))
+
+            assertTrue("post-shutdown transcribe must not commit", h.results.isEmpty())
+            assertTrue("post-shutdown transcribe must not error either", h.errors.isEmpty())
+        } finally {
+            h.shutdown()
+        }
+    }
+
+    @Test
+    fun newSessionAfterCancel_commitsWhileStaleDrops() {
+        val h = Harness(transcribeBlock = CountDownLatch(1))
+        try {
+            h.dictation.pressDown()
+            h.dictation.pressUp() // worker1 blocks in transcription
+            assertTrue(h.enteredTranscribe.await(10, TimeUnit.SECONDS))
+
+            h.dictation.cancel()
+            h.dictation.pressDown() // new session (reset bumps again)
+            assertEquals(Dictation.State.RECORDING, h.dictation.current)
+            h.dictation.pressUp() // worker2 queues behind worker1
+            assertEquals(Dictation.State.WORKING, h.dictation.current)
+
+            h.transcribeBlock!!.countDown() // worker1 returns stale, worker2 runs fresh
+            h.settleWorker()
+
+            assertEquals("stale drops, fresh commits exactly once", listOf("hello world"), h.results)
+            assertEquals(Dictation.State.IDLE, h.dictation.current)
+        } finally {
+            h.shutdown()
+        }
+    }
 }
