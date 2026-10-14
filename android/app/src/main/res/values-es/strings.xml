@@ -204,7 +204,8 @@
     <string name="hist_purged">%1$d entradas antiguas borradas</string>
     <string name="hist_purge_failed">falló el borrado: %1$s</string>
     <string name="hist_count">%1$d entradas</string>
-    <string name="hist_clear_done">falló el borrado: %1$s</string>
+    <string name="hist_cleared">historial borrado</string>
+    <string name="hist_clear_failed">falló el borrado: %1$s</string>
     <string name="hist_delete_failed">falló al eliminar: %1$s</string>
     <string name="hist_search">Buscar transcripciones</string>
     <string name="hist_words">%1$d palabras</string>

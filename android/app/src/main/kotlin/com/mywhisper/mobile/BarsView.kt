@@ -39,15 +39,15 @@ class BarsView @JvmOverloads constructor(
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         val d = resources.displayMetrics.density
+        // Guard: first layout / window resize can deliver a ~0 height;
+        // without this mid - 1f goes negative and bars invert.
+        if (height < MIN_HEIGHT_DP * d || width <= 0) return
         val bw = 3f * d
         val gap = 3f * d
         val n = bars.size
         val mid = height / 2f
-        val laneMax = 18f * d
-        val minHalf = 2f * d
         for (i in 0 until n) {
-            val v = bars[i].coerceIn(0f, 1f)
-            val h = (minHalf + v * (laneMax - minHalf)).coerceAtMost(mid - 1f)
+            val h = HardeningGuards.barHalfHeight(height.toFloat(), bars[i], d)
             val x = i * (bw + gap)
             canvas.drawRoundRect(
                 x, mid - h, x + bw, mid + h,
@@ -59,5 +59,8 @@ class BarsView @JvmOverloads constructor(
     companion object {
         private const val BAR_COUNT = 11
         private const val DECAY = 0.82f
+
+        /** Below this view height bars are skipped (dp). */
+        const val MIN_HEIGHT_DP = 5f
     }
 }

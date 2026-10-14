@@ -204,7 +204,8 @@
     <string name="hist_purged">deleted %1$d old entries</string>
     <string name="hist_purge_failed">purge failed: %1$s</string>
     <string name="hist_count">%1$d entries</string>
-    <string name="hist_clear_done">clear failed: %1$s</string>
+    <string name="hist_cleared">history cleared</string>
+    <string name="hist_clear_failed">clear failed: %1$s</string>
     <string name="hist_delete_failed">delete failed: %1$s</string>
     <string name="hist_search">Search transcripts</string>
     <string name="hist_words">%1$d words</string>

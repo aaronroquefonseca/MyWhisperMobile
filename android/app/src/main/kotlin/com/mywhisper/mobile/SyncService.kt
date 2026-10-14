@@ -141,10 +141,22 @@ class SyncService : Service() {
 /**
  * Restart sync after reboot when it is enabled (desktop starts its
  * engine from systemd; this is the mobile equivalent).
+ *
+ * At boot the credential-encrypted keystore may still be locked, so a
+ * settings read can throw: instead of failing silently, retry with
+ * backoff and re-trigger on unlock.
  */
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(ctx: Context, intent: Intent) {
-        if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
+        when (intent.action) {
+            Intent.ACTION_BOOT_COMPLETED,
+            Intent.ACTION_USER_UNLOCKED,
+            ACTION_RETRY,
+            -> attemptStart(ctx, intent.getIntExtra(EXTRA_ATTEMPT, 0))
+        }
+    }
+
+    private fun attemptStart(ctx: Context, attempt: Int) {
         try {
             val s = CoreBridge.getSettings().getOrThrow()
             val sync = s.optJSONObject("sync")
@@ -156,7 +168,52 @@ class BootReceiver : BroadcastReceiver() {
             if (s.optJSONObject("preferences")?.optBoolean("float_enabled", false) == true) {
                 OverlayService.start(ctx.applicationContext)
             }
+        } catch (e: Exception) {
+            android.util.Log.w(
+                "MwSync",
+                "boot start deferred (attempt=$attempt locked=${HardeningGuards.isKeystoreLocked(e)}): ${e.message}",
+            )
+            if (HardeningGuards.bootAttemptWithinLimit(attempt, MAX_RETRIES)) scheduleRetry(ctx, attempt + 1)
+        }
+    }
+
+    private fun scheduleRetry(ctx: Context, nextAttempt: Int) {
+        try {
+            val am = ctx.getSystemService(android.app.AlarmManager::class.java) ?: return
+            val pi = PendingIntent.getBroadcast(
+                ctx, RETRY_REQ_CODE + nextAttempt,
+                Intent(ctx, BootReceiver::class.java)
+                    .setAction(ACTION_RETRY)
+                    .putExtra(EXTRA_ATTEMPT, nextAttempt),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            am.setAndAllowWhileIdle(
+                android.app.AlarmManager.RTC_WAKEUP,
+                System.currentTimeMillis() + nextRetryDelayMs(nextAttempt),
+                pi,
+            )
         } catch (_: Exception) {
         }
+    }
+
+    companion object {
+        const val ACTION_RETRY = "com.mywhisper.mobile.sync.BOOT_RETRY"
+        const val EXTRA_ATTEMPT = "attempt"
+        const val MAX_RETRIES = 4
+        private const val RETRY_REQ_CODE = 900
+
+        /**
+         * Backoff for retry N (1-based): 1m, 2m, 4m, 8m, capped at 15m.
+         * Delegates to [HardeningGuards] for JVM tests.
+         */
+        fun nextRetryDelayMs(retryNumber: Int): Long =
+            HardeningGuards.bootRetryDelayMs(retryNumber)
+
+        /**
+         * True when the failure chain smells like a locked credential
+         * keystore. Delegates to [HardeningGuards] for JVM tests.
+         */
+        fun isKeystoreLocked(e: Throwable): Boolean =
+            HardeningGuards.isKeystoreLocked(e)
     }
 }
