@@ -108,8 +108,9 @@ class Dictation(
                 onLevel?.invoke(it)
             },
         ) ?: return
-        capture = cap
+        // bump before publish so workers that see the capture see the token.
         session.incrementAndGet()
+        capture = cap
         toggled = false
         downAt = System.currentTimeMillis()
         maxPeak = 0f
