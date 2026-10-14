@@ -69,6 +69,14 @@
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.USER_UNLOCKED" />
             </intent-filter>
+            <!-- App update: separate filter WITHOUT a data scheme —
+                the system's MY_PACKAGE_REPLACED intent carries no data
+                URI (verified: with <data android:scheme="package"/> the
+                filter never matches and nothing is delivered after
+                `adb install -r`; without it, BootReceiver fires). -->
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
         </receiver>
 
         <service
