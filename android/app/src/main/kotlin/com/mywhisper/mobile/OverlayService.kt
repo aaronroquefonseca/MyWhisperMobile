@@ -143,6 +143,12 @@ class OverlayService : Service(), Dictation.Listener {
         getSystemService(NotificationManager::class.java)?.createNotificationChannel(
             NotificationChannel(CHANNEL, getString(R.string.unified_notif_channel), NotificationManager.IMPORTANCE_LOW),
         )
+        // Drop the retired solo channels (pre-unification installs).
+        try {
+            val nm = getSystemService(NotificationManager::class.java)
+            for (id in NotifPolicy.LEGACY_CHANNEL_IDS) nm?.deleteNotificationChannel(id)
+        } catch (_: Exception) {
+        }
         dictation = Dictation(
             smartTapMs = { readLong("hotkeys", "smart_tap_ms", 150L) },
             mode = { readMode() },
@@ -186,6 +192,12 @@ class OverlayService : Service(), Dictation.Listener {
                 NotifPolicy.UnifiedState.floatActive = false
                 NotifPolicy.UnifiedState.floatState = Dictation.State.IDLE
                 stopForeground(STOP_FOREGROUND_REMOVE)
+                // Retired solo bubble row (pre-unification installs):
+                // single-STOP must never leave it behind either.
+                try {
+                    getSystemService(NotificationManager::class.java)?.cancel(NotifPolicy.LEGACY_FLOAT_NOTIF_ID)
+                } catch (_: Exception) {
+                }
                 // Shared row: we just removed it — if sync still lives,
                 // hand it back immediately (recompose, not orphan).
                 try {

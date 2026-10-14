@@ -118,6 +118,10 @@ object NotifPolicy {
     /** Legacy bubble row retired by the unification (cancelled on start). */
     const val LEGACY_FLOAT_NOTIF_ID = 42
 
+    /** Channels retired by the unification (deleted on next service start). */
+    @JvmStatic
+    val LEGACY_CHANNEL_IDS: List<String> = listOf("mw-float", "mw-sync")
+
     /**
      * Process-wide live state (both services run in the same process,
      * so a singleton suffices — no IPC). Writers: OverlayService sets

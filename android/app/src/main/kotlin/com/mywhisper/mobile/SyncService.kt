@@ -79,6 +79,11 @@ class SyncService : Service() {
         mgr.createNotificationChannel(
             NotificationChannel(CHANNEL, getString(R.string.unified_notif_channel), NotificationManager.IMPORTANCE_LOW),
         )
+        // Drop the retired solo channels (pre-unification installs).
+        try {
+            for (id in NotifPolicy.LEGACY_CHANNEL_IDS) mgr?.deleteNotificationChannel(id)
+        } catch (_: Exception) {
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -92,6 +97,12 @@ class SyncService : Service() {
                 NotifPolicy.UnifiedState.syncing = false
                 syncing = false
                 stopForeground(STOP_FOREGROUND_REMOVE)
+                // Retired solo bubble row (pre-unification installs):
+                // single-STOP must never leave it behind either.
+                try {
+                    getSystemService(NotificationManager::class.java)?.cancel(NotifPolicy.LEGACY_FLOAT_NOTIF_ID)
+                } catch (_: Exception) {
+                }
                 // Shared row: we just removed it — if the bubble still
                 // lives, hand it back immediately (recompose, not orphan).
                 try {

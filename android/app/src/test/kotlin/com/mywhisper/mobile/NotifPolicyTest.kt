@@ -221,4 +221,27 @@ class NotifPolicyTest {
         assertFalse(syncing.ongoing)
         assertFalse(syncing.showProgress)
     }
+
+    // -- Migration hygiene (retired solo rows/channels) ---------------
+
+    @Test
+    fun unifiedIdentity_stable() {
+        assertEquals("mw-status", NotifPolicy.UNIFIED_CHANNEL)
+        assertEquals(41, NotifPolicy.UNIFIED_NOTIF_ID)
+    }
+
+    @Test
+    fun legacyNotifId_isRetiredSoloBubbleRow() {
+        // The id both services cancel on START and on every STOP path.
+        assertEquals(42, NotifPolicy.LEGACY_FLOAT_NOTIF_ID)
+        // Cancelling it on STOP must never remove the live shared row.
+        assertFalse(NotifPolicy.LEGACY_FLOAT_NOTIF_ID == NotifPolicy.UNIFIED_NOTIF_ID)
+    }
+
+    @Test
+    fun legacyChannels_exactlyRetiredPair() {
+        // The channels both services delete on next start.
+        assertEquals(listOf("mw-float", "mw-sync"), NotifPolicy.LEGACY_CHANNEL_IDS)
+        assertFalse(NotifPolicy.LEGACY_CHANNEL_IDS.contains(NotifPolicy.UNIFIED_CHANNEL))
+    }
 }
