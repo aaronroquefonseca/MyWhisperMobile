@@ -57,6 +57,7 @@ class OverlayService : Service(), Dictation.Listener {
     private var wm: WindowManager? = null
     private var holder: FrameLayout? = null
     private var micBtn: ImageButton? = null
+    private var dragHandle: View? = null
     private var params: WindowManager.LayoutParams? = null
 
     private var downRawX = 0f
@@ -64,8 +65,19 @@ class OverlayService : Service(), Dictation.Listener {
     private var baseX = 0
     private var baseY = 0
     private var moved = false
+    private var moveArmed = false
     private var micCancelled = false
     private var workPulse: android.animation.ObjectAnimator? = null
+
+    /**
+     * Long-press-to-move fallback (the drag handle is small): fires
+     * only while the mic touch is still down and unmoved. Never touches
+     * Dictation itself — arming move mode must not cost a recording.
+     */
+    private val longPressMove = Runnable {
+        moveArmed = true
+        tick(60)
+    }
 
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
@@ -168,12 +180,27 @@ class OverlayService : Service(), Dictation.Listener {
             }
             else -> {
                 if (!android.provider.Settings.canDrawOverlays(this)) {
-                    Toast.makeText(this, getString(R.string.float_need_overlay), Toast.LENGTH_LONG).show()
+                    // Permission recovery flow: latch the denial (Setup
+                    // tells first-run apart from revoked), explain, and
+                    // deep-link straight to the overlay grant page so one
+                    // tap recovers. Repeat denials keep the revoked copy.
+                    val revokedBefore = FloatState.overlayDenied
+                    FloatState.recordOverlayDenial()
+                    Toast.makeText(
+                        this,
+                        getString(
+                            if (revokedBefore) R.string.float_overlay_recovery
+                            else R.string.float_need_overlay,
+                        ),
+                        Toast.LENGTH_LONG,
+                    ).show()
+                    openOverlaySettings()
                     removeBubble()
                     clearFloatState()
                     stopSelf()
                     return START_NOT_STICKY
                 }
+                FloatState.clearOverlayDenied()
                 try {
                     startForegroundWithType()
                 } catch (e: Exception) {
@@ -269,6 +296,22 @@ class OverlayService : Service(), Dictation.Listener {
     }
 
     /**
+     * Deep-link to the overlay grant page (permission recovery flow).
+     * Best-effort: locked-down profiles may refuse; the toast above
+     * already explains, so a refused intent stays silent.
+     */
+    private fun openOverlaySettings() {
+        try {
+            startActivity(
+                Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                },
+            )
+        } catch (_: Exception) {
+        }
+    }
+
+    /**
      * Auto-show rule: floating enabled, our IME not active, and (when
      * the accessibility service is on) a text field focused. No
      * manual hide needed.
@@ -285,8 +328,12 @@ class OverlayService : Service(), Dictation.Listener {
             removeBubble()
             return
         }
-        val show = !FloatState.imeActive &&
-            (!MyWhisperAccessibility.isOn(this) || FloatState.hasTextFocus)
+        val show = FloatState.shouldShowBubble(
+            floatEnabled = true,
+            imeActive = FloatState.imeActive,
+            a11yOn = MyWhisperAccessibility.isOn(this),
+            hasTextFocus = FloatState.hasTextFocus,
+        )
         android.util.Log.i("MwFloat", "apply show=$show holder=${holder != null}")
         if (show) {
             if (holder == null) showBubble()
@@ -295,6 +342,14 @@ class OverlayService : Service(), Dictation.Listener {
         }
     }
 
+    /**
+     * Bubble chrome: the mic button talks, the corner grip moves.
+     * Split controls (ux P0): touching the mic never moves the bubble
+     * and never cancels the utterance — only the grip, or a mic
+     * long-press followed by a drag, enters move mode. The persisted
+     * position is clamped into the live window on show, so a rotation
+     * or fold never strands the bubble off-screen.
+     */
     @SuppressLint("ClickableViewAccessibility")
     private fun showBubble() {
         if (holder != null) {
@@ -304,15 +359,23 @@ class OverlayService : Service(), Dictation.Listener {
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
 
         val size = dp(60)
+        val gripTouch = dp(32)
+        val rootW = size + gripTouch / 2
+        val rootH = size + gripTouch / 2
         val lp = WindowManager.LayoutParams(
-            size, size,
+            rootW, rootH,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT,
         ).also {
             it.gravity = Gravity.TOP or Gravity.START
-            it.x = prefs.getInt(KEY_X, 60)
-            it.y = prefs.getInt(KEY_Y, 400)
+            val b = safeBounds(rootW, rootH)
+            val (cx, cy) = FloatState.clampBubble(
+                prefs.getInt(KEY_X, 60), prefs.getInt(KEY_Y, 400),
+                b.minX, b.minY, b.maxX, b.maxY,
+            )
+            it.x = cx
+            it.y = cy
         }
         params = lp
 
@@ -327,81 +390,222 @@ class OverlayService : Service(), Dictation.Listener {
             // Big mark: padding trimmed so the glyph fills the button.
             setPadding(dp(7), dp(7), dp(7), dp(7))
             elevation = dp(6).toFloat()
-            layoutParams = FrameLayout.LayoutParams(size, size)
-            setOnTouchListener { v, ev -> onBubbleTouch(v, ev) }
+            layoutParams = FrameLayout.LayoutParams(size, size, Gravity.TOP or Gravity.START)
+            setOnTouchListener { _, ev -> onMicTouch(ev) }
         }
         micBtn = mic
         root.addView(mic)
+        val grip = FrameLayout(this).apply {
+            contentDescription = getString(R.string.float_drag_handle)
+            elevation = dp(7).toFloat()
+            layoutParams = FrameLayout.LayoutParams(gripTouch, gripTouch, Gravity.BOTTOM or Gravity.END)
+            setOnTouchListener { _, ev -> onHandleTouch(ev) }
+        }
+        val pill = View(this).apply {
+            isClickable = false
+            isFocusable = false
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dp(3).toFloat()
+                setColor(0xB3FFFFFF.toInt())
+            }
+            layoutParams = FrameLayout.LayoutParams(dp(16), dp(5), Gravity.CENTER)
+        }
+        grip.addView(pill)
+        dragHandle = grip
+        root.addView(grip)
         holder = root
         try {
             wm?.addView(root, lp)
         } catch (e: Exception) {
-            Toast.makeText(this, "${e.message}", Toast.LENGTH_LONG).show()
+            // Runtime revoke between the START check and addView lands
+            // here as SecurityException: same recovery as a cold denial.
+            FloatState.recordOverlayDenial()
+            openOverlaySettings()
+            Toast.makeText(this, getString(R.string.float_overlay_recovery), Toast.LENGTH_LONG).show()
+            android.util.Log.i("MwFloat", "addView denied: ${e.message}")
+            holder = null
+            micBtn = null
+            dragHandle = null
             stopSelf()
             return
         }
         refreshMic(false)
     }
 
-    private fun onBubbleTouch(v: View, ev: MotionEvent): Boolean {
+    /** Live window bounds minus system insets (re-queried per move: fold/rotate-safe). */
+    private data class SafeBounds(val minX: Int, val minY: Int, val maxX: Int, val maxY: Int)
+
+    private fun safeBounds(bubbleW: Int, bubbleH: Int): SafeBounds {
+        val w = wm ?: return SafeBounds(0, 0, 0, 0)
+        return try {
+            if (Build.VERSION.SDK_INT >= 30) {
+                val m = w.currentWindowMetrics
+                val b = m.bounds
+                val ins = m.windowInsets.getInsetsIgnoringVisibility(
+                    android.view.WindowInsets.Type.systemBars() or
+                        android.view.WindowInsets.Type.displayCutout(),
+                )
+                SafeBounds(
+                    b.left + ins.left,
+                    b.top + ins.top,
+                    b.right - ins.right - bubbleW,
+                    b.bottom - ins.bottom - bubbleH,
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                val dm = resources.displayMetrics
+                SafeBounds(0, 0, dm.widthPixels - bubbleW, dm.heightPixels - bubbleH)
+            }
+        } catch (_: Exception) {
+            SafeBounds(0, 0, 0, 0)
+        }
+    }
+
+    /** Live-clamped drag step (bounds re-queried: fold/rotate-safe). */
+    private fun moveBubbleBy(dx: Float, dy: Float) {
+        params?.let { lp ->
+            val b = safeBounds(lp.width, lp.height)
+            val (cx, cy) = FloatState.clampBubble(
+                baseX + dx.toInt(), baseY + dy.toInt(),
+                b.minX, b.minY, b.maxX, b.maxY,
+            )
+            lp.x = cx
+            lp.y = cy
+            try {
+                wm?.updateViewLayout(holder, lp)
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    /** Dock to the nearest horizontal edge, clamp, persist. */
+    private fun snapAndPersist() {
+        params?.let { lp ->
+            val b = safeBounds(lp.width, lp.height)
+            val (cx, cy) = FloatState.clampBubble(lp.x, lp.y, b.minX, b.minY, b.maxX, b.maxY)
+            lp.x = FloatState.snapToEdge(cx, b.minX, b.maxX)
+            lp.y = cy
+            try {
+                wm?.updateViewLayout(holder, lp)
+            } catch (_: Exception) {
+            }
+            try {
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                    .putInt(KEY_X, lp.x).putInt(KEY_Y, lp.y).apply()
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    /**
+     * Mic touch: talk only. Stray movement is ignored — it neither
+     * moves the bubble nor cancels the utterance — except the
+     * deliberate slide-down (same 90dp threshold as the IME, with its
+     * toast). A tap therefore never destroys a recording (ux P0).
+     */
+    private fun onMicTouch(ev: MotionEvent): Boolean {
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 downRawX = ev.rawX
                 downRawY = ev.rawY
                 params?.let { baseX = it.x; baseY = it.y }
                 moved = false
+                moveArmed = false
                 micCancelled = false
+                mainHandler.removeCallbacks(longPressMove)
+                mainHandler.postDelayed(
+                    longPressMove,
+                    android.view.ViewConfiguration.getLongPressTimeout().toLong(),
+                )
                 tick()
                 dictation.pressDown()
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
-                val dx = ev.rawX - downRawX
-                val dy = ev.rawY - downRawY
-                if (!moved && kotlin.math.hypot(dx, dy) > dp(10)) {
-                    // It is a drag: drop the press, move the bubble.
-                    moved = true
-                    dictation.cancel()
-                }
-                if (moved) {
-                    params?.let { lp ->
-                        lp.x = baseX + dx.toInt()
-                        lp.y = baseY + dy.toInt()
-                        try {
-                            wm?.updateViewLayout(holder, lp)
-                        } catch (_: Exception) {
-                        }
-                    }
-                    return true
-                }
-                // Hold-talk slide-down cancel (same threshold as IME).
-                if (!micCancelled && ev.rawY - downRawY > dp(90)) {
+                if (!moveArmed && !micCancelled && ev.rawY - downRawY > dp(90)) {
+                    // Deliberate slide-down cancel (IME parity).
                     micCancelled = true
+                    mainHandler.removeCallbacks(longPressMove)
                     dictation.cancel()
                     tick(60)
                     Toast.makeText(this, getString(R.string.ime_cancelled), Toast.LENGTH_SHORT).show()
+                    return true
+                }
+                val dist = kotlin.math.hypot(
+                    (ev.rawX - downRawX).toDouble(),
+                    (ev.rawY - downRawY).toDouble(),
+                ).toFloat()
+                if (!micCancelled &&
+                    FloatState.shouldArmMove(dist, dp(10).toFloat(), moveArmed, onHandle = false)
+                ) {
+                    // Long-press move: reposition under the finger, keep
+                    // the utterance alive — moving never destroys it.
+                    moved = true
+                    moveBubbleBy(ev.rawX - downRawX, ev.rawY - downRawY)
                 }
                 return true
             }
             MotionEvent.ACTION_UP -> {
+                mainHandler.removeCallbacks(longPressMove)
                 if (moved) {
-                    // Persist position; visibility stays automatic.
-                    params?.let { lp ->
-                        try {
-                            getSharedPreferences(PREFS, MODE_PRIVATE).edit()
-                                .putInt(KEY_X, lp.x).putInt(KEY_Y, lp.y).apply()
-                        } catch (_: Exception) {
-                        }
-                    }
+                    // Explicit move gesture: dock, leave Dictation state
+                    // untouched (a recording keeps running; tap stops).
+                    snapAndPersist()
                     moved = false
+                    moveArmed = false
                     return true
                 }
+                moveArmed = false
                 tick()
                 dictation.pressUp()
                 return true
             }
             MotionEvent.ACTION_CANCEL -> {
+                mainHandler.removeCallbacks(longPressMove)
+                moved = false
+                moveArmed = false
                 dictation.cancel()
+                return true
+            }
+        }
+        return false
+    }
+
+    /**
+     * Grip touch: move only, never Dictation. A drag here can neither
+     * start nor cancel a recording; release docks to the edge.
+     */
+    private fun onHandleTouch(ev: MotionEvent): Boolean {
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                downRawX = ev.rawX
+                downRawY = ev.rawY
+                params?.let { baseX = it.x; baseY = it.y }
+                moved = false
+                tick()
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val dist = kotlin.math.hypot(
+                    (ev.rawX - downRawX).toDouble(),
+                    (ev.rawY - downRawY).toDouble(),
+                ).toFloat()
+                if (FloatState.shouldArmMove(dist, dp(10).toFloat(), longPressFired = false, onHandle = true)) {
+                    moved = true
+                    moveBubbleBy(ev.rawX - downRawX, ev.rawY - downRawY)
+                }
+                return true
+            }
+            MotionEvent.ACTION_UP -> {
+                if (moved) {
+                    snapAndPersist()
+                    moved = false
+                }
+                return true
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                moved = false
                 return true
             }
         }
@@ -410,6 +614,12 @@ class OverlayService : Service(), Dictation.Listener {
 
     private fun removeBubble() {
         // Any hide drops the utterance (focus lost mid-press included).
+        try {
+            mainHandler.removeCallbacks(longPressMove)
+        } catch (_: Exception) {
+        }
+        moved = false
+        moveArmed = false
         try {
             dictation.cancel()
         } catch (_: Exception) {
@@ -420,6 +630,7 @@ class OverlayService : Service(), Dictation.Listener {
         }
         holder = null
         micBtn = null
+        dragHandle = null
     }
 
     private fun refreshMic(recording: Boolean) {
