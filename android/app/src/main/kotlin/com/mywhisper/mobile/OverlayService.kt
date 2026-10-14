@@ -43,6 +43,7 @@ class OverlayService : Service(), Dictation.Listener {
         private const val PREFS = "mw_state"
         private const val KEY_X = "float_x"
         private const val KEY_Y = "float_y"
+        private const val KEY_MOVE_HINT = "float_move_hint_seen"
 
         fun start(ctx: Context) {
             val i = Intent(ctx, OverlayService::class.java).setAction(ACTION_START)
@@ -74,6 +75,8 @@ class OverlayService : Service(), Dictation.Listener {
     private var holder: FrameLayout? = null
     private var micBtn: ImageButton? = null
     private var dragHandle: View? = null
+    private var stopBtn: ImageButton? = null
+    private var spinner: View? = null
     private var params: WindowManager.LayoutParams? = null
 
     private var downRawX = 0f
@@ -81,19 +84,6 @@ class OverlayService : Service(), Dictation.Listener {
     private var baseX = 0
     private var baseY = 0
     private var moved = false
-    private var moveArmed = false
-    private var micCancelled = false
-    private var workPulse: android.animation.ObjectAnimator? = null
-
-    /**
-     * Long-press-to-move fallback (the drag handle is small): fires
-     * only while the mic touch is still down and unmoved. Never touches
-     * Dictation itself — arming move mode must not cost a recording.
-     */
-    private val longPressMove = Runnable {
-        moveArmed = true
-        tick(60)
-    }
 
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
@@ -402,25 +392,27 @@ class OverlayService : Service(), Dictation.Listener {
     }
 
     /**
-     * Bubble chrome: the mic button talks, the corner grip moves.
-     * Split controls (ux P0): touching the mic never moves the bubble
-     * and never cancels the utterance — only the grip, or a mic
-     * long-press followed by a drag, enters move mode. The persisted
-     * position is clamped into the live window on show, so a rotation
-     * or fold never strands the bubble off-screen.
+     * Bubble chrome: the mic button talks, the grip moves, the stop
+     * button stops. Split controls (owner UX): the grip is the ONLY
+     * move affordance — always visible, 48dp touch target, first-run
+     * hint. Touching the mic never moves the bubble and never cancels:
+     * tap / long-press / drag on the mic is pure Dictation input. The
+     * persisted position is clamped into the live window on show, so a
+     * rotation or fold never strands the bubble off-screen.
      */
     @SuppressLint("ClickableViewAccessibility")
     private fun showBubble() {
         if (holder != null) {
-            refreshMic(false)
+            refreshChrome(Dictation.State.IDLE)
             return
         }
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
 
         val size = dp(60)
-        val gripTouch = dp(32)
-        val rootW = size + gripTouch / 2
-        val rootH = size + gripTouch / 2
+        val gripTouch = dp(48)
+        val stopSize = dp(32)
+        val rootW = size + stopSize + dp(8)
+        val rootH = size + gripTouch / 2 + dp(8)
         val lp = WindowManager.LayoutParams(
             rootW, rootH,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
@@ -440,7 +432,7 @@ class OverlayService : Service(), Dictation.Listener {
 
         val root = FrameLayout(this)
         val mic = ImageButton(this).apply {
-            setImageResource(R.drawable.ic_stat_sync)
+            setImageResource(R.drawable.ic_mic)
             contentDescription = getString(R.string.ime_mic)
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
@@ -454,10 +446,52 @@ class OverlayService : Service(), Dictation.Listener {
         }
         micBtn = mic
         root.addView(mic)
+        // Calm processing indicator: small indeterminate spinner
+        // centered on the mic, visible only while WORKING. Static —
+        // no scale/alpha pulsing on the mic itself.
+        val spin = android.widget.ProgressBar(this).apply {
+            isIndeterminate = true
+            contentDescription = getString(R.string.float_processing)
+            isClickable = false
+            isFocusable = false
+            layoutParams = FrameLayout.LayoutParams(dp(28), dp(28), Gravity.TOP or Gravity.START).apply {
+                // Center over the mic glyph.
+                leftMargin = (size - dp(28)) / 2
+                topMargin = (size - dp(28)) / 2
+            }
+            visibility = View.GONE
+        }
+        spinner = spin
+        root.addView(spin)
+        // Explicit stop affordance: always visible while RECORDING or
+        // WORKING, hidden while IDLE. Tap stops (finish/commit from
+        // RECORDING, cancel/discard from WORKING).
+        val stop = ImageButton(this).apply {
+            setImageResource(android.R.drawable.ic_menu_close_clear_cancel)
+            contentDescription = getString(R.string.float_stop)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(0xFFB3261E.toInt())
+            }
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+            elevation = dp(7).toFloat()
+            layoutParams = FrameLayout.LayoutParams(stopSize, stopSize, Gravity.TOP or Gravity.END)
+            visibility = View.GONE
+            setOnClickListener { onStopTap() }
+        }
+        stopBtn = stop
+        root.addView(stop)
+        // Grip: the ONLY move affordance. Always visible (opaque
+        // rounded tab + white pill), 48dp touch target, bottom-end.
         val grip = FrameLayout(this).apply {
             contentDescription = getString(R.string.float_drag_handle)
             elevation = dp(7).toFloat()
-            layoutParams = FrameLayout.LayoutParams(gripTouch, gripTouch, Gravity.BOTTOM or Gravity.END)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dp(12).toFloat()
+                setColor(0xCC1D1B20.toInt())
+            }
+            layoutParams = FrameLayout.LayoutParams(gripTouch, dp(24), Gravity.BOTTOM or Gravity.END)
             setOnTouchListener { _, ev -> onHandleTouch(ev) }
         }
         val pill = View(this).apply {
@@ -466,9 +500,9 @@ class OverlayService : Service(), Dictation.Listener {
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
                 cornerRadius = dp(3).toFloat()
-                setColor(0xB3FFFFFF.toInt())
+                setColor(0xFFFFFFFF.toInt())
             }
-            layoutParams = FrameLayout.LayoutParams(dp(16), dp(5), Gravity.CENTER)
+            layoutParams = FrameLayout.LayoutParams(dp(24), dp(5), Gravity.CENTER)
         }
         grip.addView(pill)
         dragHandle = grip
@@ -486,10 +520,19 @@ class OverlayService : Service(), Dictation.Listener {
             holder = null
             micBtn = null
             dragHandle = null
+            stopBtn = null
+            spinner = null
             stopSelf()
             return
         }
-        refreshMic(false)
+        // First-run move hint: once, until the user drags the grip.
+        try {
+            if (FloatState.shouldShowMoveHint(prefs.getBoolean(KEY_MOVE_HINT, false))) {
+                Toast.makeText(this, getString(R.string.float_move_hint), Toast.LENGTH_LONG).show()
+            }
+        } catch (_: Exception) {
+        }
+        refreshChrome(Dictation.State.IDLE)
     }
 
     /** Live window bounds minus system insets (re-queried per move: fold/rotate-safe). */
@@ -558,10 +601,10 @@ class OverlayService : Service(), Dictation.Listener {
     }
 
     /**
-     * Mic touch: talk only. Stray movement is ignored — it neither
-     * moves the bubble nor cancels the utterance — except the
-     * deliberate slide-down (same 90dp threshold as the IME, with its
-     * toast). A tap therefore never destroys a recording (ux P0).
+     * Mic touch: talk only. Movement is ignored — it neither moves the
+     * bubble nor cancels the utterance. The grip is the only way to
+     * move; the stop button is the only explicit stop. A tap therefore
+     * never destroys a recording (owner UX).
      */
     private fun onMicTouch(ev: MotionEvent): Boolean {
         when (ev.actionMasked) {
@@ -570,60 +613,22 @@ class OverlayService : Service(), Dictation.Listener {
                 downRawY = ev.rawY
                 params?.let { baseX = it.x; baseY = it.y }
                 moved = false
-                moveArmed = false
-                micCancelled = false
-                mainHandler.removeCallbacks(longPressMove)
-                mainHandler.postDelayed(
-                    longPressMove,
-                    android.view.ViewConfiguration.getLongPressTimeout().toLong(),
-                )
                 tick()
                 dictation.pressDown()
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
-                if (!moveArmed && !micCancelled && ev.rawY - downRawY > dp(90)) {
-                    // Deliberate slide-down cancel (IME parity).
-                    micCancelled = true
-                    mainHandler.removeCallbacks(longPressMove)
-                    dictation.cancel()
-                    tick(60)
-                    Toast.makeText(this, getString(R.string.ime_cancelled), Toast.LENGTH_SHORT).show()
-                    return true
-                }
-                val dist = kotlin.math.hypot(
-                    (ev.rawX - downRawX).toDouble(),
-                    (ev.rawY - downRawY).toDouble(),
-                ).toFloat()
-                if (!micCancelled &&
-                    FloatState.shouldArmMove(dist, dp(10).toFloat(), moveArmed, onHandle = false)
-                ) {
-                    // Long-press move: reposition under the finger, keep
-                    // the utterance alive — moving never destroys it.
-                    moved = true
-                    moveBubbleBy(ev.rawX - downRawX, ev.rawY - downRawY)
-                }
+                // Deliberately ignored: mic drag never moves, never cancels.
                 return true
             }
             MotionEvent.ACTION_UP -> {
-                mainHandler.removeCallbacks(longPressMove)
-                if (moved) {
-                    // Explicit move gesture: dock, leave Dictation state
-                    // untouched (a recording keeps running; tap stops).
-                    snapAndPersist()
-                    moved = false
-                    moveArmed = false
-                    return true
-                }
-                moveArmed = false
+                moved = false
                 tick()
                 dictation.pressUp()
                 return true
             }
             MotionEvent.ACTION_CANCEL -> {
-                mainHandler.removeCallbacks(longPressMove)
                 moved = false
-                moveArmed = false
                 dictation.cancel()
                 return true
             }
@@ -633,7 +638,8 @@ class OverlayService : Service(), Dictation.Listener {
 
     /**
      * Grip touch: move only, never Dictation. A drag here can neither
-     * start nor cancel a recording; release docks to the edge.
+     * start nor cancel a recording; release docks to the edge and marks
+     * the first-run hint seen.
      */
     private fun onHandleTouch(ev: MotionEvent): Boolean {
         when (ev.actionMasked) {
@@ -650,7 +656,7 @@ class OverlayService : Service(), Dictation.Listener {
                     (ev.rawX - downRawX).toDouble(),
                     (ev.rawY - downRawY).toDouble(),
                 ).toFloat()
-                if (FloatState.shouldArmMove(dist, dp(10).toFloat(), longPressFired = false, onHandle = true)) {
+                if (FloatState.shouldArmMove(dist, dp(10).toFloat(), onHandle = true)) {
                     moved = true
                     moveBubbleBy(ev.rawX - downRawX, ev.rawY - downRawY)
                 }
@@ -660,6 +666,7 @@ class OverlayService : Service(), Dictation.Listener {
                 if (moved) {
                     snapAndPersist()
                     moved = false
+                    markMoveHintSeen()
                 }
                 return true
             }
@@ -671,14 +678,42 @@ class OverlayService : Service(), Dictation.Listener {
         return false
     }
 
-    private fun removeBubble() {
-        // Any hide drops the utterance (focus lost mid-press included).
+    private fun markMoveHintSeen() {
         try {
-            mainHandler.removeCallbacks(longPressMove)
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                .putBoolean(KEY_MOVE_HINT, true).apply()
         } catch (_: Exception) {
         }
+    }
+
+    /**
+     * Explicit stop tap (owner UX): visible while RECORDING or
+     * WORKING. RECORDING finishes (commit — two press pairs so a Tap
+     * first-hold that only toggled still stops; the second pair
+     * no-ops once WORKING/IDLE). WORKING cancels (discard). IDLE is
+     * unreachable (button hidden) and no-ops.
+     */
+    private fun onStopTap() {
+        tick()
+        when (FloatState.stopAction(dictation.current)) {
+            FloatState.StopAction.FINISH -> {
+                dictation.pressDown()
+                dictation.pressUp()
+                // Tap-mode first-hold only toggled above: still
+                // RECORDING, so the second press finishes for real.
+                if (dictation.current == Dictation.State.RECORDING) {
+                    dictation.pressDown()
+                    dictation.pressUp()
+                }
+            }
+            FloatState.StopAction.CANCEL -> dictation.cancel()
+            FloatState.StopAction.NONE -> Unit
+        }
+    }
+
+    private fun removeBubble() {
+        // Any hide drops the utterance (focus lost mid-press included).
         moved = false
-        moveArmed = false
         try {
             dictation.cancel()
         } catch (_: Exception) {
@@ -690,70 +725,58 @@ class OverlayService : Service(), Dictation.Listener {
         holder = null
         micBtn = null
         dragHandle = null
+        stopBtn = null
+        spinner = null
     }
 
-    private fun refreshMic(recording: Boolean) {
-        micBtn?.setBackground(
-            GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(if (recording) 0xFFB3261E.toInt() else 0xFF6750A4.toInt())
-            },
-        )
+    /**
+     * Bubble chrome per state (owner UX): RECORDING reads red-mic +
+     * stop, WORKING reads dimmed mic + small spinner + stop (calm
+     * processing, no pulsing), IDLE reads purple mic with stop and
+     * spinner hidden. Recording vs processing differ at a glance.
+     */
+    private fun refreshChrome(state: Dictation.State) {
+        val recording = FloatState.isRecording(state)
+        val processing = FloatState.isProcessing(state)
+        micBtn?.apply {
+            setBackground(
+                GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(
+                        when {
+                            recording -> 0xFFB3261E.toInt()
+                            processing -> 0xFF4F378B.toInt()
+                            else -> 0xFF6750A4.toInt()
+                        },
+                    )
+                },
+            )
+            // Static dim while processing — no animation, no pulse.
+            alpha = if (processing) 0.6f else 1f
+        }
+        spinner?.visibility = if (processing) View.VISIBLE else View.GONE
+        stopBtn?.visibility =
+            if (FloatState.isStopVisible(state)) View.VISIBLE else View.GONE
     }
 
     // -- Dictation.Listener ----------------------------------------------
 
     override fun onState(s: Dictation.State, toggled: Boolean) {
         micBtn?.post {
-            refreshMic(s == Dictation.State.RECORDING)
-            // Processing feedback: pulse while transcribing.
-            if (s == Dictation.State.WORKING) {
-                startWorkPulse()
-            } else {
-                stopWorkPulse()
-            }
+            refreshChrome(s)
         }
         refreshNotif(s)
     }
 
-    /** Gentle alpha pulse while the server works. */
-    private fun startWorkPulse() {
-        if (workPulse != null) return
-        val btn = micBtn ?: return
-        try {
-            workPulse = android.animation.ObjectAnimator
-                .ofFloat(btn, View.ALPHA, 1f, 0.55f)
-                .apply {
-                    duration = 600
-                    repeatCount = android.animation.ValueAnimator.INFINITE
-                    repeatMode = android.animation.ValueAnimator.REVERSE
-                    start()
-                }
-        } catch (_: Exception) {
-        }
-    }
-
-    private fun stopWorkPulse() {
-        try {
-            workPulse?.cancel()
-        } catch (_: Exception) {
-        }
-        workPulse = null
-        try {
-            micBtn?.alpha = 1f
-        } catch (_: Exception) {
-        }
-    }
-
     override fun onResult(text: String) {
-        micBtn?.post { refreshMic(false) }
+        micBtn?.post { refreshChrome(Dictation.State.IDLE) }
         deliver(text)
     }
 
     private val bgWorkers = java.util.concurrent.Executors.newSingleThreadExecutor()
 
     override fun onError(msg: String) {
-        micBtn?.post { refreshMic(false) }
+        micBtn?.post { refreshChrome(Dictation.State.IDLE) }
         // Surface errors where the user looks: the bubble has no
         // text row, so only failures that matter get a toast.
         // Listener fires off the main thread — post the toast.

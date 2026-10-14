@@ -116,19 +116,51 @@ object FloatState {
         )
 
     /**
-     * Move arming (ux P0: a tap never destroys a recording): the bubble
-     * moves only from the drag handle past touch slop, or — for a fat
-     * finger that misses the handle — after a long-press on the mic
-     * plus movement. Anything else is a tap/hold: pure Dictation input,
-     * never a drag, never a cancel.
+     * Move arming (owner UX: grip is the ONLY move affordance): the
+     * bubble moves only from the drag handle past touch slop. Mic
+     * tap / long-press / drag never arms a move — pure Dictation
+     * input, never a drag, never a cancel.
      */
     fun shouldArmMove(
         movedPx: Float,
         slopPx: Float,
-        longPressFired: Boolean,
         onHandle: Boolean,
     ): Boolean =
-        (onHandle || longPressFired) && movedPx > slopPx
+        onHandle && movedPx > slopPx
+
+    /** Stop affordance: always visible while active (RECORDING or WORKING). */
+    fun isStopVisible(state: Dictation.State): Boolean =
+        state != Dictation.State.IDLE
+
+    /** Calm processing treatment (spinner + dim, no pulse) while WORKING. */
+    fun isProcessing(state: Dictation.State): Boolean =
+        state == Dictation.State.WORKING
+
+    /** Recording treatment (red mic, no spinner) while RECORDING. */
+    fun isRecording(state: Dictation.State): Boolean =
+        state == Dictation.State.RECORDING
+
+    /**
+     * Stop-tap decision matrix: RECORDING stops with commit (finish),
+     * WORKING stops with discard (cancel), IDLE is a no-op. The tap
+     * itself is mode-agnostic — per-mode commit semantics live in
+     * [Dictation] (tap/hold/smart finish paths).
+     */
+    enum class StopAction { FINISH, CANCEL, NONE }
+
+    fun stopAction(state: Dictation.State): StopAction =
+        when (state) {
+            Dictation.State.RECORDING -> StopAction.FINISH
+            Dictation.State.WORKING -> StopAction.CANCEL
+            Dictation.State.IDLE -> StopAction.NONE
+        }
+
+    /**
+     * First-run move hint: shown once until the user has moved the
+     * bubble via the grip (persisted by the service). Pure so tests
+     * pin the once-only rule.
+     */
+    fun shouldShowMoveHint(hasSeenHint: Boolean): Boolean = !hasSeenHint
 
     /** Record an overlay denial; returns the latch (always true). */
     fun recordOverlayDenial(): Boolean {
