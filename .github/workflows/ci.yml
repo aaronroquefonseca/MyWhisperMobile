@@ -1,0 +1,88 @@
+name: ci
+
+# First CI for this repo (no .github/ before). Unit-only gates, no emulator,
+# no device, no signing secrets. Patterns ported from the parent repo's
+# release.yml: PR+push triggers, pinned toolchains, cache actions, least
+# privilege, generous timeouts with caching to stay fast (<20 min typical).
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: core
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable action
+        with:
+          toolchain: 1.99.0
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: core
+      - name: Formatting, strict lint and unit tests
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked
+
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-java@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+        with:
+          api-level: 36
+          build-tools: 36.0.0
+          ndk: 28.2.13676358
+          cmake: 3.22.1
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable action
+        with:
+          toolchain: 1.99.0
+          targets: aarch64-linux-android, x86_64-linux-android
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          # Cache the NDK .so build too (scripts/build-core.sh runs under
+          # core/target via cargo-ndk, shared with the rust job's cache).
+          workspaces: core
+      - name: Install cargo-ndk
+        working-directory: core
+        run: cargo install --locked cargo-ndk --version 4.1.2
+      # Gradle build cache + configuration cache; no daemon issues on GH runners.
+      - uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d # v4
+      - name: Lint (errors fail), unit tests, unsigned debug APK
+        # lintDebug aborts on error severity by default; no emulator, no device.
+        # assembleDebug is unsigned (release signing needs secrets, out of scope).
+        run: |
+          ./gradlew :app:lintDebug
+          ./gradlew :app:testDebugUnitTest
+          ./gradlew :app:assembleDebug
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: app-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7
