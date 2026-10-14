@@ -13,7 +13,8 @@
 //! over concurrent edits only when newer (same LWW rule).
 
 use rusqlite::Connection;
-use std::path::Path;
+use rusqlite::OptionalExtension;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::settings::{AppSettings, HistoryEntry, Snippet};
@@ -73,6 +74,13 @@ CREATE TABLE IF NOT EXISTS sync_meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+-- Revoked peers: removals survive as a durable deny-list so a stale
+-- gossip entry or retained row on another device cannot re-add them.
+-- (Desktop #18 port: revocation is local-durable; gossiped revocation
+-- is deferred to avoid a wire change.)
+CREATE TABLE IF NOT EXISTS revoked_devices (
+    node_id TEXT PRIMARY KEY
+);
 -- Insights read pattern: per-day aggregates over a trailing window.
 -- Indexed so it stays a single range scan at any realistic volume.
 CREATE INDEX IF NOT EXISTS history_recorded ON history (recorded_at);
@@ -116,8 +124,15 @@ fn bump_gen(conn: &Connection) {
     );
 }
 
+/// `(dev, ino)` snapshot of the database file, taken at open.
+fn file_identity_of(path: &Path) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(path).ok().map(|m| (m.dev(), m.ino()))
+}
+
 pub struct Store {
     conn: Connection,
+    file_identity: Option<(u64, u64)>,
 }
 
 static HISTORY_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -127,6 +142,14 @@ fn has_column(conn: &Connection, table: &str, column: &str) -> bool {
         .is_ok()
 }
 
+/// Node ids are 64 hex chars (the hex-encoded ed25519 identity key).
+/// Local copy of the desktop `device::valid_node_id` check so peer
+/// bookkeeping never stores a malformed identity (device.rs is outside
+/// this port's owned files).
+fn valid_node_id(id: &str) -> bool {
+    id.len() == 64 && id.chars().all(|c| c.is_ascii_hexdigit())
+}
+
 /// Database encryption key (32 bytes). Order: explicit env override
 /// (headless/testing) first, otherwise the OS keyring, creating and
 /// storing a random key on first run.
@@ -134,11 +157,20 @@ fn has_column(conn: &Connection, table: &str, column: &str) -> bool {
 /// ANDROID PORT (see core/README.md): on Android the key comes from
 /// `MYWHISPER_DB_KEY`, set in-process by JNI `nativeOpen` from a
 /// Keystore-backed EncryptedSharedPreferences value. This is the
-/// direct equivalent of the desktop Secret Service entry.
+/// direct equivalent of the desktop Secret Service entry, with the
+/// same bounded semantics: a single read, no fallback, no default —
+/// a missing key and a malformed key fail with distinct errors, and a
+/// missing key is never silently replaced (desktop `database_key.rs`
+/// write-once provisioning).
 fn db_key() -> Result<[u8; 32], String> {
     if let Ok(hexkey) = std::env::var("MYWHISPER_DB_KEY") {
-        return hex_decode_key(&hexkey)
-            .ok_or_else(|| "MYWHISPER_DB_KEY must be 64 hex chars".to_string());
+        let hexkey = hexkey.trim().to_string();
+        if hexkey.len() != 64 {
+            return Err("MYWHISPER_DB_KEY must be 64 hex chars".to_string());
+        }
+        return hex_decode_key(&hexkey).ok_or_else(|| {
+            "MYWHISPER_DB_KEY is malformed (not hex); original key preserved".to_string()
+        });
     }
     #[cfg(target_os = "android")]
     return Err("MYWHISPER_DB_KEY not set (nativeOpen must provide the Keystore key)".to_string());
@@ -219,13 +251,92 @@ fn remove_sidecars(path: &Path) {
     }
 }
 
+/// Exclusive migration guard (one per database path). At most one
+/// process may create or migrate the database at a time: App + IME run
+/// as separate processes on the same `state.db`. A live holder fails
+/// the second opener fast instead of racing the plaintext→encrypted
+/// replace; a stale lock (dead pid, e.g. crash mid-migration) is
+/// reclaimed once. (Desktop #18 serializes this with
+/// `private_fs::lock` on `db.init.lock`.)
+struct MigrateGuard {
+    path: PathBuf,
+}
+
+fn acquire_migrate_lock(path: &Path) -> rusqlite::Result<MigrateGuard> {
+    let lock = path.with_extension("db.migrate.lock");
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&lock)
+    {
+        Ok(mut f) => {
+            use std::io::Write;
+            let _ = write!(f, "{}", std::process::id());
+            return Ok(MigrateGuard { path: lock.clone() });
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => {
+            return Err(rusqlite::Error::ToSqlConversionFailure(
+                format!("migration lock: {e}").into(),
+            ));
+        }
+    }
+    // Lock file exists: live holder blocks us, stale lock is reclaimed.
+    let stale = std::fs::read_to_string(&lock)
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .map(|pid| !std::path::Path::new(&format!("/proc/{pid}")).exists())
+        .unwrap_or(true);
+    if !stale {
+        return Err(rusqlite::Error::ToSqlConversionFailure(
+            "database migration already in progress in another process".into(),
+        ));
+    }
+    let _ = std::fs::remove_file(&lock);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&lock)
+        .map_err(|e| {
+            rusqlite::Error::ToSqlConversionFailure(format!("migration lock: {e}").into())
+        })?;
+    std::fs::write(&lock, std::process::id().to_string()).map_err(|e| {
+        rusqlite::Error::ToSqlConversionFailure(format!("migration lock: {e}").into())
+    })?;
+    Ok(MigrateGuard { path: lock })
+}
+
+impl Drop for MigrateGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
 /// Encrypt a legacy plaintext database in place via a temp file:
 /// attach fresh encrypted db, export, atomically replace.
+///
+/// The staging file is pre-created mode 0600 before any encrypted
+/// bytes land (desktop #18 pins the staging file 0600 for the same
+/// reason), and stale plaintext sidecars are wiped after the rename.
 fn migrate_plaintext_to_encrypted(path: &Path, key: &[u8; 32]) -> rusqlite::Result<()> {
     let tmp = path.with_extension("db.migrating");
     let _ = std::fs::remove_file(&tmp);
     remove_sidecars(&tmp);
+    // Pre-create the staging file with owner-only permissions so the
+    // encrypted copy never inherits a permissive umask.
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&tmp)
+            .map_err(|e| {
+                rusqlite::Error::ToSqlConversionFailure(format!("migration staging: {e}").into())
+            })?;
+    }
     let plain = Connection::open(path)?;
+    plain.busy_timeout(std::time::Duration::from_secs(5))?;
     let attach = format!(
         "ATTACH DATABASE '{}' AS enc KEY \"x'{}'\"",
         tmp.to_string_lossy().replace('\'', "''"),
@@ -245,11 +356,23 @@ fn migrate_plaintext_to_encrypted(path: &Path, key: &[u8; 32]) -> rusqlite::Resu
 }
 
 impl Store {
+    /// Open (or create + migrate) the database. Serialized across
+    /// processes by the migration guard; the guard is held for the
+    /// whole open so a second process can never observe a half-replaced
+    /// file.
     pub fn open(path: &Path) -> rusqlite::Result<Self> {
+        let _guard = acquire_migrate_lock(path)?;
+        Self::open_locked(path)
+    }
+
+    fn open_locked(path: &Path) -> rusqlite::Result<Self> {
         let key = db_key()
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(format!("db key: {e}").into()))?;
         let fresh = !path.exists();
         let conn = Connection::open(path)?;
+        // App + IME are separate processes on the same file: wait on
+        // the writer instead of failing the open with SQLITE_BUSY.
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
         conn.execute_batch(&key_pragma(&key))?;
         // Probing a wrongly-keyed (or plaintext) file fails here.
         let probe = conn.query_row("SELECT count(*) FROM sqlite_master", [], |r| {
@@ -261,10 +384,22 @@ impl Store {
                 drop(conn);
                 eprintln!("[store] plaintext database found, encrypting in place");
                 migrate_plaintext_to_encrypted(path, &key)?;
-                return Self::open(path);
+                return Self::open_locked(path);
             }
             return Err(err);
         }
+        // Refuse to open a database written by a newer build instead of
+        // silently running on a schema we do not understand.
+        let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        if version > 2 {
+            return Err(rusqlite::Error::ToSqlConversionFailure(
+                "database schema is newer than this MyWhisper build".into(),
+            ));
+        }
+        // Snapshot the file identity now: sync export/apply paths abort
+        // when the file was replaced under us (desktop #18
+        // file-identity check).
+        let file_identity = file_identity_of(path);
         conn.execute_batch(SCHEMA)?;
         // Best-effort migration for pre-existing databases: SQLite has
         // no ADD COLUMN IF NOT EXISTS, so a duplicate-column failure
@@ -308,7 +443,112 @@ impl Store {
         // Rows predating raw_text carry the final text as raw (the
         // pipeline was passthrough then, so this is exact).
         let _ = conn.execute("UPDATE history SET raw_text = text WHERE raw_text = ''", []);
-        Ok(Self { conn })
+        Ok(Self {
+            conn,
+            file_identity,
+        })
+    }
+
+    /// Durable sync-authorization epoch: bumped on every trust/topology
+    /// change (peer add/remove/trust, revocation, reset). Sync rounds
+    /// capture it up front and re-check it inside the commit
+    /// transaction, so a concurrently revoked or disabled peer cannot
+    /// slip a round through. (Desktop #18 `policy_epoch`.)
+    pub fn sync_epoch(&self) -> i64 {
+        self.conn
+            .query_row(
+                "SELECT CAST(value AS INTEGER) FROM sync_meta WHERE key = 'policy_epoch'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(0)
+    }
+
+    fn invalidate_sync(conn: &Connection) -> rusqlite::Result<()> {
+        conn.execute(
+            "INSERT INTO sync_meta (key, value) VALUES ('policy_epoch', '1')
+             ON CONFLICT (key) DO UPDATE SET value = CAST(value AS INTEGER) + 1",
+            [],
+        )?;
+        Ok(())
+    }
+
+    /// Abort when the database file was replaced under this connection
+    /// (restore/re-migration swapped the inode). Export/apply call this
+    /// inside their transaction so no round commits against a stale file.
+    fn check_sync_identity(&self) -> rusqlite::Result<()> {
+        let Some((dev, ino)) = self.file_identity else {
+            return Ok(());
+        };
+        // Resolve via the connection path when available.
+        let current = self
+            .conn
+            .path()
+            .filter(|p| !p.is_empty())
+            .and_then(|p| file_identity_of(Path::new(p)));
+        match current {
+            Some(cur) if cur == (dev, ino) => Ok(()),
+            Some(_) => Err(rusqlite::Error::ToSqlConversionFailure(
+                "database replaced during sync; retry".into(),
+            )),
+            // In-memory or pathless connections have nothing to check.
+            None => Ok(()),
+        }
+    }
+
+    /// Monotonic LWW clock: `MAX(now, words, snippets, stored) + 1`.
+    /// Wall-clock writes alone break convergence (a future-dated peer
+    /// would win forever; equal timestamps fall back to node-id order
+    /// only when actually equal). Checked arithmetic: overflow near
+    /// `i64::MAX` surfaces an error instead of wrapping negative and
+    /// resurrecting deleted rows. (Desktop #18 `next_version`.)
+    fn next_version(conn: &Connection) -> rusqlite::Result<i64> {
+        let now = now_ms();
+        let max_words: i64 = conn
+            .query_row("SELECT COALESCE(MAX(updated_at), 0) FROM words", [], |r| {
+                r.get(0)
+            })
+            .unwrap_or(0);
+        let max_snippets: i64 = conn
+            .query_row(
+                "SELECT COALESCE(MAX(updated_at), 0) FROM snippets",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        let stored: i64 = conn
+            .query_row(
+                "SELECT CAST(value AS INTEGER) FROM sync_meta WHERE key = 'clock'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?
+            .unwrap_or(0);
+        let base = now.max(max_words).max(max_snippets).max(stored);
+        let next = base.checked_add(1).ok_or_else(|| {
+            rusqlite::Error::ToSqlConversionFailure(
+                "monotonic sync clock overflow; reset required".into(),
+            )
+        })?;
+        conn.query_row(
+            "INSERT INTO sync_meta (key, value) VALUES ('clock', ?1)
+             ON CONFLICT (key) DO UPDATE SET value = MAX(CAST(value AS INTEGER), ?1)
+             RETURNING CAST(value AS INTEGER)",
+            [next],
+            |r| r.get(0),
+        )
+    }
+
+    /// Far-future versions (beyond a 7-day horizon) are rejected: a
+    /// peer with a runaway clock must not poison LWW ordering forever.
+    /// Old versions always pass (delayed/duplicate delivery is normal).
+    fn validate_version(version: i64) -> rusqlite::Result<()> {
+        if version < 0 || version > now_ms().saturating_add(7 * 86_400_000) {
+            return Err(rusqlite::Error::ToSqlConversionFailure(
+                "remote version outside accepted clock horizon".into(),
+            ));
+        }
+        Ok(())
     }
 
     /// Checkpoint the WAL back into the database file. Call on clean
@@ -382,24 +622,44 @@ impl Store {
         stmt.query_map([], |row| row.get(0))?.collect()
     }
 
-    /// Local write: add or resurrect a word.
+    /// Local write: add or resurrect a word. Versioned with the
+    /// monotonic clock (never wall-clock alone) so a skewed clock or a
+    /// racing peer cannot silently win.
     pub fn upsert_word(&self, word: &str, node_id: &str) -> rusqlite::Result<()> {
-        self.apply_words(&[WordRecord {
-            word: word.to_string(),
-            updated_at: now_ms(),
-            updated_by: node_id.to_string(),
-            deleted: false,
-        }])
+        let tx = self.conn.unchecked_transaction()?;
+        let version = Self::next_version(&tx)?;
+        Self::apply_words_on(
+            &tx,
+            &[WordRecord {
+                word: word.to_string(),
+                updated_at: version,
+                updated_by: node_id.to_string(),
+                deleted: false,
+            }],
+        )?;
+        bump_gen(&tx);
+        tx.commit()?;
+        bump_data_gen();
+        Ok(())
     }
 
     /// Local write: tombstone a word (propagates as a delete).
     pub fn delete_word(&self, word: &str, node_id: &str) -> rusqlite::Result<()> {
-        self.apply_words(&[WordRecord {
-            word: word.to_string(),
-            updated_at: now_ms(),
-            updated_by: node_id.to_string(),
-            deleted: true,
-        }])
+        let tx = self.conn.unchecked_transaction()?;
+        let version = Self::next_version(&tx)?;
+        Self::apply_words_on(
+            &tx,
+            &[WordRecord {
+                word: word.to_string(),
+                updated_at: version,
+                updated_by: node_id.to_string(),
+                deleted: true,
+            }],
+        )?;
+        bump_gen(&tx);
+        tx.commit()?;
+        bump_data_gen();
+        Ok(())
     }
 
     pub fn load_snippets(&self) -> rusqlite::Result<Vec<Snippet>> {
@@ -415,31 +675,49 @@ impl Store {
         .collect()
     }
 
-    /// Local write: add/update a snippet.
+    /// Local write: add/update a snippet (monotonic version, like words).
     pub fn upsert_snippet(
         &self,
         trigger: &str,
         replacement: &str,
         node_id: &str,
     ) -> rusqlite::Result<()> {
-        self.apply_snippets(&[SnippetRecord {
-            trigger: trigger.to_string(),
-            replacement: replacement.to_string(),
-            updated_at: now_ms(),
-            updated_by: node_id.to_string(),
-            deleted: false,
-        }])
+        let tx = self.conn.unchecked_transaction()?;
+        let version = Self::next_version(&tx)?;
+        Self::apply_snippets_on(
+            &tx,
+            &[SnippetRecord {
+                trigger: trigger.to_string(),
+                replacement: replacement.to_string(),
+                updated_at: version,
+                updated_by: node_id.to_string(),
+                deleted: false,
+            }],
+        )?;
+        bump_gen(&tx);
+        tx.commit()?;
+        bump_data_gen();
+        Ok(())
     }
 
     /// Local write: tombstone a snippet.
     pub fn delete_snippet(&self, trigger: &str, node_id: &str) -> rusqlite::Result<()> {
-        self.apply_snippets(&[SnippetRecord {
-            trigger: trigger.to_string(),
-            replacement: String::new(),
-            updated_at: now_ms(),
-            updated_by: node_id.to_string(),
-            deleted: true,
-        }])
+        let tx = self.conn.unchecked_transaction()?;
+        let version = Self::next_version(&tx)?;
+        Self::apply_snippets_on(
+            &tx,
+            &[SnippetRecord {
+                trigger: trigger.to_string(),
+                replacement: String::new(),
+                updated_at: version,
+                updated_by: node_id.to_string(),
+                deleted: true,
+            }],
+        )?;
+        bump_gen(&tx);
+        tx.commit()?;
+        bump_data_gen();
+        Ok(())
     }
 
     // -- history (append-only, union by uuid) ---------------------------------
@@ -470,34 +748,64 @@ impl Store {
         .collect()
     }
 
-    /// Local delete: tombstone, so the row stays deleted across sync
-    /// (union-by-uuid would otherwise resurrect it from a peer).
+    /// Local delete: tombstone + redact, so the row stays deleted across
+    /// sync (union-by-uuid would otherwise resurrect it from a peer)
+    /// and no plaintext survives locally or on the wire.
     pub fn delete_history(&self, uuid: &str) -> rusqlite::Result<()> {
-        self.conn
-            .execute("UPDATE history SET deleted = 1 WHERE uuid = ?1", [uuid])?;
-        bump_data_gen();
-        bump_gen(&self.conn);
+        let tx = self.conn.unchecked_transaction()?;
+        let n = tx.execute(
+            "UPDATE history
+             SET deleted = 1, text = '', raw_text = '', words = 0, duration_secs = 0
+             WHERE uuid = ?1 AND deleted = 0",
+            [uuid],
+        )?;
+        if n > 0 {
+            Self::invalidate_sync(&tx)?;
+            bump_gen(&tx);
+        }
+        tx.commit()?;
+        if n > 0 {
+            bump_data_gen();
+        }
         Ok(())
     }
 
-    /// Delete history rows with no duration (pre-fix data that pins
-    /// words-per-minute at 0). Returns rows removed.
+    /// Redact history rows with no duration (pre-fix data that pins
+    /// words-per-minute at 0). Tombstones, not deletes: dropping rows
+    /// would let a peer resurrect them on the next sync.
     pub fn delete_zero_duration_history(&self) -> rusqlite::Result<usize> {
-        Ok(self
-            .conn
-            .execute("DELETE FROM history WHERE duration_secs <= 0", [])?)
+        self.redact_history_where("duration_secs <= 0", [])
     }
 
-    /// Clear all transcript history (tombstones survive: dropping
-    /// them would resurrect peers' rows on next sync). Returns rows
-    /// removed.
+    /// Clear all transcript payloads while preserving replicated
+    /// deletion identities (tombstones). Returns rows redacted.
     pub fn clear_history(&self) -> rusqlite::Result<usize> {
-        let n = self
-            .conn
-            .execute("UPDATE history SET deleted = 1 WHERE deleted = 0", [])?;
-        bump_data_gen();
-        bump_gen(&self.conn);
-        Ok(n)
+        self.redact_history_where("1", [])
+    }
+
+    fn redact_history_where(
+        &self,
+        predicate: &str,
+        params: impl rusqlite::Params,
+    ) -> rusqlite::Result<usize> {
+        let tx = self.conn.unchecked_transaction()?;
+        let count = tx.execute(
+            &format!(
+                "UPDATE history
+                 SET deleted = 1, text = '', raw_text = '', words = 0, duration_secs = 0
+                 WHERE deleted = 0 AND ({predicate})"
+            ),
+            params,
+        )?;
+        if count > 0 {
+            Self::invalidate_sync(&tx)?;
+            bump_gen(&tx);
+        }
+        tx.commit()?;
+        if count > 0 {
+            bump_data_gen();
+        }
+        Ok(count)
     }
 
     /// One-shot service commands (GUI -> service): "stop"/"start"
@@ -632,27 +940,55 @@ impl Store {
     /// Reset all user data: history (incl. tombstones), words,
     /// snippets, stored settings. Devices/sync_meta survive (topology,
     /// not data). Callers reset in-memory state + persist defaults.
+    /// Reset all user data. Tombstones and revocations survive (dropping
+    /// them would resurrect peers' rows on the next sync), the sync
+    /// epoch advances so stale authorized exports fail, and sync comes
+    /// back disabled — never re-enabled by a stale default. One
+    /// transaction: the reset is all-or-nothing. (Desktop #18
+    /// `reset_on`, minus the audio-vault/capture-epoch parts, which
+    /// have no Android consumer.)
     pub fn reset_all_data(&self) -> rusqlite::Result<()> {
-        for table in ["history", "words", "snippets", "kv"] {
-            self.conn.execute(&format!("DELETE FROM {table}"), [])?;
-        }
+        let tx = self.conn.unchecked_transaction()?;
+        let version = Self::next_version(&tx)?;
+        tx.execute(
+            "UPDATE history
+             SET deleted = 1, text = '', raw_text = '', words = 0, duration_secs = 0",
+            [],
+        )?;
+        tx.execute("UPDATE words SET deleted = 1, updated_at = ?1", [version])?;
+        tx.execute(
+            "UPDATE snippets SET deleted = 1, replacement = '', updated_at = ?1",
+            [version],
+        )?;
+        tx.execute(
+            "INSERT OR IGNORE INTO revoked_devices SELECT node_id FROM devices",
+            [],
+        )?;
+        tx.execute("DELETE FROM devices", [])?;
+        Self::invalidate_sync(&tx)?;
+        tx.execute("DELETE FROM kv", [])?;
+        let mut defaults = AppSettings::default();
+        defaults.sync.enabled = false;
+        let json = serde_json::to_string(&defaults).map_err(|e| {
+            rusqlite::Error::ToSqlConversionFailure(format!("settings serialize: {e}").into())
+        })?;
+        tx.execute(
+            "INSERT INTO kv (key, value) VALUES ('settings', ?1)",
+            [json],
+        )?;
+        bump_gen(&tx);
+        tx.commit()?;
         bump_data_gen();
-        bump_gen(&self.conn);
         Ok(())
     }
 
-    /// Delete rows older than `days` (auto-delete transcripts).
+    /// Redact rows older than `days` (auto-delete transcripts).
     /// Tombstones survive: dropping them would resurrect peers' rows.
     pub fn purge_old_history(&self, days: u32) -> rusqlite::Result<usize> {
-        let count = self.conn.execute(
-            "UPDATE history SET deleted = 1 WHERE deleted = 0 AND recorded_at < strftime('%s', 'now', ?1)",
+        self.redact_history_where(
+            "recorded_at < strftime('%s', 'now', ?1)",
             [format!("-{days} days")],
-        )?;
-        if count > 0 {
-            bump_data_gen();
-            bump_gen(&self.conn);
-        }
-        Ok(count)
+        )
     }
 
     // -- sync: export + LWW apply --------------------------------------------
@@ -708,116 +1044,305 @@ impl Store {
         .collect()
     }
 
-    /// Returns true when `(new_at, new_by)` strictly beats the stored
-    /// version: the total order behind every conflict decision.
-    fn wins(new_at: i64, new_by: &str, old_at: i64, old_by: &str) -> bool {
-        (new_at, new_by) > (old_at, old_by)
-    }
-
     /// Merge remote word records. Union converges; concurrent edits to
     /// the same word resolve to the newer `(updated_at, updated_by)`.
+    /// One transaction, atomic LWW in SQL (no read-then-write race
+    /// between the App and IME connections).
     pub fn apply_words(&self, records: &[WordRecord]) -> rusqlite::Result<()> {
-        for r in records {
-            let existing: Option<(i64, String)> = self
-                .conn
-                .query_row(
-                    "SELECT updated_at, updated_by FROM words WHERE word = ?1",
-                    [&r.word],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .ok();
-            let take = match existing {
-                None => true,
-                Some((old_at, old_by)) => Self::wins(r.updated_at, &r.updated_by, old_at, &old_by),
-            };
-            if take {
-                self.conn.execute(
-                    "INSERT INTO words (word, updated_at, updated_by, deleted)
-                     VALUES (?1, ?2, ?3, ?4)
-                     ON CONFLICT (word) DO UPDATE SET
-                       updated_at = excluded.updated_at,
-                       updated_by = excluded.updated_by,
-                       deleted = excluded.deleted",
-                    (&r.word, r.updated_at, &r.updated_by, r.deleted as i64),
-                )?;
-            }
+        let tx = self.conn.unchecked_transaction()?;
+        let changed = Self::apply_words_on(&tx, records)?;
+        if changed > 0 {
+            bump_gen(&tx);
         }
-        bump_data_gen();
-        bump_gen(&self.conn);
+        tx.commit()?;
+        if changed > 0 {
+            bump_data_gen();
+        }
         Ok(())
+    }
+
+    fn apply_words_on(conn: &Connection, records: &[WordRecord]) -> rusqlite::Result<usize> {
+        let mut changed = 0;
+        for r in records {
+            Self::validate_version(r.updated_at)?;
+            changed += conn.execute(
+                "INSERT INTO words (word, updated_at, updated_by, deleted)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT (word) DO UPDATE SET
+                   updated_at = excluded.updated_at,
+                   updated_by = excluded.updated_by,
+                   deleted = excluded.deleted
+                 WHERE (excluded.updated_at, excluded.updated_by)
+                     > (words.updated_at, words.updated_by)",
+                (&r.word, r.updated_at, &r.updated_by, r.deleted as i64),
+            )?;
+        }
+        Ok(changed)
     }
 
     pub fn apply_snippets(&self, records: &[SnippetRecord]) -> rusqlite::Result<()> {
-        for r in records {
-            let existing: Option<(String, i64, String)> = self
-                .conn
-                .query_row(
-                    "SELECT replacement, updated_at, updated_by FROM snippets WHERE trigger = ?1",
-                    [&r.trigger],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-                )
-                .ok();
-            let take = match existing {
-                None => true,
-                Some((_, old_at, old_by)) => {
-                    Self::wins(r.updated_at, &r.updated_by, old_at, &old_by)
-                }
-            };
-            if take {
-                self.conn.execute(
-                    "INSERT INTO snippets (trigger, replacement, updated_at, updated_by, deleted)
-                     VALUES (?1, ?2, ?3, ?4, ?5)
-                     ON CONFLICT (trigger) DO UPDATE SET
-                       replacement = excluded.replacement,
-                       updated_at = excluded.updated_at,
-                       updated_by = excluded.updated_by,
-                       deleted = excluded.deleted",
-                    (
-                        &r.trigger,
-                        &r.replacement,
-                        r.updated_at,
-                        &r.updated_by,
-                        r.deleted as i64,
-                    ),
-                )?;
-            }
+        let tx = self.conn.unchecked_transaction()?;
+        let changed = Self::apply_snippets_on(&tx, records)?;
+        if changed > 0 {
+            bump_gen(&tx);
         }
-        bump_data_gen();
-        bump_gen(&self.conn);
+        tx.commit()?;
+        if changed > 0 {
+            bump_data_gen();
+        }
         Ok(())
     }
 
-    /// Merge remote history: pure union on uuid, never conflicts.
-    pub fn apply_history(&self, records: &[HistoryRecord]) -> rusqlite::Result<()> {
+    fn apply_snippets_on(conn: &Connection, records: &[SnippetRecord]) -> rusqlite::Result<usize> {
+        let mut changed = 0;
         for r in records {
-            self.conn.execute(
+            Self::validate_version(r.updated_at)?;
+            changed += conn.execute(
+                "INSERT INTO snippets (trigger, replacement, updated_at, updated_by, deleted)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT (trigger) DO UPDATE SET
+                   replacement = excluded.replacement,
+                   updated_at = excluded.updated_at,
+                   updated_by = excluded.updated_by,
+                   deleted = excluded.deleted
+                 WHERE (excluded.updated_at, excluded.updated_by)
+                     > (snippets.updated_at, snippets.updated_by)",
+                (
+                    &r.trigger,
+                    if r.deleted { "" } else { &r.replacement },
+                    r.updated_at,
+                    &r.updated_by,
+                    r.deleted as i64,
+                ),
+            )?;
+        }
+        Ok(changed)
+    }
+
+    /// Merge remote history: union on uuid with monotonic tombstones.
+    /// A delete/discard flag, once set on either side, sticks, and the
+    /// payload is redacted to empty the moment either side tombstones —
+    /// a peer holding the old plaintext row can never resurrect text.
+    pub fn apply_history(&self, records: &[HistoryRecord]) -> rusqlite::Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        let changed = Self::apply_history_on(&tx, records)?;
+        if changed > 0 {
+            bump_gen(&tx);
+        }
+        tx.commit()?;
+        if changed > 0 {
+            bump_data_gen();
+        }
+        Ok(())
+    }
+
+    fn apply_history_on(conn: &Connection, records: &[HistoryRecord]) -> rusqlite::Result<usize> {
+        let mut changed = 0;
+        for r in records {
+            changed += conn.execute(
                 "INSERT INTO history (uuid, text, raw_text, words, duration_secs, deleted, discarded, recorded_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-                 ON CONFLICT (uuid) DO UPDATE
-                 SET deleted = excluded.deleted, discarded = excluded.discarded
-                 WHERE excluded.deleted = 1 OR excluded.discarded = 1",
+                 ON CONFLICT (uuid) DO UPDATE SET
+                   deleted = history.deleted OR excluded.deleted,
+                   discarded = history.discarded OR excluded.discarded,
+                   text = CASE WHEN history.deleted OR excluded.deleted
+                                    OR history.discarded OR excluded.discarded
+                               THEN '' ELSE history.text END,
+                   raw_text = CASE WHEN history.deleted OR excluded.deleted
+                                        OR history.discarded OR excluded.discarded
+                                   THEN '' ELSE history.raw_text END,
+                   words = CASE WHEN history.deleted OR excluded.deleted
+                                     OR history.discarded OR excluded.discarded
+                                THEN 0 ELSE history.words END,
+                   duration_secs = CASE WHEN history.deleted OR excluded.deleted THEN 0
+                                        WHEN history.discarded OR excluded.discarded
+                                        THEN MAX(history.duration_secs, excluded.duration_secs)
+                                        ELSE history.duration_secs END
+                 WHERE (excluded.deleted AND NOT history.deleted)
+                    OR (excluded.discarded AND NOT history.discarded)",
                 (
                     &r.uuid,
-                    &r.text,
-                    &r.raw_text,
-                    r.words,
-                    r.duration_secs,
+                    if r.deleted || r.discarded {
+                        ""
+                    } else {
+                        &r.text
+                    },
+                    if r.deleted || r.discarded {
+                        ""
+                    } else {
+                        &r.raw_text
+                    },
+                    if r.deleted || r.discarded { 0 } else { r.words },
+                    if r.deleted { 0 } else { r.duration_secs },
                     r.deleted,
                     r.discarded,
                     r.recorded_at,
                 ),
             )?;
         }
-        bump_data_gen();
-        bump_gen(&self.conn);
+        Ok(changed)
+    }
+
+    /// All three content tables in one transaction: a sync round either
+    /// commits everything or leaves everything unchanged (no half-merged
+    /// rounds visible to the UI or the next export).
+    pub fn apply_content(
+        &self,
+        words: &[WordRecord],
+        snippets: &[SnippetRecord],
+        history: &[HistoryRecord],
+    ) -> rusqlite::Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        let changed = Self::apply_words_on(&tx, words)?
+            + Self::apply_snippets_on(&tx, snippets)?
+            + Self::apply_history_on(&tx, history)?;
+        if changed > 0 {
+            bump_gen(&tx);
+        }
+        tx.commit()?;
+        if changed > 0 {
+            bump_data_gen();
+        }
         Ok(())
+    }
+
+    /// One authorized content snapshot: settings/trust/content are read
+    /// inside a single transaction, so an export can never mix a stale
+    /// trust decision with fresh content — or default away an export
+    /// failure. Callers capture `sync_epoch()` first and pass it back
+    /// here; any trust/topology change in between fails the export.
+    /// (Desktop #18 `export_authorized`; the 16 MiB legacy single-shot
+    /// cap is dropped — phone/desktop negotiate full payloads here —
+    /// see PR description.)
+    pub fn export_authorized(
+        &self,
+        peer_id: &str,
+        epoch: i64,
+    ) -> rusqlite::Result<ContentSnapshot> {
+        let tx = self.conn.unchecked_transaction()?;
+        self.check_sync_identity()?;
+        Self::require_sync_authorized(&tx, peer_id, epoch)?;
+        let snapshot = ContentSnapshot {
+            words: self.export_words()?,
+            snippets: self.export_snippets()?,
+            history: self.export_history()?,
+            peers: self.export_gossip()?,
+        };
+        tx.commit()?;
+        Ok(snapshot)
+    }
+
+    fn require_sync_authorized(
+        conn: &Connection,
+        peer_id: &str,
+        epoch: i64,
+    ) -> rusqlite::Result<()> {
+        let current_epoch: Option<i64> = conn
+            .query_row(
+                "SELECT CAST(value AS INTEGER) FROM sync_meta WHERE key = 'policy_epoch'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        // No permissive defaults: sync must be explicitly enabled in a
+        // readable settings blob. Missing/unreadable/decoded-off all
+        // refuse.
+        let settings: Option<String> = conn
+            .query_row("SELECT value FROM kv WHERE key = 'settings'", [], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        let enabled = settings
+            .and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok())
+            .and_then(|v| v.get("sync")?.get("enabled")?.as_bool())
+            .unwrap_or(false);
+        let peer: Option<Peer> = conn
+            .query_row(
+                "SELECT node_id, name, address, addresses, trusted, pending,
+                        introducer, last_seen, last_sync
+                 FROM devices WHERE node_id = ?1",
+                [peer_id],
+                Self::peer_from_row,
+            )
+            .optional()?;
+        let revoked: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM revoked_devices WHERE node_id = ?1)",
+            [peer_id],
+            |r| r.get(0),
+        )?;
+        if !enabled
+            || revoked
+            || current_epoch.unwrap_or(0) != epoch
+            || !peer.is_some_and(|p| p.trusted)
+        {
+            return Err(rusqlite::Error::ToSqlConversionFailure(
+                "sync authorization changed".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// One authorized content round: re-checks authorization INSIDE the
+    /// commit transaction (a revocation racing the round cannot slip
+    /// through), applies words/snippets/history/gossip atomically, and
+    /// records the sync. Returns gossip-added peers.
+    /// (Desktop #18 `apply_sync_round`.)
+    pub fn apply_sync_round(
+        &self,
+        peer_id: &str,
+        epoch: i64,
+        self_id: &str,
+        content: (&[WordRecord], &[SnippetRecord], &[HistoryRecord]),
+        gossip: &[PeerGossip],
+    ) -> rusqlite::Result<usize> {
+        let tx = self.conn.unchecked_transaction()?;
+        self.check_sync_identity()?;
+        Self::require_sync_authorized(&tx, peer_id, epoch)?;
+        let peer: Option<Peer> = tx
+            .query_row(
+                "SELECT node_id, name, address, addresses, trusted, pending,
+                        introducer, last_seen, last_sync
+                 FROM devices WHERE node_id = ?1",
+                [peer_id],
+                Self::peer_from_row,
+            )
+            .optional()?;
+        let changed = Self::apply_words_on(&tx, content.0)?
+            + Self::apply_snippets_on(&tx, content.1)?
+            + Self::apply_history_on(&tx, content.2)?;
+        let added =
+            Self::apply_gossip_on(&tx, gossip, peer.is_some_and(|p| p.introducer), self_id)?;
+        tx.execute(
+            "UPDATE devices SET last_seen = ?2, last_sync = ?2 WHERE node_id = ?1",
+            (peer_id, now_ms() / 1000),
+        )?;
+        if changed > 0 || added > 0 {
+            bump_gen(&tx);
+        }
+        tx.commit()?;
+        if changed > 0 || added > 0 {
+            bump_data_gen();
+        }
+        Ok(added)
     }
 
     pub fn open_memory() -> rusqlite::Result<Self> {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch(SCHEMA)?;
-        Ok(Self { conn })
+        Ok(Self {
+            conn,
+            file_identity: None,
+        })
     }
+}
+
+/// One authorized content snapshot exchanged in a sync round.
+#[derive(Debug, Clone, Default)]
+pub struct ContentSnapshot {
+    pub words: Vec<WordRecord>,
+    pub snippets: Vec<SnippetRecord>,
+    pub history: Vec<HistoryRecord>,
+    pub peers: Vec<PeerGossip>,
 }
 
 /// Versioned word row exchanged between nodes.
@@ -896,8 +1421,15 @@ fn dump_addresses(addresses: &[String]) -> String {
 }
 
 /// Merge new observations into a stored address list (dedup, cap 8).
+/// Fresh observations win the front slots; empty or oversized entries
+/// never reach storage (bounded input from the network).
 fn merge_addresses(current: &[String], seen: &[String]) -> Vec<String> {
-    let mut out: Vec<String> = seen.to_vec();
+    let mut out: Vec<String> = seen
+        .iter()
+        .filter(|a| !a.is_empty() && a.len() <= 256)
+        .take(8)
+        .cloned()
+        .collect();
     for a in current {
         if !out.contains(a) {
             out.push(a.clone());
@@ -947,7 +1479,11 @@ impl Store {
         Ok(peer)
     }
 
-    /// Insert or update a peer row (manual add / edits).
+    /// Insert or update a peer row (manual add / edits). Trust changes
+    /// advance the sync epoch so in-flight authorized exports for this
+    /// peer fail closed. Re-trusting clears the revocation; introduction
+    /// authority is NOT granted here — it stays an explicit local choice
+    /// (`set_peer_introducer`), and is revoked when trust is removed.
     pub fn upsert_peer(
         &self,
         node_id: &str,
@@ -955,32 +1491,90 @@ impl Store {
         address: &str,
         trusted: bool,
     ) -> rusqlite::Result<()> {
+        if !valid_node_id(node_id) {
+            return Err(rusqlite::Error::ToSqlConversionFailure(
+                "invalid peer identity".into(),
+            ));
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        Self::invalidate_sync(&tx)?;
+        if trusted {
+            tx.execute("DELETE FROM revoked_devices WHERE node_id = ?1", [node_id])?;
+        }
         let addresses = if address.is_empty() {
             "[]".to_string()
         } else {
             dump_addresses(&[address.to_string()])
         };
-        self.conn.execute(
+        tx.execute(
             "INSERT INTO devices
                (node_id, name, address, addresses, trusted, pending, introducer,
                 last_seen, last_sync)
-             VALUES (?1, ?2, ?3, ?4, ?5, 0, ?5, 0, 0)
+             VALUES (?1, ?2, ?3, ?4, ?5, 0, 0, 0, 0)
              ON CONFLICT (node_id) DO UPDATE SET
                name = excluded.name,
                address = excluded.address,
                addresses = excluded.addresses,
                trusted = excluded.trusted,
-               introducer = excluded.introducer,
+               introducer = CASE WHEN excluded.trusted THEN devices.introducer ELSE 0 END,
                pending = 0",
             (node_id, name, address, addresses, trusted as i64),
         )?;
-        Ok(())
+        tx.commit()
     }
 
+    /// Revoke a peer: the row is removed AND the id joins the durable
+    /// deny-list, so gossip or a stale database can never re-add it.
+    /// Trust changes advance the sync epoch.
     pub fn remove_peer(&self, node_id: &str) -> rusqlite::Result<()> {
-        self.conn
-            .execute("DELETE FROM devices WHERE node_id = ?1", [node_id])?;
-        Ok(())
+        let tx = self.conn.unchecked_transaction()?;
+        Self::invalidate_sync(&tx)?;
+        tx.execute(
+            "INSERT OR IGNORE INTO revoked_devices (node_id) VALUES (?1)",
+            [node_id],
+        )?;
+        tx.execute("DELETE FROM devices WHERE node_id = ?1", [node_id])?;
+        tx.commit()
+    }
+
+    pub fn is_revoked(&self, node_id: &str) -> rusqlite::Result<bool> {
+        self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM revoked_devices WHERE node_id = ?1)",
+            [node_id],
+            |r| r.get(0),
+        )
+    }
+
+    /// Introduction authority is an explicit local choice, independent
+    /// of trust: granting it to an untrusted peer is refused.
+    pub fn set_peer_introducer(&self, node_id: &str, enabled: bool) -> rusqlite::Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        let peer: Option<Peer> = tx
+            .query_row(
+                "SELECT node_id, name, address, addresses, trusted, pending,
+                        introducer, last_seen, last_sync
+                 FROM devices WHERE node_id = ?1",
+                [node_id],
+                Self::peer_from_row,
+            )
+            .optional()?;
+        let Some(peer) = peer else {
+            return Err(rusqlite::Error::ToSqlConversionFailure(
+                "peer does not exist".into(),
+            ));
+        };
+        if enabled && !peer.trusted {
+            return Err(rusqlite::Error::ToSqlConversionFailure(
+                "trust the peer before granting introduction authority".into(),
+            ));
+        }
+        tx.execute(
+            "UPDATE devices SET introducer = ?2 WHERE node_id = ?1",
+            (node_id, enabled as i64),
+        )?;
+        Self::invalidate_sync(&tx)?;
+        bump_gen(&tx);
+        tx.commit()
     }
 
     /// Rename without touching trust, pending or introducer flags.
@@ -1018,12 +1612,19 @@ impl Store {
 
     /// Record inbound contact. Unknown nodes become pending requests
     /// (never auto-trusted); known nodes refresh addresses/last_seen.
+    /// Revoked or malformed identities are refused outright — they must
+    /// never regain even a pending row.
     pub fn record_seen(
         &self,
         node_id: &str,
         name: &str,
         addresses: &[String],
     ) -> rusqlite::Result<bool> {
+        if !valid_node_id(node_id) || self.is_revoked(node_id)? {
+            return Err(rusqlite::Error::ToSqlConversionFailure(
+                "invalid or revoked peer".into(),
+            ));
+        }
         let now = now_ms() / 1000;
         let existing = self.get_peer(node_id)?;
         match existing {
@@ -1053,19 +1654,22 @@ impl Store {
         }
     }
 
-    /// Decide a pending request. Accepting trusts the peer, marks it
-    /// an introducer (its vouched devices join automatically) and
-    /// clears the pending flag.
+    /// Decide a pending request. Accepting trusts the peer and clears
+    /// the pending flag; introduction authority stays off until
+    /// explicitly granted (`set_peer_introducer`). Rejecting revokes
+    /// the id durably. Both paths advance the sync epoch.
     pub fn decide_request(&self, node_id: &str, accept: bool) -> rusqlite::Result<()> {
         if accept {
-            self.conn.execute(
-                "UPDATE devices SET trusted = 1, pending = 0, introducer = 1
+            let tx = self.conn.unchecked_transaction()?;
+            tx.execute(
+                "UPDATE devices SET trusted = 1, pending = 0, introducer = 0
                  WHERE node_id = ?1",
                 [node_id],
             )?;
+            Self::invalidate_sync(&tx)?;
+            tx.commit()?;
         } else {
-            self.conn
-                .execute("DELETE FROM devices WHERE node_id = ?1", [node_id])?;
+            self.remove_peer(node_id)?;
         }
         Ok(())
     }
@@ -1096,21 +1700,52 @@ impl Store {
 
     /// Merge gossiped peers: refresh addresses of known nodes;
     /// auto-add strangers vouched by an introducer as trusted.
+    /// Revoked or malformed ids are skipped (gossip must never repair a
+    /// revocation). One transaction.
     pub fn apply_gossip(
         &self,
         gossip: &[PeerGossip],
         introducer: bool,
         self_id: &str,
     ) -> rusqlite::Result<usize> {
+        let tx = self.conn.unchecked_transaction()?;
+        let added = Self::apply_gossip_on(&tx, gossip, introducer, self_id)?;
+        tx.commit()?;
+        Ok(added)
+    }
+
+    fn apply_gossip_on(
+        conn: &Connection,
+        gossip: &[PeerGossip],
+        introducer: bool,
+        self_id: &str,
+    ) -> rusqlite::Result<usize> {
         let mut added = 0;
         for g in gossip {
-            if g.node_id == self_id {
+            if g.node_id == self_id || !valid_node_id(&g.node_id) {
                 continue;
             }
-            match self.get_peer(&g.node_id)? {
+            let revoked: bool = conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM revoked_devices WHERE node_id = ?1)",
+                [&g.node_id],
+                |r| r.get(0),
+            )?;
+            if revoked {
+                continue;
+            }
+            let peer: Option<Peer> = conn
+                .query_row(
+                    "SELECT node_id, name, address, addresses, trusted, pending,
+                            introducer, last_seen, last_sync
+                     FROM devices WHERE node_id = ?1",
+                    [&g.node_id],
+                    Self::peer_from_row,
+                )
+                .optional()?;
+            match peer {
                 Some(peer) => {
                     let merged = merge_addresses(&peer.addresses, &g.addresses);
-                    self.conn.execute(
+                    conn.execute(
                         "UPDATE devices SET addresses = ?2, last_seen = MAX(last_seen, ?3)
                          WHERE node_id = ?1",
                         (g.node_id.clone(), dump_addresses(&merged), g.last_seen),
@@ -1118,21 +1753,21 @@ impl Store {
                     // Names ride along with gossip so renames propagate
                     // without waiting for a full sync round.
                     if !g.name.is_empty() && g.name != peer.name {
-                        self.conn.execute(
+                        conn.execute(
                             "UPDATE devices SET name = ?2 WHERE node_id = ?1",
                             (g.node_id.clone(), g.name.clone()),
                         )?;
                     }
                 }
                 None if introducer => {
-                    self.conn.execute(
+                    conn.execute(
                         "INSERT INTO devices
                            (node_id, name, addresses, trusted, pending, last_seen)
                          VALUES (?1, ?2, ?3, 1, 0, ?4)",
                         (
                             g.node_id.clone(),
                             g.name.clone(),
-                            dump_addresses(&g.addresses),
+                            dump_addresses(&merge_addresses(&[], &g.addresses)),
                             g.last_seen,
                         ),
                     )?;
@@ -1571,5 +2206,283 @@ mod tests {
         assert_eq!(kept, "kept");
         drop(store_conn);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // -- desktop #18 port: authz / tombstone / epoch tests ------------------
+
+    /// Deterministic 64-hex peer id (mirrors the real ed25519 identity
+    /// format so `valid_node_id` accepts it).
+    fn peer_id(seed: u8) -> String {
+        std::iter::repeat_with(|| format!("{seed:02x}"))
+            .take(32)
+            .collect()
+    }
+
+    /// Persist a settings blob with sync explicitly enabled (fresh
+    /// `open_memory` stores carry no blob, which refuses by design).
+    fn enable_sync(store: &Store) {
+        let mut s = store.load_settings();
+        s.sync.enabled = true;
+        store.save_settings(&s).unwrap();
+    }
+
+    fn trust(store: &Store, peer: &str) {
+        store.upsert_peer(peer, "peer", "", true).unwrap();
+    }
+
+    #[test]
+    fn authorized_export_needs_trust_current_epoch_and_enabled_sync() {
+        let store = Store::open_memory().unwrap();
+        let peer = peer_id(0x11);
+        // No settings blob yet: refuses (no permissive defaults).
+        store.upsert_peer(&peer, "peer", "", true).unwrap();
+        assert!(store.export_authorized(&peer, store.sync_epoch()).is_err());
+        enable_sync(&store);
+        let epoch = store.sync_epoch();
+        store
+            .add_history("raw", "hello", 2, 5, &peer_id(0x22))
+            .unwrap();
+        assert_eq!(
+            store.export_authorized(&peer, epoch).unwrap().history.len(),
+            1
+        );
+
+        // Stale epoch fails after any trust/topology change.
+        trust(&store, &peer_id(0x33));
+        assert_ne!(store.sync_epoch(), epoch);
+        assert!(store.export_authorized(&peer, epoch).is_err());
+
+        // Unknown peer fails even with the fresh epoch.
+        let fresh = store.sync_epoch();
+        assert!(store.export_authorized(&peer_id(0x44), fresh).is_err());
+
+        // Disabled sync fails.
+        let mut s = store.load_settings();
+        s.sync.enabled = false;
+        store.save_settings(&s).unwrap();
+        assert!(store.export_authorized(&peer, fresh).is_err());
+    }
+
+    #[test]
+    fn revoked_peer_is_denied_everywhere_and_never_repair_via_gossip() {
+        let store = Store::open_memory().unwrap();
+        enable_sync(&store);
+        let peer = peer_id(0x55);
+        let intro = peer_id(0x66);
+        trust(&store, &peer);
+        trust(&store, &intro);
+        store.set_peer_introducer(&intro, true).unwrap();
+        let epoch = store.sync_epoch();
+        assert!(store.export_authorized(&peer, epoch).is_ok());
+
+        store.remove_peer(&peer).unwrap();
+        assert!(store.is_revoked(&peer).unwrap());
+        let epoch = store.sync_epoch();
+        // Export, re-contact and gossip repair all refuse.
+        assert!(store.export_authorized(&peer, epoch).is_err());
+        assert!(store.record_seen(&peer, "peer", &[]).is_err());
+        let gossip = vec![PeerGossip {
+            node_id: peer.clone(),
+            name: "peer".to_string(),
+            addresses: vec![],
+            last_seen: 0,
+        }];
+        assert_eq!(
+            store.apply_gossip(&gossip, true, &peer_id(0x77)).unwrap(),
+            0
+        );
+        assert!(store.get_peer(&peer).unwrap().is_none());
+        // Malformed identities are refused the same way.
+        assert!(store.record_seen("not-a-node-id", "x", &[]).is_err());
+        assert!(store.upsert_peer("short", "x", "", true).is_err());
+
+        // Explicit re-trust clears the revocation.
+        store.upsert_peer(&peer, "peer", "", true).unwrap();
+        assert!(!store.is_revoked(&peer).unwrap());
+        assert!(store.export_authorized(&peer, store.sync_epoch()).is_ok());
+    }
+
+    #[test]
+    fn introduction_authority_is_explicit_not_implied_by_trust() {
+        let store = Store::open_memory().unwrap();
+        let peer = peer_id(0x88);
+        trust(&store, &peer);
+        // Granting to an unknown peer is refused...
+        assert!(store.set_peer_introducer(&peer_id(0x99), true).is_err());
+        // ...trust alone grants nothing...
+        assert!(!store.get_peer(&peer).unwrap().unwrap().introducer);
+        // ...and accepting a request leaves it off (explicit grant only).
+        let pending = peer_id(0x9a);
+        store.record_seen(&pending, "new", &[]).unwrap();
+        store.decide_request(&pending, true).unwrap();
+        let row = store.get_peer(&pending).unwrap().unwrap();
+        assert!(row.trusted && !row.pending && !row.introducer);
+        // Rejecting revokes durably.
+        let denied = peer_id(0x9b);
+        store.record_seen(&denied, "denied", &[]).unwrap();
+        store.decide_request(&denied, false).unwrap();
+        assert!(store.is_revoked(&denied).unwrap());
+    }
+
+    #[test]
+    fn sync_round_applies_atomically_and_rechecks_inside_commit() {
+        let a = Store::open_memory().unwrap();
+        let b = Store::open_memory().unwrap();
+        for s in [&a, &b] {
+            enable_sync(s);
+        }
+        let pa = peer_id(0xa1);
+        let pb = peer_id(0xb1);
+        // Each store trusts the other under a synthetic id.
+        a.upsert_peer(&pb, "b", "", true).unwrap();
+        b.upsert_peer(&pa, "a", "", true).unwrap();
+        let epoch_b = b.sync_epoch();
+
+        let words = vec![WordRecord {
+            word: "kwyjibo".to_string(),
+            updated_at: now_ms(),
+            updated_by: pa.clone(),
+            deleted: false,
+        }];
+        let history = vec![HistoryRecord {
+            uuid: "round-1".to_string(),
+            text: "hi".to_string(),
+            raw_text: "hi".to_string(),
+            words: 1,
+            duration_secs: 2,
+            deleted: false,
+            discarded: false,
+            recorded_at: now_ms() / 1000,
+        }];
+        let added = b
+            .apply_sync_round(&pa, epoch_b, &pb, (&words, &[], &history), &[])
+            .unwrap();
+        assert_eq!(added, 0);
+        assert!(b.load_words().unwrap().contains(&"kwyjibo".to_string()));
+        assert_eq!(b.load_history(10, false).unwrap().len(), 1);
+
+        // Stale epoch commits nothing (all-or-nothing).
+        let stale_words = vec![WordRecord {
+            word: "evil".to_string(),
+            updated_at: now_ms(),
+            updated_by: pa.clone(),
+            deleted: false,
+        }];
+        b.upsert_peer(&peer_id(0xc1), "churn", "", true).unwrap();
+        assert!(
+            b.apply_sync_round(&pa, epoch_b, &pb, (&stale_words, &[], &[]), &[])
+                .is_err()
+        );
+        assert!(!b.load_words().unwrap().contains(&"evil".to_string()));
+    }
+
+    #[test]
+    fn history_deletes_redact_payloads_and_survive_as_tombstones() {
+        let a = Store::open_memory().unwrap();
+        let b = Store::open_memory().unwrap();
+        let uuid = a
+            .add_history("secret raw", "secret", 2, 5, "node-x")
+            .unwrap();
+        b.apply_history(&a.export_history().unwrap()).unwrap();
+        a.delete_history(&uuid).unwrap();
+        // Local row keeps the tombstone but no text.
+        let row = a.export_history().unwrap();
+        assert_eq!(row.len(), 1);
+        assert!(row[0].deleted && row[0].text.is_empty() && row[0].raw_text.is_empty());
+        // The tombstone redacts the peer that still holds plaintext.
+        b.apply_history(&a.export_history().unwrap()).unwrap();
+        let brow = b.export_history().unwrap();
+        assert!(brow[0].deleted && brow[0].text.is_empty());
+        assert!(a.load_history(10, true).unwrap().is_empty());
+
+        // Legacy zero-duration cleanup redacts instead of deleting.
+        a.add_history("legacy", "legacy", 4, 0, "node-x").unwrap();
+        assert_eq!(a.delete_zero_duration_history().unwrap(), 1);
+        let rows = a.export_history().unwrap();
+        assert!(rows.iter().all(|r| r.deleted));
+        // Clear-all preserves every tombstone identity (the row is
+        // already a tombstone here, so nothing new is redacted).
+        assert_eq!(b.clear_history().unwrap(), 0);
+        assert!(b.load_history(10, true).unwrap().is_empty());
+        assert!(!b.export_history().unwrap().is_empty());
+    }
+
+    #[test]
+    fn reset_keeps_tombstones_revocations_and_kills_sync() {
+        let store = Store::open_memory().unwrap();
+        enable_sync(&store);
+        let peer = peer_id(0xd1);
+        trust(&store, &peer);
+        store.upsert_word("hello", "node-x").unwrap();
+        store.add_history("raw", "text", 2, 5, "node-x").unwrap();
+        let epoch = store.sync_epoch();
+
+        store.reset_all_data().unwrap();
+        // Epoch advanced: stale authorized exports fail.
+        assert_ne!(store.sync_epoch(), epoch);
+        assert!(store.export_authorized(&peer, epoch).is_err());
+        // Trust gone, revocation durable, sync back disabled.
+        assert!(store.list_peers().unwrap().is_empty());
+        assert!(store.is_revoked(&peer).unwrap());
+        assert!(!store.load_settings().sync.enabled);
+        // Content tombstones survived (no resurrection from peers).
+        assert!(store.load_words().unwrap().is_empty());
+        assert!(!store.export_words().unwrap().is_empty());
+        assert!(store.export_words().unwrap().iter().all(|w| w.deleted));
+        assert!(store.export_history().unwrap().iter().all(|h| h.deleted));
+    }
+
+    #[test]
+    fn monotonic_clock_increases_and_overflow_errors_without_wrapping() {
+        let store = Store::open_memory().unwrap();
+        let first = Store::next_version(&store.conn).unwrap();
+        let second = Store::next_version(&store.conn).unwrap();
+        assert!(second > first);
+        // A racing wall clock cannot move versions backwards: stored
+        // clock dominates.
+        store.upsert_word("w", "node-x").unwrap();
+        let third = Store::next_version(&store.conn).unwrap();
+        assert!(third > second);
+
+        // Near-max clock saturates to MAX once, then errors (never
+        // wraps negative / resurrects).
+        store
+            .conn
+            .execute(
+                "INSERT INTO words (word, updated_at, updated_by, deleted)
+                 VALUES ('maxed', ?1, 'node-x', 0)",
+                [i64::MAX - 1],
+            )
+            .unwrap();
+        assert_eq!(Store::next_version(&store.conn).unwrap(), i64::MAX);
+        assert!(Store::next_version(&store.conn).is_err());
+        assert!(Store::next_version(&store.conn).is_err());
+    }
+
+    #[test]
+    fn future_dated_versions_rejected_while_delayed_ones_merge() {
+        let store = Store::open_memory().unwrap();
+        // Delayed/duplicate old records are normal transport: accepted.
+        store
+            .apply_words(&[WordRecord {
+                word: "old".to_string(),
+                updated_at: 1000,
+                updated_by: peer_id(0xe1),
+                deleted: false,
+            }])
+            .unwrap();
+        assert!(store.load_words().unwrap().contains(&"old".to_string()));
+        // A peer 30 days in the future must not poison LWW ordering.
+        assert!(
+            store
+                .apply_words(&[WordRecord {
+                    word: "future".to_string(),
+                    updated_at: now_ms() + 30 * 86_400_000,
+                    updated_by: peer_id(0xe2),
+                    deleted: false,
+                }])
+                .is_err()
+        );
+        assert!(!store.load_words().unwrap().contains(&"future".to_string()));
     }
 }
