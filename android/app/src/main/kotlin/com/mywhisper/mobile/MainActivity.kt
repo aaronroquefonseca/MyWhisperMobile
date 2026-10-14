@@ -8,7 +8,6 @@ import android.net.wifi.WifiManager
 import android.os.Bundle
 import android.provider.Settings
 import android.view.inputmethod.InputMethodManager
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -56,6 +55,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
@@ -71,6 +72,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -90,6 +92,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
@@ -180,10 +183,16 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun toast(msg: String) =
-        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+    /** Snackbar event bus: Activity/composable code emits, Root() displays. */
+    private val snackbarEvents = MutableSharedFlow<String>(extraBufferCapacity = 8)
 
-    private fun bgToast(msg: String) = runOnUiThread { toast(msg) }
+    private fun notify(msg: String) {
+        snackbarEvents.tryEmit(msg)
+    }
+
+    private fun toast(msg: String) = notify(msg)
+
+    private fun bgToast(msg: String) = notify(msg)
 
     /**
      * Push local mutations out immediately (desktop sync_after_change
@@ -234,7 +243,11 @@ class MainActivity : ComponentActivity() {
                 else -> if (androidx.compose.foundation.isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()
             },
         ) {
-            var tab by remember { mutableIntStateOf(0) }
+            var tab by rememberSaveable { mutableIntStateOf(0) }
+            val snackbarHost = remember { SnackbarHostState() }
+            LaunchedEffect(Unit) {
+                snackbarEvents.collect { snackbarHost.showSnackbar(it) }
+            }
             val tabs = listOf(
                                 getString(R.string.tab_setup),
                                 getString(R.string.tab_stt),
@@ -244,7 +257,7 @@ class MainActivity : ComponentActivity() {
                                 getString(R.string.tab_history),
                                 getString(R.string.tab_devices),
                             )
-            Scaffold { pad ->
+            Scaffold(snackbarHost = { SnackbarHost(snackbarHost) }) { pad ->
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
@@ -834,7 +847,30 @@ class MainActivity : ComponentActivity() {
         var streaming by remember { mutableStateOf(e.optBoolean("streaming", true)) }
         var enabled by remember { mutableStateOf(e.optBoolean("enabled", true)) }
         var showKey by remember { mutableStateOf(false) }
+        var testStatus by remember { mutableStateOf<String?>(null) }
         val kind = e.optString("kind")
+        val urlRequired = kind == "SelfHosted"
+        val urlBlank = url.isBlank() && urlRequired
+        val modelBlank = model.isBlank()
+        val canSave = !urlBlank && !modelBlank
+        fun testConnection(): String {
+            val u = url.trim()
+            val m = model.trim()
+            if (urlRequired && u.isEmpty()) return "Enter a server URL first."
+            if (m.isEmpty()) return "Enter a model first."
+            if (u.isNotEmpty()) {
+                val scheme = u.substringBefore("://", "")
+                val ok = u.contains("://") && when (kind) {
+                    "SelfHosted" -> scheme in setOf("http", "https", "ws", "wss")
+                    else -> scheme in setOf("http", "https")
+                }
+                if (!ok) {
+                    return if (kind == "SelfHosted") "URL must start with http(s):// or ws(s)://."
+                    else "Base URL must start with http(s)://."
+                }
+            }
+            return "Looks good — save, then dictate to verify against the server."
+        }
         AlertDialog(
             onDismissRequest = onClose,
             title = { Text("${stringResource(R.string.stt_dialog_title)} · $kind") },
@@ -855,17 +891,26 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                     }
-                    OutlinedTextField(value = url, onValueChange = { url = it },
+                    OutlinedTextField(value = url, onValueChange = { url = it; testStatus = null },
                         label = {
                             Text(
                                 if (kind == "Cloud") "Base URL (blank = vendor default)"
                                 else "Server URL (http(s) or ws(s))",
                             )
                         },
+                        isError = urlBlank,
+                        supportingText = {
+                            if (urlBlank) Text("Server URL is required.")
+                        },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                         modifier = Modifier.fillMaxWidth())
-                    OutlinedTextField(value = model, onValueChange = { model = it },
-                        label = { Text(stringResource(R.string.stt_model)) }, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(value = model, onValueChange = { model = it; testStatus = null },
+                        label = { Text(stringResource(R.string.stt_model)) },
+                        isError = modelBlank,
+                        supportingText = {
+                            if (modelBlank) Text("Model is required.")
+                        },
+                        modifier = Modifier.fillMaxWidth())
                     OutlinedTextField(
                         value = key, onValueChange = { key = it },
                         label = { Text(stringResource(R.string.stt_apikey)) },
@@ -898,16 +943,32 @@ class MainActivity : ComponentActivity() {
                         Text(stringResource(R.string.stt_enabled), modifier = Modifier.weight(1f))
                         Switch(checked = enabled, onCheckedChange = { enabled = it })
                     }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedButton(onClick = { testStatus = testConnection() }) {
+                            Text("Test connection")
+                        }
+                    }
+                    testStatus?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (it.startsWith("Looks good")) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.error,
+                        )
+                    }
                 }
             },
             confirmButton = {
-                TextButton(onClick = {
-                    e.put("name", name).put("url", url.trim())
-                        .put("model", model.trim()).put("provider", provider)
-                        .put("api_key", key).put("streaming", streaming)
-                        .put("enabled", enabled)
-                    onSave(e)
-                }) { Text(stringResource(R.string.action_save)) }
+                TextButton(
+                    enabled = canSave,
+                    onClick = {
+                        e.put("name", name).put("url", url.trim())
+                            .put("model", model.trim()).put("provider", provider)
+                            .put("api_key", key).put("streaming", streaming)
+                            .put("enabled", enabled)
+                        onSave(e)
+                    },
+                ) { Text(stringResource(R.string.action_save)) }
             },
             dismissButton = { TextButton(onClick = onClose) { Text(stringResource(R.string.action_cancel)) } },
         )
@@ -1558,6 +1619,7 @@ class MainActivity : ComponentActivity() {
                 }
             } catch (e: Exception) {
                 err = e.message ?: "failed"
+                notify(err)
             }
         }
         Column(
@@ -1570,13 +1632,6 @@ class MainActivity : ComponentActivity() {
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             )
-            if (err.isNotEmpty()) {
-                Text(
-                    err,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                )
-            }
             val u = stats?.optLong("dictations", 0L) ?: 0L
             val w = stats?.optLong("wordsSpoken", 0L) ?: 0L
             val wpm = stats?.optDouble("wordsPerMinute", 0.0) ?: 0.0
@@ -1609,6 +1664,14 @@ class MainActivity : ComponentActivity() {
                 }
             }
             Section(stringResource(R.string.act_chart)) {
+                if (err.isNotEmpty()) {
+                    Text(
+                        err,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                }
                 if (days.isEmpty()) {
                     Text(stringResource(R.string.act_empty), style = MaterialTheme.typography.bodySmall)
                 } else {
@@ -1638,11 +1701,11 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                     Spacer(Modifier.height(4.dp))
-                    OutlinedButton(onClick = { version++ }) {
-                        Icon(Icons.Filled.Refresh, contentDescription = null)
-                        Spacer(Modifier.width(4.dp))
-                        Text(stringResource(R.string.action_refresh))
-                    }
+                }
+                OutlinedButton(onClick = { err = ""; version++ }) {
+                    Icon(Icons.Filled.Refresh, contentDescription = null)
+                    Spacer(Modifier.width(4.dp))
+                    Text(stringResource(R.string.action_refresh))
                 }
             }
         }
@@ -1808,6 +1871,7 @@ class MainActivity : ComponentActivity() {
     private fun HistoryScreen(s: JSONObject) {
         var items by remember { mutableStateOf(loadHist()) }
         var version by remember { mutableIntStateOf(0) }
+        var confirmClear by remember { mutableStateOf(false) }
         @Suppress("UNUSED_EXPRESSION") version
         Column(modifier = Modifier.fillMaxSize()) {
             var privOpen by remember { mutableStateOf(false) }
@@ -1907,16 +1971,35 @@ class MainActivity : ComponentActivity() {
                 Text(stringResource(R.string.hist_count, items.size), style = MaterialTheme.typography.titleMedium)
                 Row {
                     TextButton(onClick = { items = loadHist() }) { Text(stringResource(R.string.action_refresh)) }
-                    TextButton(onClick = {
-                        try {
-                            CoreBridge.dataOf(CoreBridge.nativeClearHistory())
-                            items = loadHist()
-                            kickSync()
-                        } catch (e: Exception) {
-                            toast(getString(R.string.hist_clear_done, e.message))
-                        }
-                    }) { Text(stringResource(R.string.action_clear)) }
+                    TextButton(
+                        enabled = items.isNotEmpty(),
+                        onClick = { confirmClear = true },
+                    ) { Text(stringResource(R.string.action_clear)) }
                 }
+            }
+            if (confirmClear) {
+                AlertDialog(
+                    onDismissRequest = { confirmClear = false },
+                    title = { Text("Clear all history?") },
+                    text = { Text("This deletes every saved dictation on this device. This cannot be undone.") },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            confirmClear = false
+                            try {
+                                CoreBridge.dataOf(CoreBridge.nativeClearHistory())
+                                items = loadHist()
+                                kickSync()
+                            } catch (e: Exception) {
+                                toast(getString(R.string.hist_clear_done, e.message))
+                            }
+                        }) { Text(stringResource(R.string.action_clear)) }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { confirmClear = false }) {
+                            Text(stringResource(R.string.action_cancel))
+                        }
+                    },
+                )
             }
             var histQuery by remember { mutableStateOf("") }
             OutlinedTextField(
