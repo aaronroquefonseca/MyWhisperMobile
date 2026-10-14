@@ -17,9 +17,9 @@ pub mod textnorm;
 pub mod viz_types;
 
 use engine::Engine;
+use jni::JNIEnv;
 use jni::objects::{JClass, JShortArray, JString};
 use jni::sys::{jint, jstring};
-use jni::JNIEnv;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
@@ -90,6 +90,8 @@ fn get_string(env: &mut JNIEnv, s: &JString) -> Result<String, String> {
 
 /// Open (or create) `state.db` under `filesDir` with the Keystore-held
 /// `dbKeyHex` (64 hex chars). Must be called before any other method.
+/// # Safety
+/// Called from the JVM with valid JNI handles (`env` attached, object args valid local refs).
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeOpen(
     mut env: JNIEnv,
@@ -114,6 +116,8 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeOpen(
     jstr(&mut env, &out.unwrap_or_else(err_json))
 }
 
+/// # Safety
+/// Called from the JVM with valid JNI handles (`env` attached, object args valid local refs).
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeGetSettings(
     mut env: JNIEnv,
@@ -123,13 +127,15 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeGetSett
     jstr(&mut env, &out)
 }
 
+/// # Safety
+/// Called from the JVM with valid JNI handles (`env` attached, object args valid local refs).
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativePutSettings(
     mut env: JNIEnv,
     _cls: JClass,
     json: JString,
 ) -> jstring {
-    let out = (|| -> String {
+    let out = {
         let body = get_string(&mut env, &json).unwrap_or_default();
         with_engine(
             |e| match e.put_settings(&body) {
@@ -138,10 +144,12 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativePutSett
             },
             || err_json("engine not open"),
         )
-    })();
+    };
     jstr(&mut env, &out)
 }
 
+/// # Safety
+/// Called from the JVM with valid JNI handles (`env` attached, object args valid local refs).
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeStartUtterance(
     mut env: JNIEnv,
@@ -158,6 +166,8 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeStartUt
     jstr(&mut env, &out)
 }
 
+/// # Safety
+/// Called from the JVM with valid JNI handles (`env` attached, object args valid local refs).
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativePushPcm(
     mut env: JNIEnv,
@@ -182,6 +192,8 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativePushPcm
 
 /// Block while the server chain transcribes (call off the UI thread).
 /// Returns `{ok, data: {text, raw, engine, durationSecs, words}}`.
+/// # Safety
+/// Called from the JVM with valid JNI handles (`env` attached, object args valid local refs).
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeFinishUtterance(
     mut env: JNIEnv,
@@ -200,6 +212,8 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeFinishU
     jstr(&mut env, &out)
 }
 
+/// # Safety
+/// Called from the JVM with valid JNI handles (`env` attached, object args valid local refs).
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeCancelUtterance(
     mut env: JNIEnv,
@@ -215,6 +229,8 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeCancelU
     jstr(&mut env, &out)
 }
 
+/// # Safety
+/// Called from the JVM with valid JNI handles (`env` attached, object args valid local refs).
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeGetHistory(
     mut env: JNIEnv,
@@ -228,6 +244,8 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeGetHist
     jstr(&mut env, &out)
 }
 
+/// # Safety
+/// Called from the JVM with valid JNI handles (`env` attached, object args valid local refs).
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeClearHistory(
     mut env: JNIEnv,
@@ -243,13 +261,15 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeClearHi
     jstr(&mut env, &out)
 }
 
+/// # Safety
+/// Called from the JVM with valid JNI handles (`env` attached, object args valid local refs).
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeDeleteHistory(
     mut env: JNIEnv,
     _cls: JClass,
     uuid: JString,
 ) -> jstring {
-    let out = (|| -> String {
+    let out = {
         let id = get_string(&mut env, &uuid).unwrap_or_default();
         with_engine(
             |e| match e.delete_history(&id) {
@@ -258,7 +278,7 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeDeleteH
             },
             || err_json("engine not open"),
         )
-    })();
+    };
     jstr(&mut env, &out)
 }
 
@@ -270,6 +290,8 @@ fn engine_dir() -> Result<PathBuf, String> {
 }
 
 /// The effective default cleanup prompt (desktop-identical).
+/// # Safety
+/// Called from the JVM with valid JNI handles (`env` attached, object args valid local refs).
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeDefaultCleanupPrompt(
     mut env: JNIEnv,
@@ -283,6 +305,8 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeDefault
     )
 }
 
+/// # Safety
+/// Called from the JVM with valid JNI handles (`env` attached, object args valid local refs).
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativePurgeHistory(
     mut env: JNIEnv,
@@ -299,6 +323,8 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativePurgeHi
     jstr(&mut env, &out)
 }
 
+/// # Safety
+/// Called from the JVM with valid JNI handles (`env` attached, object args valid local refs).
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeUsageStats(
     mut env: JNIEnv,
@@ -333,6 +359,8 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeUsageSt
 
 /// Per-day aggregates for the trailing `days` days:
 /// `[{dayStart, words, utterances}]` (dayStart = epoch seconds).
+/// # Safety
+/// Called from the JVM with valid JNI handles (`env` attached, object args valid local refs).
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeDailyActivity(
     mut env: JNIEnv,
@@ -369,6 +397,8 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeDailyAc
 
 // -- sync ---------------------------------------------------------------
 
+/// # Safety
+/// Called from the JVM with valid JNI handles (`env` attached, object args valid local refs).
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeSyncStart(
     mut env: JNIEnv,
@@ -384,6 +414,8 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeSyncSta
     jstr(&mut env, &out)
 }
 
+/// # Safety
+/// Called from the JVM with valid JNI handles (`env` attached, object args valid local refs).
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeSyncStop(
     mut env: JNIEnv,
@@ -393,6 +425,8 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeSyncSto
     jstr(&mut env, &ok_json(serde_json::Value::Null))
 }
 
+/// # Safety
+/// Called from the JVM with valid JNI handles (`env` attached, object args valid local refs).
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeSyncStatus(
     mut env: JNIEnv,
@@ -405,6 +439,8 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeSyncSta
     jstr(&mut env, &out)
 }
 
+/// # Safety
+/// Called from the JVM with valid JNI handles (`env` attached, object args valid local refs).
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeSyncPeers(
     mut env: JNIEnv,
@@ -419,6 +455,8 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeSyncPee
 
 /// This device's display name: explicit setting wins, otherwise the
 /// generated adjective-noun name (same as desktop).
+/// # Safety
+/// Called from the JVM with valid JNI handles (`env` attached, object args valid local refs).
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeDisplayName(
     mut env: JNIEnv,
@@ -446,6 +484,8 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeDisplay
 }
 
 /// Manual pairing by ID (see sync_ctl::sync_add).
+/// # Safety
+/// Called from the JVM with valid JNI handles (`env` attached, object args valid local refs).
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeSyncAdd(
     mut env: JNIEnv,
@@ -470,6 +510,8 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeSyncAdd
     jstr(&mut env, &out)
 }
 
+/// # Safety
+/// Called from the JVM with valid JNI handles (`env` attached, object args valid local refs).
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeSyncTrust(
     mut env: JNIEnv,
@@ -492,6 +534,8 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeSyncTru
 }
 
 /// Blocking single-peer round (call off the UI thread).
+/// # Safety
+/// Called from the JVM with valid JNI handles (`env` attached, object args valid local refs).
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeSyncNow(
     mut env: JNIEnv,
@@ -513,6 +557,8 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeSyncNow
 }
 
 /// Blocking round with all trusted peers (call off the UI thread).
+/// # Safety
+/// Called from the JVM with valid JNI handles (`env` attached, object args valid local refs).
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeSyncAllNow(
     mut env: JNIEnv,
@@ -532,6 +578,8 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeSyncAll
 
 // -- dictionary (store-backed, desktop app_dictionary parity) --------
 
+/// # Safety
+/// Called from the JVM with valid JNI handles (`env` attached, object args valid local refs).
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeGetWords(
     mut env: JNIEnv,
@@ -541,13 +589,15 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeGetWord
     jstr(&mut env, &out)
 }
 
+/// # Safety
+/// Called from the JVM with valid JNI handles (`env` attached, object args valid local refs).
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeAddWord(
     mut env: JNIEnv,
     _cls: JClass,
     word: JString,
 ) -> jstring {
-    let out = (|| -> String {
+    let out = {
         let w = get_string(&mut env, &word).unwrap_or_default();
         with_engine(
             |e| match e.add_word(&w) {
@@ -556,17 +606,19 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeAddWord
             },
             || err_json("engine not open"),
         )
-    })();
+    };
     jstr(&mut env, &out)
 }
 
+/// # Safety
+/// Called from the JVM with valid JNI handles (`env` attached, object args valid local refs).
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeDeleteWord(
     mut env: JNIEnv,
     _cls: JClass,
     word: JString,
 ) -> jstring {
-    let out = (|| -> String {
+    let out = {
         let w = get_string(&mut env, &word).unwrap_or_default();
         with_engine(
             |e| match e.delete_word(&w) {
@@ -575,10 +627,12 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeDeleteW
             },
             || err_json("engine not open"),
         )
-    })();
+    };
     jstr(&mut env, &out)
 }
 
+/// # Safety
+/// Called from the JVM with valid JNI handles (`env` attached, object args valid local refs).
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeGetSnippets(
     mut env: JNIEnv,
@@ -588,6 +642,8 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeGetSnip
     jstr(&mut env, &out)
 }
 
+/// # Safety
+/// Called from the JVM with valid JNI handles (`env` attached, object args valid local refs).
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativePutSnippet(
     mut env: JNIEnv,
@@ -595,7 +651,7 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativePutSnip
     trigger: JString,
     replacement: JString,
 ) -> jstring {
-    let out = (|| -> String {
+    let out = {
         let t = get_string(&mut env, &trigger).unwrap_or_default();
         let r = get_string(&mut env, &replacement).unwrap_or_default();
         with_engine(
@@ -605,17 +661,19 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativePutSnip
             },
             || err_json("engine not open"),
         )
-    })();
+    };
     jstr(&mut env, &out)
 }
 
+/// # Safety
+/// Called from the JVM with valid JNI handles (`env` attached, object args valid local refs).
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeDeleteSnippet(
     mut env: JNIEnv,
     _cls: JClass,
     trigger: JString,
 ) -> jstring {
-    let out = (|| -> String {
+    let out = {
         let t = get_string(&mut env, &trigger).unwrap_or_default();
         with_engine(
             |e| match e.delete_snippet(&t) {
@@ -624,6 +682,6 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeDeleteS
             },
             || err_json("engine not open"),
         )
-    })();
+    };
     jstr(&mut env, &out)
 }

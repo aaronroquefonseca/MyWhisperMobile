@@ -18,7 +18,7 @@
 
 use crate::audio::wav_bytes_16k;
 use crate::settings::{SttChainEntry, SttEntryKind, SttSettings};
-use crate::textnorm::{dictionary_prompt, GROQ_PROMPT_CHARS, WHISPER_PROMPT_CHARS};
+use crate::textnorm::{GROQ_PROMPT_CHARS, WHISPER_PROMPT_CHARS, dictionary_prompt};
 
 #[derive(Debug, Clone)]
 pub struct Transcript {
@@ -120,7 +120,7 @@ pub fn ollama_request(
     system: &str,
     user: &str,
 ) -> serde_json::Value {
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
     let mut body = json!({
         "model": model,
         "stream": false,
@@ -352,10 +352,10 @@ fn post_openai_compat(
     if !language.trim().is_empty() && language != "auto" {
         form = form.text("language", language.to_string());
     }
-    if let Some(p) = prompt {
-        if !p.is_empty() {
-            form = form.text("prompt", p.to_string());
-        }
+    if let Some(p) = prompt
+        && !p.is_empty()
+    {
+        form = form.text("prompt", p.to_string());
     }
     let mut req = client.post(url).multipart(form);
     if !api_key.trim().is_empty() {
@@ -713,8 +713,8 @@ pub fn transcribe_chain_witnessed(
 //   instead of relaunching.
 // ---------------------------------------------------------------------------
 
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 /// Control generation: bumped on every applied switch/stop so queued
 /// work from an older configuration aborts instead of resurrecting
@@ -1005,8 +1005,7 @@ pub fn reconcile_lazy_switch(
         return Ok(true);
     }
     if let Some(ref auth) = authority
-        && (server_generation() != auth.witness
-            || stt_fingerprint(stt) != auth.snapshot_fp)
+        && (server_generation() != auth.witness || stt_fingerprint(stt) != auth.snapshot_fp)
     {
         return Ok(true);
     }
@@ -1138,10 +1137,7 @@ pub(crate) fn status_test_lock() -> std::sync::MutexGuard<'static, ()> {
 /// reconciling a stale pairing. Production builds contain no hook.
 #[cfg(test)]
 static POLL_SNAPSHOT_PAUSE: Mutex<
-    Option<(
-        std::sync::mpsc::Sender<()>,
-        std::sync::mpsc::Receiver<()>,
-    )>,
+    Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>,
 > = Mutex::new(None);
 
 /// Install the poll snapshot-window barrier (single-shot).
@@ -1161,11 +1157,7 @@ pub(crate) fn clear_poll_snapshot_pause() {
 
 #[cfg(test)]
 pub(crate) fn poll_snapshot_pause_point() {
-    if let Some((entered, proceed)) = POLL_SNAPSHOT_PAUSE
-        .lock()
-        .ok()
-        .and_then(|mut g| g.take())
-    {
+    if let Some((entered, proceed)) = POLL_SNAPSHOT_PAUSE.lock().ok().and_then(|mut g| g.take()) {
         let _ = entered.send(());
         let _ = proceed.recv_timeout(std::time::Duration::from_secs(10));
     }
@@ -1178,10 +1170,7 @@ pub(crate) fn poll_snapshot_pause_point() {
 /// Production builds contain no hook.
 #[cfg(test)]
 static FINISH_GUARD_PAUSE: Mutex<
-    Option<(
-        std::sync::mpsc::Sender<()>,
-        std::sync::mpsc::Receiver<()>,
-    )>,
+    Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>,
 > = Mutex::new(None);
 
 /// Install the finish-guard barrier (single-shot).
@@ -1201,11 +1190,7 @@ pub(crate) fn clear_finish_guard_pause() {
 
 #[cfg(test)]
 pub(crate) fn finish_guard_pause_point() {
-    if let Some((entered, proceed)) = FINISH_GUARD_PAUSE
-        .lock()
-        .ok()
-        .and_then(|mut g| g.take())
-    {
+    if let Some((entered, proceed)) = FINISH_GUARD_PAUSE.lock().ok().and_then(|mut g| g.take()) {
         let _ = entered.send(());
         let _ = proceed.recv_timeout(std::time::Duration::from_secs(10));
     }
@@ -1284,14 +1269,18 @@ mod tests {
                 "model {model}"
             );
         }
-        assert!(claude_request("future-model", None, "s", "u")
-            .unwrap()
-            .get("thinking")
-            .is_none());
-        assert!(claude_request("claude-sonnet-4-5", None, "s", "u")
-            .unwrap()
-            .get("thinking")
-            .is_none());
+        assert!(
+            claude_request("future-model", None, "s", "u")
+                .unwrap()
+                .get("thinking")
+                .is_none()
+        );
+        assert!(
+            claude_request("claude-sonnet-4-5", None, "s", "u")
+                .unwrap()
+                .get("thinking")
+                .is_none()
+        );
     }
 
     #[test]
@@ -1329,36 +1318,44 @@ mod tests {
         gemini["candidates"][0]["finishReason"] = json!("MAX_TOKENS");
         assert!(gemini_answer(&gemini).is_err());
         for reason in ["length", "content_filter", "tool_calls", ""] {
-            assert!(chat_answer(
-                &json!({"choices":[{"finish_reason":reason,"message":{"content":"partial"}}]})
-            )
-            .is_err());
+            assert!(
+                chat_answer(
+                    &json!({"choices":[{"finish_reason":reason,"message":{"content":"partial"}}]})
+                )
+                .is_err()
+            );
         }
-        assert!(ollama_answer(
-            &json!({"done":false,"done_reason":"stop","message":{"content":"partial"}})
-        )
-        .is_err());
+        assert!(
+            ollama_answer(
+                &json!({"done":false,"done_reason":"stop","message":{"content":"partial"}})
+            )
+            .is_err()
+        );
         // Missing done_reason is also incomplete.
         assert!(ollama_answer(&json!({"done":true,"message":{"content":"x"}})).is_err());
     }
 
     #[test]
     fn refusals_tool_calls_and_malformed_blocks_are_rejected() {
-        assert!(claude_answer(
-            &json!({"stop_reason":"end_turn","content":[{"type":"tool_use","id":"1"}]})
-        )
-        .is_err());
-        assert!(claude_answer(
-            &json!({"stop_reason":"end_turn","content":[{"type":"server_tool_use"}]})
-        )
-        .is_err());
+        assert!(
+            claude_answer(
+                &json!({"stop_reason":"end_turn","content":[{"type":"tool_use","id":"1"}]})
+            )
+            .is_err()
+        );
+        assert!(
+            claude_answer(
+                &json!({"stop_reason":"end_turn","content":[{"type":"server_tool_use"}]})
+            )
+            .is_err()
+        );
         assert!(
             claude_answer(&json!({"stop_reason":"end_turn","content":[{"type":"text"}]})).is_err()
         );
-        assert!(claude_answer(
-            &json!({"stop_reason":"refusal","content":[{"type":"text","text":"x"}]})
-        )
-        .is_err());
+        assert!(
+            claude_answer(&json!({"stop_reason":"refusal","content":[{"type":"text","text":"x"}]}))
+                .is_err()
+        );
         assert_eq!(
             claude_answer(
                 &json!({"stop_reason":"end_turn","content":[{"type":"redacted_thinking","data":"x"},{"type":"text","text":"ok"}]})
@@ -1386,15 +1383,19 @@ mod tests {
             &json!({"choices":[{"finish_reason":"stop","message":{"content":"x","tool_calls":[]}}]})
         )
         .is_err());
-        assert!(chat_answer(
-            &json!({"choices":[{"finish_reason":"tool_calls","message":{"content":"x"}}]})
-        )
-        .is_err());
+        assert!(
+            chat_answer(
+                &json!({"choices":[{"finish_reason":"tool_calls","message":{"content":"x"}}]})
+            )
+            .is_err()
+        );
         // Ollama: tool_calls rejected, thinking ignored, content required.
-        assert!(ollama_answer(
-            &json!({"done":true,"done_reason":"stop","message":{"content":"x","tool_calls":[]}})
-        )
-        .is_err());
+        assert!(
+            ollama_answer(
+                &json!({"done":true,"done_reason":"stop","message":{"content":"x","tool_calls":[]}})
+            )
+            .is_err()
+        );
         assert_eq!(
             ollama_answer(
                 &json!({"done":true,"done_reason":"stop","message":{"content":"hi 🎙️","thinking":"secret"}})
@@ -1402,10 +1403,10 @@ mod tests {
             .unwrap(),
             "hi 🎙️"
         );
-        assert!(ollama_answer(
-            &json!({"done":true,"done_reason":"stop","message":{"content":null}})
-        )
-        .is_err());
+        assert!(
+            ollama_answer(&json!({"done":true,"done_reason":"stop","message":{"content":null}}))
+                .is_err()
+        );
         assert!(ollama_answer(&json!({"done":true,"done_reason":"stop"})).is_err());
     }
 
