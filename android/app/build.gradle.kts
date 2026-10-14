@@ -8,17 +8,34 @@ android {
     namespace = "com.mywhisper.mobile"
     compileSdk = 36
 
+    // Version scheme: versionCode monotonic (+1/release), versionName SemVer.
+    // Source of truth: gradle.properties (mywhisper.versionCode/Name).
     defaultConfig {
         applicationId = "com.mywhisper.mobile"
         minSdk = 29
         targetSdk = 36
-        versionCode = 4
-        versionName = "0.1.0"
+        versionCode = providers.gradleProperty("mywhisper.versionCode").getOrElse("4").toInt()
+        versionName = providers.gradleProperty("mywhisper.versionName").getOrElse("0.1.0")
     }
 
+    // Release signing (docs only, unsigned build by default):
+    // Provide via env/gradle.properties, never commit keystore:
+    //   signingConfigs { create("release") {
+    //     storeFile = file(System.getenv("MYWHISPER_KEYSTORE_PATH") ?: "release.keystore")
+    //     storePassword = System.getenv("MYWHISPER_KEYSTORE_PASSWORD")
+    //     keyAlias = System.getenv("MYWHISPER_KEY_ALIAS")
+    //     keyPassword = System.getenv("MYWHISPER_KEY_PASSWORD") } }
+    //   buildTypes.release.signingConfig = signingConfigs.getByName("release")
     buildTypes {
         release {
+            // R8/minify + shrinkResources CHECKED 2026-10-14: enabling R8 with
+            // default rules fails on Tink (security-crypto) missing classes
+            // (errorprone annotations, javax.annotation). Keep disabled until
+            // proguard-rules.pro adds -dontwarn/-keep for Tink. Then set:
+            // isMinifyEnabled=true, isShrinkResources=true,
+            // proguardFiles(getDefaultProguardFile(...), "proguard-rules.pro").
             isMinifyEnabled = false
+            isShrinkResources = false
         }
     }
 
