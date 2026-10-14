@@ -153,7 +153,15 @@ class OverlayService : Service(), Dictation.Listener {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
+                // Detach first: in-flight Dictation.finish set(IDLE)
+                // would otherwise refreshNotif an ongoing notif (42)
+                // with no live service behind it.
+                try {
+                    if (::dictation.isInitialized) dictation.listener = null
+                } catch (_: Exception) {
+                }
                 removeBubble()
+                clearFloatState()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
                 return START_NOT_STICKY
@@ -161,15 +169,24 @@ class OverlayService : Service(), Dictation.Listener {
             else -> {
                 if (!android.provider.Settings.canDrawOverlays(this)) {
                     Toast.makeText(this, getString(R.string.float_need_overlay), Toast.LENGTH_LONG).show()
+                    removeBubble()
+                    clearFloatState()
                     stopSelf()
                     return START_NOT_STICKY
                 }
                 try {
                     startForegroundWithType()
                 } catch (e: Exception) {
-                    android.util.Log.i("MwFloat", "fg denied: ${e.message}")
+                    // Background start denied (boot redelivery): never run
+                    // un-foregrounded — the system kills us ~10s later.
+                    android.util.Log.i("MwFloat", "fg denied, stopping: ${e.message}")
+                    removeBubble()
+                    clearFloatState()
+                    stopSelf()
+                    return START_NOT_STICKY
                 }
                 ensureCore()
+                dictation.listener = this
                 FloatState.onChange = { applyVisibility() }
                 applyVisibility()
                 mainHandler.removeCallbacks(watchTick)
@@ -188,18 +205,7 @@ class OverlayService : Service(), Dictation.Listener {
     }
 
     private fun startForegroundWithType() {
-        val stopIntent = PendingIntent.getService(
-            this, 0,
-            Intent(this, OverlayService::class.java).setAction(ACTION_STOP),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-        val notif: Notification = NotificationCompat.Builder(this, CHANNEL)
-            .setContentTitle(getString(R.string.float_notif_title))
-            .setContentText(getString(R.string.float_notif_text))
-            .setSmallIcon(R.drawable.ic_stat_sync)
-            .setOngoing(true)
-            .addAction(android.R.drawable.ic_menu_close_clear_cancel, getString(R.string.notif_stop), stopIntent)
-            .build()
+        val notif = buildNotif(working = false)
         if (Build.VERSION.SDK_INT >= 29) {
             var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
             if (Build.VERSION.SDK_INT >= 29) {
@@ -209,6 +215,56 @@ class OverlayService : Service(), Dictation.Listener {
         } else {
             @Suppress("DEPRECATION")
             startForeground(NOTIF_ID, notif)
+        }
+    }
+
+    /**
+     * Groundwork for the STOP action + tap target: notification tap
+     * opens Setup, STOP tears the service down. While transcribing
+     * ([Dictation.State.WORKING]) the text flips and shows progress.
+     */
+    internal fun buildNotif(working: Boolean): Notification {
+        val stopIntent = PendingIntent.getService(
+            this, 0,
+            Intent(this, OverlayService::class.java).setAction(ACTION_STOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val openIntent = PendingIntent.getActivity(
+            this, 1,
+            Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val b = NotificationCompat.Builder(this, CHANNEL)
+            .setContentTitle(getString(R.string.float_notif_title))
+            .setContentText(
+                if (working) getString(R.string.ime_working)
+                else getString(R.string.float_notif_text),
+            )
+            .setSmallIcon(R.drawable.ic_stat_sync)
+            .setContentIntent(openIntent)
+            .setOngoing(true)
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, getString(R.string.notif_stop), stopIntent)
+        if (working) b.setProgress(0, 0, true) else b.setProgress(0, 0, false)
+        return b.build()
+    }
+
+    /** Refresh the foreground notification (WORKING progress or base). */
+    private fun refreshNotif(working: Boolean) {
+        try {
+            getSystemService(NotificationManager::class.java)?.notify(NOTIF_ID, buildNotif(working))
+        } catch (_: Exception) {
+        }
+    }
+
+    /** Clear process-wide float state (no un-foregrounded run). */
+    private fun clearFloatState() {
+        try {
+            mainHandler.removeCallbacks(watchTick)
+        } catch (_: Exception) {
+        }
+        try {
+            FloatState.onChange = null
+        } catch (_: Exception) {
         }
     }
 
@@ -387,6 +443,7 @@ class OverlayService : Service(), Dictation.Listener {
                 stopWorkPulse()
             }
         }
+        refreshNotif(s == Dictation.State.WORKING)
     }
 
     /** Gentle alpha pulse while the server works. */
@@ -429,10 +486,13 @@ class OverlayService : Service(), Dictation.Listener {
         micBtn?.post { refreshMic(false) }
         // Surface errors where the user looks: the bubble has no
         // text row, so only failures that matter get a toast.
-        if (!msg.contains("too short") && !msg.contains("silence")) {
-            try {
-                Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
-            } catch (_: Exception) {
+        // Listener fires off the main thread — post the toast.
+        if (shouldSurfaceError(msg)) {
+            mainHandler.post {
+                try {
+                    Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+                } catch (_: Exception) {
+                }
             }
         }
     }
@@ -446,13 +506,16 @@ class OverlayService : Service(), Dictation.Listener {
             val ok = MyWhisperAccessibility.commit(t)
             android.util.Log.i("MwFloat", "commit ok=$ok")
             if (!ok) {
-                try {
-                    Toast.makeText(
-                        this,
-                        getString(R.string.float_no_field),
-                        Toast.LENGTH_LONG,
-                    ).show()
-                } catch (_: Exception) {
+                // Toast must run on the main thread (this is a worker).
+                mainHandler.post {
+                    try {
+                        Toast.makeText(
+                            this,
+                            getString(R.string.float_no_field),
+                            Toast.LENGTH_LONG,
+                        ).show()
+                    } catch (_: Exception) {
+                    }
                 }
             }
         }
@@ -460,15 +523,19 @@ class OverlayService : Service(), Dictation.Listener {
 
     override fun onDestroy() {
         try {
-            mainHandler.removeCallbacks(watchTick)
+            if (::dictation.isInitialized) dictation.listener = null
         } catch (_: Exception) {
         }
-        try {
-            FloatState.onChange = null
-        } catch (_: Exception) {
-        }
+        clearFloatState()
         removeBubble()
         bgWorkers.shutdownNow()
         super.onDestroy()
     }
 }
+
+/**
+ * Pure toast filter (unit-testable): only failures that matter
+ * surface as a toast; routine drops stay silent.
+ */
+internal fun shouldSurfaceError(msg: String): Boolean =
+    !msg.contains("too short") && !msg.contains("silence")
