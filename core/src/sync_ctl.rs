@@ -77,10 +77,13 @@ pub fn sync_start(dir: PathBuf) -> Result<String, String> {
     sync_stop();
     let db_path = dir.join("state.db");
     let store = Store::open(&db_path).map_err(|e| format!("open db: {e}"))?;
-    let settings = store.load_settings();
-    if !settings.sync.enabled {
+    // Strict gate (same fail-open class as the dial gate): a missing or
+    // unreadable settings blob refuses. load_settings() defaults would
+    // start sync on a fresh install that never opted in.
+    if !store.sync_enabled_explicit() {
         return Err("sync is disabled in settings".to_string());
     }
+    let settings = store.load_settings();
     let identity = DeviceIdentity::load_or_create(&dir.join("device.key"))
         .map_err(|e| format!("identity: {e}"))?;
     let creds = identity.creds();

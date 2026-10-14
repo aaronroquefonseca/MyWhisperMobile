@@ -2627,5 +2627,13 @@ mod tests {
         s.sync.enabled = false;
         store.save_settings(&s).unwrap();
         assert!(!store.sync_enabled_explicit());
+        // Corrupt blob: defaults would still report enabled, strict
+        // parse refuses.
+        store
+            .conn
+            .execute("UPDATE kv SET value = '{broken' WHERE key = 'settings'", [])
+            .unwrap();
+        assert!(store.load_settings().sync.enabled);
+        assert!(!store.sync_enabled_explicit());
     }
 }
