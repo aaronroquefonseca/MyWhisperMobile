@@ -76,16 +76,20 @@ class SyncService : Service() {
                 return START_STICKY
             }
             else -> {
-                // Foreground is best-effort: Android forbids dataSync
-                // FGS from background starts (boot redelivery,
-                // reinstall). The engine still runs opportunistically
-                // without it; the Sync tab promotes to foreground.
-                val fgOk = try {
+                // Foreground is mandatory: a background start denied
+                // here (boot redelivery) must not run un-foregrounded —
+                // the system kills us ~10s later. Stop instead; the
+                // Sync tab re-promotes to foreground on user action.
+                try {
                     startForegroundWithType()
-                    true
                 } catch (e: Exception) {
-                    android.util.Log.i("MwSync", "fg denied, engine only: ${e.message}")
-                    false
+                    android.util.Log.i("MwSync", "fg denied, stopping: ${e.message}")
+                    try {
+                        CoreBridge.syncStop()
+                    } catch (_: Exception) {
+                    }
+                    stopSelf()
+                    return START_NOT_STICKY
                 }
                 workers.execute {
                     try {
@@ -93,7 +97,7 @@ class SyncService : Service() {
                     } catch (_: Exception) {
                     }
                 }
-                return if (fgOk) START_STICKY else START_NOT_STICKY
+                return START_STICKY
             }
         }
     }
@@ -139,6 +143,20 @@ class SyncService : Service() {
 }
 
 /**
+ * Pure boot-start policy (unit-testable): each service decides
+ * independently so one bad branch never blocks the other, and the
+ * bubble never starts at boot without overlay permission (its
+ * foreground start would be denied and immediately stopped).
+ */
+internal object BootPolicy {
+    fun shouldStartSync(syncEnabled: Boolean, startOnBoot: Boolean): Boolean =
+        syncEnabled && startOnBoot
+
+    fun shouldStartFloat(floatEnabled: Boolean, canDrawOverlays: Boolean): Boolean =
+        floatEnabled && canDrawOverlays
+}
+
+/**
  * Restart sync after reboot when it is enabled (desktop starts its
  * engine from systemd; this is the mobile equivalent).
  *
@@ -157,16 +175,30 @@ class BootReceiver : BroadcastReceiver() {
     }
 
     private fun attemptStart(ctx: Context, attempt: Int) {
+        val app = ctx.applicationContext
         try {
             val s = CoreBridge.getSettings().getOrThrow()
             val sync = s.optJSONObject("sync")
-            if (sync?.optBoolean("enabled", true) == true &&
-                sync.optBoolean("start_on_boot", true)
-            ) {
-                SyncService.start(ctx.applicationContext)
+            val syncEnabled = sync?.optBoolean("enabled", true) == true
+            val startOnBoot = sync?.optBoolean("start_on_boot", true) == true
+            if (BootPolicy.shouldStartSync(syncEnabled, startOnBoot)) {
+                try {
+                    SyncService.start(app)
+                } catch (_: Exception) {
+                }
             }
-            if (s.optJSONObject("preferences")?.optBoolean("float_enabled", false) == true) {
-                OverlayService.start(ctx.applicationContext)
+            val floatEnabled =
+                s.optJSONObject("preferences")?.optBoolean("float_enabled", false) == true
+            val canOverlay = try {
+                android.provider.Settings.canDrawOverlays(app)
+            } catch (_: Exception) {
+                false
+            }
+            if (BootPolicy.shouldStartFloat(floatEnabled, canOverlay)) {
+                try {
+                    OverlayService.start(app)
+                } catch (_: Exception) {
+                }
             }
         } catch (e: Exception) {
             android.util.Log.w(
