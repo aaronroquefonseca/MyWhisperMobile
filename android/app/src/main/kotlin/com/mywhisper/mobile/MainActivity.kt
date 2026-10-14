@@ -1988,9 +1988,10 @@ class MainActivity : ComponentActivity() {
                             try {
                                 CoreBridge.dataOf(CoreBridge.nativeClearHistory())
                                 items = loadHist()
+                                toast(getString(R.string.hist_cleared))
                                 kickSync()
                             } catch (e: Exception) {
-                                toast(getString(R.string.hist_clear_done, e.message))
+                                toast(getString(R.string.hist_clear_failed, e.message))
                             }
                         }) { Text(stringResource(R.string.action_clear)) }
                     },

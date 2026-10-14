@@ -40,6 +40,7 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
     private var lastState = Dictation.State.IDLE
     private var lastToggled = false
     private var lastNote = ""
+    private var lastAnnounced = ""
 
     private var micDownRawY = 0f
     private var micCancelled = false
@@ -52,6 +53,12 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
     override fun onCreate() {
         super.onCreate()
         android.util.Log.i("MyWhisperIME", "ime.onCreate")
+        // Re-sync bubble state after process death: memory defaults
+        // to imeActive=false; prefs hold the last published value.
+        try {
+            FloatState.restoreImeActive(this)
+        } catch (_: Exception) {
+        }
         ensureCore()
         dictation = Dictation(
             smartTapMs = { readSmartTapMs() },
@@ -134,6 +141,15 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
     @SuppressLint("ClickableViewAccessibility")
     override fun onCreateInputView(): View {
         android.util.Log.i("MyWhisperIME", "ime.onCreateInputView")
+        // A fade-out from updatePill may still hold the previous pill:
+        // the old view is discarded on rebuild, so cancel it and drop
+        // the refs before inflating the new ones.
+        try {
+            pillBox?.animate()?.cancel()
+        } catch (_: Exception) {
+        }
+        pillBox = null
+        barsView = null
         applySystemBars()
         // Usage flag: the config app cannot read the current IME on
         // targetSdk 34+, so the IME reports itself.
@@ -433,8 +449,7 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
 
     override fun onFinishInputView(finishingInput: Boolean) {
         stopBackspaceRepeat()
-        FloatState.imeActive = false
-        FloatState.refresh()
+        FloatState.setImeActive(this, false)
         super.onFinishInputView(finishingInput)
     }
 
@@ -445,13 +460,14 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
         android.util.Log.i("MyWhisperIME", "ime.onStartInputView")
         super.onStartInputView(info, restarting)
         applySystemBars()
-        // Our bar is up: the floating bubble stands down.
-        FloatState.imeActive = true
-        FloatState.refresh()
+        // Our bar is up: the floating bubble stands down. Persisted
+        // so the bubble re-syncs after process death.
+        FloatState.setImeActive(this, true)
     }
 
     override fun onEvaluateInputViewShown(): Boolean {
         android.util.Log.i("MyWhisperIME", "ime.onEvaluateInputViewShown")
+        super.onEvaluateInputViewShown()
         return true
     }
 
@@ -478,6 +494,31 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
             shape = GradientDrawable.OVAL
             setColor(if (recording) 0xFFB3261E.toInt() else 0xFF6750A4.toInt())
         }
+
+    /**
+     * Theme error color (Compose colorScheme.error equivalent for
+     * Views): ?android:attr/colorError on API 31+, else the night-aware
+     * mw_error resource. No hardcoded hue.
+     */
+    private fun errorColor(): Int {
+        if (android.os.Build.VERSION.SDK_INT >= 31) {
+            try {
+                val tv = TypedValue()
+                if (theme.resolveAttribute(android.R.attr.colorError, tv, true)) {
+                    if (tv.type in TypedValue.TYPE_FIRST_COLOR_INT..TypedValue.TYPE_LAST_COLOR_INT) {
+                        return tv.data
+                    }
+                    if (tv.resourceId != 0) return getColor(tv.resourceId)
+                }
+            } catch (_: Exception) {
+            }
+        }
+        return try {
+            getColor(R.color.mw_error)
+        } catch (_: Exception) {
+            0xFFB3261E.toInt()
+        }
+    }
 
     private fun sideBackground(barBg: Int, night: Boolean): GradientDrawable =
         GradientDrawable().apply {
@@ -533,9 +574,13 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
         } else {
             barsView?.clear()
             if (pill.visibility == View.VISIBLE) {
-                pill.animate().alpha(0f).setDuration(120).withEndAction {
-                    pill.visibility = View.INVISIBLE
-                    pill.alpha = 1f
+                // onCreateInputView rebuilds pillBox: a stale fade-out
+                // must not mutate the replacement view.
+                val target = pill
+                target.animate().alpha(0f).setDuration(120).withEndAction {
+                    if (!HardeningGuards.pillEndActionApplies(pillBox, target)) return@withEndAction
+                    target.visibility = View.INVISIBLE
+                    target.alpha = 1f
                 }.start()
             }
         }
@@ -553,21 +598,33 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
         spinner?.visibility =
             if (lastState == Dictation.State.WORKING) View.VISIBLE else View.GONE
         updatePill(lastState == Dictation.State.RECORDING)
-        hintText?.text = when (lastState) {
+        val hint = hintText
+        hint?.text = when (lastState) {
             // While recording the escape hatch is sliding down, not a
             // button you cannot reach mid-hold.
             Dictation.State.RECORDING -> getString(R.string.ime_slide_cancel)
             Dictation.State.WORKING -> getString(R.string.ime_working)
             Dictation.State.IDLE -> lastNote.ifEmpty { idleHint() }
         }
-        // Errors in red, status in the theme dim color.
+        // Errors in the theme error color, status in the theme dim color.
         val night = (resources.configuration.uiMode
             and android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
             android.content.res.Configuration.UI_MODE_NIGHT_YES
-        hintText?.setTextColor(
-            if (lastState == Dictation.State.IDLE && lastNote.isNotEmpty()) 0xFFD92D20.toInt()
+        val isError = lastState == Dictation.State.IDLE && lastNote.isNotEmpty()
+        hint?.setTextColor(
+            if (isError) errorColor()
             else if (night) 0xFFA8A4B5.toInt() else 0xFF5F5B66.toInt(),
         )
+        // TalkBack: error text is otherwise silent on a status line.
+        if (isError && HardeningGuards.shouldAnnounceError(lastNote, lastAnnounced)) {
+            lastAnnounced = lastNote
+            try {
+                hint?.announceForAccessibility(lastNote)
+            } catch (_: Exception) {
+            }
+        } else if (!isError) {
+            lastAnnounced = ""
+        }
     }
 
     /**
