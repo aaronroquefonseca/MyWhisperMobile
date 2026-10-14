@@ -31,8 +31,12 @@ class SyncService : Service() {
         private const val CHANNEL = "mw-sync"
         private const val NOTIF_ID = 41
 
-        fun start(ctx: Context) {
+        /** Boot/update attempt carried for bounded retry (default -1 = interactive, no retry). */
+        const val EXTRA_BOOT_ATTEMPT = "boot_attempt"
+
+        fun start(ctx: Context, bootAttempt: Int = -1) {
             val i = Intent(ctx, SyncService::class.java).setAction(ACTION_START)
+            if (bootAttempt >= 0) i.putExtra(EXTRA_BOOT_ATTEMPT, bootAttempt)
             androidx.core.content.ContextCompat.startForegroundService(ctx, i)
         }
 
@@ -113,9 +117,12 @@ class SyncService : Service() {
             }
             else -> {
                 // Foreground is mandatory: a background start denied
-                // here (boot redelivery) must not run un-foregrounded —
-                // the system kills us ~10s later. Stop instead; the
-                // Sync tab re-promotes to foreground on user action.
+                // here must not run un-foregrounded — the system kills
+                // us ~10s later. Stop instead; a boot/update start
+                // feeds back into the bounded alarm retry (succeeds on
+                // a later alarm once the app is foregrounded), an
+                // interactive start never denies and never retries.
+                val bootAttempt = intent?.getIntExtra(EXTRA_BOOT_ATTEMPT, -1) ?: -1
                 try {
                     startForegroundWithType()
                 } catch (e: Exception) {
@@ -123,6 +130,10 @@ class SyncService : Service() {
                     try {
                         CoreBridge.syncStop()
                     } catch (_: Exception) {
+                    }
+                    BootPolicy.nextBootRetryAttempt(bootAttempt, BootReceiver.MAX_RETRIES)?.let { next ->
+                        android.util.Log.i("MwSync", "boot start denied, retrying (attempt=$next)")
+                        BootReceiver.scheduleRetry(this, next)
                     }
                     stopSelf()
                     return START_NOT_STICKY
@@ -226,6 +237,39 @@ internal object BootPolicy {
 
     fun shouldStartFloat(floatEnabled: Boolean, canDrawOverlays: Boolean): Boolean =
         floatEnabled && canDrawOverlays
+
+    /**
+     * True when [e] is an Android 12+ background FGS denial. Name-based
+     * (no API-31 class reference) so minSdk 29 never linkage-crashes.
+     */
+    fun isFgsDenied(e: Throwable): Boolean {
+        var t: Throwable? = e
+        var depth = 0
+        while (t != null && depth < 10) {
+            if (t.javaClass.name.contains("ForegroundServiceStartNotAllowed")) return true
+            t = t.cause
+            depth++
+        }
+        return false
+    }
+
+    /**
+     * Next boot/update retry attempt after [attempt], or null when
+     * exhausted (interactive starts pass -1 and never retry).
+     */
+    fun nextBootRetryAttempt(attempt: Int, maxRetries: Int): Int? {
+        if (attempt < 0 || attempt >= maxRetries) return null
+        return attempt + 1
+    }
+
+    /**
+     * Retry a failed boot/update start only for transient causes (FGS
+     * denial while backgrounded, locked keystore) with attempts left.
+     * Anything else fails fast: no blind retry loop.
+     */
+    fun shouldRetryBootStart(e: Throwable, attempt: Int, maxRetries: Int): Boolean =
+        (isFgsDenied(e) || HardeningGuards.isKeystoreLocked(e)) &&
+            HardeningGuards.bootAttemptWithinLimit(attempt, maxRetries)
 }
 
 /**
@@ -238,12 +282,8 @@ internal object BootPolicy {
  */
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(ctx: Context, intent: Intent) {
-        when (intent.action) {
-            Intent.ACTION_BOOT_COMPLETED,
-            Intent.ACTION_USER_UNLOCKED,
-            ACTION_RETRY,
-            -> attemptStart(ctx, intent.getIntExtra(EXTRA_ATTEMPT, 0))
-        }
+        if (!handlesAction(intent.action)) return
+        attemptStart(ctx, intent.getIntExtra(EXTRA_ATTEMPT, 0))
     }
 
     private fun attemptStart(ctx: Context, attempt: Int) {
@@ -254,9 +294,23 @@ class BootReceiver : BroadcastReceiver() {
             val syncEnabled = sync?.optBoolean("enabled", true) == true
             val startOnBoot = sync?.optBoolean("start_on_boot", true) == true
             if (BootPolicy.shouldStartSync(syncEnabled, startOnBoot)) {
+                // The BOOT_COMPLETED temp allowlist lets start() through,
+                // but startForeground(dataSync) is still denied from a
+                // boot/update source (API 34+ FGS-type gate) — the service
+                // self-stops and feeds back into the bounded alarm retry
+                // via EXTRA_BOOT_ATTEMPT. A bare start() throw (no
+                // allowlist, e.g. alarm retry while backgrounded) retries
+                // here. Either way: never swallow, always bounded.
                 try {
-                    SyncService.start(app)
-                } catch (_: Exception) {
+                    SyncService.start(app, attempt)
+                } catch (e: Exception) {
+                    android.util.Log.w(
+                        "MwSync",
+                        "boot sync start failed (attempt=$attempt fgsDenied=${BootPolicy.isFgsDenied(e)}): ${e.message}",
+                    )
+                    if (BootPolicy.shouldRetryBootStart(e, attempt, MAX_RETRIES)) {
+                        scheduleRetry(ctx, attempt + 1)
+                    }
                 }
             }
             val floatEnabled =
@@ -269,7 +323,14 @@ class BootReceiver : BroadcastReceiver() {
             if (BootPolicy.shouldStartFloat(floatEnabled, canOverlay)) {
                 try {
                     OverlayService.start(app)
-                } catch (_: Exception) {
+                } catch (e: Exception) {
+                    android.util.Log.w(
+                        "MwSync",
+                        "boot float start failed (attempt=$attempt fgsDenied=${BootPolicy.isFgsDenied(e)}): ${e.message}",
+                    )
+                    if (BootPolicy.shouldRetryBootStart(e, attempt, MAX_RETRIES)) {
+                        scheduleRetry(ctx, attempt + 1)
+                    }
                 }
             }
         } catch (e: Exception) {
@@ -281,30 +342,46 @@ class BootReceiver : BroadcastReceiver() {
         }
     }
 
-    private fun scheduleRetry(ctx: Context, nextAttempt: Int) {
-        try {
-            val am = ctx.getSystemService(android.app.AlarmManager::class.java) ?: return
-            val pi = PendingIntent.getBroadcast(
-                ctx, RETRY_REQ_CODE + nextAttempt,
-                Intent(ctx, BootReceiver::class.java)
-                    .setAction(ACTION_RETRY)
-                    .putExtra(EXTRA_ATTEMPT, nextAttempt),
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-            )
-            am.setAndAllowWhileIdle(
-                android.app.AlarmManager.RTC_WAKEUP,
-                System.currentTimeMillis() + nextRetryDelayMs(nextAttempt),
-                pi,
-            )
-        } catch (_: Exception) {
-        }
-    }
-
     companion object {
         const val ACTION_RETRY = "com.mywhisper.mobile.sync.BOOT_RETRY"
         const val EXTRA_ATTEMPT = "attempt"
         const val MAX_RETRIES = 4
         private const val RETRY_REQ_CODE = 900
+
+        /**
+         * Bounded boot/update retry alarm (1m, 2m, 4m, 8m backoff).
+         * Companion so the denied service start can feed back into the
+         * same chain from [SyncService.onStartCommand].
+         */
+        internal fun scheduleRetry(ctx: Context, nextAttempt: Int) {
+            try {
+                val am = ctx.getSystemService(android.app.AlarmManager::class.java) ?: return
+                val pi = PendingIntent.getBroadcast(
+                    ctx.applicationContext, RETRY_REQ_CODE + nextAttempt,
+                    Intent(ctx.applicationContext, BootReceiver::class.java)
+                        .setAction(ACTION_RETRY)
+                        .putExtra(EXTRA_ATTEMPT, nextAttempt),
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                )
+                am.setAndAllowWhileIdle(
+                    android.app.AlarmManager.RTC_WAKEUP,
+                    System.currentTimeMillis() + nextRetryDelayMs(nextAttempt),
+                    pi,
+                )
+            } catch (_: Exception) {
+            }
+        }
+
+        /**
+         * Actions routed to [attemptStart]: boot, unlock, app-update
+         * replace (same path restarts sync + float after update) and
+         * the internal retry alarm. Unit-testable without Robolectric
+         * (action strings only, no Context needed).
+         */
+        fun handlesAction(action: String?): Boolean = action == Intent.ACTION_BOOT_COMPLETED ||
+            action == Intent.ACTION_USER_UNLOCKED ||
+            action == Intent.ACTION_MY_PACKAGE_REPLACED ||
+            action == ACTION_RETRY
 
         /**
          * Backoff for retry N (1-based): 1m, 2m, 4m, 8m, capped at 15m.

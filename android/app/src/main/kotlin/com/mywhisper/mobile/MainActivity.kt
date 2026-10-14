@@ -2744,14 +2744,18 @@ getString(R.string.sync_running, shown)
                     if (!running) {
                         Button(onClick = {
                             acquireMulticast()
-                            // Foreground service keeps the listener,
-                            // discovery and rounds alive + shows status.
+                            // Single-owner start: the service owns
+                            // syncStart (sync_start() begins with
+                            // sync_stop(), so a concurrent activity-side
+                            // syncStart() kills the service's manager and
+                            // the first tap nets dead sync). Never call
+                            // CoreBridge.syncStart() here; just refresh
+                            // status once the service promotes.
                             SyncService.start(this@MainActivity)
                             workers.execute {
-                                // Fallback if the service path is slow.
                                 try {
-                                    CoreBridge.syncStart()
-                                } catch (_: Exception) {
+                                    Thread.sleep(1_000)
+                                } catch (_: InterruptedException) {
                                 }
                                 runOnUiThread { refresh() }
                             }
