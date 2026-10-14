@@ -37,6 +37,7 @@ class OverlayService : Service(), Dictation.Listener {
     companion object {
         const val ACTION_START = "com.mywhisper.mobile.float.START"
         const val ACTION_STOP = "com.mywhisper.mobile.float.STOP"
+        const val ACTION_REFRESH = "com.mywhisper.mobile.float.REFRESH_NOTIF"
         private const val CHANNEL = "mw-float"
         private const val NOTIF_ID = 42
         private const val PREFS = "mw_state"
@@ -51,9 +52,24 @@ class OverlayService : Service(), Dictation.Listener {
         fun stop(ctx: Context) {
             ctx.startService(Intent(ctx, OverlayService::class.java).setAction(ACTION_STOP))
         }
+
+        /** Rebuild the foreground notification from current state + prefs (no restart). */
+        fun refreshNotif(ctx: Context) {
+            try {
+                ctx.startService(Intent(ctx, OverlayService::class.java).setAction(ACTION_REFRESH))
+            } catch (_: Exception) {
+            }
+        }
     }
 
     private lateinit var dictation: Dictation
+    /**
+     * True once [startForegroundWithType] succeeds, false on STOP /
+     * destroy. REFRESH must never recreate a stopped service
+     * un-foregrounded (PR #2 pattern): an unguarded notify() would
+     * leave an orphan ongoing notification STOP cannot remove.
+     */
+    @Volatile private var foregrounded = false
     private var wm: WindowManager? = null
     private var holder: FrameLayout? = null
     private var micBtn: ImageButton? = null
@@ -174,9 +190,25 @@ class OverlayService : Service(), Dictation.Listener {
                 }
                 removeBubble()
                 clearFloatState()
+                foregrounded = false
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
                 return START_NOT_STICKY
+            }
+            ACTION_REFRESH -> {
+                // Prefs toggle: rebuild from live state, no restart —
+                // but never promote a stopped service. Self-terminate
+                // instead of refreshing un-foregrounded.
+                if (!foregrounded) {
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+                try {
+                    val s = if (::dictation.isInitialized) dictation.current else Dictation.State.IDLE
+                    refreshNotif(s)
+                } catch (_: Exception) {
+                }
+                return START_STICKY
             }
             else -> {
                 if (!android.provider.Settings.canDrawOverlays(this)) {
@@ -214,6 +246,7 @@ class OverlayService : Service(), Dictation.Listener {
                 }
                 ensureCore()
                 dictation.listener = this
+                foregrounded = true
                 FloatState.onChange = { applyVisibility() }
                 applyVisibility()
                 mainHandler.removeCallbacks(watchTick)
@@ -232,7 +265,8 @@ class OverlayService : Service(), Dictation.Listener {
     }
 
     private fun startForegroundWithType() {
-        val notif = buildNotif(working = false)
+        val s = if (::dictation.isInitialized) dictation.current else Dictation.State.IDLE
+        val notif = buildNotif(s)
         if (Build.VERSION.SDK_INT >= 29) {
             var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
             if (Build.VERSION.SDK_INT >= 29) {
@@ -247,10 +281,15 @@ class OverlayService : Service(), Dictation.Listener {
 
     /**
      * Groundwork for the STOP action + tap target: notification tap
-     * opens Setup, STOP tears the service down. While transcribing
-     * ([Dictation.State.WORKING]) the text flips and shows progress.
+     * opens Setup, STOP tears the service down. Per-mode copy driven
+     * by [NotifPolicy]: idle = base text, RECORDING = red recording
+     * text, WORKING = transcribing + indeterminate progress when the
+     * pref allows. STOP + contentIntent on every mode; BigTextStyle
+     * keeps the actions expanded.
      */
-    internal fun buildNotif(working: Boolean): Notification {
+    internal fun buildNotif(state: Dictation.State): Notification {
+        val prefs = NotifPolicy.floatPrefsJson(readPrefsObj())
+        val spec = NotifPolicy.forFloatState(state, prefs)
         val stopIntent = PendingIntent.getService(
             this, 0,
             Intent(this, OverlayService::class.java).setAction(ACTION_STOP),
@@ -261,26 +300,46 @@ class OverlayService : Service(), Dictation.Listener {
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
+        val text = when (state) {
+            Dictation.State.RECORDING -> getString(R.string.float_notif_rec_text)
+            Dictation.State.WORKING -> getString(R.string.ime_working)
+            Dictation.State.IDLE -> getString(R.string.float_notif_text)
+        }
         val b = NotificationCompat.Builder(this, CHANNEL)
             .setContentTitle(getString(R.string.float_notif_title))
-            .setContentText(
-                if (working) getString(R.string.ime_working)
-                else getString(R.string.float_notif_text),
-            )
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setSmallIcon(R.drawable.ic_stat_sync)
             .setContentIntent(openIntent)
-            .setOngoing(true)
+            .setOngoing(spec.ongoing)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, getString(R.string.notif_stop), stopIntent)
-        if (working) b.setProgress(0, 0, true) else b.setProgress(0, 0, false)
+        if (spec.showProgress) b.setProgress(0, 0, true) else b.setProgress(0, 0, false)
         return b.build()
     }
 
-    /** Refresh the foreground notification (WORKING progress or base). */
-    private fun refreshNotif(working: Boolean) {
+    /** Legacy boolean entry (WORKING vs base); delegates to the state builder. */
+    internal fun buildNotif(working: Boolean): Notification =
+        buildNotif(if (working) Dictation.State.WORKING else Dictation.State.IDLE)
+
+    private fun readPrefsObj(): org.json.JSONObject? {
+        return try {
+            CoreBridge.getSettings().getOrThrow().optJSONObject("preferences")
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /** Refresh the foreground notification for the live state (no stale mode). */
+    private fun refreshNotif(state: Dictation.State) {
         try {
-            getSystemService(NotificationManager::class.java)?.notify(NOTIF_ID, buildNotif(working))
+            getSystemService(NotificationManager::class.java)?.notify(NOTIF_ID, buildNotif(state))
         } catch (_: Exception) {
         }
+    }
+
+    /** Legacy boolean refresh; delegates to the state refresh. */
+    private fun refreshNotif(working: Boolean) {
+        refreshNotif(if (working) Dictation.State.WORKING else Dictation.State.IDLE)
     }
 
     /** Clear process-wide float state (no un-foregrounded run). */
@@ -654,7 +713,7 @@ class OverlayService : Service(), Dictation.Listener {
                 stopWorkPulse()
             }
         }
-        refreshNotif(s == Dictation.State.WORKING)
+        refreshNotif(s)
     }
 
     /** Gentle alpha pulse while the server works. */
@@ -733,6 +792,7 @@ class OverlayService : Service(), Dictation.Listener {
     }
 
     override fun onDestroy() {
+        foregrounded = false
         try {
             if (::dictation.isInitialized) dictation.listener = null
         } catch (_: Exception) {
