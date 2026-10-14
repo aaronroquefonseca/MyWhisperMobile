@@ -153,6 +153,13 @@ class OverlayService : Service(), Dictation.Listener {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
+                // Detach first: in-flight Dictation.finish set(IDLE)
+                // would otherwise refreshNotif an ongoing notif (42)
+                // with no live service behind it.
+                try {
+                    if (::dictation.isInitialized) dictation.listener = null
+                } catch (_: Exception) {
+                }
                 removeBubble()
                 clearFloatState()
                 stopForeground(STOP_FOREGROUND_REMOVE)
@@ -514,6 +521,10 @@ class OverlayService : Service(), Dictation.Listener {
     }
 
     override fun onDestroy() {
+        try {
+            if (::dictation.isInitialized) dictation.listener = null
+        } catch (_: Exception) {
+        }
         clearFloatState()
         removeBubble()
         bgWorkers.shutdownNow()
