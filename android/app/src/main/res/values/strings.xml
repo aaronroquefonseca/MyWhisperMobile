@@ -78,6 +78,9 @@
     <string name="float_need_overlay">Allow display over other apps first</string>
     <string name="float_overlay_recovery">Overlay permission was revoked — re-enable “Display over other apps” to restore the bubble</string>
     <string name="float_drag_handle">Drag handle — move bubble</string>
+    <string name="float_move_hint">Drag the handle below the mic to move the bubble</string>
+    <string name="float_stop">Stop — end dictation</string>
+    <string name="float_processing">Transcribing…</string>
     <string name="float_no_field">No editable field focused — open one and dictate again</string>
     <string name="a11y_desc">Commits floating-bubble dictations into the focused text field.</string>
     <string name="setup_theme">Theme</string>
