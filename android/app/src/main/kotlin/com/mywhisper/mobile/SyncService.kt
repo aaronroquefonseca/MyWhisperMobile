@@ -26,9 +26,13 @@ class SyncService : Service() {
     companion object {
         const val ACTION_START = "com.mywhisper.mobile.sync.START"
         const val ACTION_STOP = "com.mywhisper.mobile.sync.STOP"
+        /** Notification STOP: stops BOTH services (single STOP stops one). */
+        const val ACTION_STOP_ALL = "com.mywhisper.mobile.sync.STOP_ALL"
         const val ACTION_SYNC_NOW = "com.mywhisper.mobile.sync.NOW"
         const val ACTION_REFRESH = "com.mywhisper.mobile.sync.REFRESH_NOTIF"
-        private const val CHANNEL = "mw-sync"
+        // Shared row: same channel + ID as OverlayService (see
+        // NotifPolicy.UNIFIED_*); one visible row, two FGS owners.
+        private const val CHANNEL = "mw-status"
         private const val NOTIF_ID = 41
 
         /** Boot/update attempt carried for bounded retry (default -1 = interactive, no retry). */
@@ -73,7 +77,7 @@ class SyncService : Service() {
         super.onCreate()
         val mgr = getSystemService(NotificationManager::class.java)
         mgr.createNotificationChannel(
-            NotificationChannel(CHANNEL, "Device sync", NotificationManager.IMPORTANCE_LOW),
+            NotificationChannel(CHANNEL, getString(R.string.unified_notif_channel), NotificationManager.IMPORTANCE_LOW),
         )
     }
 
@@ -84,7 +88,37 @@ class SyncService : Service() {
                 android.util.Log.i("MwSync", "stopping")
                 CoreBridge.syncStop()
                 foregrounded = false
+                NotifPolicy.UnifiedState.syncActive = false
+                NotifPolicy.UnifiedState.syncing = false
+                syncing = false
                 stopForeground(STOP_FOREGROUND_REMOVE)
+                // Shared row: we just removed it — if the bubble still
+                // lives, hand it back immediately (recompose, not orphan).
+                try {
+                    if (NotifPolicy.UnifiedState.floatActive) OverlayService.refreshNotif(this)
+                } catch (_: Exception) {
+                }
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            ACTION_STOP_ALL -> {
+                // Notification STOP: both rows are one row, so one tap
+                // stops both (single STOP from a tab toggle stops one).
+                android.util.Log.i("MwSync", "stopping all")
+                CoreBridge.syncStop()
+                foregrounded = false
+                NotifPolicy.UnifiedState.syncActive = false
+                NotifPolicy.UnifiedState.syncing = false
+                syncing = false
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                try {
+                    OverlayService.stop(this)
+                } catch (_: Exception) {
+                }
+                try {
+                    getSystemService(NotificationManager::class.java)?.cancel(NotifPolicy.LEGACY_FLOAT_NOTIF_ID)
+                } catch (_: Exception) {
+                }
                 stopSelf()
                 return START_NOT_STICKY
             }
@@ -92,6 +126,7 @@ class SyncService : Service() {
                 // Notify only while foregrounded: a stopped service
                 // must not mint an orphan notification it cannot own.
                 syncing = true
+                NotifPolicy.UnifiedState.syncing = true
                 if (foregrounded) refreshSyncNotif()
                 workers.execute {
                     try {
@@ -99,6 +134,7 @@ class SyncService : Service() {
                     } catch (_: Exception) {
                     } finally {
                         syncing = false
+                        NotifPolicy.UnifiedState.syncing = false
                         if (foregrounded) refreshSyncNotif()
                     }
                 }
@@ -123,6 +159,9 @@ class SyncService : Service() {
                 // a later alarm once the app is foregrounded), an
                 // interactive start never denies and never retries.
                 val bootAttempt = intent?.getIntExtra(EXTRA_BOOT_ATTEMPT, -1) ?: -1
+                // Publish before foregrounding so the shared builder sees us.
+                NotifPolicy.UnifiedState.syncActive = true
+                NotifPolicy.UnifiedState.syncing = syncing
                 try {
                     startForegroundWithType()
                 } catch (e: Exception) {
@@ -131,6 +170,8 @@ class SyncService : Service() {
                         CoreBridge.syncStop()
                     } catch (_: Exception) {
                     }
+                    NotifPolicy.UnifiedState.syncActive = false
+                    NotifPolicy.UnifiedState.syncing = false
                     BootPolicy.nextBootRetryAttempt(bootAttempt, BootReceiver.MAX_RETRIES)?.let { next ->
                         android.util.Log.i("MwSync", "boot start denied, retrying (attempt=$next)")
                         BootReceiver.scheduleRetry(this, next)
@@ -151,21 +192,38 @@ class SyncService : Service() {
     }
 
     /**
-     * Per-mode sync notification driven by [NotifPolicy]: idle =
-     * base text, syncing = working text + indeterminate progress
-     * when the pref allows. STOP + contentIntent on every mode;
-     * Sync-now action + BigTextStyle keep the actions expanded.
+     * SHARED unified-row builder (same channel + ID + spec as
+     * OverlayService): bubble wins while active (RECORDING/WORKING), else
+     * sync paints when alive, else the lone idle bubble. Self counts as
+     * alive (the builder runs foregrounded); the bubble comes from
+     * [NotifPolicy.UnifiedState]. STOP stops both (ACTION_STOP_ALL), tap
+     * opens Setup (MainActivity lands on Setup), BigTextStyle keeps the
+     * actions expanded, per-mode prefs via [NotifPolicy].
      */
     internal fun buildSyncNotif(syncing: Boolean): Notification {
-        val prefs = try {
-            NotifPolicy.syncPrefsJson(CoreBridge.getSettings().getOrThrow().optJSONObject("preferences"))
+        val prefsObj = try {
+            CoreBridge.getSettings().getOrThrow().optJSONObject("preferences")
         } catch (_: Exception) {
-            NotifPolicy.SyncPrefs()
+            null
         }
-        val spec = NotifPolicy.forSync(syncing, prefs)
+        val floatPrefs = NotifPolicy.floatPrefsJson(prefsObj)
+        val syncPrefs = NotifPolicy.syncPrefsJson(prefsObj)
+        val spec = NotifPolicy.forUnified(
+            floatActive = NotifPolicy.UnifiedState.floatActive,
+            floatState = NotifPolicy.UnifiedState.floatState,
+            floatPrefs = floatPrefs,
+            syncActive = true,
+            syncing = syncing,
+            syncPrefs = syncPrefs,
+        ) ?: NotifPolicy.UnifiedSpec(
+            NotifPolicy.UnifiedChrome.SYNC_IDLE,
+            ongoing = syncPrefs.ongoing,
+            showProgress = false,
+            showSyncNow = true,
+        )
         val stopIntent = PendingIntent.getService(
-            this, 0,
-            Intent(this, SyncService::class.java).setAction(ACTION_STOP),
+            this, 10,
+            Intent(this, SyncService::class.java).setAction(ACTION_STOP_ALL),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val nowIntent = PendingIntent.getService(
@@ -178,24 +236,39 @@ class SyncService : Service() {
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        val text = if (syncing) getString(R.string.notif_sync_working_text)
-        else getString(R.string.notif_sync_text)
+        val text = when (spec.chrome) {
+            NotifPolicy.UnifiedChrome.FLOAT_RECORDING -> getString(R.string.float_notif_rec_text)
+            NotifPolicy.UnifiedChrome.FLOAT_WORKING -> getString(R.string.ime_working)
+            NotifPolicy.UnifiedChrome.FLOAT_IDLE -> getString(R.string.float_notif_text)
+            NotifPolicy.UnifiedChrome.SYNCING -> getString(R.string.notif_sync_working_text)
+            NotifPolicy.UnifiedChrome.SYNC_IDLE -> getString(R.string.notif_sync_text)
+        }
+        val title = when (spec.chrome) {
+            NotifPolicy.UnifiedChrome.FLOAT_RECORDING,
+            NotifPolicy.UnifiedChrome.FLOAT_WORKING,
+            NotifPolicy.UnifiedChrome.FLOAT_IDLE -> getString(R.string.float_notif_title)
+            NotifPolicy.UnifiedChrome.SYNCING,
+            NotifPolicy.UnifiedChrome.SYNC_IDLE -> getString(R.string.notif_sync_title)
+        }
         val b = NotificationCompat.Builder(this, CHANNEL)
-            .setContentTitle(getString(R.string.notif_sync_title))
+            .setContentTitle(title)
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setSmallIcon(R.drawable.ic_stat_sync)
             .setContentIntent(openIntent)
             .setOngoing(spec.ongoing)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, getString(R.string.notif_stop), stopIntent)
-            .addAction(android.R.drawable.ic_popup_sync, getString(R.string.notif_sync_now), nowIntent)
+        if (spec.showSyncNow) {
+            b.addAction(android.R.drawable.ic_popup_sync, getString(R.string.notif_sync_now), nowIntent)
+        }
         if (spec.showProgress) b.setProgress(0, 0, true) else b.setProgress(0, 0, false)
         return b.build()
     }
 
-    /** Refresh the foreground notification for the live sync state (no stale mode). */
+    /** Refresh the shared foreground row for the live sync state (no stale mode). */
     private fun refreshSyncNotif() {
         try {
+            NotifPolicy.UnifiedState.syncing = syncing
             getSystemService(NotificationManager::class.java)?.notify(NOTIF_ID, buildSyncNotif(syncing))
         } catch (_: Exception) {
         }
@@ -203,6 +276,11 @@ class SyncService : Service() {
 
     private fun startForegroundWithType() {
         val notif: Notification = buildSyncNotif(syncing)
+        // Drop the retired solo bubble row (pre-unification installs).
+        try {
+            getSystemService(NotificationManager::class.java)?.cancel(NotifPolicy.LEGACY_FLOAT_NOTIF_ID)
+        } catch (_: Exception) {
+        }
         if (Build.VERSION.SDK_INT >= 29) {
             startForeground(
                 NOTIF_ID, notif,
@@ -216,6 +294,8 @@ class SyncService : Service() {
 
     override fun onDestroy() {
         foregrounded = false
+        NotifPolicy.UnifiedState.syncActive = false
+        NotifPolicy.UnifiedState.syncing = false
         try {
             CoreBridge.syncStop()
         } catch (_: Exception) {

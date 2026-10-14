@@ -96,4 +96,129 @@ class NotifPolicyTest {
         assertFalse(NotifPolicy.forSync(true, off).showProgress)
         assertFalse(NotifPolicy.forSync(false, off).ongoing)
     }
+
+    // -- Unified row (one row for bubble + sync) -----------------------
+
+    @Test
+    fun unified_neitherActive_showsNothing() {
+        assertEquals(
+            null,
+            NotifPolicy.forUnified(
+                floatActive = false,
+                floatState = Dictation.State.IDLE,
+                floatPrefs = NotifPolicy.FloatPrefs(),
+                syncActive = false,
+                syncing = false,
+                syncPrefs = NotifPolicy.SyncPrefs(),
+            ),
+        )
+    }
+
+    @Test
+    fun unified_floatOnly_paintsFloat() {
+        val f = NotifPolicy.FloatPrefs()
+        val s = NotifPolicy.SyncPrefs()
+        assertEquals(
+            NotifPolicy.UnifiedChrome.FLOAT_IDLE,
+            NotifPolicy.forUnified(true, Dictation.State.IDLE, f, false, false, s)!!.chrome,
+        )
+        val rec = NotifPolicy.forUnified(true, Dictation.State.RECORDING, f, false, false, s)!!
+        assertEquals(NotifPolicy.UnifiedChrome.FLOAT_RECORDING, rec.chrome)
+        assertFalse(rec.showSyncNow)
+        val work = NotifPolicy.forUnified(true, Dictation.State.WORKING, f, false, true, s)!!
+        assertEquals(NotifPolicy.UnifiedChrome.FLOAT_WORKING, work.chrome)
+        assertTrue(work.showProgress)
+        assertFalse(work.showSyncNow)
+    }
+
+    @Test
+    fun unified_syncOnly_paintsSync() {
+        val f = NotifPolicy.FloatPrefs()
+        val s = NotifPolicy.SyncPrefs()
+        val idle = NotifPolicy.forUnified(false, Dictation.State.IDLE, f, true, false, s)!!
+        assertEquals(NotifPolicy.UnifiedChrome.SYNC_IDLE, idle.chrome)
+        assertTrue(idle.showSyncNow)
+        assertFalse(idle.showProgress)
+        val syncing = NotifPolicy.forUnified(false, Dictation.State.IDLE, f, true, true, s)!!
+        assertEquals(NotifPolicy.UnifiedChrome.SYNCING, syncing.chrome)
+        assertTrue(syncing.showSyncNow)
+        assertTrue(syncing.showProgress)
+    }
+
+    @Test
+    fun unified_bubbleActive_winsOverSync() {
+        val f = NotifPolicy.FloatPrefs()
+        val s = NotifPolicy.SyncPrefs()
+        // RECORDING beats even an active sync round: no Sync-now action.
+        val rec = NotifPolicy.forUnified(true, Dictation.State.RECORDING, f, true, true, s)!!
+        assertEquals(NotifPolicy.UnifiedChrome.FLOAT_RECORDING, rec.chrome)
+        assertFalse(rec.showSyncNow)
+        val work = NotifPolicy.forUnified(true, Dictation.State.WORKING, f, true, true, s)!!
+        assertEquals(NotifPolicy.UnifiedChrome.FLOAT_WORKING, work.chrome)
+        assertFalse(work.showSyncNow)
+    }
+
+    @Test
+    fun unified_bubbleIdle_yieldsToSync() {
+        val f = NotifPolicy.FloatPrefs()
+        val s = NotifPolicy.SyncPrefs()
+        val syncing = NotifPolicy.forUnified(true, Dictation.State.IDLE, f, true, true, s)!!
+        assertEquals(NotifPolicy.UnifiedChrome.SYNCING, syncing.chrome)
+        assertTrue(syncing.showSyncNow)
+        val idle = NotifPolicy.forUnified(true, Dictation.State.IDLE, f, true, false, s)!!
+        assertEquals(NotifPolicy.UnifiedChrome.SYNC_IDLE, idle.chrome)
+    }
+
+    @Test
+    fun unified_hiddenMode_showsNothing() {
+        // Bubble idle + sync round with progress off: only sync paints,
+        // with no progress bar (float contributes nothing).
+        val idle = NotifPolicy.forUnified(
+            true, Dictation.State.IDLE, NotifPolicy.FloatPrefs(),
+            true, true, NotifPolicy.SyncPrefs(showProgress = false),
+        )!!
+        assertEquals(NotifPolicy.UnifiedChrome.SYNCING, idle.chrome)
+        assertFalse(idle.showProgress)
+        // Bubble working with progress off + sync round: bubble still
+        // wins, no progress, no Sync-now (sync contributes nothing).
+        val work = NotifPolicy.forUnified(
+            true, Dictation.State.WORKING, NotifPolicy.FloatPrefs(workProgress = false),
+            true, true, NotifPolicy.SyncPrefs(),
+        )!!
+        assertEquals(NotifPolicy.UnifiedChrome.FLOAT_WORKING, work.chrome)
+        assertFalse(work.showProgress)
+        assertFalse(work.showSyncNow)
+        assertTrue(work.ongoing)
+    }
+
+    @Test
+    fun unified_floatToggles_reflectedInRow() {
+        val off = NotifPolicy.floatPrefs(mapOf(NotifPolicy.KEY_IDLE_ONGOING to false))
+        val idle = NotifPolicy.forUnified(
+            true, Dictation.State.IDLE, off,
+            false, false, NotifPolicy.SyncPrefs(),
+        )!!
+        assertFalse(idle.ongoing)
+        val rec = NotifPolicy.forUnified(
+            true, Dictation.State.RECORDING, off,
+            false, false, NotifPolicy.SyncPrefs(),
+        )!!
+        assertTrue(rec.ongoing)
+    }
+
+    @Test
+    fun unified_syncToggles_reflectedInRow() {
+        val off = NotifPolicy.syncPrefs(
+            mapOf(
+                NotifPolicy.KEY_SYNC_ONGOING to false,
+                NotifPolicy.KEY_SYNC_PROGRESS to false,
+            ),
+        )
+        val syncing = NotifPolicy.forUnified(
+            false, Dictation.State.IDLE, NotifPolicy.FloatPrefs(),
+            true, true, off,
+        )!!
+        assertFalse(syncing.ongoing)
+        assertFalse(syncing.showProgress)
+    }
 }

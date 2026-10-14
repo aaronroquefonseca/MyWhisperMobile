@@ -71,7 +71,7 @@
     <string name="setup_float_overlay">Permitir mostrar sobre apps</string>
     <string name="setup_float_a11y">Activar servicio de dictado</string>
     <string name="setup_float_a11y_sub">Permite insertar resultados en el campo activo.</string>
-    <string name="float_notif_channel">Botón flotante</string>
+    <string name="unified_notif_channel">Estado de MyWhisper</string>
     <string name="float_notif_title">Burbuja MyWhisper</string>
     <string name="float_notif_text">Dictado flotante activo</string>
     <string name="float_notif_rec_text">Grabando… toca Detener para terminar</string>

@@ -103,4 +103,88 @@ object NotifPolicy {
     fun forSync(syncing: Boolean, prefs: SyncPrefs): SyncSpec =
         if (syncing) SyncSpec(ongoing = prefs.ongoing, showProgress = prefs.showProgress)
         else SyncSpec(ongoing = prefs.ongoing, showProgress = false)
+
+    // -- Unified foreground row (one row for bubble + sync) --------------
+
+    /**
+     * Shared notification identity: BOTH services call startForeground
+     * with this ID so the shade shows one row. Each service still holds
+     * its own foreground state (independent FGS types); the visible row
+     * is last-writer-wins, always composed from [UnifiedState].
+     */
+    const val UNIFIED_CHANNEL = "mw-status"
+    const val UNIFIED_NOTIF_ID = 41
+
+    /** Legacy bubble row retired by the unification (cancelled on start). */
+    const val LEGACY_FLOAT_NOTIF_ID = 42
+
+    /**
+     * Process-wide live state (both services run in the same process,
+     * so a singleton suffices — no IPC). Writers: OverlayService sets
+     * float*, SyncService sets sync*. Readers: both builders compose
+     * from the full snapshot so either row refresh reflects both.
+     */
+    object UnifiedState {
+        @Volatile var floatActive: Boolean = false
+        @Volatile var floatState: Dictation.State = Dictation.State.IDLE
+        @Volatile var syncActive: Boolean = false
+        @Volatile var syncing: Boolean = false
+
+        fun reset() {
+            floatActive = false
+            floatState = Dictation.State.IDLE
+            syncActive = false
+            syncing = false
+        }
+    }
+
+    /** Which mode paints the unified row (single chrome, no stacking). */
+    enum class UnifiedChrome { FLOAT_RECORDING, FLOAT_WORKING, FLOAT_IDLE, SYNCING, SYNC_IDLE }
+
+    /**
+     * Resolved unified spec: exactly one chrome + its ongoing/progress
+     * + whether the Sync-now action applies (sync chrome only). A
+     * disabled/hidden mode contributes nothing — only the shown mode's
+     * prefs resolve here.
+     */
+    data class UnifiedSpec(
+        val chrome: UnifiedChrome,
+        val ongoing: Boolean,
+        val showProgress: Boolean,
+        val showSyncNow: Boolean,
+    )
+
+    /**
+     * Compose one row from both states. Bubble wins while active
+     * (RECORDING/WORKING → its title/text/actions); otherwise sync
+     * paints when alive, else the lone idle bubble. Null when neither
+     * lives (last one out removes the row).
+     */
+    @JvmStatic
+    fun forUnified(
+        floatActive: Boolean,
+        floatState: Dictation.State,
+        floatPrefs: FloatPrefs,
+        syncActive: Boolean,
+        syncing: Boolean,
+        syncPrefs: SyncPrefs,
+    ): UnifiedSpec? {
+        if (!floatActive && !syncActive) return null
+        if (floatActive && floatState != Dictation.State.IDLE) {
+            val spec = forFloatState(floatState, floatPrefs)
+            val chrome = if (floatState == Dictation.State.RECORDING) {
+                UnifiedChrome.FLOAT_RECORDING
+            } else {
+                UnifiedChrome.FLOAT_WORKING
+            }
+            return UnifiedSpec(chrome, spec.ongoing, spec.showProgress, showSyncNow = false)
+        }
+        if (syncActive) {
+            val spec = forSync(syncing, syncPrefs)
+            val chrome = if (syncing) UnifiedChrome.SYNCING else UnifiedChrome.SYNC_IDLE
+            return UnifiedSpec(chrome, spec.ongoing, spec.showProgress, showSyncNow = true)
+        }
+        val spec = forFloatState(Dictation.State.IDLE, floatPrefs)
+        return UnifiedSpec(UnifiedChrome.FLOAT_IDLE, spec.ongoing, spec.showProgress, showSyncNow = false)
+    }
 }

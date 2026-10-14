@@ -71,7 +71,7 @@
     <string name="setup_float_overlay">Allow display over apps</string>
     <string name="setup_float_a11y">Enable dictation service</string>
     <string name="setup_float_a11y_sub">Lets results land in the focused field.</string>
-    <string name="float_notif_channel">Floating button</string>
+    <string name="unified_notif_channel">MyWhisper status</string>
     <string name="float_notif_title">MyWhisper bubble</string>
     <string name="float_notif_text">Floating dictation active</string>
     <string name="float_notif_rec_text">Recording… tap Stop to end</string>
