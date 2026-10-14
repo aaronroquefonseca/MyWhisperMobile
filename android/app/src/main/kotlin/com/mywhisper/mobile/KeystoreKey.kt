@@ -29,9 +29,14 @@ object KeystoreKey {
 
     private fun ByteArray.hex(): String = joinToString("") { "%02x".format(it) }
 
+    internal fun isValidHexKey(s: String): Boolean =
+        s.length == 64 && s.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }
+
     fun getOrCreateHex(ctx: Context): String {
         val p = prefs(ctx)
-        p.getString(KEY, null)?.let { if (it.length == 64) return it }
+        // Fail closed: length-only check would hand a non-hex string to
+        // nativeOpen/SQLCipher. Malformed values are dropped and replaced.
+        p.getString(KEY, null)?.let { if (isValidHexKey(it)) return it }
         val raw = ByteArray(32).also { SecureRandom().nextBytes(it) }
         val hex = raw.hex()
         p.edit().putString(KEY, hex).apply()

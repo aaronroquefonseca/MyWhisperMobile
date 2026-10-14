@@ -208,11 +208,23 @@ fn is_not_a_database(e: &rusqlite::Error) -> bool {
     format!("{e:?}").contains("not a database")
 }
 
+/// Delete SQLite sidecars (`-wal`, `-shm`, `-journal`) next to `path`.
+/// After the plaintext→encrypted migration the main file is replaced
+/// by `rename`, but the old sidecars survive next to it and still hold
+/// plaintext pages. Best-effort: missing files are fine.
+fn remove_sidecars(path: &Path) {
+    for suffix in ["-wal", "-shm", "-journal"] {
+        let sidecar = format!("{}{suffix}", path.display());
+        let _ = std::fs::remove_file(sidecar);
+    }
+}
+
 /// Encrypt a legacy plaintext database in place via a temp file:
 /// attach fresh encrypted db, export, atomically replace.
 fn migrate_plaintext_to_encrypted(path: &Path, key: &[u8; 32]) -> rusqlite::Result<()> {
     let tmp = path.with_extension("db.migrating");
     let _ = std::fs::remove_file(&tmp);
+    remove_sidecars(&tmp);
     let plain = Connection::open(path)?;
     let attach = format!(
         "ATTACH DATABASE '{}' AS enc KEY \"x'{}'\"",
@@ -225,6 +237,10 @@ fn migrate_plaintext_to_encrypted(path: &Path, key: &[u8; 32]) -> rusqlite::Resu
     drop(plain);
     std::fs::rename(&tmp, path)
         .map_err(|e| rusqlite::Error::ToSqlConversionFailure(format!("replace db: {e}").into()))?;
+    // The rename only moves the main file: stale plaintext sidecars
+    // from the old db (and any WAL the temp db wrote) must go too.
+    remove_sidecars(path);
+    remove_sidecars(&tmp);
     Ok(())
 }
 
@@ -1477,5 +1493,83 @@ mod tests {
         }])
         .unwrap();
         assert_eq!(snippet(&a, "k").as_deref(), Some("new"));
+    }
+
+    #[test]
+    fn hex_key_rejects_non_hex() {
+        // 64 chars but non-hex: same class of bad key the Android
+        // length-only check used to let through. Fail closed.
+        assert!(hex_decode_key(&"zz".repeat(32)).is_none());
+        assert!(hex_decode_key(&"gg".repeat(32)).is_none());
+        assert!(
+            hex_decode_key("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdeg")
+                .is_none()
+        );
+        assert!(hex_decode_key("short").is_none());
+        assert!(hex_decode_key(&"ab".repeat(31)).is_none());
+        assert!(hex_decode_key(&"ab".repeat(33)).is_none());
+        assert!(hex_decode_key(&"ab".repeat(32)).is_some());
+        assert!(hex_decode_key(&"AB".repeat(32)).is_some());
+    }
+
+    #[test]
+    fn plaintext_migration_removes_sidecars() {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1000);
+        let dir = std::env::temp_dir().join(format!(
+            "mywhisper-migrate-test-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("state.db");
+        // Deterministic test key (no env mutation: parallel tests share
+        // the process env, so this test passes the key explicitly).
+        let test_key = "0123456789abcdef".repeat(4);
+        assert_eq!(test_key.len(), 64);
+        // Legacy plaintext db with one marker row.
+        {
+            let plain = Connection::open(&path).unwrap();
+            plain
+                .execute_batch("CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+                .unwrap();
+            plain
+                .execute("INSERT INTO kv (key, value) VALUES ('probe', 'kept')", [])
+                .unwrap();
+            drop(plain);
+        }
+        // Stale plaintext sidecars: L0 residue the migration must wipe.
+        for suffix in ["-wal", "-shm", "-journal"] {
+            let sidecar = format!("{}{suffix}", path.display());
+            std::fs::write(&sidecar, b"plaintext residue").unwrap();
+        }
+        // Exercise the migration directly so the wipe is observed
+        // before reopen recreates live (encrypted) WAL sidecars.
+        let key = hex_decode_key(&test_key).unwrap();
+        migrate_plaintext_to_encrypted(&path, &key).unwrap();
+        for suffix in ["-wal", "-shm", "-journal"] {
+            assert!(
+                !std::path::Path::new(&format!("{}{suffix}", path.display())).exists(),
+                "sidecar {suffix} must be wiped by migration"
+            );
+        }
+        let store_conn = Connection::open(&path).unwrap();
+        store_conn.execute_batch(&key_pragma(&key)).unwrap();
+        // Reopened live sidecars (WAL) may exist again, but must never
+        // carry the old plaintext bytes.
+        for suffix in ["-wal", "-shm", "-journal"] {
+            let sidecar = format!("{}{suffix}", path.display());
+            if let Ok(bytes) = std::fs::read(&sidecar) {
+                assert!(
+                    !bytes.windows(17).any(|w| w == b"plaintext residue"),
+                    "sidecar {suffix} must not retain plaintext"
+                );
+            }
+        }
+        let kept: String = store_conn
+            .query_row("SELECT value FROM kv WHERE key = 'probe'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(kept, "kept");
+        drop(store_conn);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
