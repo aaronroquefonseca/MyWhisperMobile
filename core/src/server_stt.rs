@@ -610,6 +610,534 @@ pub fn transcribe_chain(
     Err(errors.join("; "))
 }
 
+// ---------------------------------------------------------------------------
+// Server status + provider-switch reconcile (desktop #11 port).
+//
+// Desktop runs local whisper/sherpa child processes and reconciles
+// them from a service watcher; mobile is server-only (remote
+// request/response per utterance, no owned processes), so the port
+// tracks the *chain* instead of processes:
+//
+// - `server_status` reports the single primary remote entry (never one
+//   row per engine: the desktop bug was whisper + sherpa-offline +
+//   sherpa-online all "running" on one custom port; the mobile analog
+//   is one enabled chain entry looking live while fallbacks do too).
+// - `ReconcileAuthority { witness, snapshot_fp }` is built per
+//   validated tick and carried into every apply branch (never
+//   re-sampled): a queued tick whose witness predates a control
+//   transition, or whose snapshot no longer matches current settings,
+//   defers instead of killing/launching on stale intent.
+// - Stale ticks defer without touching markers, suppression, or the
+//   active chain, so the next poll retries against truth. Only success
+//   advances the `(primary, auto)` pair.
+// - Explicit Stop (`record_stop`, wired to engine cancel) bumps the
+//   control generation (revoking queued witnesses, including on an
+//   empty chain) and suppresses auto-restart of that fingerprint until
+//   a deliberate settings change expires it. Expiry refusal preserves
+//   bookkeeping (`last_auto` untouched).
+// - A primary move bumps the generation, killing the previous chain:
+//   stale in-flight work observes the newer generation and settles
+//   instead of relaunching.
+// ---------------------------------------------------------------------------
+
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::Mutex;
+
+/// Control generation: bumped on every applied switch/stop so queued
+/// work from an older configuration aborts instead of resurrecting
+/// it.
+static SERVER_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// Currently reconciled chain fingerprint (empty = cold/none).
+static ACTIVE_FP: Mutex<String> = Mutex::new(String::new());
+
+/// Admission: one holding across each check+mutate section below, so a
+/// concurrent reconcile/expire cannot slip between the decision and
+/// the mutation (desktop `SERVER_START_LOCK` analog; mobile sections
+/// are memory-only, no blocking operations under it).
+static RECONCILE_LOCK: Mutex<()> = Mutex::new(());
+
+/// Explicit-Stop authority: post-bump generation + stopped fingerprint
+/// (desktop `LAST_STOP_GEN` + `STOPPED_FP` analog). A queued autostart
+/// observes the newer Stop and settles cold until a deliberate
+/// settings change expires it.
+static LAST_STOP_GEN: AtomicU64 = AtomicU64::new(0);
+static STOPPED_FP: Mutex<String> = Mutex::new(String::new());
+
+/// Generation at which autostart-disabled was last observed (desktop
+/// `LAST_DISABLE_OBSERVED_GEN` analog). Orders a Stop against the
+/// toggle an expiry would serve: only a Stop strictly newer than the
+/// last observed disable revokes it. Must be captured alongside the
+/// observation, never sampled when a delayed update runs.
+static LAST_DISABLE_OBSERVED_GEN: AtomicU64 = AtomicU64::new(0);
+
+/// Admitted utterances (recording or transcribing). Reconciliation
+/// defers while non-zero: never kill/replace the chain mid-utterance;
+/// the pending switch applies on the next idle tick.
+static ACTIVE_UTTERANCES: AtomicUsize = AtomicUsize::new(0);
+
+/// Current control generation (witness source for ticks).
+pub fn server_generation() -> u64 {
+    SERVER_GENERATION.load(Ordering::Acquire)
+}
+
+fn bump_generation() {
+    SERVER_GENERATION.fetch_add(1, Ordering::AcqRel);
+}
+
+/// True while an utterance is recording or transcribing.
+pub fn inference_active() -> bool {
+    ACTIVE_UTTERANCES.load(Ordering::Acquire) > 0
+}
+
+pub(crate) fn active_inc() {
+    ACTIVE_UTTERANCES.fetch_add(1, Ordering::AcqRel);
+}
+
+pub(crate) fn active_dec() {
+    ACTIVE_UTTERANCES.fetch_sub(1, Ordering::AcqRel);
+}
+
+fn active_fp() -> String {
+    ACTIVE_FP.lock().map(|g| g.clone()).unwrap_or_default()
+}
+
+fn stopped_fp() -> String {
+    STOPPED_FP.lock().map(|g| g.clone()).unwrap_or_default()
+}
+
+/// First enabled remote entry: the chain primary (Local skipped,
+/// failover order = list order).
+fn primary_remote(stt: &SttSettings) -> Option<&SttChainEntry> {
+    stt.entries
+        .iter()
+        .find(|e| e.enabled && e.kind != SttEntryKind::Local)
+}
+
+fn entry_identity(e: &SttChainEntry) -> String {
+    let kind = match e.kind {
+        SttEntryKind::Local => "local",
+        SttEntryKind::SelfHosted => "self-hosted",
+        SttEntryKind::Cloud => "cloud",
+    };
+    format!(
+        "{kind}|{}|{}|{}",
+        e.provider.trim().to_ascii_lowercase(),
+        e.url.trim().trim_end_matches('/'),
+        e.model.trim(),
+    )
+}
+
+/// Primary chain identity without the autostart flag: lets the tick
+/// distinguish "config moved" (replace/stop) from "only the autostart
+/// toggle moved" (warm on enable, keep on disable). Language affects
+/// every request, so it travels with the identity; unrelated edits
+/// (keep-warm, dictionary, unused keys) never bounce the chain.
+pub fn stt_primary_id(stt: &SttSettings) -> String {
+    let local_on = stt
+        .entries
+        .iter()
+        .any(|e| e.enabled && e.kind == SttEntryKind::Local);
+    let primary = primary_remote(stt)
+        .map(entry_identity)
+        .unwrap_or_else(|| "none".to_string());
+    format!(
+        "local_on={local_on}|primary={primary}|lang={}",
+        stt.language.trim()
+    )
+}
+
+/// Fingerprint of the running-relevant configuration: primary identity
+/// + autostart. The tick reconciles only when this moves.
+pub fn stt_fingerprint(stt: &SttSettings) -> String {
+    format!("{}|auto={}", stt_primary_id(stt), stt.auto_start_server)
+}
+
+/// Validated tick observation carried into apply calls so queued work
+/// can never authorize stale settings with a fresh generation, nor
+/// kill or clear on behalf of a superseded snapshot.
+#[derive(Clone, Debug)]
+pub struct ReconcileAuthority {
+    /// Control generation validated at observation time (never
+    /// re-sampled downstream: a newer transition revokes this).
+    pub witness: u64,
+    /// Fingerprint of the observed settings snapshot.
+    pub snapshot_fp: String,
+}
+
+/// Tick result. Deferred/failed ticks leave the `(primary, auto)`
+/// markers untouched so the next poll retries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TickOutcome {
+    Unchanged,
+    Applied,
+    Deferred,
+}
+
+/// Record an observed autostart disable. `gen_at_observe` must be the
+/// generation sampled with the snapshot being recorded.
+fn note_disable_observed(gen_at_observe: u64) {
+    LAST_DISABLE_OBSERVED_GEN.store(gen_at_observe, Ordering::Release);
+}
+
+/// Explicit user Stop: bump the generation (revoking queued witnesses,
+/// even on an empty chain) and suppress auto-restart of `fp` until a
+/// deliberate settings change expires it. Empty fingerprints bump but
+/// record nothing (fingerprint-gated, like desktop).
+pub fn record_stop(fp: &str) {
+    bump_generation();
+    if fp.is_empty() {
+        return;
+    }
+    LAST_STOP_GEN.store(server_generation(), Ordering::Release);
+    *STOPPED_FP.lock().unwrap_or_else(|p| p.into_inner()) = fp.to_string();
+}
+
+/// Expire Stop suppression for a deliberate transition (autostart
+/// re-enable / applied primary move). Validated end to end: the
+/// witness must still match, the snapshot must still be current, and
+/// no Stop strictly newer than the last observed disable may target
+/// the current configuration. Anything stale returns false without
+/// touching suppression, so a newer Stop survives. Returns true when
+/// the suppression was expired (or nothing suppressed it).
+pub fn expire_stop_suppression_at(current: &SttSettings, auth: &ReconcileAuthority) -> bool {
+    let _admission = match RECONCILE_LOCK.lock() {
+        Ok(g) => g,
+        Err(_) => return false,
+    };
+    if server_generation() != auth.witness {
+        return false;
+    }
+    let fp_now = stt_fingerprint(current);
+    if fp_now.is_empty() || fp_now != auth.snapshot_fp {
+        return false;
+    }
+    if LAST_STOP_GEN.load(Ordering::Acquire) > LAST_DISABLE_OBSERVED_GEN.load(Ordering::Acquire)
+        && stopped_fp() == fp_now
+    {
+        return false;
+    }
+    *STOPPED_FP.lock().unwrap_or_else(|p| p.into_inner()) = String::new();
+    true
+}
+
+/// Single-listener status: at most one row — the primary remote entry
+/// with its liveness (active chain + not Stop-suppressed). Fallbacks
+/// are never reported as running. Empty when no remote is enabled.
+pub fn server_status(stt: &SttSettings) -> Vec<(String, bool)> {
+    let Some(entry) = primary_remote(stt) else {
+        return Vec::new();
+    };
+    let fp = stt_fingerprint(stt);
+    let live = !fp.is_empty() && active_fp() == fp && stopped_fp() != fp;
+    let label = if entry.name.trim().is_empty() {
+        entry_identity(entry)
+    } else {
+        entry.name.trim().to_string()
+    };
+    vec![(label, live)]
+}
+
+/// Reconcile the active chain with the settings: make the running
+/// chain match, killing the previous one on a switch. Returns
+/// `Ok(true)` when deferred (active utterance, stale authority, or
+/// superseded snapshot — no mutation), `Ok(false)` when applied
+/// (including settling cold under Stop suppression).
+///
+/// `authority` carries the tick's validated witness (`Some`) into
+/// every decision, verified under admission before mutating. `None`
+/// derives fresh (synchronous deliberate callers with no window).
+pub fn reconcile_servers(
+    stt: &SttSettings,
+    authority: Option<ReconcileAuthority>,
+) -> Result<bool, String> {
+    // Attested identity when carried, locally derived otherwise; every
+    // decision below keys off this one value.
+    let fp = match &authority {
+        Some(auth) => auth.snapshot_fp.clone(),
+        None => stt_fingerprint(stt),
+    };
+    let _admission = RECONCILE_LOCK.lock().map_err(|e| e.to_string())?;
+    if inference_active() {
+        return Ok(true);
+    }
+    // Carried witness revalidated under admission: queued work whose
+    // witness predates a control transition defers instead of acting
+    // on stale intent.
+    if let Some(ref auth) = authority
+        && server_generation() != auth.witness
+    {
+        return Ok(true);
+    }
+    // Acting on a superseded snapshot is never correct here,
+    // regardless of caller: killing the chain for settings that are no
+    // longer current can only drop the right one. Deliberate callers
+    // pass current settings, so this always matches for them.
+    if stt_fingerprint(stt) != fp {
+        return Ok(true);
+    }
+    // A Stop targeting this fingerprint suppresses restart: settle
+    // cold (applied, no launch, no resurrection).
+    if !fp.is_empty() && stopped_fp() == fp {
+        return Ok(false);
+    }
+    if primary_remote(stt).is_none() {
+        // Leaving remote operation (or nothing usable): kill the
+        // previous chain so it does not stay warm, and expire any
+        // older Stop (this deliberate config takes effect; freshness
+        // proven above, still holding admission).
+        if !active_fp().is_empty() {
+            bump_generation();
+            *ACTIVE_FP.lock().unwrap_or_else(|p| p.into_inner()) = String::new();
+        }
+        if !fp.is_empty() {
+            *STOPPED_FP.lock().unwrap_or_else(|p| p.into_inner()) = String::new();
+        }
+        return Ok(false);
+    }
+    if !stt.auto_start_server {
+        // Lazy: moves route to `reconcile_lazy_switch` (stop-old, stay
+        // cold); steady autostart-path ticks are no-ops.
+        return Ok(false);
+    }
+    if active_fp() == fp {
+        return Ok(false);
+    }
+    // Switch: bump first (kills the previous chain; stale in-flight
+    // work observes the newer generation and settles), then publish.
+    // The newer deliberate config expires any older Stop.
+    bump_generation();
+    *ACTIVE_FP.lock().unwrap_or_else(|p| p.into_inner()) = fp.clone();
+    if !fp.is_empty() {
+        *STOPPED_FP.lock().unwrap_or_else(|p| p.into_inner()) = String::new();
+    }
+    Ok(false)
+}
+
+/// Lazy-switch helper (autostart off + fingerprint moved): kill the
+/// old chain and stay cold until the next utterance. Same deferral
+/// contract as `reconcile_servers`. Applying the observed move expires
+/// any older Stop (still holding admission, so no Stop slips between
+/// the kill and the expiry).
+pub fn reconcile_lazy_switch(
+    stt: &SttSettings,
+    authority: Option<ReconcileAuthority>,
+) -> Result<bool, String> {
+    let fp = match &authority {
+        Some(auth) => auth.snapshot_fp.clone(),
+        None => stt_fingerprint(stt),
+    };
+    let _admission = RECONCILE_LOCK.lock().map_err(|e| e.to_string())?;
+    if inference_active() {
+        return Ok(true);
+    }
+    if let Some(ref auth) = authority
+        && (server_generation() != auth.witness
+            || stt_fingerprint(stt) != auth.snapshot_fp)
+    {
+        return Ok(true);
+    }
+    if stt_fingerprint(stt) != fp {
+        return Ok(true);
+    }
+    if !active_fp().is_empty() {
+        bump_generation();
+        *ACTIVE_FP.lock().unwrap_or_else(|p| p.into_inner()) = String::new();
+    }
+    *STOPPED_FP.lock().unwrap_or_else(|p| p.into_inner()) = String::new();
+    Ok(false)
+}
+
+/// One watcher poll over already-loaded settings: compare against the
+/// last applied `(primary, auto)` pair and reconcile once on change.
+/// Deferred/failed ticks leave the pair untouched so the next poll
+/// retries. Disabled-state observations refresh the disable marker
+/// before the skip check (even unchanged ones), so a refusal below
+/// never strands later toggles.
+///
+/// `authority` must be the witness + fingerprint validated at
+/// observation time (`Some`, watcher path), or `None` for deliberate
+/// synchronous callers (fresh derivation, no window).
+pub fn stt_watcher_tick(
+    current: &SttSettings,
+    last_primary: &mut String,
+    last_auto: &mut bool,
+    authority: Option<ReconcileAuthority>,
+) -> TickOutcome {
+    let curr_primary = stt_primary_id(current);
+    let curr_auto = current.auto_start_server;
+    let witness = match &authority {
+        Some(auth) => auth.witness,
+        None => server_generation(),
+    };
+    // Refresh the disable marker on every validated disabled tick so
+    // genuine later toggles still warm normally after a refusal.
+    if !curr_auto {
+        note_disable_observed(witness);
+    }
+    let auth = match authority {
+        Some(a) => a,
+        None => ReconcileAuthority {
+            witness,
+            snapshot_fp: stt_fingerprint(current),
+        },
+    };
+    if curr_primary == *last_primary && curr_auto == *last_auto {
+        return TickOutcome::Unchanged;
+    }
+    if inference_active() {
+        return TickOutcome::Deferred;
+    }
+    if curr_primary != *last_primary {
+        // Configuration moved. Transient failures retry on the next
+        // tick; only success advances the pair.
+        let applied = if curr_auto {
+            match reconcile_servers(current, Some(auth)) {
+                Ok(deferred) => !deferred,
+                Err(_) => false,
+            }
+        } else {
+            match reconcile_lazy_switch(current, Some(auth)) {
+                Ok(deferred) => !deferred,
+                Err(_) => false,
+            }
+        };
+        if applied {
+            *last_primary = curr_primary;
+            *last_auto = curr_auto;
+            TickOutcome::Applied
+        } else {
+            TickOutcome::Deferred
+        }
+    } else {
+        // Only the autostart toggle moved.
+        if curr_auto {
+            // Re-enabling is itself deliberate: expire any Stop
+            // suppression of this fingerprint before warming, unless a
+            // newer Stop revoked this observation — then defer without
+            // touching bookkeeping (the toggle was never validly
+            // applied; later observations retry).
+            if !expire_stop_suppression_at(current, &auth) {
+                return TickOutcome::Deferred;
+            }
+            match reconcile_servers(current, Some(auth)) {
+                Ok(deferred) => {
+                    if !deferred {
+                        *last_auto = curr_auto;
+                        TickOutcome::Applied
+                    } else {
+                        TickOutcome::Deferred
+                    }
+                }
+                Err(_) => TickOutcome::Deferred,
+            }
+        } else {
+            // Disable keeps the running chain (no bounce). Marker was
+            // already refreshed above for every disabled observation.
+            *last_auto = curr_auto;
+            TickOutcome::Applied
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn reset_status_state() {
+    SERVER_GENERATION.store(0, Ordering::Release);
+    LAST_STOP_GEN.store(0, Ordering::Release);
+    LAST_DISABLE_OBSERVED_GEN.store(0, Ordering::Release);
+    ACTIVE_UTTERANCES.store(0, Ordering::Release);
+    *ACTIVE_FP.lock().unwrap_or_else(|p| p.into_inner()) = String::new();
+    *STOPPED_FP.lock().unwrap_or_else(|p| p.into_inner()) = String::new();
+}
+
+#[cfg(test)]
+static STATUS_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+#[cfg(test)]
+pub(crate) fn status_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    STATUS_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+/// Test-only barrier parked between the poll's control-generation
+/// witness and its settings reload (desktop `TICK_SNAPSHOT_PAUSE`
+/// analog). Lets a test land a Stop/switch strictly inside the
+/// snapshot window and prove the torn tick discards instead of
+/// reconciling a stale pairing. Production builds contain no hook.
+#[cfg(test)]
+static POLL_SNAPSHOT_PAUSE: Mutex<
+    Option<(
+        std::sync::mpsc::Sender<()>,
+        std::sync::mpsc::Receiver<()>,
+    )>,
+> = Mutex::new(None);
+
+/// Install the poll snapshot-window barrier (single-shot).
+#[cfg(test)]
+pub(crate) fn set_poll_snapshot_pause(
+    tx: std::sync::mpsc::Sender<()>,
+    rx: std::sync::mpsc::Receiver<()>,
+) {
+    *POLL_SNAPSHOT_PAUSE.lock().unwrap() = Some((tx, rx));
+}
+
+/// Clear a parked (never reached) barrier so later tests never block.
+#[cfg(test)]
+pub(crate) fn clear_poll_snapshot_pause() {
+    POLL_SNAPSHOT_PAUSE.lock().unwrap().take();
+}
+
+#[cfg(test)]
+pub(crate) fn poll_snapshot_pause_point() {
+    if let Some((entered, proceed)) = POLL_SNAPSHOT_PAUSE
+        .lock()
+        .ok()
+        .and_then(|mut g| g.take())
+    {
+        let _ = entered.send(());
+        let _ = proceed.recv_timeout(std::time::Duration::from_secs(10));
+    }
+}
+
+/// Test-only barrier parked after a successful chain transcribe but
+/// before the staleness guard (desktop `RECONCILE_ENSURE_PAUSE`
+/// analog). Lets a test land a switch/Stop inside the transcribe
+/// window and prove the stale result settles instead of delivering.
+/// Production builds contain no hook.
+#[cfg(test)]
+static FINISH_GUARD_PAUSE: Mutex<
+    Option<(
+        std::sync::mpsc::Sender<()>,
+        std::sync::mpsc::Receiver<()>,
+    )>,
+> = Mutex::new(None);
+
+/// Install the finish-guard barrier (single-shot).
+#[cfg(test)]
+pub(crate) fn set_finish_guard_pause(
+    tx: std::sync::mpsc::Sender<()>,
+    rx: std::sync::mpsc::Receiver<()>,
+) {
+    *FINISH_GUARD_PAUSE.lock().unwrap() = Some((tx, rx));
+}
+
+/// Clear a parked (never reached) barrier so later tests never block.
+#[cfg(test)]
+pub(crate) fn clear_finish_guard_pause() {
+    FINISH_GUARD_PAUSE.lock().unwrap().take();
+}
+
+#[cfg(test)]
+pub(crate) fn finish_guard_pause_point() {
+    if let Some((entered, proceed)) = FINISH_GUARD_PAUSE
+        .lock()
+        .ok()
+        .and_then(|mut g| g.take())
+    {
+        let _ = entered.send(());
+        let _ = proceed.recv_timeout(std::time::Duration::from_secs(10));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -861,5 +1389,330 @@ mod tests {
                 .unwrap(),
             ""
         );
+    }
+
+    // -- desktop #11 port: status + provider-switch reconcile ---------
+
+    fn remote_entry(id: &str, name: &str, provider: &str, url: &str, model: &str) -> SttChainEntry {
+        SttChainEntry {
+            id: id.to_string(),
+            name: name.to_string(),
+            kind: SttEntryKind::Cloud,
+            enabled: true,
+            provider: provider.to_string(),
+            url: url.to_string(),
+            model: model.to_string(),
+            api_key: String::new(),
+            streaming: true,
+        }
+    }
+
+    fn local_entry() -> SttChainEntry {
+        SttChainEntry {
+            id: "stt-local".to_string(),
+            name: "Local".to_string(),
+            kind: SttEntryKind::Local,
+            enabled: true,
+            provider: String::new(),
+            url: String::new(),
+            model: String::new(),
+            api_key: String::new(),
+            streaming: true,
+        }
+    }
+
+    fn stt_auto(entries: Vec<SttChainEntry>, auto: bool) -> SttSettings {
+        SttSettings {
+            entries,
+            auto_start_server: auto,
+            ..SttSettings::default()
+        }
+    }
+
+    fn tick_applied(current: &SttSettings, last: &mut (String, bool)) -> TickOutcome {
+        stt_watcher_tick(current, &mut last.0, &mut last.1, None)
+    }
+
+    #[test]
+    fn status_reports_single_primary_not_every_entry() {
+        let _guard = status_test_lock();
+        reset_status_state();
+        // Three enabled remotes + Local: status must be one row (the
+        // primary), never one per engine — the desktop #11 shape where
+        // whisper + sherpa-offline + sherpa-online all showed running.
+        let stt = stt_auto(
+            vec![
+                local_entry(),
+                remote_entry("a", "OpenAI", "openai", "", "whisper-1"),
+                remote_entry("b", "Groq", "groq", "", "whisper-large-v3"),
+                remote_entry("c", "Self", "", "http://srv:8000", "whisper-1"),
+            ],
+            true,
+        );
+        let status = server_status(&stt);
+        assert_eq!(status.len(), 1);
+        assert_eq!(status[0].0, "OpenAI");
+        assert!(!status[0].1, "cold before reconcile");
+        // Empty chain: no rows at all.
+        let empty = stt_auto(vec![], true);
+        assert!(server_status(&empty).is_empty());
+        let locals = stt_auto(vec![local_entry()], true);
+        assert!(server_status(&locals).is_empty());
+        // Applied reconcile lights the single primary.
+        let mut last = (stt_primary_id(&stt), false);
+        assert_eq!(tick_applied(&stt, &mut last), TickOutcome::Applied);
+        let status = server_status(&stt);
+        assert_eq!(status.len(), 1);
+        assert_eq!(status[0], ("OpenAI".to_string(), true));
+    }
+
+    #[test]
+    fn switch_kills_previous_chain_and_noop_does_not_bump() {
+        let _guard = status_test_lock();
+        reset_status_state();
+        let v1 = stt_auto(
+            vec![remote_entry("a", "OpenAI", "openai", "", "whisper-1")],
+            true,
+        );
+        let v2 = stt_auto(
+            vec![remote_entry("b", "Groq", "groq", "", "whisper-large-v3")],
+            true,
+        );
+        assert_eq!(reconcile_servers(&v1, None), Ok(false));
+        let gen1 = server_generation();
+        assert!(gen1 > 0);
+        assert!(server_status(&v1)[0].1);
+        // Steady re-apply: no bump, chain untouched.
+        assert_eq!(reconcile_servers(&v1, None), Ok(false));
+        assert_eq!(server_generation(), gen1);
+        // Switch: bump kills the previous chain, new one live.
+        assert_eq!(reconcile_servers(&v2, None), Ok(false));
+        assert!(server_generation() > gen1);
+        assert_eq!(server_status(&v2)[0], ("Groq".to_string(), true));
+        assert!(!server_status(&v1)[0].1, "old chain no longer live");
+    }
+
+    #[test]
+    fn stale_authority_defers_without_mutation() {
+        let _guard = status_test_lock();
+        reset_status_state();
+        let v1 = stt_auto(
+            vec![remote_entry("a", "OpenAI", "openai", "", "whisper-1")],
+            true,
+        );
+        let v2 = stt_auto(
+            vec![remote_entry("b", "Groq", "groq", "", "whisper-large-v3")],
+            true,
+        );
+        assert_eq!(reconcile_servers(&v1, None), Ok(false));
+        let gen1 = server_generation();
+        // Park a validated observation of v1, then deliberately move.
+        let parked = ReconcileAuthority {
+            witness: gen1,
+            snapshot_fp: stt_fingerprint(&v1),
+        };
+        assert_eq!(reconcile_servers(&v2, None), Ok(false));
+        let gen2 = server_generation();
+        assert!(gen2 > gen1);
+        // Stale witness defers: active chain, generation untouched.
+        assert_eq!(reconcile_servers(&v1, Some(parked.clone())), Ok(true));
+        assert_eq!(server_generation(), gen2);
+        assert!(server_status(&v2)[0].1);
+        // Stale snapshot (fresh witness, superseded identity) defers too:
+        // the attested fingerprint no longer matches the passed settings.
+        let stale_snap = ReconcileAuthority {
+            witness: gen2,
+            snapshot_fp: parked.snapshot_fp.clone(),
+        };
+        assert_eq!(reconcile_servers(&v2, Some(stale_snap)), Ok(true));
+        assert_eq!(server_generation(), gen2);
+        assert!(server_status(&v2)[0].1);
+        // Lazy branch carries identity the same way.
+        assert_eq!(reconcile_lazy_switch(&v1, Some(parked)), Ok(true));
+        assert_eq!(server_generation(), gen2);
+    }
+
+    #[test]
+    fn stop_suppresses_restart_until_deliberate_change() {
+        let _guard = status_test_lock();
+        reset_status_state();
+        let v1 = stt_auto(
+            vec![remote_entry("a", "OpenAI", "openai", "", "whisper-1")],
+            true,
+        );
+        let v2 = stt_auto(
+            vec![remote_entry("b", "Groq", "groq", "", "whisper-large-v3")],
+            true,
+        );
+        assert_eq!(reconcile_servers(&v1, None), Ok(false));
+        let fp1 = stt_fingerprint(&v1);
+        // Explicit Stop: restart of the same fingerprint settles cold.
+        record_stop(&fp1);
+        assert_eq!(reconcile_servers(&v1, None), Ok(false));
+        assert!(!server_status(&v1)[0].1);
+        // A deliberate switch expires the suppression and restarts...
+        assert_eq!(reconcile_servers(&v2, None), Ok(false));
+        assert!(server_status(&v2)[0].1);
+        // ...including returning to the previously stopped config.
+        assert_eq!(reconcile_servers(&v1, None), Ok(false));
+        assert!(server_status(&v1)[0].1);
+    }
+
+    #[test]
+    fn stale_expiry_cannot_clear_newer_stop() {
+        let _guard = status_test_lock();
+        reset_status_state();
+        let v1 = stt_auto(
+            vec![remote_entry("a", "OpenAI", "openai", "", "whisper-1")],
+            true,
+        );
+        assert_eq!(reconcile_servers(&v1, None), Ok(false));
+        // Park the observation, then land a newer Stop inside the window.
+        let parked = ReconcileAuthority {
+            witness: server_generation(),
+            snapshot_fp: stt_fingerprint(&v1),
+        };
+        record_stop(&stt_fingerprint(&v1));
+        assert!(!expire_stop_suppression_at(&v1, &parked));
+        // Suppression intact: still cold, autostart still settles.
+        assert!(!server_status(&v1)[0].1);
+        assert_eq!(reconcile_servers(&v1, None), Ok(false));
+        assert!(!server_status(&v1)[0].1);
+    }
+
+    #[test]
+    fn expiry_refusal_preserves_bookkeeping_and_genuine_toggle_restarts() {
+        let _guard = status_test_lock();
+        reset_status_state();
+        let dis = stt_auto(
+            vec![remote_entry("a", "OpenAI", "openai", "", "whisper-1")],
+            false,
+        );
+        let en = stt_auto(
+            vec![remote_entry("a", "OpenAI", "openai", "", "whisper-1")],
+            true,
+        );
+        // Disable observes (marker refreshed), then a Stop lands newer.
+        let mut last = (stt_primary_id(&dis), true);
+        assert_eq!(tick_applied(&dis, &mut last), TickOutcome::Applied);
+        assert!(!last.1);
+        let parked = ReconcileAuthority {
+            witness: server_generation(),
+            snapshot_fp: stt_fingerprint(&en),
+        };
+        record_stop(&stt_fingerprint(&dis));
+        // Parked re-enable observes the newer Stop: defer, last_auto
+        // preserved false (never marked as successfully applied).
+        assert_eq!(
+            stt_watcher_tick(&en, &mut last.0, &mut last.1, Some(parked)),
+            TickOutcome::Deferred
+        );
+        assert!(!last.1);
+        // A fresh disable observation refreshes past the Stop (even on
+        // an unchanged tick — the marker refresh runs before the skip
+        // check)...
+        assert_eq!(tick_applied(&dis, &mut last), TickOutcome::Unchanged);
+        // ...so the genuine toggle warms normally.
+        assert_eq!(tick_applied(&en, &mut last), TickOutcome::Applied);
+        assert!(last.1);
+        assert!(server_status(&en)[0].1);
+    }
+
+    #[test]
+    fn tick_defers_while_active_and_retries_next_poll() {
+        let _guard = status_test_lock();
+        reset_status_state();
+        let v1 = stt_auto(
+            vec![remote_entry("a", "OpenAI", "openai", "", "whisper-1")],
+            true,
+        );
+        let v2 = stt_auto(
+            vec![remote_entry("b", "Groq", "groq", "", "whisper-large-v3")],
+            true,
+        );
+        let mut last = (String::new(), false);
+        assert_eq!(tick_applied(&v1, &mut last), TickOutcome::Applied);
+        let gen1 = server_generation();
+        // Active utterance: move defers, markers/chain/generation intact.
+        active_inc();
+        assert_eq!(tick_applied(&v2, &mut last), TickOutcome::Deferred);
+        active_dec();
+        assert_eq!(last.0, stt_primary_id(&v1));
+        assert_eq!(server_generation(), gen1);
+        assert!(server_status(&v1)[0].1);
+        // Idle retry applies the pending switch.
+        assert_eq!(tick_applied(&v2, &mut last), TickOutcome::Applied);
+        assert_eq!(last.0, stt_primary_id(&v2));
+        assert!(server_status(&v2)[0].1);
+    }
+
+    #[test]
+    fn unrelated_edits_do_not_bounce_the_chain() {
+        let _guard = status_test_lock();
+        reset_status_state();
+        let mut v1 = stt_auto(
+            vec![remote_entry("a", "OpenAI", "openai", "", "whisper-1")],
+            true,
+        );
+        let mut last = (String::new(), false);
+        assert_eq!(tick_applied(&v1, &mut last), TickOutcome::Applied);
+        let gen1 = server_generation();
+        // keep-warm, language-model keys and entry renames that leave
+        // the primary identity alone are steady-state ticks.
+        v1.keep_warm = "5m".to_string();
+        v1.entries[0].name = "Renamed".to_string();
+        v1.entries[0].api_key = "sk-new".to_string();
+        assert_eq!(tick_applied(&v1, &mut last), TickOutcome::Unchanged);
+        assert_eq!(server_generation(), gen1);
+        // Language travels with the identity (it shapes requests).
+        v1.language = "es".to_string();
+        assert_eq!(tick_applied(&v1, &mut last), TickOutcome::Applied);
+        assert!(server_generation() > gen1);
+    }
+
+    #[test]
+    fn lazy_switch_kills_old_chain_and_stays_cold() {
+        let _guard = status_test_lock();
+        reset_status_state();
+        let warm = stt_auto(
+            vec![remote_entry("a", "OpenAI", "openai", "", "whisper-1")],
+            true,
+        );
+        let mut last = (String::new(), false);
+        assert_eq!(tick_applied(&warm, &mut last), TickOutcome::Applied);
+        let gen1 = server_generation();
+        // Autostart off + primary moved: old chain killed, new cold.
+        let lazy = stt_auto(
+            vec![remote_entry("b", "Groq", "groq", "", "whisper-large-v3")],
+            false,
+        );
+        assert_eq!(tick_applied(&lazy, &mut last), TickOutcome::Applied);
+        assert!(server_generation() > gen1);
+        assert_eq!(last, (stt_primary_id(&lazy), false));
+        let status = server_status(&lazy);
+        assert_eq!(status.len(), 1);
+        assert_eq!(status[0].0, "Groq");
+        assert!(!status[0].1, "lazy leaves the new chain cold");
+        // Steady lazy ticks are no-ops.
+        assert_eq!(tick_applied(&lazy, &mut last), TickOutcome::Unchanged);
+    }
+
+    #[test]
+    fn leaving_remote_kills_chain_and_settles() {
+        let _guard = status_test_lock();
+        reset_status_state();
+        let v1 = stt_auto(
+            vec![remote_entry("a", "OpenAI", "openai", "", "whisper-1")],
+            true,
+        );
+        let mut last = (String::new(), false);
+        assert_eq!(tick_applied(&v1, &mut last), TickOutcome::Applied);
+        let gen1 = server_generation();
+        // All remotes disabled: previous chain killed, status empty.
+        let mut gone = v1.clone();
+        gone.entries[0].enabled = false;
+        assert_eq!(tick_applied(&gone, &mut last), TickOutcome::Applied);
+        assert!(server_generation() > gen1);
+        assert!(server_status(&gone).is_empty());
     }
 }
