@@ -42,8 +42,6 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
     private var lastToggled = false
     private var lastNote = ""
     private var lastAnnounced = ""
-    /** First-hold slide hint: once per process, never blocking. */
-    private var slideHintShown = false
 
     private var micDownRawY = 0f
     private var micCancelled = false
@@ -56,6 +54,12 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
         const val MIC_ANIM_MS = 180L
         /** Slide-hint nudge distance (dp): gentle, never blocking. */
         const val SLIDE_HINT_DP = 10
+        /**
+         * First-hold slide hint latch: companion-scoped = once per process.
+         * An instance field would replay after IME-switch service rebirth
+         * in a live process; the comment contract promises per-process.
+         */
+        @Volatile var slideHintShown = false
 
         /**
          * State-driven mic visuals. Pure (no views): unit-tested, and
