@@ -135,6 +135,42 @@ class FloatBubbleTest {
         assertFalse(FloatState.shouldShowMoveHint(hasSeenHint = true))
     }
 
+    // -- Bubble chrome geometry (review round 2) ---------------------
+
+    @Test
+    fun spinner_drawsAboveMic() {
+        // Z-order assumption: the ProgressBar default elevation is 0,
+        // which renders UNDER the mic glyph (6dp). The service sets the
+        // spinner to 8dp — this pins that ordering so a future edit
+        // cannot silently bury the processing indicator again.
+        assertEquals(6, BUBBLE_MIC_ELEVATION_DP)
+        assertEquals(8, BUBBLE_SPINNER_ELEVATION_DP)
+        assertTrue(
+            "spinner must sit above the mic glyph",
+            BUBBLE_SPINNER_ELEVATION_DP > BUBBLE_MIC_ELEVATION_DP,
+        )
+    }
+
+    @Test
+    fun stop_hitTargetMatchesGrip() {
+        // Visual stays 32dp; the TouchDelegate expands to the 48dp
+        // minimum (grip parity). Per-side pad = (48 - 32) / 2 = 8.
+        assertEquals(32, STOP_VISUAL_DP)
+        assertEquals(48, STOP_TARGET_DP)
+        assertEquals(8, touchExpandPx(STOP_VISUAL_DP, STOP_TARGET_DP))
+    }
+
+    @Test
+    fun stop_touchDelegateExpandsTo48() {
+        // Mirrors the service's TouchDelegate math (hit.inset(-pad)):
+        // a 32px visual rect with an 8px outward inset becomes 48x48.
+        val pad = touchExpandPx(32, 48)
+        val expanded = expandHitRect(HitRect(0, 0, 32, 32), -pad)
+        assertEquals(HitRect(-8, -8, 40, 40), expanded)
+        assertEquals(48, expanded.width)
+        assertEquals(48, expanded.height)
+    }
+
     // -- Stop-tap commit/discard per mode ----------------------------
 
     /**

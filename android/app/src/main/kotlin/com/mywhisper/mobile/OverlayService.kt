@@ -410,7 +410,7 @@ class OverlayService : Service(), Dictation.Listener {
 
         val size = dp(60)
         val gripTouch = dp(48)
-        val stopSize = dp(32)
+        val stopSize = dp(STOP_VISUAL_DP)
         val rootW = size + stopSize + dp(8)
         val rootH = size + gripTouch / 2 + dp(8)
         val lp = WindowManager.LayoutParams(
@@ -440,7 +440,7 @@ class OverlayService : Service(), Dictation.Listener {
             }
             // Big mark: padding trimmed so the glyph fills the button.
             setPadding(dp(7), dp(7), dp(7), dp(7))
-            elevation = dp(6).toFloat()
+            elevation = dp(BUBBLE_MIC_ELEVATION_DP).toFloat()
             layoutParams = FrameLayout.LayoutParams(size, size, Gravity.TOP or Gravity.START)
             setOnTouchListener { _, ev -> onMicTouch(ev) }
         }
@@ -454,6 +454,8 @@ class OverlayService : Service(), Dictation.Listener {
             contentDescription = getString(R.string.float_processing)
             isClickable = false
             isFocusable = false
+            // Z-order: drawn above the mic glyph (mic sits at 6dp).
+            elevation = dp(BUBBLE_SPINNER_ELEVATION_DP).toFloat()
             layoutParams = FrameLayout.LayoutParams(dp(28), dp(28), Gravity.TOP or Gravity.START).apply {
                 // Center over the mic glyph.
                 leftMargin = (size - dp(28)) / 2
@@ -481,6 +483,19 @@ class OverlayService : Service(), Dictation.Listener {
         }
         stopBtn = stop
         root.addView(stop)
+        // 48dp touch target on a 32dp visual (a11y parity with the
+        // 48dp grip): expand the hit rect via TouchDelegate on the
+        // parent after layout; the drawn size never changes.
+        stop.post {
+            try {
+                val hit = android.graphics.Rect()
+                stop.getHitRect(hit)
+                val pad = (dp(STOP_TARGET_DP) - dp(STOP_VISUAL_DP)) / 2
+                hit.inset(-pad, -pad)
+                (stop.parent as? View)?.touchDelegate = android.view.TouchDelegate(hit, stop)
+            } catch (_: Exception) {
+            }
+        }
         // Grip: the ONLY move affordance. Always visible (opaque
         // rounded tab + white pill), 48dp touch target, bottom-end.
         val grip = FrameLayout(this).apply {
@@ -833,3 +848,33 @@ class OverlayService : Service(), Dictation.Listener {
  */
 internal fun shouldSurfaceError(msg: String): Boolean =
     !msg.contains("too short") && !msg.contains("silence")
+
+/** Mic glyph elevation (dp): the spinner must sit above this. */
+internal const val BUBBLE_MIC_ELEVATION_DP = 6
+
+/** Processing spinner elevation (dp): above the mic, below nothing. */
+internal const val BUBBLE_SPINNER_ELEVATION_DP = 8
+
+/** Stop button drawn size (dp): kept small, expanded by TouchDelegate. */
+internal const val STOP_VISUAL_DP = 32
+
+/** Stop button minimum touch target (dp): a11y parity with the grip. */
+internal const val STOP_TARGET_DP = 48
+
+/**
+ * Pure hit-rect (framework-free so JVM tests pin it): TouchDelegate
+ * inset is negative to expand; the expanded edge equals
+ * (target - visual) / 2 per side.
+ */
+internal data class HitRect(val left: Int, val top: Int, val right: Int, val bottom: Int) {
+    val width: Int get() = right - left
+    val height: Int get() = bottom - top
+}
+
+/** Per-side expansion (px) from a visual size to a target size. */
+internal fun touchExpandPx(visualPx: Int, targetPx: Int): Int =
+    (targetPx - visualPx) / 2
+
+/** Apply a TouchDelegate-style inset (negative = expand) to a rect. */
+internal fun expandHitRect(r: HitRect, insetPx: Int): HitRect =
+    HitRect(r.left + insetPx, r.top + insetPx, r.right - insetPx, r.bottom - insetPx)
