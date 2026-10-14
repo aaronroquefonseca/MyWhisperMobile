@@ -47,6 +47,7 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     debugImplementation("androidx.compose.ui:ui-tooling")
+    testImplementation("junit:junit:4.13.2")
 }
 
 // Build the Rust core and drop the .so files into jniLibs before merge.
