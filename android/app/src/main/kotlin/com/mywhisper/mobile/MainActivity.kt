@@ -823,6 +823,15 @@ class MainActivity : ComponentActivity() {
                     s.put("preferences", nprefs)
                     save()
                 }
+                NotifToggle(
+                    title = getString(R.string.notif_pref_sync_ongoing),
+                    sub = getString(R.string.notif_pref_sync_ongoing_sub),
+                    checked = nprefs.optBoolean(NotifPolicy.KEY_SYNC_ONGOING, true),
+                ) {
+                    nprefs.put(NotifPolicy.KEY_SYNC_ONGOING, it)
+                    s.put("preferences", nprefs)
+                    save()
+                }
             }
             Section(stringResource(R.string.setup_mic_button)) {
                 val prefs = s.optJSONObject("preferences") ?: JSONObject()

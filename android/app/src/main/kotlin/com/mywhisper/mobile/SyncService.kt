@@ -55,6 +55,13 @@ class SyncService : Service() {
 
     private val workers = Executors.newSingleThreadExecutor()
     @Volatile private var syncing = false
+    /**
+     * True once [startForegroundWithType] succeeds, false on STOP /
+     * destroy. REFRESH must never recreate a stopped service
+     * un-foregrounded (PR #2 pattern): an unguarded notify() would
+     * leave an orphan ongoing notification STOP cannot remove.
+     */
+    @Volatile private var foregrounded = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -72,26 +79,35 @@ class SyncService : Service() {
             ACTION_STOP -> {
                 android.util.Log.i("MwSync", "stopping")
                 CoreBridge.syncStop()
+                foregrounded = false
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
                 return START_NOT_STICKY
             }
             ACTION_SYNC_NOW -> {
+                // Notify only while foregrounded: a stopped service
+                // must not mint an orphan notification it cannot own.
                 syncing = true
-                refreshSyncNotif()
+                if (foregrounded) refreshSyncNotif()
                 workers.execute {
                     try {
                         CoreBridge.syncAllNow()
                     } catch (_: Exception) {
                     } finally {
                         syncing = false
-                        refreshSyncNotif()
+                        if (foregrounded) refreshSyncNotif()
                     }
                 }
                 return START_STICKY
             }
             ACTION_REFRESH -> {
-                // Prefs toggle: rebuild from live state, no restart.
+                // Prefs toggle: rebuild from live state, no restart —
+                // but never promote a stopped service. Self-terminate
+                // instead of refreshing un-foregrounded.
+                if (!foregrounded) {
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
                 refreshSyncNotif()
                 return START_STICKY
             }
@@ -117,6 +133,7 @@ class SyncService : Service() {
                     } catch (_: Exception) {
                     }
                 }
+                foregrounded = true
                 return START_STICKY
             }
         }
@@ -187,6 +204,7 @@ class SyncService : Service() {
     }
 
     override fun onDestroy() {
+        foregrounded = false
         try {
             CoreBridge.syncStop()
         } catch (_: Exception) {

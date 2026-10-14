@@ -289,4 +289,6 @@
     <string name="notif_pref_work_sub">Mostrar actividad mientras el servidor trabaja.</string>
     <string name="notif_pref_sync">Progreso de sincronización</string>
     <string name="notif_pref_sync_sub">Mostrar actividad durante la sincronización.</string>
+    <string name="notif_pref_sync_ongoing">Estado fijado</string>
+    <string name="notif_pref_sync_ongoing_sub">Mantener fijada la notificación de sincronización.</string>
 </resources>

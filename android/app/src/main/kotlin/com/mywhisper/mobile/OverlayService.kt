@@ -63,6 +63,13 @@ class OverlayService : Service(), Dictation.Listener {
     }
 
     private lateinit var dictation: Dictation
+    /**
+     * True once [startForegroundWithType] succeeds, false on STOP /
+     * destroy. REFRESH must never recreate a stopped service
+     * un-foregrounded (PR #2 pattern): an unguarded notify() would
+     * leave an orphan ongoing notification STOP cannot remove.
+     */
+    @Volatile private var foregrounded = false
     private var wm: WindowManager? = null
     private var holder: FrameLayout? = null
     private var micBtn: ImageButton? = null
@@ -183,12 +190,19 @@ class OverlayService : Service(), Dictation.Listener {
                 }
                 removeBubble()
                 clearFloatState()
+                foregrounded = false
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
                 return START_NOT_STICKY
             }
             ACTION_REFRESH -> {
-                // Prefs toggle: rebuild from live state, no restart.
+                // Prefs toggle: rebuild from live state, no restart —
+                // but never promote a stopped service. Self-terminate
+                // instead of refreshing un-foregrounded.
+                if (!foregrounded) {
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
                 try {
                     val s = if (::dictation.isInitialized) dictation.current else Dictation.State.IDLE
                     refreshNotif(s)
@@ -232,6 +246,7 @@ class OverlayService : Service(), Dictation.Listener {
                 }
                 ensureCore()
                 dictation.listener = this
+                foregrounded = true
                 FloatState.onChange = { applyVisibility() }
                 applyVisibility()
                 mainHandler.removeCallbacks(watchTick)
@@ -777,6 +792,7 @@ class OverlayService : Service(), Dictation.Listener {
     }
 
     override fun onDestroy() {
+        foregrounded = false
         try {
             if (::dictation.isInitialized) dictation.listener = null
         } catch (_: Exception) {
