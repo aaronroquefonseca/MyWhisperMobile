@@ -563,8 +563,12 @@ impl Store {
     /// Far-future versions (beyond a 7-day horizon) are rejected: a
     /// peer with a runaway clock must not poison LWW ordering forever.
     /// Old versions always pass (delayed/duplicate delivery is normal).
+    /// Remote versions beyond now + horizon are rejected (runaway peer
+    /// clock must not poison LWW ordering). Shared with the reset scrub.
+    const VERSION_HORIZON_MS: i64 = 7 * 86_400_000;
+
     fn validate_version(version: i64) -> rusqlite::Result<()> {
-        if version < 0 || version > now_ms().saturating_add(7 * 86_400_000) {
+        if version < 0 || version > now_ms().saturating_add(Self::VERSION_HORIZON_MS) {
             return Err(rusqlite::Error::ToSqlConversionFailure(
                 "remote version outside accepted clock horizon".into(),
             ));
@@ -970,6 +974,21 @@ impl Store {
     /// have no Android consumer.)
     pub fn reset_all_data(&self) -> rusqlite::Result<()> {
         let tx = self.conn.unchecked_transaction()?;
+        // FIRST drop excursion state, THEN mint the tombstone version:
+        // next_version reads MAX(words/snippets) + stored clock, so a
+        // poisoned clock or far-future rows would otherwise push the
+        // tombstones outside peers' horizon and the deletes would never
+        // land (resurrection on next sync).
+        tx.execute("DELETE FROM sync_meta WHERE key = 'clock'", [])?;
+        let horizon = now_ms().saturating_add(Self::VERSION_HORIZON_MS);
+        tx.execute(
+            "UPDATE words SET updated_at = 0 WHERE updated_at > ?1",
+            [horizon],
+        )?;
+        tx.execute(
+            "UPDATE snippets SET updated_at = 0 WHERE updated_at > ?1",
+            [horizon],
+        )?;
         let version = Self::next_version(&tx)?;
         tx.execute(
             "UPDATE history
@@ -986,9 +1005,6 @@ impl Store {
             [],
         )?;
         tx.execute("DELETE FROM devices", [])?;
-        // Drop the monotonic clock: an excursion-poisoned stored value
-        // must not survive the reset that is supposed to recover it.
-        tx.execute("DELETE FROM sync_meta WHERE key = 'clock'", [])?;
         Self::invalidate_sync(&tx)?;
         tx.execute("DELETE FROM kv", [])?;
         let mut defaults = AppSettings::default();
@@ -2594,21 +2610,58 @@ mod tests {
     fn reset_clears_poisoned_monotonic_clock() {
         let store = Store::open_memory().unwrap();
         let poisoned = now_ms() + 30 * 86_400_000;
+        // Content rows present before reset, versions excursion-poisoned
+        // (as minted by local writes during the excursion): the case the
+        // old mint-before-scrub order got wrong.
+        store.upsert_word("w", "node-x").unwrap();
+        store.upsert_snippet("t", "r", "node-x").unwrap();
+        store
+            .conn
+            .execute("UPDATE words SET updated_at = ?1", [poisoned])
+            .unwrap();
+        store
+            .conn
+            .execute("UPDATE snippets SET updated_at = ?1", [poisoned])
+            .unwrap();
         store
             .conn
             .execute(
-                "INSERT INTO sync_meta (key, value) VALUES ('clock', ?1)",
+                "INSERT INTO sync_meta (key, value) VALUES ('clock', ?1)
+                 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
                 [poisoned.to_string()],
             )
             .unwrap();
         store.reset_all_data().unwrap();
+        // Tombstones minted near the wall clock: peers inside the 7-day
+        // horizon accept them instead of resurrecting the rows.
+        for w in store.export_words().unwrap() {
+            assert!(w.deleted);
+            assert!(
+                (w.updated_at - now_ms()).abs() < 60_000,
+                "tombstone version near wall clock, got {}",
+                w.updated_at
+            );
+        }
+        for sn in store.export_snippets().unwrap() {
+            assert!(sn.deleted);
+            assert!(
+                (sn.updated_at - now_ms()).abs() < 60_000,
+                "tombstone version near wall clock, got {}",
+                sn.updated_at
+            );
+        }
+        // The poison is gone: reset re-mints a wall-clock clock row.
         let clock: Option<String> = store
             .conn
             .query_row("SELECT value FROM sync_meta WHERE key = 'clock'", [], |r| {
                 r.get(0)
             })
             .ok();
-        assert!(clock.is_none(), "reset must drop the stored clock");
+        let clock: i64 = clock.expect("reset re-mints a sane clock").parse().unwrap();
+        assert!(
+            (clock - now_ms()).abs() < 60_000,
+            "stored clock near wall clock, got {clock}"
+        );
         // Post-reset versions come from the wall clock again.
         let v = Store::next_version(&store.conn).unwrap();
         assert!((v - now_ms()).abs() < 60_000, "clock recovered, got {v}");
