@@ -74,6 +74,7 @@
     <string name="float_notif_channel">Floating button</string>
     <string name="float_notif_title">MyWhisper bubble</string>
     <string name="float_notif_text">Floating dictation active</string>
+    <string name="float_notif_rec_text">Recording… tap Stop to end</string>
     <string name="float_need_overlay">Allow display over other apps first</string>
     <string name="float_overlay_recovery">Overlay permission was revoked — re-enable “Display over other apps” to restore the bubble</string>
     <string name="float_drag_handle">Drag handle — move bubble</string>
@@ -277,5 +278,15 @@
     <!-- Sync service notification -->
     <string name="notif_sync_title">MyWhisper sync</string>
     <string name="notif_sync_text">Listening for device sync</string>
+    <string name="notif_sync_working_text">Syncing now…</string>
+    <string name="notif_sync_now">Sync now</string>
     <string name="notif_stop">Stop</string>
+    <string name="notif_pref_idle">Ongoing in idle</string>
+    <string name="notif_pref_idle_sub">Keep the notification pinned while idle.</string>
+    <string name="notif_pref_rec">Ongoing while recording</string>
+    <string name="notif_pref_rec_sub">Keep the notification pinned while recording.</string>
+    <string name="notif_pref_work">Progress while transcribing</string>
+    <string name="notif_pref_work_sub">Show activity while the server works.</string>
+    <string name="notif_pref_sync">Sync progress</string>
+    <string name="notif_pref_sync_sub">Show activity while a sync round runs.</string>
 </resources>

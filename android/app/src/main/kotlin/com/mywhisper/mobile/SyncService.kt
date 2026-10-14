@@ -27,6 +27,7 @@ class SyncService : Service() {
         const val ACTION_START = "com.mywhisper.mobile.sync.START"
         const val ACTION_STOP = "com.mywhisper.mobile.sync.STOP"
         const val ACTION_SYNC_NOW = "com.mywhisper.mobile.sync.NOW"
+        const val ACTION_REFRESH = "com.mywhisper.mobile.sync.REFRESH_NOTIF"
         private const val CHANNEL = "mw-sync"
         private const val NOTIF_ID = 41
 
@@ -42,9 +43,18 @@ class SyncService : Service() {
         fun syncNow(ctx: Context) {
             ctx.startService(Intent(ctx, SyncService::class.java).setAction(ACTION_SYNC_NOW))
         }
+
+        /** Rebuild the foreground notification from current prefs (no restart). */
+        fun refreshNotif(ctx: Context) {
+            try {
+                ctx.startService(Intent(ctx, SyncService::class.java).setAction(ACTION_REFRESH))
+            } catch (_: Exception) {
+            }
+        }
     }
 
     private val workers = Executors.newSingleThreadExecutor()
+    @Volatile private var syncing = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -67,12 +77,22 @@ class SyncService : Service() {
                 return START_NOT_STICKY
             }
             ACTION_SYNC_NOW -> {
+                syncing = true
+                refreshSyncNotif()
                 workers.execute {
                     try {
                         CoreBridge.syncAllNow()
                     } catch (_: Exception) {
+                    } finally {
+                        syncing = false
+                        refreshSyncNotif()
                     }
                 }
+                return START_STICKY
+            }
+            ACTION_REFRESH -> {
+                // Prefs toggle: rebuild from live state, no restart.
+                refreshSyncNotif()
                 return START_STICKY
             }
             else -> {
@@ -102,10 +122,27 @@ class SyncService : Service() {
         }
     }
 
-    private fun startForegroundWithType() {
+    /**
+     * Per-mode sync notification driven by [NotifPolicy]: idle =
+     * base text, syncing = working text + indeterminate progress
+     * when the pref allows. STOP + contentIntent on every mode;
+     * Sync-now action + BigTextStyle keep the actions expanded.
+     */
+    internal fun buildSyncNotif(syncing: Boolean): Notification {
+        val prefs = try {
+            NotifPolicy.syncPrefsJson(CoreBridge.getSettings().getOrThrow().optJSONObject("preferences"))
+        } catch (_: Exception) {
+            NotifPolicy.SyncPrefs()
+        }
+        val spec = NotifPolicy.forSync(syncing, prefs)
         val stopIntent = PendingIntent.getService(
             this, 0,
             Intent(this, SyncService::class.java).setAction(ACTION_STOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val nowIntent = PendingIntent.getService(
+            this, 2,
+            Intent(this, SyncService::class.java).setAction(ACTION_SYNC_NOW),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val openIntent = PendingIntent.getActivity(
@@ -113,14 +150,31 @@ class SyncService : Service() {
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        val notif: Notification = NotificationCompat.Builder(this, CHANNEL)
+        val text = if (syncing) getString(R.string.notif_sync_working_text)
+        else getString(R.string.notif_sync_text)
+        val b = NotificationCompat.Builder(this, CHANNEL)
             .setContentTitle(getString(R.string.notif_sync_title))
-            .setContentText(getString(R.string.notif_sync_text))
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setSmallIcon(R.drawable.ic_stat_sync)
             .setContentIntent(openIntent)
-            .setOngoing(true)
+            .setOngoing(spec.ongoing)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, getString(R.string.notif_stop), stopIntent)
-            .build()
+            .addAction(android.R.drawable.ic_popup_sync, getString(R.string.notif_sync_now), nowIntent)
+        if (spec.showProgress) b.setProgress(0, 0, true) else b.setProgress(0, 0, false)
+        return b.build()
+    }
+
+    /** Refresh the foreground notification for the live sync state (no stale mode). */
+    private fun refreshSyncNotif() {
+        try {
+            getSystemService(NotificationManager::class.java)?.notify(NOTIF_ID, buildSyncNotif(syncing))
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun startForegroundWithType() {
+        val notif: Notification = buildSyncNotif(syncing)
         if (Build.VERSION.SDK_INT >= 29) {
             startForeground(
                 NOTIF_ID, notif,

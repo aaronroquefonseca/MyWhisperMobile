@@ -359,6 +359,16 @@ class MainActivity : ComponentActivity() {
                     settingsState.value = committed
                     settingsError.value = ""
                     settingsBusy.value = false
+                    // Prefs toggle: rebuild live foreground notifications,
+                    // no process restart needed.
+                    try {
+                        OverlayService.refreshNotif(this)
+                    } catch (_: Exception) {
+                    }
+                    try {
+                        SyncService.refreshNotif(this)
+                    } catch (_: Exception) {
+                    }
                 }
             } catch (e: Exception) {
                 runOnUiThread {
@@ -511,6 +521,22 @@ class MainActivity : ComponentActivity() {
                 Spacer(Modifier.height(8.dp))
                 body()
             }
+        }
+    }
+
+    @Composable
+    private fun NotifToggle(
+        title: String,
+        sub: String,
+        checked: Boolean,
+        onChecked: (Boolean) -> Unit,
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(title)
+                Text(sub, style = MaterialTheme.typography.bodySmall)
+            }
+            Switch(checked = checked, onCheckedChange = onChecked)
         }
     }
 
@@ -756,6 +782,46 @@ class MainActivity : ComponentActivity() {
                     }
                 }) {
                     Text(stringResource(R.string.setup_notif_allow))
+                }
+                Spacer(Modifier.height(8.dp))
+                // Per-mode notification policy: each toggle rebuilds
+                // the live foreground notifications (no restart).
+                val nprefs = s.optJSONObject("preferences") ?: JSONObject()
+                NotifToggle(
+                    title = getString(R.string.notif_pref_idle),
+                    sub = getString(R.string.notif_pref_idle_sub),
+                    checked = nprefs.optBoolean(NotifPolicy.KEY_IDLE_ONGOING, true),
+                ) {
+                    nprefs.put(NotifPolicy.KEY_IDLE_ONGOING, it)
+                    s.put("preferences", nprefs)
+                    save()
+                }
+                NotifToggle(
+                    title = getString(R.string.notif_pref_rec),
+                    sub = getString(R.string.notif_pref_rec_sub),
+                    checked = nprefs.optBoolean(NotifPolicy.KEY_REC_ONGOING, true),
+                ) {
+                    nprefs.put(NotifPolicy.KEY_REC_ONGOING, it)
+                    s.put("preferences", nprefs)
+                    save()
+                }
+                NotifToggle(
+                    title = getString(R.string.notif_pref_work),
+                    sub = getString(R.string.notif_pref_work_sub),
+                    checked = nprefs.optBoolean(NotifPolicy.KEY_WORK_PROGRESS, true),
+                ) {
+                    nprefs.put(NotifPolicy.KEY_WORK_PROGRESS, it)
+                    s.put("preferences", nprefs)
+                    save()
+                }
+                NotifToggle(
+                    title = getString(R.string.notif_pref_sync),
+                    sub = getString(R.string.notif_pref_sync_sub),
+                    checked = nprefs.optBoolean(NotifPolicy.KEY_SYNC_PROGRESS, true),
+                ) {
+                    nprefs.put(NotifPolicy.KEY_SYNC_PROGRESS, it)
+                    s.put("preferences", nprefs)
+                    save()
                 }
             }
             Section(stringResource(R.string.setup_mic_button)) {

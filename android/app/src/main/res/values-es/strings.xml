@@ -74,6 +74,7 @@
     <string name="float_notif_channel">Botón flotante</string>
     <string name="float_notif_title">Burbuja MyWhisper</string>
     <string name="float_notif_text">Dictado flotante activo</string>
+    <string name="float_notif_rec_text">Grabando… toca Detener para terminar</string>
     <string name="float_need_overlay">Permite mostrar sobre otras apps primero</string>
     <string name="float_overlay_recovery">El permiso de superposición fue revocado — reactiva «Mostrar sobre otras apps» para recuperar la burbuja</string>
     <string name="float_drag_handle">Asa de arrastre — mover la burbuja</string>
@@ -277,5 +278,15 @@
     <!-- Sync service notification -->
     <string name="notif_sync_title">Sincronización MyWhisper</string>
     <string name="notif_sync_text">Escuchando sincronización</string>
+    <string name="notif_sync_working_text">Sincronizando…</string>
+    <string name="notif_sync_now">Sincronizar</string>
     <string name="notif_stop">Detener</string>
+    <string name="notif_pref_idle">Fijada en reposo</string>
+    <string name="notif_pref_idle_sub">Mantener la notificación fijada en reposo.</string>
+    <string name="notif_pref_rec">Fijada al grabar</string>
+    <string name="notif_pref_rec_sub">Mantener la notificación fijada al grabar.</string>
+    <string name="notif_pref_work">Progreso al transcribir</string>
+    <string name="notif_pref_work_sub">Mostrar actividad mientras el servidor trabaja.</string>
+    <string name="notif_pref_sync">Progreso de sincronización</string>
+    <string name="notif_pref_sync_sub">Mostrar actividad durante la sincronización.</string>
 </resources>
