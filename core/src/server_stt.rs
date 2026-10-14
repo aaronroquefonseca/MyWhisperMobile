@@ -300,18 +300,33 @@ const RESPONSE_CAP: usize = 1024 * 1024;
 pub(crate) fn capped_text(
     resp: reqwest::blocking::Response,
     description: &str,
-) -> Result<String, String> {    if resp
+) -> Result<String, String> {
+    if resp
         .content_length()
         .is_some_and(|len| len > RESPONSE_CAP as u64)
     {
         return Err(format!("{description}: response size limit exceeded"));
     }
-    let bytes = resp.bytes().map_err(|e| format!("read body: {e}"))?;
-    if bytes.len() > RESPONSE_CAP {
-        return Err(format!("{description}: response size limit exceeded"));
+    // Chunk loop (desktop #22 parity): `take` bounds the total read to
+    // cap+1 and each chunk is checked against the remaining budget, so
+    // a missing/lying Content-Length can never buffer unbounded — at
+    // most one in-flight chunk sits past the cap.
+    use std::io::Read as _;
+    let mut limited = resp.take(RESPONSE_CAP as u64 + 1);
+    let mut bytes = Vec::new();
+    let mut tmp = [0u8; 8192];
+    loop {
+        let n =
+            std::io::Read::read(&mut limited, &mut tmp).map_err(|e| format!("read body: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        if n > RESPONSE_CAP.saturating_sub(bytes.len()) {
+            return Err(format!("{description}: response size limit exceeded"));
+        }
+        bytes.extend_from_slice(&tmp[..n]);
     }
-    String::from_utf8(bytes.to_vec())
-        .map_err(|_| format!("{description}: response is not UTF-8"))
+    String::from_utf8(bytes).map_err(|_| format!("{description}: response is not UTF-8"))
 }
 
 fn post_openai_compat(
@@ -653,8 +668,7 @@ pub fn transcribe_chain_witnessed(
         // this chain — abort before the next upload, never fall back.
         if server_generation() != witness {
             return Err(
-                "cancelled (chain superseded mid-utterance; fallback uploads aborted)"
-                    .to_string(),
+                "cancelled (chain superseded mid-utterance; fallback uploads aborted)".to_string(),
             );
         }
         usable += 1;
@@ -1794,7 +1808,13 @@ mod tests {
     /// Single-shot stub: consumes one request (headers + body per
     /// `Content-Length`), counts the hit, replies `body`. Deadline-bound
     /// accept so a client that never connects cannot wedge the join.
-    fn stub_server(body: &'static str) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>, std::thread::JoinHandle<()>) {
+    fn stub_server(
+        body: &'static str,
+    ) -> (
+        String,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        std::thread::JoinHandle<()>,
+    ) {
         use std::io::{Read, Write};
         use std::sync::atomic::Ordering;
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1887,8 +1907,7 @@ mod tests {
         // Admission witness, then a cancel lands before the chain runs.
         let witness = server_generation();
         record_stop(&stt_fingerprint(&stt));
-        let err =
-            transcribe_chain_witnessed(&stt, &vec![1000i16; 1600], &[], witness).unwrap_err();
+        let err = transcribe_chain_witnessed(&stt, &vec![1000i16; 1600], &[], witness).unwrap_err();
         assert!(
             err.contains("superseded") || err.contains("cancelled"),
             "stale chain must abort, got: {err}"
@@ -1914,13 +1933,8 @@ mod tests {
             ],
             false,
         );
-        let t = transcribe_chain_witnessed(
-            &stt,
-            &vec![1000i16; 1600],
-            &[],
-            server_generation(),
-        )
-        .unwrap();
+        let t = transcribe_chain_witnessed(&stt, &vec![1000i16; 1600], &[], server_generation())
+            .unwrap();
         assert_eq!(t.text, "hello");
         srv_a.join().unwrap();
         srv_b.join().unwrap();
@@ -1951,17 +1965,101 @@ mod tests {
                     break;
                 }
             }
+            // Drain the whole request body first: closing while the
+            // client is still uploading can RST its send (flake), and
+            // the point under test is the reply, not the upload.
+            let head_end = buf
+                .windows(4)
+                .position(|w| w == b"\r\n\r\n")
+                .map(|p| p + 4)
+                .unwrap_or(buf.len());
+            let headers = String::from_utf8_lossy(&buf[..head_end.min(buf.len())]);
+            let len: usize = headers
+                .lines()
+                .find_map(|l| {
+                    let (k, v) = l.split_once(':')?;
+                    if k.trim().eq_ignore_ascii_case("content-length") {
+                        v.trim().parse().ok()
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(0);
+            while buf.len().saturating_sub(head_end) < len {
+                let n = sock.read(&mut tmp).unwrap_or(0);
+                if n == 0 {
+                    break;
+                }
+                buf.extend_from_slice(&tmp[..n]);
+            }
             // Claim 2 MiB; the client must reject from the header alone.
             let _ = sock.write_all(
                 b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2097152\r\nConnection: close\r\n\r\n",
             );
         });
         let began = std::time::Instant::now();
-        let err = post_openai_compat(&url, "", "whisper-1", "en", None, vec![0u8; 44])
-            .unwrap_err();
+        let err = post_openai_compat(&url, "", "whisper-1", "en", None, vec![0u8; 44]).unwrap_err();
         assert!(
             err.contains("response size limit exceeded"),
             "oversized reply must be capped, got: {err}"
+        );
+        assert!(
+            began.elapsed() < std::time::Duration::from_secs(30),
+            "cap rejection took {:?}",
+            began.elapsed()
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn chunked_oversize_body_is_capped_without_content_length() {
+        // No Content-Length (chunked framing): the per-chunk cap must
+        // abort past 1 MiB instead of buffering the whole body. The
+        // server ignores write errors — the client drops the socket on
+        // abort, which is the legitimate outcome, not a stall.
+        let _guard = status_test_lock();
+        reset_status_state();
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            sock.set_read_timeout(Some(std::time::Duration::from_secs(10)))
+                .unwrap();
+            let mut buf = Vec::new();
+            let mut tmp = [0u8; 4096];
+            loop {
+                let n = sock.read(&mut tmp).unwrap_or(0);
+                if n == 0 {
+                    break;
+                }
+                buf.extend_from_slice(&tmp[..n]);
+                if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let _ = sock.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+            );
+            let chunk = vec![b'x'; 16384];
+            for _ in 0..80 {
+                if sock
+                    .write_all(format!("{:X}\r\n", chunk.len()).as_bytes())
+                    .is_err()
+                {
+                    break;
+                }
+                if sock.write_all(&chunk).is_err() || sock.write_all(b"\r\n").is_err() {
+                    break;
+                }
+            }
+            let _ = sock.write_all(b"0\r\n\r\n");
+        });
+        let began = std::time::Instant::now();
+        let err = post_openai_compat(&url, "", "whisper-1", "en", None, vec![0u8; 44]).unwrap_err();
+        assert!(
+            err.contains("response size limit exceeded"),
+            "chunked oversize must be capped, got: {err}"
         );
         assert!(
             began.elapsed() < std::time::Duration::from_secs(30),

@@ -581,6 +581,12 @@ impl Engine {
             &words,
             generation_at_entry,
         );
+        // Cleanup fetches are blocking: recheck the witness before the
+        // history write so a cancel that landed mid-cleanup settles
+        // instead of storing a phantom row.
+        if crate::server_stt::server_generation() != generation_at_entry {
+            return Err("superseded (provider switched mid-utterance)".to_string());
+        }
 
         // Retention first, then store only when history is on
         // (mirrors desktop deliver). Leased-work join before
