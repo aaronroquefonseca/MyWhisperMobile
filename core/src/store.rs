@@ -176,7 +176,7 @@ fn db_key() -> Result<[u8; 32], String> {
     return Err("MYWHISPER_DB_KEY not set (nativeOpen must provide the Keystore key)".to_string());
     #[cfg(not(target_os = "android"))]
     {
-        return db_key_desktop();
+        db_key_desktop()
     }
 }
 
@@ -378,8 +378,7 @@ impl Store {
         let probe = conn.query_row("SELECT count(*) FROM sqlite_master", [], |r| {
             r.get::<_, i64>(0)
         });
-        if probe.is_err() && !fresh {
-            let err = probe.unwrap_err();
+        if !fresh && let Err(err) = probe {
             if is_not_a_database(&err) {
                 drop(conn);
                 eprintln!("[store] plaintext database found, encrypting in place");

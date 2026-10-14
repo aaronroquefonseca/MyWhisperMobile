@@ -5,8 +5,8 @@
 use mywhisper_core::device::DeviceIdentity;
 use mywhisper_core::net;
 use mywhisper_core::store::Store;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 fn setup(dir: &std::path::Path) -> (Store, DeviceIdentity) {
     std::fs::create_dir_all(dir).unwrap();
@@ -130,10 +130,12 @@ fn trusted_peers_merge_words_and_history_both_ways() {
     assert_eq!(report.peer_name, "alice");
 
     // Bob merged alice's word + history.
-    assert!(bob_store
-        .load_words()
-        .unwrap()
-        .contains(&"kwyjibo".to_string()));
+    assert!(
+        bob_store
+            .load_words()
+            .unwrap()
+            .contains(&"kwyjibo".to_string())
+    );
     let hist = bob_store.load_history(10, false).unwrap();
     assert!(hist.iter().any(|h| h.text == "Hello from alice"));
 
