@@ -179,31 +179,7 @@ class OverlayService : Service(), Dictation.Listener {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
-                // Detach first: in-flight Dictation.finish set(IDLE)
-                // would otherwise refreshNotif an ongoing notif
-                // with no live service behind it.
-                try {
-                    if (::dictation.isInitialized) dictation.listener = null
-                } catch (_: Exception) {
-                }
-                removeBubble()
-                clearFloatState()
-                foregrounded = false
-                NotifPolicy.UnifiedState.floatActive = false
-                NotifPolicy.UnifiedState.floatState = Dictation.State.IDLE
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                // Retired solo bubble row (pre-unification installs):
-                // single-STOP must never leave it behind either.
-                try {
-                    getSystemService(NotificationManager::class.java)?.cancel(NotifPolicy.LEGACY_FLOAT_NOTIF_ID)
-                } catch (_: Exception) {
-                }
-                // Shared row: we just removed it — if sync still lives,
-                // hand it back immediately (recompose, not orphan).
-                try {
-                    if (NotifPolicy.UnifiedState.syncActive) SyncService.refreshNotif(this)
-                } catch (_: Exception) {
-                }
+                teardownFloat()
                 stopSelf()
                 return START_NOT_STICKY
             }
@@ -239,9 +215,7 @@ class OverlayService : Service(), Dictation.Listener {
                         Toast.LENGTH_LONG,
                     ).show()
                     openOverlaySettings()
-                    removeBubble()
-                    clearFloatState()
-                    NotifPolicy.UnifiedState.floatActive = false
+                    teardownFloat()
                     stopSelf()
                     return START_NOT_STICKY
                 }
@@ -256,9 +230,7 @@ class OverlayService : Service(), Dictation.Listener {
                     // Background start denied (boot redelivery): never run
                     // un-foregrounded — the system kills us ~10s later.
                     android.util.Log.i("MwFloat", "fg denied, stopping: ${e.message}")
-                    removeBubble()
-                    clearFloatState()
-                    NotifPolicy.UnifiedState.floatActive = false
+                    teardownFloat()
                     stopSelf()
                     return START_NOT_STICKY
                 }
@@ -408,6 +380,49 @@ class OverlayService : Service(), Dictation.Listener {
         try {
             FloatState.onChange = null
         } catch (_: Exception) {
+        }
+    }
+
+    /**
+     * Shared teardown for every float death path (STOP, overlay-denied
+     * START, addView denial, FGS denial): detach first so in-flight
+     * Dictation.finish set(IDLE) can't refreshNotif an ongoing row with
+     * no live service behind it, drop the bubble + state, remove the
+     * shared row, and hand it back to sync when alive (recompose, not
+     * orphan — a bare stopSelf would leave stale float chrome while
+     * sync lives). Every step best-effort; callers stopSelf afterwards.
+     * Executes [floatTeardownPlan] field by field (JVM-tested matrix).
+     */
+    private fun teardownFloat() {
+        val plan = floatTeardownPlan(NotifPolicy.UnifiedState.syncActive)
+        if (plan.detachListener) {
+            try {
+                if (::dictation.isInitialized) dictation.listener = null
+            } catch (_: Exception) {
+            }
+        }
+        if (plan.removeBubble) removeBubble()
+        if (plan.clearState) clearFloatState()
+        foregrounded = false
+        if (plan.resetUnifiedState) {
+            NotifPolicy.UnifiedState.floatActive = false
+            NotifPolicy.UnifiedState.floatState = Dictation.State.IDLE
+        }
+        if (plan.removeSharedRow) {
+            try {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+            } catch (_: Exception) {
+            }
+            try {
+                getSystemService(NotificationManager::class.java)?.cancel(NotifPolicy.LEGACY_FLOAT_NOTIF_ID)
+            } catch (_: Exception) {
+            }
+        }
+        if (plan.recomposeSync) {
+            try {
+                SyncService.refreshNotif(this)
+            } catch (_: Exception) {
+            }
         }
     }
 
@@ -599,11 +614,7 @@ class OverlayService : Service(), Dictation.Listener {
             openOverlaySettings()
             Toast.makeText(this, getString(R.string.float_overlay_recovery), Toast.LENGTH_LONG).show()
             android.util.Log.i("MwFloat", "addView denied: ${e.message}")
-            holder = null
-            micBtn = null
-            dragHandle = null
-            stopBtn = null
-            spinner = null
+            teardownFloat()
             stopSelf()
             return
         }
@@ -947,3 +958,30 @@ internal fun touchExpandPx(visualPx: Int, targetPx: Int): Int =
 /** Apply a TouchDelegate-style inset (negative = expand) to a rect. */
 internal fun expandHitRect(r: HitRect, insetPx: Int): HitRect =
     HitRect(r.left + insetPx, r.top + insetPx, r.right - insetPx, r.bottom - insetPx)
+
+/**
+ * Pure teardown matrix for the float death paths (STOP, overlay-denied
+ * START, addView denial, FGS denial): every path runs the same full
+ * teardown — detach, bubble, state, unified-state reset, shared-row
+ * removal — and only the survivor recompose varies with sync liveness.
+ * [OverlayService.teardownFloat] executes the plan field by field.
+ */
+internal data class FloatTeardown(
+    val detachListener: Boolean,
+    val removeBubble: Boolean,
+    val clearState: Boolean,
+    val resetUnifiedState: Boolean,
+    val removeSharedRow: Boolean,
+    val recomposeSync: Boolean,
+)
+
+/** Full teardown always; recompose the survivor row iff sync lives. */
+internal fun floatTeardownPlan(syncActive: Boolean): FloatTeardown =
+    FloatTeardown(
+        detachListener = true,
+        removeBubble = true,
+        clearState = true,
+        resetUnifiedState = true,
+        removeSharedRow = true,
+        recomposeSync = syncActive,
+    )

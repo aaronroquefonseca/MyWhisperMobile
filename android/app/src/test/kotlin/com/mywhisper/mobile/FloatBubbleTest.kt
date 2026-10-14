@@ -270,4 +270,36 @@ class FloatBubbleTest {
         FloatState.clearOverlayDenied()
         assertFalse(FloatState.overlayDenied)
     }
+
+    // -- Death-path teardown matrix --------------------------------
+
+    @Test
+    fun teardown_alwaysFull_onlyRecomposeVaries() {
+        // Every death path (STOP, overlay-denied START, addView denial,
+        // FGS denial) runs the same full teardown; only the survivor
+        // recompose depends on sync liveness.
+        for (syncActive in listOf(false, true)) {
+            val plan = floatTeardownPlan(syncActive)
+            assertTrue(plan.detachListener)
+            assertTrue(plan.removeBubble)
+            assertTrue(plan.clearState)
+            assertTrue(plan.resetUnifiedState)
+            assertTrue(plan.removeSharedRow)
+            assertEquals(syncActive, plan.recomposeSync)
+        }
+    }
+
+    @Test
+    fun teardown_noSyncAlive_removesRowWithoutRecompose() {
+        val plan = floatTeardownPlan(false)
+        assertTrue(plan.removeSharedRow)
+        assertFalse(plan.recomposeSync)
+    }
+
+    @Test
+    fun teardown_syncAlive_handsRowBack() {
+        val plan = floatTeardownPlan(true)
+        assertTrue(plan.removeSharedRow)
+        assertTrue(plan.recomposeSync)
+    }
 }
