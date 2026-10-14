@@ -464,6 +464,27 @@ impl Store {
             .unwrap_or(0)
     }
 
+    /// Strict sync-enabled read for authorization gates: the settings
+    /// blob must exist, parse, and explicitly enable sync. Anything
+    /// else (missing/unreadable/decoded-off) refuses. Never derives
+    /// policy from `load_settings()` defaults here.
+    pub fn sync_enabled_explicit(&self) -> bool {
+        let settings: Option<String> = self
+            .conn
+            .query_row("SELECT value FROM kv WHERE key = 'settings'", [], |r| {
+                r.get(0)
+            })
+            .ok();
+        settings
+            .and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok())
+            .and_then(|v| {
+                v.get("sync")
+                    .and_then(|s| s.get("enabled"))
+                    .and_then(|e| e.as_bool())
+            })
+            .unwrap_or(false)
+    }
+
     fn invalidate_sync(conn: &Connection) -> rusqlite::Result<()> {
         conn.execute(
             "INSERT INTO sync_meta (key, value) VALUES ('policy_epoch', '1')
@@ -965,6 +986,9 @@ impl Store {
             [],
         )?;
         tx.execute("DELETE FROM devices", [])?;
+        // Drop the monotonic clock: an excursion-poisoned stored value
+        // must not survive the reset that is supposed to recover it.
+        tx.execute("DELETE FROM sync_meta WHERE key = 'clock'", [])?;
         Self::invalidate_sync(&tx)?;
         tx.execute("DELETE FROM kv", [])?;
         let mut defaults = AppSettings::default();
@@ -1049,6 +1073,12 @@ impl Store {
     /// One transaction, atomic LWW in SQL (no read-then-write race
     /// between the App and IME connections).
     pub fn apply_words(&self, records: &[WordRecord]) -> rusqlite::Result<()> {
+        // Horizon check lives at the remote entry only: locally minted
+        // versions (upsert/delete via next_version) must never lock out
+        // local writes after a clock excursion + correction.
+        for r in records {
+            Self::validate_version(r.updated_at)?;
+        }
         let tx = self.conn.unchecked_transaction()?;
         let changed = Self::apply_words_on(&tx, records)?;
         if changed > 0 {
@@ -1064,7 +1094,6 @@ impl Store {
     fn apply_words_on(conn: &Connection, records: &[WordRecord]) -> rusqlite::Result<usize> {
         let mut changed = 0;
         for r in records {
-            Self::validate_version(r.updated_at)?;
             changed += conn.execute(
                 "INSERT INTO words (word, updated_at, updated_by, deleted)
                  VALUES (?1, ?2, ?3, ?4)
@@ -1081,6 +1110,10 @@ impl Store {
     }
 
     pub fn apply_snippets(&self, records: &[SnippetRecord]) -> rusqlite::Result<()> {
+        // Remote entry: horizon-checked (see apply_words).
+        for r in records {
+            Self::validate_version(r.updated_at)?;
+        }
         let tx = self.conn.unchecked_transaction()?;
         let changed = Self::apply_snippets_on(&tx, records)?;
         if changed > 0 {
@@ -1096,7 +1129,6 @@ impl Store {
     fn apply_snippets_on(conn: &Connection, records: &[SnippetRecord]) -> rusqlite::Result<usize> {
         let mut changed = 0;
         for r in records {
-            Self::validate_version(r.updated_at)?;
             changed += conn.execute(
                 "INSERT INTO snippets (trigger, replacement, updated_at, updated_by, deleted)
                  VALUES (?1, ?2, ?3, ?4, ?5)
@@ -1298,6 +1330,13 @@ impl Store {
         let tx = self.conn.unchecked_transaction()?;
         self.check_sync_identity()?;
         Self::require_sync_authorized(&tx, peer_id, epoch)?;
+        // Remote entry: horizon-checked before anything commits.
+        for r in content.0 {
+            Self::validate_version(r.updated_at)?;
+        }
+        for r in content.1 {
+            Self::validate_version(r.updated_at)?;
+        }
         let peer: Option<Peer> = tx
             .query_row(
                 "SELECT node_id, name, address, addresses, trusted, pending,
@@ -2484,5 +2523,109 @@ mod tests {
                 .is_err()
         );
         assert!(!store.load_words().unwrap().contains(&"future".to_string()));
+    }
+
+    #[test]
+    fn local_writes_survive_clock_excursion_and_correction() {
+        let store = Store::open_memory().unwrap();
+        // Excursion poisons the stored monotonic clock far into the future.
+        let poisoned = now_ms() + 30 * 86_400_000;
+        store
+            .conn
+            .execute(
+                "INSERT INTO sync_meta (key, value) VALUES ('clock', ?1)",
+                [poisoned.to_string()],
+            )
+            .unwrap();
+        // Clock corrected back, stored poison remains: local dictionary
+        // writes must keep working (horizon applies to remote input only).
+        store.upsert_word("local", "node-x").unwrap();
+        store.delete_word("local", "node-x").unwrap();
+        store.upsert_snippet("t", "r", "node-x").unwrap();
+        store.delete_snippet("t", "node-x").unwrap();
+        assert!(store.load_words().unwrap().is_empty());
+        // Remote poison is still rejected at the entry.
+        assert!(
+            store
+                .apply_words(&[WordRecord {
+                    word: "poison".to_string(),
+                    updated_at: poisoned,
+                    updated_by: peer_id(0xf1),
+                    deleted: false,
+                }])
+                .is_err()
+        );
+        assert!(
+            store
+                .apply_snippets(&[SnippetRecord {
+                    trigger: "poison".to_string(),
+                    replacement: "x".to_string(),
+                    updated_at: poisoned,
+                    updated_by: peer_id(0xf1),
+                    deleted: false,
+                }])
+                .is_err()
+        );
+        // And a poisoned sync round commits nothing.
+        enable_sync(&store);
+        let peer = peer_id(0xf2);
+        trust(&store, &peer);
+        let epoch = store.sync_epoch();
+        let bad = vec![WordRecord {
+            word: "round-poison".to_string(),
+            updated_at: poisoned,
+            updated_by: peer.clone(),
+            deleted: false,
+        }];
+        assert!(
+            store
+                .apply_sync_round(&peer, epoch, &peer_id(0xf3), (&bad, &[], &[]), &[])
+                .is_err()
+        );
+        assert!(
+            !store
+                .load_words()
+                .unwrap()
+                .contains(&"round-poison".to_string())
+        );
+    }
+
+    #[test]
+    fn reset_clears_poisoned_monotonic_clock() {
+        let store = Store::open_memory().unwrap();
+        let poisoned = now_ms() + 30 * 86_400_000;
+        store
+            .conn
+            .execute(
+                "INSERT INTO sync_meta (key, value) VALUES ('clock', ?1)",
+                [poisoned.to_string()],
+            )
+            .unwrap();
+        store.reset_all_data().unwrap();
+        let clock: Option<String> = store
+            .conn
+            .query_row("SELECT value FROM sync_meta WHERE key = 'clock'", [], |r| {
+                r.get(0)
+            })
+            .ok();
+        assert!(clock.is_none(), "reset must drop the stored clock");
+        // Post-reset versions come from the wall clock again.
+        let v = Store::next_version(&store.conn).unwrap();
+        assert!((v - now_ms()).abs() < 60_000, "clock recovered, got {v}");
+    }
+
+    #[test]
+    fn dial_gate_needs_an_explicit_settings_blob() {
+        let store = Store::open_memory().unwrap();
+        // Fresh store: load_settings() would report enabled via defaults,
+        // but the strict gate refuses without a persisted opt-in.
+        assert!(store.load_settings().sync.enabled);
+        assert!(!store.sync_enabled_explicit());
+        enable_sync(&store);
+        assert!(store.sync_enabled_explicit());
+        let mut s = store.load_settings();
+        s.sync.enabled = false;
+        store.save_settings(&s).unwrap();
+        assert!(!store.sync_enabled_explicit());
     }
 }

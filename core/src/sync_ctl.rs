@@ -48,7 +48,10 @@ fn push_report(reports: &Arc<Mutex<Vec<String>>>, line: String) {
 /// on the wire. No permissive defaults: an unreadable settings blob
 /// refuses.
 fn require_dial_authorized(store: &Store, node_id: &str) -> Result<(), String> {
-    if !store.load_settings().sync.enabled {
+    // Strict parse (mirrors require_sync_authorized): a missing or
+    // unreadable settings blob refuses. load_settings() defaults would
+    // fail this gate open on fresh installs.
+    if !store.sync_enabled_explicit() {
         return Err("sync is disabled in settings".to_string());
     }
     if store
