@@ -1,6 +1,8 @@
 package com.mywhisper.mobile
 
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Mic-button controller: hold-to-talk / toggle / smart, mirroring the
@@ -16,8 +18,31 @@ class Dictation(
     private val smartTapMs: () -> Long = { 150L },
     private val mode: () -> String = { "Smart" },
     private val releaseDelayMs: () -> Long = { 0L },
+    private val startCapture: (
+        onPcm: (ShortArray, Int) -> Unit,
+        onError: (String) -> Unit,
+        onLevel: (Float) -> Unit,
+    ) -> Capture? = { onPcm, onError, onLevel ->
+        val cap = AudioCapture(onPcm = onPcm, onError = onError, onLevel = onLevel)
+        if (cap.start()) {
+            object : Capture {
+                override fun stop() = cap.stop()
+            }
+        } else {
+            null
+        }
+    },
+    private val finishTranscription: () -> Pair<String, String> = { CoreBridge.finishUtterance() },
+    private val cancelTranscription: () -> Unit = { CoreBridge.cancelUtterance() },
+    private val log: (String) -> Unit = { msg -> android.util.Log.i("MwDict", msg) },
+    private val workers: ExecutorService = Executors.newSingleThreadExecutor(),
 ) {
     enum class State { IDLE, RECORDING, WORKING }
+
+    /** Stoppable mic handle (production: wraps [AudioCapture]; tests: fake). */
+    interface Capture {
+        fun stop()
+    }
 
     interface Listener {
         fun onState(s: State, toggled: Boolean)
@@ -29,13 +54,21 @@ class Dictation(
     /** Live mic peaks for the pill visualizer (capture thread). */
     var onLevel: ((Float) -> Unit)? = null
     private var maxPeak = 0f
-    private val workers = Executors.newSingleThreadExecutor()
 
     private var state = State.IDLE
     private var toggled = false
     private var secondDown = false
     private var downAt = 0L
-    @Volatile private var capture: AudioCapture? = null
+    @Volatile private var capture: Capture? = null
+    /**
+     * Session token: bumped on every new recording ([pressDown]) and
+     * every [cancel]. The [finish] worker snapshots it and rechecks
+     * after the tail sleep AND after the blocking [finishTranscription]
+     * return — a stale token means cancel won, so drop without
+     * committing. Nullness of [capture] alone is racy (TOCTOU:
+     * snapshot-then-cancel still transcribes).
+     */
+    private val session = AtomicInteger(0)
 
     val current: State get() = state
 
@@ -60,8 +93,8 @@ class Dictation(
             }
             State.IDLE -> Unit
         }
-        val cap = AudioCapture(
-            onPcm = { buf, n ->
+        val cap = startCapture(
+            { buf, n ->
                 // Copy: the buffer is reused by the read loop.
                 val copy = buf.copyOf(n)
                 try {
@@ -69,15 +102,14 @@ class Dictation(
                 } catch (_: Exception) {
                 }
             },
-            onError = { listener?.onError(it); hardStop() },
-            onLevel = {
+            { listener?.onError(it); hardStop() },
+            {
                 if (it > maxPeak) maxPeak = it
                 onLevel?.invoke(it)
             },
-        )
-        if (!cap.start()) {
-            return
-        }
+        ) ?: return
+        // bump before publish so workers that see the capture see the token.
+        session.incrementAndGet()
         capture = cap
         toggled = false
         downAt = System.currentTimeMillis()
@@ -120,9 +152,12 @@ class Dictation(
 
     fun cancel() {
         if (state == State.IDLE) return
+        // Invalidate the finish worker FIRST so a blocked
+        // finishTranscription that returns later drops, never commits.
+        session.incrementAndGet()
         hardStop()
         try {
-            CoreBridge.cancelUtterance()
+            cancelTranscription()
         } catch (_: Exception) {
         }
     }
@@ -160,6 +195,7 @@ class Dictation(
         toggled = false
         secondDown = false
         set(State.WORKING)
+        val gen = session.get()
         workers.execute {
             if (tail > 0) {
                 try {
@@ -167,29 +203,37 @@ class Dictation(
                 } catch (_: Exception) {
                 }
             }
-            // Cancelled while tailing (cancel() nulls capture):
-            // drop without transcribing.
+            // Cancelled while tailing: cancel() bumps session, so the
+            // token rules — capture nullness alone races (worker may
+            // have snapshotted non-null just before cancel). Return
+            // silently: state already belongs to cancel()/a new press.
+            if (gen != session.get()) return@execute
             val cap = capture
-            if (cap == null) {
-                set(State.IDLE)
-                return@execute
-            }
+            if (cap == null || gen != session.get()) return@execute
             try {
-                capture?.stop()
+                cap.stop()
             } catch (_: Exception) {
             }
             capture = null
+            val text: String
             try {
-                val (text, _) = CoreBridge.finishUtterance()
-                android.util.Log.i("MwDict", "utterance max peak=%.2f".format(maxPeak))
-                android.util.Log.i("MwDict", "utterance text len=${text.length} hasListener=${listener != null}")
-                if (text.isBlank()) {
-                    listener?.onError("empty transcript")
-                } else {
-                    listener?.onResult(text)
-                }
+                text = finishTranscription().first
             } catch (e: Exception) {
-                listener?.onError(e.message ?: "transcription failed")
+                if (gen == session.get()) {
+                    listener?.onError(e.message ?: "transcription failed")
+                    set(State.IDLE)
+                }
+                return@execute
+            }
+            // Cancelled while blocked in transcription: the call above
+            // returned after cancel() — drop, never commit to the IME.
+            if (gen != session.get()) return@execute
+            log("utterance max peak=%.2f".format(maxPeak))
+            log("utterance text len=${text.length} hasListener=${listener != null}")
+            if (text.isBlank()) {
+                listener?.onError("empty transcript")
+            } else {
+                listener?.onResult(text)
             }
             set(State.IDLE)
         }
