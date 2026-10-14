@@ -99,8 +99,8 @@
     <string name="stt_local_why">Why?</string>
     <string name="stt_local_title">On-device speech</string>
     <string name="stt_local_body">The Local entry uses the live local configuration (models on this phone). On-device inference is not implemented in this build yet, so the entry is skipped. Add a Self-hosted or Cloud entry above it to dictate now — order decides priority.</string>
-    <string name="stt_selfhosted">Self-hosted</string>
-    <string name="stt_cloud">Cloud</string>
+    <string name="stt_add">Add service</string>
+    <string name="stt_selfhosted_compat">Self-hosted means any OpenAI-compatible speech endpoint, including the server bundled with MyWhisper desktop (same transcriptions protocol).</string>
     <string name="stt_capture">Capture</string>
     <string name="stt_language">Language</string>
     <string name="stt_vad">Voice activity trim</string>

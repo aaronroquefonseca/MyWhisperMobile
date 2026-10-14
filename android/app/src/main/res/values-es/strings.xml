@@ -99,8 +99,8 @@
     <string name="stt_local_why">¿Por qué?</string>
     <string name="stt_local_title">Voz local</string>
     <string name="stt_local_body">La entrada Local usa la configuración local en vivo (modelos de este teléfono). La inferencia local aún no está disponible en esta versión, así que se omite. Añade una entrada autohospedada o en la nube encima para dictar ahora — el orden decide la prioridad.</string>
-    <string name="stt_selfhosted">Autohospedado</string>
-    <string name="stt_cloud">Nube</string>
+    <string name="stt_add">Añadir servicio</string>
+    <string name="stt_selfhosted_compat">Autohospedado significa cualquier endpoint de voz compatible con OpenAI, incluido el servidor incluido con MyWhisper de escritorio (mismo protocolo de transcripción).</string>
     <string name="stt_capture">Captura</string>
     <string name="stt_language">Idioma</string>
     <string name="stt_vad">Recorte por actividad de voz</string>
