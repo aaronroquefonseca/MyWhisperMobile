@@ -16,8 +16,8 @@
 
 use crate::audio::{self, Recorder, MIN_SAMPLES_16K};
 use crate::server_stt::{
-    record_stop, server_status as chain_status, stt_fingerprint, stt_primary_id, stt_watcher_tick,
-    transcribe_chain, TickOutcome, Transcript,
+    capped_text, record_stop, server_status as chain_status, stt_fingerprint, stt_primary_id,
+    stt_watcher_tick, transcribe_chain_witnessed, TickOutcome, Transcript,
 };
 use crate::settings::{AppSettings, HistoryEntry, LlmEntry};
 use crate::store::Store;
@@ -126,12 +126,19 @@ fn dictionary_suffix(words: &[String]) -> Option<String> {
 
 /// POST JSON with headers. `"authorization-bearer"` is shorthand for
 /// a Bearer token (mirrors desktop `http_post_json`).
+///
+/// Desktop #22 port (M): same bounded-fetch treatment as the STT
+/// chain — 5 s connect deadline, 60 s total deadline, 1 MiB response
+/// cap (header precheck + byte cap). DROP: async cancel-during-fetch;
+/// the witness gate in `post_process` keeps cancelled utterances off
+/// fallback cleanup entries.
 fn http_post_json(
     url: &str,
     headers: &[(&str, &str)],
     body: &serde_json::Value,
 ) -> Result<String, String> {
     let client = reqwest::blocking::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(5))
         .timeout(std::time::Duration::from_secs(60))
         .build()
         .map_err(|e| format!("http client: {e}"))?;
@@ -151,7 +158,7 @@ fn http_post_json(
     if !res.status().is_success() {
         return Err(format!("llm http {}", res.status()));
     }
-    res.text().map_err(|e| format!("llm body: {e}"))
+    capped_text(res, "llm cleanup")
 }
 
 /// One cleanup call against a configured entry (faithful desktop
@@ -293,10 +300,16 @@ fn llm_cleanup_one(entry: &LlmEntry, system: &str, raw: &str) -> Result<String, 
 }
 
 /// Post-process STT output (mirrors desktop `post_process`).
+/// `witness` is the utterance admission generation: a control
+/// transition since admission aborts before the next fallback cleanup
+/// fetch — cancelled utterances never reach fallback entries (the
+/// admitted entry still runs to its deadline; DROP async abort, same
+/// as the STT chain).
 fn post_process(
     raw: &str,
     lm: &crate::settings::LanguageModelSettings,
     words: &[String],
+    witness: u64,
 ) -> String {
     if !lm.cleanup_enabled {
         return raw.to_string();
@@ -310,6 +323,9 @@ fn post_process(
         None => effective_prompt(&lm.cleanup_prompt).to_string(),
     };
     for entry in chain {
+        if crate::server_stt::server_generation() != witness {
+            break;
+        }
         match llm_cleanup_one(entry, &system, raw) {
             Ok(text) if !text.trim().is_empty() => return text.trim().to_string(),
             Ok(_) => continue,
@@ -538,7 +554,7 @@ impl Engine {
         // then settle instead of delivering for a dead chain.
         let generation_at_entry = crate::server_stt::server_generation();
         let Transcript { text: raw, engine } =
-            transcribe_chain(&self.settings.stt, &pcm16, &words)?;
+            transcribe_chain_witnessed(&self.settings.stt, &pcm16, &words, generation_at_entry)?;
         // Test seam (cfg(test) only): park after a successful
         // transcribe, before the guard, so a test can land a
         // switch/Stop inside the window. Production builds contain no
@@ -559,10 +575,19 @@ impl Engine {
             .flat_map(|s| s.triggers().into_iter().map(|t| (t, s.replacement.clone())))
             .collect();
         let expanded = expand_snippets(&raw, &pairs);
-        let text = post_process(&expanded, &self.settings.language_models, &words);
+        let text = post_process(
+            &expanded,
+            &self.settings.language_models,
+            &words,
+            generation_at_entry,
+        );
 
         // Retention first, then store only when history is on
-        // (mirrors desktop deliver).
+        // (mirrors desktop deliver). Leased-work join before
+        // finalization (desktop #22 shutdown parity at utterance
+        // scope): the history write completes before `checkpoint`
+        // finalizes the database — never checkpoint first and leave
+        // the row behind on crash.
         if self.settings.privacy.transcript_auto_delete_days > 0 {
             let days = self.settings.privacy.transcript_auto_delete_days;
             let _ = with_busy_retry(|| self.store.purge_old_history(days));
@@ -981,12 +1006,12 @@ mod tests {
         let handle = std::thread::spawn(move || {
             let history_before = eng.history_json(10);
             let out = eng.finish_utterance();
-            (history_before, out)
+            (eng, history_before, out)
         });
         rx_entered.recv_timeout(Duration::from_secs(10)).unwrap();
         crate::server_stt::record_stop("");
         tx_proceed.send(()).unwrap();
-        let (history_before, out) = handle.join().unwrap();
+        let (eng, history_before, out) = handle.join().unwrap();
         clear_finish_guard_pause();
         stub.join().unwrap();
         match out {
@@ -996,7 +1021,41 @@ mod tests {
                 "stale result must settle, got: {err}"
             ),
         }
-        // Nothing delivered, nothing stored.
+        // Nothing delivered, nothing stored — the stale path settles
+        // before the history write, never after it.
         assert_eq!(history_before, "[]");
+        assert_eq!(eng.history_json(10), "[]");
+    }
+
+    #[test]
+    fn finish_stores_history_before_returning() {
+        // Join-before-finalize at utterance scope: when finish returns
+        // Ok, the history row is already durable (a later reader never
+        // observes the write behind).
+        let _guard = status_test_lock();
+        reset_status_state();
+        let (port, stub) = stub_transcription_server();
+        let mut eng = open_engine();
+        // Hermetic: disable LLM cleanup (the default legacy Ollama
+        // chain would otherwise polish via any localhost server).
+        let mut settings: AppSettings = serde_json::from_str(&settings_with(self_hosted_entry(
+            "Stub",
+            &format!("http://127.0.0.1:{port}"),
+        )))
+        .unwrap();
+        settings.language_models.cleanup_enabled = false;
+        eng.put_settings(&serde_json::to_string(&settings).unwrap())
+            .unwrap();
+        assert_eq!(eng.poll_stt(), TickOutcome::Unchanged);
+        eng.start_utterance(16000);
+        eng.push_pcm(&vec![1000i16; 8000]);
+        let out = eng.finish_utterance().unwrap();
+        assert_eq!(out.text, "hello world");
+        stub.join().unwrap();
+        let history = eng.history_json(10);
+        assert!(
+            history.contains(&out.text),
+            "history row must be stored before finish returns, got: {history}"
+        );
     }
 }

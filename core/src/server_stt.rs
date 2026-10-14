@@ -281,6 +281,39 @@ fn http_transcribe_url(base: &str) -> String {
 }
 
 /// POST multipart WAV, parse OpenAI-style `{text}` (tolerates `data.text`).
+///
+/// Desktop #22 port (M): bounded provider IO — 5 s connect deadline
+/// (also bounds DNS; DROP: desktop's cancellable resolver subprocess,
+/// no blocking-DNS hook exists here), 180 s total deadline (desktop
+/// `INFERENCE_TIMEOUT` parity), 1 MiB response cap (header precheck +
+/// byte cap, never buffered unbounded). DROP: async
+/// cancel-during-transfer; the witness gate in
+/// `transcribe_chain_witnessed` (no fallback upload after cancel) plus
+/// the engine post-guard (stale results settle) cover delivery.
+const CONNECT_TIMEOUT_SECS: u64 = 5;
+pub(crate) const INFERENCE_TIMEOUT_SECS: u64 = 180;
+const RESPONSE_CAP: usize = 1024 * 1024;
+
+/// Read a bounded UTF-8 body: reject oversized replies from the
+/// `Content-Length` header when present, enforce the byte cap while
+/// reading, then require UTF-8.
+pub(crate) fn capped_text(
+    resp: reqwest::blocking::Response,
+    description: &str,
+) -> Result<String, String> {    if resp
+        .content_length()
+        .is_some_and(|len| len > RESPONSE_CAP as u64)
+    {
+        return Err(format!("{description}: response size limit exceeded"));
+    }
+    let bytes = resp.bytes().map_err(|e| format!("read body: {e}"))?;
+    if bytes.len() > RESPONSE_CAP {
+        return Err(format!("{description}: response size limit exceeded"));
+    }
+    String::from_utf8(bytes.to_vec())
+        .map_err(|_| format!("{description}: response is not UTF-8"))
+}
+
 fn post_openai_compat(
     url: &str,
     api_key: &str,
@@ -290,7 +323,8 @@ fn post_openai_compat(
     wav: Vec<u8>,
 ) -> Result<String, String> {
     let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
+        .connect_timeout(std::time::Duration::from_secs(CONNECT_TIMEOUT_SECS))
+        .timeout(std::time::Duration::from_secs(INFERENCE_TIMEOUT_SECS))
         .build()
         .map_err(|e| format!("http client: {e}"))?;
     let file = reqwest::blocking::multipart::Part::bytes(wav)
@@ -314,7 +348,7 @@ fn post_openai_compat(
     }
     let resp = req.send().map_err(|e| format!("request: {e}"))?;
     let status = resp.status();
-    let body = resp.text().map_err(|e| format!("read body: {e}"))?;
+    let body = capped_text(resp, "transcription")?;
     if !status.is_success() {
         return Err(format!(
             "server {status}: {}",
@@ -357,7 +391,8 @@ fn post_deepgram(
         url.push_str(&format!("&language={}", language.trim()));
     }
     let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
+        .connect_timeout(std::time::Duration::from_secs(CONNECT_TIMEOUT_SECS))
+        .timeout(std::time::Duration::from_secs(INFERENCE_TIMEOUT_SECS))
         .build()
         .map_err(|e| format!("http client: {e}"))?;
     let resp = client
@@ -368,7 +403,7 @@ fn post_deepgram(
         .send()
         .map_err(|e| format!("request: {e}"))?;
     let status = resp.status();
-    let body = resp.text().map_err(|e| format!("read body: {e}"))?;
+    let body = capped_text(resp, "deepgram transcription")?;
     if !status.is_success() {
         return Err(format!(
             "server {status}: {}",
@@ -583,6 +618,22 @@ pub fn transcribe_chain(
     samples_16k_i16: &[i16],
     words: &[String],
 ) -> Result<Transcript, String> {
+    transcribe_chain_witnessed(stt, samples_16k_i16, words, server_generation())
+}
+
+/// Witnessed chain (desktop #22 session-ownership port): `witness` is
+/// the control generation sampled at utterance admission — the engine
+/// holds it across the blocking transfer. It is rechecked before
+/// EVERY entry, including the first: a cancel/reset/switch that lands
+/// after admission aborts before any further upload, so cancelled
+/// recordings NEVER reach a fallback entry. Stale delivery without a
+/// witness (direct callers) still relies on the engine post-guard.
+pub fn transcribe_chain_witnessed(
+    stt: &SttSettings,
+    samples_16k_i16: &[i16],
+    words: &[String],
+    witness: u64,
+) -> Result<Transcript, String> {
     let pcm_f32: Vec<f32> = samples_16k_i16
         .iter()
         .map(|s| *s as f32 / 32768.0)
@@ -597,6 +648,14 @@ pub fn transcribe_chain(
                 entry.name
             ));
             continue;
+        }
+        // Session gate: a control transition since admission revokes
+        // this chain — abort before the next upload, never fall back.
+        if server_generation() != witness {
+            return Err(
+                "cancelled (chain superseded mid-utterance; fallback uploads aborted)"
+                    .to_string(),
+            );
         }
         usable += 1;
         match transcribe_entry(entry, stt, &wav, &pcm_f32, words) {
@@ -1714,5 +1773,201 @@ mod tests {
         assert_eq!(tick_applied(&gone, &mut last), TickOutcome::Applied);
         assert!(server_generation() > gen1);
         assert!(server_status(&gone).is_empty());
+    }
+
+    // -- desktop #22 port: bounded IO + session-gated failover ---------
+
+    fn self_hosted_entry(name: &str, url: &str) -> SttChainEntry {
+        SttChainEntry {
+            id: format!("stt-{name}"),
+            name: name.to_string(),
+            kind: SttEntryKind::SelfHosted,
+            enabled: true,
+            provider: String::new(),
+            url: url.to_string(),
+            model: "test".to_string(),
+            api_key: String::new(),
+            streaming: false,
+        }
+    }
+
+    /// Single-shot stub: consumes one request (headers + body per
+    /// `Content-Length`), counts the hit, replies `body`. Deadline-bound
+    /// accept so a client that never connects cannot wedge the join.
+    fn stub_server(body: &'static str) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+        use std::sync::atomic::Ordering;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = hits.clone();
+        let handle = std::thread::spawn(move || {
+            listener.set_nonblocking(true).unwrap();
+            // No connection ever arrives on the stale-witness path, so
+            // this only needs to outlive the client's immediate abort.
+            let stop = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            let stream = loop {
+                match listener.accept() {
+                    Ok((s, _)) => break Some(s),
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        if std::time::Instant::now() >= stop {
+                            break None;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(2));
+                    }
+                    Err(_) => break None,
+                }
+            };
+            let mut sock = match stream {
+                Some(s) => s,
+                None => return,
+            };
+            counted.fetch_add(1, Ordering::SeqCst);
+            sock.set_read_timeout(Some(std::time::Duration::from_secs(10)))
+                .unwrap();
+            let mut buf = Vec::new();
+            let mut tmp = [0u8; 4096];
+            loop {
+                let n = sock.read(&mut tmp).unwrap_or(0);
+                if n == 0 {
+                    break;
+                }
+                buf.extend_from_slice(&tmp[..n]);
+                if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let head_end = buf
+                .windows(4)
+                .position(|w| w == b"\r\n\r\n")
+                .map(|p| p + 4)
+                .unwrap_or(buf.len());
+            let headers = String::from_utf8_lossy(&buf[..head_end.min(buf.len())]);
+            let len: usize = headers
+                .lines()
+                .find_map(|l| {
+                    let (k, v) = l.split_once(':')?;
+                    if k.trim().eq_ignore_ascii_case("content-length") {
+                        v.trim().parse().ok()
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(0);
+            while buf.len().saturating_sub(head_end) < len {
+                let n = sock.read(&mut tmp).unwrap_or(0);
+                if n == 0 {
+                    break;
+                }
+                buf.extend_from_slice(&tmp[..n]);
+            }
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = sock.write_all(resp.as_bytes());
+        });
+        (url, hits, handle)
+    }
+
+    #[test]
+    fn stale_witness_aborts_before_any_fallback_upload() {
+        use std::sync::atomic::Ordering;
+        let _guard = status_test_lock();
+        reset_status_state();
+        let (url_a, hits_a, srv_a) = stub_server(r#"{"text":"a"}"#);
+        let (url_b, hits_b, srv_b) = stub_server(r#"{"text":"b"}"#);
+        let stt = stt_auto(
+            vec![
+                self_hosted_entry("A", &url_a),
+                self_hosted_entry("B", &url_b),
+            ],
+            false,
+        );
+        // Admission witness, then a cancel lands before the chain runs.
+        let witness = server_generation();
+        record_stop(&stt_fingerprint(&stt));
+        let err =
+            transcribe_chain_witnessed(&stt, &vec![1000i16; 1600], &[], witness).unwrap_err();
+        assert!(
+            err.contains("superseded") || err.contains("cancelled"),
+            "stale chain must abort, got: {err}"
+        );
+        srv_a.join().unwrap();
+        srv_b.join().unwrap();
+        // Neither the admitted entry nor the fallback was ever uploaded to.
+        assert_eq!(hits_a.load(Ordering::SeqCst), 0);
+        assert_eq!(hits_b.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn fresh_witness_uses_first_success_without_touching_fallback() {
+        use std::sync::atomic::Ordering;
+        let _guard = status_test_lock();
+        reset_status_state();
+        let (url_a, hits_a, srv_a) = stub_server(r#"{"text":"hello"}"#);
+        let (url_b, hits_b, srv_b) = stub_server(r#"{"text":"fallback"}"#);
+        let stt = stt_auto(
+            vec![
+                self_hosted_entry("A", &url_a),
+                self_hosted_entry("B", &url_b),
+            ],
+            false,
+        );
+        let t = transcribe_chain_witnessed(
+            &stt,
+            &vec![1000i16; 1600],
+            &[],
+            server_generation(),
+        )
+        .unwrap();
+        assert_eq!(t.text, "hello");
+        srv_a.join().unwrap();
+        srv_b.join().unwrap();
+        assert_eq!(hits_a.load(Ordering::SeqCst), 1);
+        assert_eq!(hits_b.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn oversized_response_is_rejected_from_headers_without_reading_body() {
+        let _guard = status_test_lock();
+        reset_status_state();
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            sock.set_read_timeout(Some(std::time::Duration::from_secs(10)))
+                .unwrap();
+            let mut buf = Vec::new();
+            let mut tmp = [0u8; 4096];
+            loop {
+                let n = sock.read(&mut tmp).unwrap_or(0);
+                if n == 0 {
+                    break;
+                }
+                buf.extend_from_slice(&tmp[..n]);
+                if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            // Claim 2 MiB; the client must reject from the header alone.
+            let _ = sock.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2097152\r\nConnection: close\r\n\r\n",
+            );
+        });
+        let began = std::time::Instant::now();
+        let err = post_openai_compat(&url, "", "whisper-1", "en", None, vec![0u8; 44])
+            .unwrap_err();
+        assert!(
+            err.contains("response size limit exceeded"),
+            "oversized reply must be capped, got: {err}"
+        );
+        assert!(
+            began.elapsed() < std::time::Duration::from_secs(30),
+            "cap rejection took {:?}",
+            began.elapsed()
+        );
+        server.join().unwrap();
     }
 }

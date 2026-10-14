@@ -61,12 +61,22 @@ class Dictation(
     private var downAt = 0L
     @Volatile private var capture: Capture? = null
     /**
-     * Session token: bumped on every new recording ([pressDown]) and
-     * every [cancel]. The [finish] worker snapshots it and rechecks
-     * after the tail sleep AND after the blocking [finishTranscription]
-     * return — a stale token means cancel won, so drop without
-     * committing. Nullness of [capture] alone is racy (TOCTOU:
-     * snapshot-then-cancel still transcribes).
+     * Session token: bumped on every new recording ([pressDown]),
+     * every [cancel], and [shutdown]. The [finish] worker snapshots it
+     * and rechecks after the tail sleep AND after the blocking
+     * [finishTranscription] return — a stale token means cancel won, so
+     * drop without committing. Nullness of [capture] alone is racy
+     * (TOCTOU: snapshot-then-cancel still transcribes).
+     *
+     * Cancelled/reset recordings never reach a fallback upload by
+     * construction: the stale worker returns before [finishTranscription]
+     * is consulted for commit, and the core chain rechecks its own
+     * witness before every fallback entry, so a post-cancel result can
+     * neither commit here nor upload there.
+     *
+     * Bounded admission: [workers] is a single thread, and at most one
+     * finish is ever queued — [pressDown] drops while WORKING,
+     * [pressUp]/[finish] only leave RECORDING, and the tail caps at 2 s.
      */
     private val session = AtomicInteger(0)
 
@@ -163,6 +173,10 @@ class Dictation(
     }
 
     fun shutdown() {
+        // Invalidate the finish worker FIRST, same as cancel(): a
+        // transcription blocked at destroy time must drop, never commit
+        // to a dead listener. State is left alone (terminal; no UI).
+        session.incrementAndGet()
         try {
             capture?.stop()
         } catch (_: Exception) {
