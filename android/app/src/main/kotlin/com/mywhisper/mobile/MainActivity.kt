@@ -99,6 +99,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Config app mirroring the desktop Settings screens: Setup (IME +
@@ -111,6 +112,14 @@ class MainActivity : ComponentActivity() {
 
     private val settingsState: MutableState<JSONObject?> = mutableStateOf(null)
     private val statusState = mutableStateOf("")
+    private val settingsBusy = mutableStateOf(false)
+    private val settingsError = mutableStateOf("")
+    private val histBusy = mutableStateOf(false)
+    private val histError = mutableStateOf("")
+    private val settingsGen = AtomicLong(0)
+    private val histGen = AtomicLong(0)
+    private val activityGen = AtomicLong(0)
+    private val syncGen = AtomicLong(0)
     private val micGranted = mutableStateOf(false)
     private val overlayGranted = mutableStateOf(false)
     private val a11yOn = mutableStateOf(false)
@@ -172,6 +181,30 @@ class MainActivity : ComponentActivity() {
                 !a11y -> OverlayCta.A11Y
                 else -> OverlayCta.READY
             }
+
+        /**
+         * Generation guard for settings-page jobs (desktop `Rc::ptr_eq`
+         * / `CHECK_EPOCH` parity): a worker commits its result only
+         * when its generation still equals the screen's current one.
+         * Pure for unit tests.
+         */
+        @JvmStatic
+        internal fun jobApplies(currentGen: Long, jobGen: Long): Boolean =
+            CoreBridge.SettingsJobs.jobApplies(currentGen, jobGen)
+
+        /** Next per-screen job generation. Pure for unit tests. */
+        @JvmStatic
+        internal fun nextJobGen(currentGen: Long): Long =
+            CoreBridge.SettingsJobs.nextJobGen(currentGen)
+
+        /**
+         * True when the committed store warning leaves a retryable
+         * reset behind (desktop `settings.reset.incomplete` parity).
+         * Pure for unit tests.
+         */
+        @JvmStatic
+        internal fun resetNeedsRetry(warning: String?): Boolean =
+            CoreBridge.SettingsJobs.resetNeedsRetry(warning)
     }
 
     /** Speech language codes (stored code, shown label). */
@@ -239,6 +272,12 @@ class MainActivity : ComponentActivity() {
         } catch (_: Exception) {
         }
         multicastLock = null
+        // Drop late job results: the generation bump makes stale
+        // workers no-ops instead of touching torn-down state.
+        settingsGen.incrementAndGet()
+        histGen.incrementAndGet()
+        activityGen.incrementAndGet()
+        syncGen.incrementAndGet()
         workers.shutdownNow()
         super.onDestroy()
     }
@@ -274,21 +313,61 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun reload() {
-        try {
-            settingsState.value = CoreBridge.getSettings().getOrThrow()
-            val app = application as? MyWhisperApp
-            statusState.value = app?.coreError ?: "core ready"
-        } catch (e: Exception) {
-            statusState.value = "core error: ${e.message}"
+        // Generation-aware async load (desktop settings-page jobs
+        // parity): the worker commits only when its generation is
+        // still current, so a newer reload/save drops this result
+        // instead of clobbering newer committed state.
+        val gen = CoreBridge.SettingsJobs.nextJobGen(settingsGen.get()).also { settingsGen.set(it) }
+        settingsBusy.value = true
+        workers.execute {
+            try {
+                val committed = CoreBridge.getSettings().getOrThrow()
+                val app = application as? MyWhisperApp
+                val status = app?.coreError ?: "core ready"
+                runOnUiThread {
+                    if (!jobApplies(settingsGen.get(), gen)) return@runOnUiThread
+                    settingsState.value = committed
+                    statusState.value = status
+                    settingsError.value = ""
+                    settingsBusy.value = false
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    if (!jobApplies(settingsGen.get(), gen)) return@runOnUiThread
+                    statusState.value = "core error: ${e.message}"
+                    settingsError.value = e.message ?: "failed"
+                    settingsBusy.value = false
+                }
+            }
         }
     }
 
     private fun save() {
-        val s = settingsState.value ?: return
-        try {
-            CoreBridge.putSettings(s).getOrThrow()
-        } catch (e: Exception) {
-            toast(getString(R.string.save_failed, e.message))
+        // Async save with committed-state reflection: persist the
+        // snapshot, then re-read the committed settings and apply
+        // them (desktop reset Snapshot parity). Stale generations
+        // drop, so rapid successive saves keep last-writer-wins.
+        val snapshot = settingsState.value?.toString() ?: return
+        val gen = CoreBridge.SettingsJobs.nextJobGen(settingsGen.get()).also { settingsGen.set(it) }
+        settingsBusy.value = true
+        workers.execute {
+            try {
+                CoreBridge.putSettings(JSONObject(snapshot)).getOrThrow()
+                val committed = CoreBridge.getSettings().getOrThrow()
+                runOnUiThread {
+                    if (!jobApplies(settingsGen.get(), gen)) return@runOnUiThread
+                    settingsState.value = committed
+                    settingsError.value = ""
+                    settingsBusy.value = false
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    if (!jobApplies(settingsGen.get(), gen)) return@runOnUiThread
+                    settingsError.value = e.message ?: "failed"
+                    settingsBusy.value = false
+                    toast(getString(R.string.save_failed, e.message))
+                }
+            }
         }
     }
 
@@ -382,10 +461,30 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                     if (s == null) {
-                        Text(
-                            statusState.value,
-                            modifier = Modifier.padding(16.dp),
-                        )
+                        // Explicit recovery UI: boot/load failures keep
+                        // the committed error visible with a retry that
+                        // re-runs the generation-aware reload job.
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text(statusState.value)
+                            if (settingsError.value.isNotEmpty()) {
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    settingsError.value,
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            Button(
+                                onClick = { reload() },
+                                enabled = !settingsBusy.value,
+                            ) {
+                                Text(
+                                    if (settingsBusy.value) "Loading…"
+                                    else stringResource(R.string.action_refresh),
+                                )
+                            }
+                        }
                     } else {
                         when (tab) {
                             0 -> SetupScreen(s)
@@ -673,8 +772,8 @@ class MainActivity : ComponentActivity() {
                 DropDown(getString(R.string.setup_behavior_label), mode, listOf("Smart", "Push", "Tap")) {
                     prefs.put("mic_mode", it)
                     s.put("preferences", prefs)
+                    // save() already reflects the committed state.
                     save()
-                    reload()
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(modifier = Modifier.weight(1f)) {
@@ -690,7 +789,6 @@ class MainActivity : ComponentActivity() {
                             prefs.put("show_pill", it)
                             s.put("preferences", prefs)
                             save()
-                            reload()
                         },
                     )
                 }
@@ -766,7 +864,6 @@ class MainActivity : ComponentActivity() {
                         } else {
                             OverlayService.stop(this@MainActivity)
                         }
-                        reload()
                     })
                 }
             }
@@ -779,7 +876,6 @@ class MainActivity : ComponentActivity() {
                     prefs.put("theme", it)
                     s.put("preferences", prefs)
                     save()
-                    reload()
                 }
             }
         }
@@ -1186,12 +1282,22 @@ class MainActivity : ComponentActivity() {
                 }
                 // Effective prompt state: blank stored = built-in default.
                 var defaultText by remember { mutableStateOf<String?>(null) }
+                var promptFailed by remember { mutableStateOf(false) }
                 if (defaultText == null) {
                     LaunchedEffect(Unit) {
-                        defaultText = try {
-                            CoreBridge.defaultCleanupPrompt().getOrThrow()
-                        } catch (_: Exception) {
-                            ""
+                        workers.execute {
+                            try {
+                                val prompt = CoreBridge.defaultCleanupPrompt().getOrThrow()
+                                runOnUiThread {
+                                    defaultText = prompt
+                                    promptFailed = false
+                                }
+                            } catch (_: Exception) {
+                                runOnUiThread {
+                                    defaultText = ""
+                                    promptFailed = true
+                                }
+                            }
                         }
                     }
                 }
@@ -1205,6 +1311,21 @@ class MainActivity : ComponentActivity() {
                     else "Using your customized prompt.",
                     style = MaterialTheme.typography.bodyMedium,
                 )
+                if (promptFailed) {
+                    // Explicit recovery UI for the async prompt job.
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "Couldn't load the built-in prompt.",
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = {
+                            defaultText = null
+                            promptFailed = false
+                        }) { Text(stringResource(R.string.action_refresh)) }
+                    }
+                }
                 Spacer(Modifier.height(4.dp))
                 Card(
                     colors = CardDefaults.cardColors(
@@ -1795,17 +1916,30 @@ class MainActivity : ComponentActivity() {
         var days by remember { mutableStateOf<List<Day>>(emptyList()) }
         var err by remember { mutableStateOf("") }
         var version by remember { mutableIntStateOf(0) }
+        // Generation-aware load: a newer refresh drops this worker's
+        // commit instead of clobbering newer committed state.
         LaunchedEffect(version) {
-            try {
-                stats = CoreBridge.usageStats().getOrThrow()
-                val arr = CoreBridge.dailyActivity(200).getOrThrow()
-                days = List(arr.length()) { i ->
-                    val o = arr.getJSONObject(i)
-                    Day(o.getLong("dayStart"), o.getInt("words"), o.getInt("utterances"))
+            val gen = CoreBridge.SettingsJobs.nextJobGen(activityGen.get()).also { activityGen.set(it) }
+            workers.execute {
+                try {
+                    val s = CoreBridge.usageStats().getOrThrow()
+                    val arr = CoreBridge.dailyActivity(200).getOrThrow()
+                    val d = List(arr.length()) { i ->
+                        val o = arr.getJSONObject(i)
+                        Day(o.getLong("dayStart"), o.getInt("words"), o.getInt("utterances"))
+                    }
+                    runOnUiThread {
+                        if (!jobApplies(activityGen.get(), gen)) return@runOnUiThread
+                        stats = s
+                        days = d
+                    }
+                } catch (e: Exception) {
+                    runOnUiThread {
+                        if (!jobApplies(activityGen.get(), gen)) return@runOnUiThread
+                        err = e.message ?: "failed"
+                        notify(err)
+                    }
                 }
-            } catch (e: Exception) {
-                err = e.message ?: "failed"
-                notify(err)
             }
         }
         Column(
@@ -2055,10 +2189,110 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun HistoryScreen(s: JSONObject) {
-        var items by remember { mutableStateOf(loadHist()) }
+        var items by remember { mutableStateOf(emptyList<Hist>()) }
         var version by remember { mutableIntStateOf(0) }
         var confirmClear by remember { mutableStateOf(false) }
         @Suppress("UNUSED_EXPRESSION") version
+        // Generation-aware history jobs (desktop reset parity):
+        // each destructive op runs off-thread, then reflects the
+        // committed store state; stale generations drop instead of
+        // clobbering, failures keep an explicit retryable error.
+        fun refreshHist() {
+            val gen = CoreBridge.SettingsJobs.nextJobGen(histGen.get()).also { histGen.set(it) }
+            histBusy.value = true
+            workers.execute {
+                try {
+                    val committed = loadHistThrowing()
+                    runOnUiThread {
+                        if (!jobApplies(histGen.get(), gen)) return@runOnUiThread
+                        items = committed
+                        histError.value = ""
+                        histBusy.value = false
+                    }
+                } catch (e: Exception) {
+                    runOnUiThread {
+                        if (!jobApplies(histGen.get(), gen)) return@runOnUiThread
+                        histError.value = e.message ?: "failed"
+                        histBusy.value = false
+                    }
+                }
+            }
+        }
+        fun purgeHist(days: Int) {
+            val gen = CoreBridge.SettingsJobs.nextJobGen(histGen.get()).also { histGen.set(it) }
+            histBusy.value = true
+            workers.execute {
+                try {
+                    val n = CoreBridge.purgeHistory(days).getOrThrow()
+                    val committed = loadHistThrowing()
+                    runOnUiThread {
+                        if (!jobApplies(histGen.get(), gen)) return@runOnUiThread
+                        items = committed
+                        histError.value = ""
+                        histBusy.value = false
+                        bgToast(getString(R.string.hist_purged, n))
+                    }
+                    kickSync()
+                } catch (e: Exception) {
+                    runOnUiThread {
+                        if (!jobApplies(histGen.get(), gen)) return@runOnUiThread
+                        histError.value = e.message ?: "failed"
+                        histBusy.value = false
+                        bgToast(getString(R.string.hist_purge_failed, e.message))
+                    }
+                }
+            }
+        }
+        fun clearHist() {
+            val gen = CoreBridge.SettingsJobs.nextJobGen(histGen.get()).also { histGen.set(it) }
+            histBusy.value = true
+            workers.execute {
+                try {
+                    CoreBridge.dataOf(CoreBridge.nativeClearHistory())
+                    val committed = loadHistThrowing()
+                    runOnUiThread {
+                        if (!jobApplies(histGen.get(), gen)) return@runOnUiThread
+                        items = committed
+                        histError.value = ""
+                        histBusy.value = false
+                        toast(getString(R.string.hist_cleared))
+                    }
+                    kickSync()
+                } catch (e: Exception) {
+                    runOnUiThread {
+                        if (!jobApplies(histGen.get(), gen)) return@runOnUiThread
+                        histError.value = e.message ?: "failed"
+                        histBusy.value = false
+                        toast(getString(R.string.hist_clear_failed, e.message))
+                    }
+                }
+            }
+        }
+        fun deleteHist(uuid: String) {
+            val gen = CoreBridge.SettingsJobs.nextJobGen(histGen.get()).also { histGen.set(it) }
+            histBusy.value = true
+            workers.execute {
+                try {
+                    CoreBridge.dataOf(CoreBridge.nativeDeleteHistory(uuid))
+                    val committed = loadHistThrowing()
+                    runOnUiThread {
+                        if (!jobApplies(histGen.get(), gen)) return@runOnUiThread
+                        items = committed
+                        histError.value = ""
+                        histBusy.value = false
+                    }
+                    kickSync()
+                } catch (e: Exception) {
+                    runOnUiThread {
+                        if (!jobApplies(histGen.get(), gen)) return@runOnUiThread
+                        histError.value = e.message ?: "failed"
+                        histBusy.value = false
+                        toast(getString(R.string.hist_delete_failed, e.message))
+                    }
+                }
+            }
+        }
+        LaunchedEffect(Unit) { refreshHist() }
         Column(modifier = Modifier.fillMaxSize()) {
             var privOpen by remember { mutableStateOf(false) }
             Card(modifier = Modifier.fillMaxWidth().padding(8.dp)) {
@@ -2131,16 +2365,7 @@ class MainActivity : ComponentActivity() {
                         OutlinedButton(onClick = {
                             val days = daysStr.toIntOrNull() ?: 0
                             if (days > 0) {
-                                workers.execute {
-                                    try {
-                                        val n = CoreBridge.purgeHistory(days).getOrThrow()
-                                        bgToast(getString(R.string.hist_purged, n))
-                                    } catch (e: Exception) {
-                                        bgToast(getString(R.string.hist_purge_failed, e.message))
-                                    }
-                                    runOnUiThread { items = loadHist() }
-                                    kickSync()
-                                }
+                                purgeHist(days)
                             } else {
                                 toast(getString(R.string.hist_set_days))
                             }
@@ -2156,11 +2381,33 @@ class MainActivity : ComponentActivity() {
             ) {
                 Text(stringResource(R.string.hist_count, items.size), style = MaterialTheme.typography.titleMedium)
                 Row {
-                    TextButton(onClick = { items = loadHist() }) { Text(stringResource(R.string.action_refresh)) }
                     TextButton(
-                        enabled = items.isNotEmpty(),
+                        onClick = { refreshHist() },
+                        enabled = !histBusy.value,
+                    ) { Text(stringResource(R.string.action_refresh)) }
+                    TextButton(
+                        enabled = items.isNotEmpty() && !histBusy.value,
                         onClick = { confirmClear = true },
                     ) { Text(stringResource(R.string.action_clear)) }
+                }
+            }
+            if (histError.value.isNotEmpty()) {
+                // Explicit recovery UI: the committed error stays
+                // visible with a retry that re-runs the load job.
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        histError.value,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(
+                        onClick = { histError.value = ""; refreshHist() },
+                        enabled = !histBusy.value,
+                    ) { Text(stringResource(R.string.action_refresh)) }
                 }
             }
             if (confirmClear) {
@@ -2171,14 +2418,7 @@ class MainActivity : ComponentActivity() {
                     confirmButton = {
                         TextButton(onClick = {
                             confirmClear = false
-                            try {
-                                CoreBridge.dataOf(CoreBridge.nativeClearHistory())
-                                items = loadHist()
-                                toast(getString(R.string.hist_cleared))
-                                kickSync()
-                            } catch (e: Exception) {
-                                toast(getString(R.string.hist_clear_failed, e.message))
-                            }
+                            clearHist()
                         }) { Text(stringResource(R.string.action_clear)) }
                     },
                     dismissButton = {
@@ -2214,15 +2454,10 @@ class MainActivity : ComponentActivity() {
                                     style = MaterialTheme.typography.bodySmall,
                                 )
                             }
-                            IconButton(onClick = {
-                                try {
-                                    CoreBridge.dataOf(CoreBridge.nativeDeleteHistory(h.uuid))
-                                    items = loadHist()
-                                    kickSync()
-                                } catch (e: Exception) {
-                                    toast(getString(R.string.hist_delete_failed, e.message))
-                                }
-                            }) {
+                            IconButton(
+                                onClick = { deleteHist(h.uuid) },
+                                enabled = !histBusy.value,
+                            ) {
                                 Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.action_delete))
                             }
                         }
@@ -2234,19 +2469,24 @@ class MainActivity : ComponentActivity() {
 
     private fun loadHist(): List<Hist> {
         return try {
-            val raw = CoreBridge.nativeGetHistory(200)
-            val arr = JSONArray(raw)
-            List(arr.length()) { i ->
-                val o = arr.getJSONObject(i)
-                Hist(
-                    o.optString("uuid"),
-                    o.optString("text"),
-                    o.optString("dateLabel"),
-                    o.optInt("wordCount"),
-                )
-            }
+            loadHistThrowing()
         } catch (_: Exception) {
             emptyList()
+        }
+    }
+
+    /** Throwing history load so jobs can keep a retryable error state. */
+    private fun loadHistThrowing(): List<Hist> {
+        val raw = CoreBridge.nativeGetHistory(200)
+        val arr = JSONArray(raw)
+        return List(arr.length()) { i ->
+            val o = arr.getJSONObject(i)
+            Hist(
+                o.optString("uuid"),
+                o.optString("text"),
+                o.optString("dateLabel"),
+                o.optInt("wordCount"),
+            )
         }
     }
 
@@ -2294,13 +2534,25 @@ class MainActivity : ComponentActivity() {
         var displayName by remember { mutableStateOf("") }
         var addOpen by remember { mutableStateOf(false) }
         fun refresh() {
-            try {
-                status = CoreBridge.syncStatus().getOrThrow()
-            } catch (_: Exception) {
+            // Generation-aware commit: stale polls drop instead of
+            // clobbering newer committed status/peers.
+            val gen = CoreBridge.SettingsJobs.nextJobGen(syncGen.get()).also { syncGen.set(it) }
+            workers.execute {
+                val st = try {
+                    CoreBridge.syncStatus().getOrThrow()
+                } catch (_: Exception) {
+                    null
+                }
+                val ps = loadPeers()
+                val nm = CoreBridge.displayName()
+                runOnUiThread {
+                    if (!jobApplies(syncGen.get(), gen)) return@runOnUiThread
+                    if (st != null) status = st
+                    peers = ps
+                    displayName = nm
+                    version++
+                }
             }
-            peers = loadPeers()
-            displayName = CoreBridge.displayName()
-            version++
         }
         fun note(id: String, text: String) {
             notes = notes + (id to text)
@@ -2310,10 +2562,19 @@ class MainActivity : ComponentActivity() {
             refresh()
             while (true) {
                 delay(5000)
-                try {
-                    status = CoreBridge.syncStatus().getOrThrow()
-                    peers = loadPeers()
-                } catch (_: Exception) {
+                val gen = CoreBridge.SettingsJobs.nextJobGen(syncGen.get()).also { syncGen.set(it) }
+                workers.execute {
+                    val st = try {
+                        CoreBridge.syncStatus().getOrThrow()
+                    } catch (_: Exception) {
+                        null
+                    }
+                    val ps = loadPeers()
+                    runOnUiThread {
+                        if (!jobApplies(syncGen.get(), gen)) return@runOnUiThread
+                        if (st != null) status = st
+                        peers = ps
+                    }
                 }
             }
         }
