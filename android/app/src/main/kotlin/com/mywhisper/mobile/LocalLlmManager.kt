@@ -9,21 +9,29 @@ import java.security.MessageDigest
 /**
  * On-device LLM cleanup (text polish only — never STT).
  *
- * Chosen provider: MediaPipe LLM Inference `.task`
- * (`com.google.mediapipe:tasks-genai`, GPU delegate; successor API:
- * LiteRT-LM). Inference itself is loaded lazily via reflection so
+ * Chosen provider: LiteRT-LM `.litertlm`
+ * (`com.google.ai.edge.litertlm:litertlm-android`, GPU backend with
+ * CPU fallback). Inference itself is loaded lazily via reflection so
  * plain JVM unit tests never touch the native runner; all logic
  * here (manifest, SHA-256, status, prompt packing) is pure JVM.
  *
- * Model files live under `<filesDir>/models` (file `cleanup.task`), downloaded by
- * [downloadModel] with SHA-256 verification against
- * `scripts/local-llm-models.json`. Binaries are NEVER committed.
- * When no model is ready the engine's cleanup chain falls through
- * to Ollama/cloud (default order unchanged).
+ * Model files live under `<filesDir>/models` (file
+ * `cleanup.litertlm`), downloaded by [downloadModel] with SHA-256
+ * verification against `scripts/local-llm-models.json`. Binaries are
+ * NEVER committed. When no model is ready the engine's cleanup chain
+ * falls through to Ollama/cloud (default order unchanged).
+ *
+ * Migration note: the legacy MediaPipe `.task` slot (`cleanup.task`)
+ * does NOT load under LiteRT-LM (different bundle format). Fresh
+ * downloads land in `cleanup.litertlm`; [deleteModel] also scrubs the
+ * legacy slot and its partials.
  */
 object LocalLlmManager {
-    const val PROVIDER = "mediapipe"
-    const val DEFAULT_TASK_NAME = "cleanup.task"
+    const val PROVIDER = "litertlm"
+    const val DEFAULT_MODEL_NAME = "cleanup.litertlm"
+
+    /** Legacy MediaPipe slot — never loaded, scrubbed by [deleteModel]. */
+    const val LEGACY_TASK_NAME = "cleanup.task"
 
     data class ModelAsset(
         val id: String,
@@ -41,8 +49,8 @@ object LocalLlmManager {
         val sizeBytes: Long?,
     )
 
-    /** Default model slot: `<dir>/models/cleanup.task`. */
-    fun defaultTaskFile(dir: File): File = File(File(dir, "models"), DEFAULT_TASK_NAME)
+    /** Default model slot: `<dir>/models/cleanup.litertlm`. */
+    fun defaultModelFile(dir: File): File = File(File(dir, "models"), DEFAULT_MODEL_NAME)
 
     /**
      * Parse `scripts/local-llm-models.json` (`{"models":[...]}`).
@@ -166,10 +174,10 @@ object LocalLlmManager {
         }
     }
 
-    fun statusFor(taskFile: File): Status = Status(
-        modelPath = taskFile.absolutePath,
-        ready = taskFile.isFile,
-        sizeBytes = if (taskFile.isFile) taskFile.length() else null,
+    fun statusFor(modelFile: File): Status = Status(
+        modelPath = modelFile.absolutePath,
+        ready = modelFile.isFile,
+        sizeBytes = if (modelFile.isFile) modelFile.length() else null,
     )
 
     /** Lowercase hex SHA-256 of [file] (streamed). */
@@ -273,7 +281,11 @@ object LocalLlmManager {
         return dest
     }
 
-    /** Remove the model file + any per-asset partials (delete / retry cleanup). */
+    /**
+     * Remove the model file + any per-asset partials (delete / retry
+     * cleanup), plus the legacy MediaPipe `cleanup.task` slot and its
+     * partials (unloadable under LiteRT-LM — never re-downloaded).
+     */
     fun deleteModel(dest: File, assets: List<ModelAsset> = emptyList()) {
         try { dest.delete() } catch (_: Exception) {}
         for (a in assets) {
@@ -286,49 +298,212 @@ object LocalLlmManager {
             }?.forEach { it.delete() }
         } catch (_: Exception) {
         }
+        // Legacy MediaPipe slot: same directory, old file name.
+        try {
+            val legacy = File(dest.parentFile, LEGACY_TASK_NAME)
+            if (legacy.absolutePath != dest.absolutePath) {
+                legacy.delete()
+                legacy.parentFile?.listFiles { f ->
+                    f.name.startsWith(LEGACY_TASK_NAME + ".part.")
+                }?.forEach { it.delete() }
+            }
+        } catch (_: Exception) {
+        }
     }
 
     /**
-     * Synchronous single-turn generation via the MediaPipe runner.
-     * Loaded by reflection (`com.google.mediapipe.tasks.genai.llminference.LlmInference`)
-     * so the tasks-genai AAR is optional at unit-test time.
+     * Synchronous single-turn generation via the LiteRT-LM runner.
+     * Loaded by reflection (`com.google.ai.edge.litertlm.Engine`)
+     * so the litertlm AAR is optional at unit-test time.
      * Throws when the model file is missing or the runner is unavailable —
      * callers fall back to the next cleanup entry.
      */
-    fun generate(taskFile: File, prompt: String, maxTokens: Int = 512): String {
-        require(taskFile.isFile) { "local llm model not ready at ${taskFile.absolutePath}" }
-        return MediaPipeRunner.generate(taskFile.absolutePath, prompt, maxTokens)
+    fun generate(modelFile: File, prompt: String, maxTokens: Int = 512): String {
+        require(modelFile.isFile) { "local llm model not ready at ${modelFile.absolutePath}" }
+        return LiteRtLmRunner.generate(modelFile.absolutePath, prompt, maxTokens)
     }
 
-    /** Reflection bridge to `LlmInference` (GPU delegate, temp 0). */
-    internal object MediaPipeRunner {
-        fun generate(modelPath: String, prompt: String, maxTokens: Int): String {
-            val optionsClass = Class.forName(
-                "com.google.mediapipe.tasks.genai.llminference.LlmInferenceOptions",
-            )
-            val llmClass =
-                Class.forName("com.google.mediapipe.tasks.genai.llminference.LlmInference")
-            val builder = optionsClass.getMethod("builder").invoke(null)
-            val builderClass = builder.javaClass
-            builderClass.getMethod("setModelPath", String::class.java)
-                .invoke(builder, modelPath)
+    /** Reflection bridge to LiteRT-LM `Engine` (GPU, CPU fallback; temp defaults). */
+    internal object LiteRtLmRunner {
+        private const val PKG = "com.google.ai.edge.litertlm"
+
+        /** True when the LiteRT-LM runner is on the classpath. Never throws. */
+        fun isSupported(): Boolean =
             try {
-                builderClass.getMethod("setMaxTokens", Int::class.javaPrimitiveType)
-                    .invoke(builder, maxTokens)
-            } catch (_: NoSuchMethodException) {
-                // Older tasks-genai: no setMaxTokens — defaults apply.
+                Class.forName("$PKG.Engine")
+                true
+            } catch (_: Throwable) {
+                false
             }
-            val options = builderClass.getMethod("build").invoke(builder)
-            val create = llmClass.getMethod("createFromOptions", optionsClass)
-            val session = create.invoke(null, options)
+
+        fun generate(modelPath: String, prompt: String, maxTokens: Int): String {
+            // GPU first; ANY GPU-attempt failure (missing delegate,
+            // init error) retries once on CPU. A CPU-attempt failure
+            // throws — callers fall back to the server chain.
+            // A missing runner (CNFE) fails both attempts fail-closed.
+            val gpuError = try {
+                return tryBackend(modelPath, prompt, maxTokens, gpuFirst = true)
+            } catch (e: Throwable) {
+                e
+            }
             try {
-                return llmClass.getMethod("generateResponse", String::class.java)
-                    .invoke(session, prompt) as String
-            } finally {
+                return tryBackend(modelPath, prompt, maxTokens, gpuFirst = false)
+            } catch (cpuError: Throwable) {
+                throw IllegalStateException(
+                    "local-llm unavailable (gpu: ${gpuError.message}; cpu: ${cpuError.message})",
+                    cpuError,
+                )
+            }
+        }
+
+        private fun tryBackend(
+            modelPath: String,
+            prompt: String,
+            maxTokens: Int,
+            gpuFirst: Boolean,
+        ): String {
+            val engineClass: Class<*>
+            val configClass: Class<*>
+            val backendClass: Class<*>
+            try {
+                engineClass = Class.forName("$PKG.Engine")
+                configClass = Class.forName("$PKG.EngineConfig")
+                backendClass = Class.forName("$PKG.Backend")
+            } catch (e: ClassNotFoundException) {
+                throw IllegalStateException("local-llm runner unavailable (litertlm missing)", e)
+            }
+            val backend = newBackend(backendClass, gpuFirst)
+            val engine = try {
+                val config = newEngineConfig(configClass, modelPath, backend)
+                val ctor = engineClass.constructors.firstOrNull {
+                    it.parameterTypes.size == 1 &&
+                        it.parameterTypes[0].isAssignableFrom(configClass)
+                } ?: throw IllegalStateException("local-llm Engine(EngineConfig) missing")
+                ctor.newInstance(config)
+            } catch (e: IllegalStateException) {
+                throw e
+            } catch (e: Throwable) {
+                throw IllegalStateException("local-llm engine create failed", e)
+            }
+            try {
+                invoke(engine, "initialize")
+                val conversation = newConversation(engine, engineClass)
                 try {
-                    llmClass.getMethod("close").invoke(session)
-                } catch (_: Exception) {
+                    return sendPrompt(conversation, prompt, maxTokens)
+                } finally {
+                    closeQuietly(conversation)
                 }
+            } finally {
+                closeQuietly(engine)
+            }
+        }
+
+        /**
+         * Smallest constructor whose leading params match [prefix]
+         * (types assignable), remaining slots filled with null. The
+         * LiteRT-LM config data classes keep every param past the
+         * required prefix nullable, and @JvmOverloads coverage varies
+         * by SDK version — so prefer the short overload, else the full
+         * ctor with null defaults.
+         */
+        private fun newWithNullPrefix(clazz: Class<*>, prefix: Array<out Any?>): Any {
+            val ctor = clazz.constructors
+                .filter { c ->
+                    val p = c.parameterTypes
+                    p.size >= prefix.size && prefix.indices.all { i ->
+                        prefix[i] == null || p[i].isInstance(prefix[i])
+                    }
+                }
+                .minByOrNull { it.parameterTypes.size }
+                ?: throw IllegalStateException("local-llm ${clazz.simpleName} ctor missing")
+            val args = arrayOfNulls<Any>(ctor.parameterTypes.size)
+            prefix.copyInto(args)
+            try {
+                return ctor.newInstance(*args)
+            } catch (e: IllegalStateException) {
+                throw e
+            } catch (e: Throwable) {
+                throw IllegalStateException("local-llm ${clazz.simpleName} create failed", e)
+            }
+        }
+
+        private fun newEngineConfig(configClass: Class<*>, modelPath: String, backend: Any): Any =
+            newWithNullPrefix(configClass, arrayOf(modelPath, backend))
+
+        private fun newBackend(backendClass: Class<*>, gpu: Boolean): Any {
+            val nested = backendClass.classes
+            if (gpu) {
+                val gpuClass = nested.firstOrNull { it.simpleName == "GPU" }
+                if (gpuClass != null) {
+                    try {
+                        return gpuClass.getDeclaredConstructor().newInstance()
+                    } catch (_: Throwable) {
+                        // Fall through to CPU.
+                    }
+                }
+            }
+            val cpuClass = nested.firstOrNull { it.simpleName == "CPU" }
+                ?: throw IllegalStateException("local-llm Backend.CPU missing")
+            // CPU data-class params are all nullable; arity varies by
+            // SDK (@JvmOverloads not guaranteed) — nulls for all.
+            return newWithNullPrefix(cpuClass, emptyArray())
+        }
+
+        private fun newConversation(engine: Any, engineClass: Class<*>): Any {
+            val configClass = Class.forName("$PKG.ConversationConfig")
+            val emptyConfig = newWithNullPrefix(configClass, emptyArray())
+            val create = engineClass.methods.firstOrNull {
+                it.name == "createConversation" && it.parameterTypes.size == 1 &&
+                    it.parameterTypes[0].isAssignableFrom(configClass)
+            } ?: throw IllegalStateException("local-llm createConversation missing")
+            try {
+                return create.invoke(engine, emptyConfig)
+                    ?: throw IllegalStateException("local-llm createConversation null")
+            } catch (e: IllegalStateException) {
+                throw e
+            } catch (e: Throwable) {
+                throw IllegalStateException("local-llm createConversation failed", e)
+            }
+        }
+
+        private fun sendPrompt(conversation: Any, prompt: String, maxTokens: Int): String {
+            val full = try {
+                val m = conversation.javaClass.methods.firstOrNull {
+                    it.name == "sendMessage" && it.parameterTypes.size == 8 &&
+                        it.parameterTypes[0] == String::class.java &&
+                        it.parameterTypes[5] == Integer::class.java
+                } ?: throw NoSuchMethodException("8-arg sendMessage")
+                val args = arrayOfNulls<Any>(8)
+                args[0] = prompt
+                // Non-null: reflection bypasses Kotlin defaults, and the
+                // SDK dereferences extraContext (nullable configs stay null).
+                args[1] = emptyMap<String, Any>()
+                args[5] = Integer.valueOf(maxTokens)
+                m.invoke(conversation, *args)
+            } catch (_: NoSuchMethodException) {
+                // Older SDK without the maxOutputToken overload.
+                invoke(conversation, "sendMessage", prompt)
+            } catch (e: Throwable) {
+                throw IllegalStateException("local-llm sendMessage failed", e)
+            }
+            return (full?.toString() ?: throw IllegalStateException("local-llm empty response"))
+        }
+
+        private fun invoke(target: Any, name: String, vararg args: Any?): Any? {
+            val m = target.javaClass.methods.firstOrNull {
+                it.name == name && it.parameterTypes.size == args.size
+            } ?: throw NoSuchMethodException("$name/${args.size}")
+            try {
+                return m.invoke(target, *args)
+            } catch (e: Throwable) {
+                throw IllegalStateException("local-llm $name failed", e)
+            }
+        }
+
+        private fun closeQuietly(target: Any) {
+            try {
+                target.javaClass.getMethod("close").invoke(target)
+            } catch (_: Throwable) {
             }
         }
     }

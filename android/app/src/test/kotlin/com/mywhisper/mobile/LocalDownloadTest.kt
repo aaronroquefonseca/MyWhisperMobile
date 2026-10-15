@@ -173,20 +173,26 @@ class LocalDownloadTest {
     fun llmDeleteModel_removesDestAndPartials() {
         val dir = Files.createTempDirectory("llm-del").toFile()
         try {
-            val dest = File(dir, "cleanup.task")
+            val dest = File(dir, "cleanup.litertlm")
             dest.writeBytes("model".toByteArray())
             val assets = listOf(
-                LocalLlmManager.ModelAsset("a", "https://example/a.task", "0".repeat(64), 5),
-                LocalLlmManager.ModelAsset("b", "https://example/b.task", "1".repeat(64), 5),
+                LocalLlmManager.ModelAsset("a", "https://example/a.litertlm", "0".repeat(64), 5),
+                LocalLlmManager.ModelAsset("b", "https://example/b.litertlm", "1".repeat(64), 5),
             )
             for (a in assets) {
                 LocalLlmManager.partFileFor(dest, a.id).writeBytes("part".toByteArray())
             }
+            // Legacy MediaPipe slot must go too (unloadable under LiteRT-LM).
+            val legacy = File(dir, "cleanup.task")
+            legacy.writeBytes("legacy".toByteArray())
+            File(dir, "cleanup.task.part.a").writeBytes("part".toByteArray())
             LocalLlmManager.deleteModel(dest, assets)
             assertFalse(dest.exists())
             for (a in assets) {
                 assertFalse(LocalLlmManager.partFileFor(dest, a.id).exists())
             }
+            assertFalse(legacy.exists())
+            assertFalse(File(dir, "cleanup.task.part.a").exists())
         } finally {
             dir.deleteRecursively()
         }

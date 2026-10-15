@@ -444,7 +444,7 @@ class RowsUxReworkTest {
             assertEquals(0L, r.verifiedBytes)
             // Slot once + legacy probe once — never a second sweep.
             assertEquals(
-                listOf(slot.name, LocalLlmManager.DEFAULT_TASK_NAME).sorted(),
+                listOf(slot.name, LocalLlmManager.DEFAULT_MODEL_NAME).sorted(),
                 calls.sorted(),
             )
         } finally {

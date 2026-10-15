@@ -9,7 +9,7 @@ import org.junit.Test
 /**
  * Pure JVM rules for the on-device LLM manager (see LocalLlmManager):
  * manifest parsing, prompt packing (core byte-stable), status and
- * SHA-256 verification. No MediaPipe runner, no JNI — safe on the
+ * SHA-256 verification. No LiteRT-LM runner, no JNI — safe on the
  * host (the API targets physical GPUs, not emulators).
  */
 class LocalLlmManagerTest {
@@ -25,12 +25,12 @@ class LocalLlmManagerTest {
     @Test
     fun manifest_parsesModels() {
         val json = """{"models":[
-            {"id":"smollm2-360m","url":"https://example/x.task",
-             "sha256":"abc","size_bytes":412000000}]}"""
+            {"id":"gemma4-e2b-it","url":"https://example/x.litertlm",
+             "sha256":"abc","size_bytes":2588147712}]}"""
         val models = LocalLlmManager.parseManifest(json)
         assertEquals(1, models.size)
-        assertEquals("smollm2-360m", models[0].id)
-        assertEquals(412000000L, models[0].sizeBytes)
+        assertEquals("gemma4-e2b-it", models[0].id)
+        assertEquals(2588147712L, models[0].sizeBytes)
     }
 
     @Test(expected = Exception::class)
@@ -42,12 +42,13 @@ class LocalLlmManagerTest {
     fun status_missingFileIsNotReady() {
         val dir = createTempDir("llm-status")
         try {
-            val task = LocalLlmManager.defaultTaskFile(dir)
-            assertEquals("cleanup.task", task.name)
-            val s = LocalLlmManager.statusFor(task)
+            val model = LocalLlmManager.defaultModelFile(dir)
+            assertEquals("cleanup.litertlm", model.name)
+            val s = LocalLlmManager.statusFor(model)
             assertFalse(s.ready)
             assertEquals(null, s.sizeBytes)
             assertEquals(LocalLlmManager.PROVIDER, s.provider)
+            assertEquals("litertlm", s.provider)
         } finally {
             dir.deleteRecursively()
         }
@@ -75,11 +76,11 @@ class LocalLlmManagerTest {
     fun partFiles_areUniquePerAsset() {
         val dir = createTempDir("llm-part")
         try {
-            val dest = File(dir, "cleanup.task")
-            val a = LocalLlmManager.partFileFor(dest, "smollm2-360m")
-            val b = LocalLlmManager.partFileFor(dest, "gemma3-1b")
+            val dest = File(dir, "cleanup.litertlm")
+            val a = LocalLlmManager.partFileFor(dest, "gemma4-e2b-it")
+            val b = LocalLlmManager.partFileFor(dest, "gemma4-e4b-it")
             assertFalse(a == b)
-            assertEquals(File(dir, "cleanup.task.part.smollm2-360m"), a)
+            assertEquals(File(dir, "cleanup.litertlm.part.gemma4-e2b-it"), a)
         } finally {
             dir.deleteRecursively()
         }
@@ -93,12 +94,12 @@ class LocalLlmManagerTest {
 
     @Test
     fun download_skipsWhenDestAlreadyVerifies() {
-        val dest = File.createTempFile("llm-dl", ".task")
+        val dest = File.createTempFile("llm-dl", ".litertlm")
         try {
             dest.writeBytes("abc".toByteArray())
             val asset = LocalLlmManager.ModelAsset(
                 id = "v",
-                url = "https://127.0.0.1:1/unreachable.task",
+                url = "https://127.0.0.1:1/unreachable.litertlm",
                 sha256 = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
                 sizeBytes = 3,
             )
@@ -111,6 +112,28 @@ class LocalLlmManagerTest {
 
     @Test(expected = RuntimeException::class)
     fun generate_throwsWhenModelMissing() {
-        LocalLlmManager.generate(File("/nonexistent/cleanup.task"), "prompt")
+        LocalLlmManager.generate(File("/nonexistent/cleanup.litertlm"), "prompt")
+    }
+
+    @Test(expected = RuntimeException::class)
+    fun generate_throwsWhenRunnerAbsent() {
+        // Fail-closed: a present-but-unrunnable file (no LiteRT-LM on
+        // the lite/JVM test classpath; a garbage file under full flavor)
+        // must throw so callers fall back to the server chain — never a
+        // silent empty.
+        val f = File.createTempFile("llm-norunner", ".litertlm")
+        try {
+            f.writeBytes("abc".toByteArray())
+            LocalLlmManager.generate(f, "prompt")
+        } finally {
+            f.delete()
+        }
+    }
+
+    @Test
+    fun runnerProbe_neverThrows() {
+        // Classpath probe must never throw — callers keep the server
+        // fallback. Value is flavor-dependent (false on lite/JVM).
+        LocalLlmManager.LiteRtLmRunner.isSupported()
     }
 }

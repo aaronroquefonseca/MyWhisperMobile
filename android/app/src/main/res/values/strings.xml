@@ -121,7 +121,7 @@
     <string name="stt_lang_follows">Follows Capture language (%1$s)</string>
     <string name="stt_lang_fixed">Fixed language: %1$s</string>
     <string name="llm_ram_need">Needs %1$d MB RAM</string>
-    <string name="llm_ram_warn">May fail on low-RAM phones — the 1B model is the safe pick.</string>
+    <string name="llm_ram_warn">May fail on low-RAM phones — the E2B model is the safe pick.</string>
     <string name="local_delete_title">Delete downloaded model?</string>
     <string name="local_delete_body">Removes %1$s from this device. You can re-download it later.</string>
     <string name="local_deleted">Model files deleted.</string>

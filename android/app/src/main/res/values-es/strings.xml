@@ -121,7 +121,7 @@
     <string name="stt_lang_follows">Sigue el idioma de captura (%1$s)</string>
     <string name="stt_lang_fixed">Idioma fijo: %1$s</string>
     <string name="llm_ram_need">Necesita %1$d MB de RAM</string>
-    <string name="llm_ram_warn">Puede fallar en teléfonos con poca RAM — el modelo 1B es la opción segura.</string>
+    <string name="llm_ram_warn">Puede fallar en teléfonos con poca RAM — el modelo E2B es la opción segura.</string>
     <string name="local_delete_title">¿Eliminar el modelo descargado?</string>
     <string name="local_delete_body">Elimina %1$s de este dispositivo. Puedes descargarlo de nuevo más tarde.</string>
     <string name="local_deleted">Archivos del modelo eliminados.</string>

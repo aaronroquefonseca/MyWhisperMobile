@@ -50,9 +50,9 @@ class LocalEnablementTest {
     fun llm_missingFileIsMissing() {
         val dir = createTempDir("llm-enable")
         try {
-            val dest = File(dir, "cleanup.task")
+            val dest = File(dir, "cleanup.litertlm")
             val assets = listOf(
-                LocalLlmManager.ModelAsset("m", "https://example/x.task", "a".repeat(64), 3),
+                LocalLlmManager.ModelAsset("m", "https://example/x.litertlm", "a".repeat(64), 3),
             )
             assertEquals(
                 MainActivity.LocalPackState.MISSING,
@@ -66,11 +66,11 @@ class LocalEnablementTest {
     @Test
     fun llm_placeholderPinsFailClosed() {
         // File present but only zero pins exist -> MISSING (never enable).
-        val f = File.createTempFile("llm-enable", ".task")
+        val f = File.createTempFile("llm-enable", ".litertlm")
         try {
             f.writeBytes("abc".toByteArray())
             val assets = listOf(
-                LocalLlmManager.ModelAsset("m", "https://example/x.task", "0".repeat(64), 3),
+                LocalLlmManager.ModelAsset("m", "https://example/x.litertlm", "0".repeat(64), 3),
             )
             assertEquals(
                 MainActivity.LocalPackState.MISSING,
@@ -83,18 +83,18 @@ class LocalEnablementTest {
 
     @Test
     fun llm_matchingShaIsPresent_mismatchIsMismatch() {
-        val f = File.createTempFile("llm-enable", ".task")
+        val f = File.createTempFile("llm-enable", ".litertlm")
         try {
             f.writeBytes("abc".toByteArray())
             // "abc" -> ba7816bf... (FIPS 180-4 vector).
             val real = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-            val ok = listOf(LocalLlmManager.ModelAsset("m", "https://example/x.task", real, 3))
+            val ok = listOf(LocalLlmManager.ModelAsset("m", "https://example/x.litertlm", real, 3))
             assertEquals(
                 MainActivity.LocalPackState.PRESENT,
                 MainActivity.llmLocalPackState(f, ok),
             )
             val bad = listOf(
-                LocalLlmManager.ModelAsset("m", "https://example/x.task", "c".repeat(64), 3),
+                LocalLlmManager.ModelAsset("m", "https://example/x.litertlm", "c".repeat(64), 3),
             )
             assertEquals(
                 MainActivity.LocalPackState.MISMATCH,
@@ -108,9 +108,11 @@ class LocalEnablementTest {
     @Test
     fun llmManifest_parsesTwoKnownAssets() {
         val assets = LocalLlmManager.parseManifest(MainActivity.LLM_MANIFEST_JSON)
-        assertEquals(listOf("gemma3-1b-it-int4", "gemma2-2b-it-q8"), assets.map { it.id })
-        // Real pins: verified by full download + sha256sum (public
-        // repos, no auth) — downloads are live, fail-closed otherwise.
+        assertEquals(listOf("gemma4-e2b-it", "gemma4-e4b-it"), assets.map { it.id })
+        // Real pins: HF XET content hashes (X-Linked-ETag) + sizes
+        // (X-Linked-Size) read via HEAD on the resolve URLs, sizes
+        // cross-checked vs litert.dev (public repos, no auth) —
+        // downloads are live, fail-closed otherwise.
         assertTrue(assets.none { MainActivity.isPlaceholderSha(it.sha256) })
         assertTrue(assets.all { it.sizeBytes > 0 })
         assertTrue(assets.all { it.minRamMb > 0 })

@@ -38,7 +38,7 @@ android {
             ndk { abiFilters += "arm64-v8a" }
             // APK SLIM: R8 + shrinkResources in release (rules in
             // proguard-rules.pro: Tink -dontwarn/-keep, CoreBridge
-            // native keeps, sherpa/MediaPipe reflection keeps).
+            // native keeps, sherpa/LiteRT-LM reflection keeps).
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
@@ -49,11 +49,11 @@ android {
     }
 
     // APK SLIM: lite = server chain only (no on-device AARs on the
-    // classpath at all); full = lite + sherpa STT + MediaPipe LLM.
-    // fullImplementation keeps the ~50MB sherpa AAR and tasks-genai
-    // (incl. libllm_inference_engine_jni.so) out of lite APKs. Lite
+    // classpath at all); full = lite + sherpa STT + LiteRT-LM.
+    // fullImplementation keeps the ~50MB sherpa AAR and litertlm
+    // (incl. its native libs) out of lite APKs. Lite
     // compiles and runs without them: LocalStt/SherpaRunner and
-    // LocalLlmManager/MediaPipeRunner load those classes by reflection
+    // LocalLlmManager/LiteRtLmRunner load those classes by reflection
     // and return null/throw-caught (server fallback) when absent.
     buildFeatures {
         compose = true
@@ -92,11 +92,15 @@ dependencies {
     // the unmetered/battery-not-low constraints, and exponential-backoff
     // retry + app-kill resume (see ModelDownloadSchedule for rationale).
     implementation("androidx.work:work-runtime-ktx:2.9.0")
-    // On-device LLM cleanup (MediaPipe LLM Inference .task, GPU delegate;
-    // successor API: LiteRT-LM). Loaded lazily via reflection in
+    // On-device LLM cleanup (LiteRT-LM .litertlm, GPU backend with
+    // CPU fallback). Loaded lazily via reflection in
     // LocalLlmManager so lite builds and JVM unit tests run without the
     // native runner.
-    add("fullImplementation", "com.google.mediapipe:tasks-genai:0.10.27")
+    add("fullImplementation", "com.google.ai.edge.litertlm:litertlm-android:0.16.1")
+    // Pin note: 0.16.1 is the newest litertlm built with Kotlin 2.2
+    // (0.17+ ships Kotlin 2.4 metadata the project's 2.2.0 compiler
+    // cannot read — full flavor fails to compile). Revisit together
+    // with the Kotlin 2.4 plugin bump.
     // On-device STT runtime (sherpa-onnx 1.13.8, arm64-v8a + x86_64 JNI).
     // AAR fetched by scripts/fetch-sherpa-aar.sh (run once after
     // checkout, CI does it too), never committed. fullImplementation only:
