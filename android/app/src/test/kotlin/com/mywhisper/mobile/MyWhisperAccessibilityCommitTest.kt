@@ -98,6 +98,105 @@ class MyWhisperAccessibilityCommitTest {
         assertFalse(MyWhisperAccessibility.shouldMarkSensitive(29))
     }
 
+    @Test
+    fun clipRoundTrip_restoresPriorClip() {
+        // Review finding: the transcription must not survive as the
+        // live clip. Prior clip with items -> restored verbatim.
+        val calls = mutableListOf<String>()
+        val ok = MyWhisperAccessibility.withTranscriptionClip(
+            capturePrior = { "user-clip" },
+            priorCount = { 1 },
+            publish = { calls += "publish" },
+            doPaste = { calls += "paste"; true },
+            restore = { calls += "restore:$it" },
+            clear = { calls += "clear" },
+        )
+        assertTrue(ok)
+        assertEquals(listOf("publish", "paste", "restore:user-clip"), calls)
+    }
+
+    @Test
+    fun clipRoundTrip_clearsWhenNoPrior() {
+        // No prior clip -> clearPrimaryClip, never restore.
+        val calls = mutableListOf<String>()
+        val ok = MyWhisperAccessibility.withTranscriptionClip<String>(
+            capturePrior = { null },
+            priorCount = { error("unused") },
+            publish = { calls += "publish" },
+            doPaste = { calls += "paste"; true },
+            restore = { calls += "restore" },
+            clear = { calls += "clear" },
+        )
+        assertTrue(ok)
+        assertEquals(listOf("publish", "paste", "clear"), calls)
+    }
+
+    @Test
+    fun clipRoundTrip_clearsWhenPriorEmpty() {
+        // Prior handle with zero items -> clear, never restore.
+        val calls = mutableListOf<String>()
+        val ok = MyWhisperAccessibility.withTranscriptionClip(
+            capturePrior = { "empty" },
+            priorCount = { 0 },
+            publish = { calls += "publish" },
+            doPaste = { calls += "paste"; true },
+            restore = { calls += "restore" },
+            clear = { calls += "clear" },
+        )
+        assertTrue(ok)
+        assertEquals(listOf("publish", "paste", "clear"), calls)
+    }
+
+    @Test
+    fun clipRoundTrip_pasteThrow_clearFallback() {
+        // Exception after overwrite -> clear fallback runs, false out.
+        val calls = mutableListOf<String>()
+        val ok = MyWhisperAccessibility.withTranscriptionClip(
+            capturePrior = { "user-clip" },
+            priorCount = { 1 },
+            publish = { calls += "publish" },
+            doPaste = { throw IllegalStateException("paste boom") },
+            restore = { calls += "restore" },
+            clear = { calls += "clear" },
+        )
+        assertFalse(ok)
+        assertEquals(listOf("publish", "clear"), calls)
+    }
+
+    @Test
+    fun clipRoundTrip_publishThrow_noClear() {
+        // Publish itself threw -> nothing overwritten, so no clear:
+        // clearing would destroy the user's untouched clip.
+        val calls = mutableListOf<String>()
+        val ok = MyWhisperAccessibility.withTranscriptionClip(
+            capturePrior = { "user-clip" },
+            priorCount = { 1 },
+            publish = { throw SecurityException("clip denied") },
+            doPaste = { calls += "paste"; true },
+            restore = { calls += "restore" },
+            clear = { calls += "clear" },
+        )
+        assertFalse(ok)
+        assertTrue(calls.isEmpty())
+    }
+
+    @Test
+    fun clipRoundTrip_captureThrow_stillPastesAndClears() {
+        // Unreadable prior (background-read denial) -> paste proceeds,
+        // then clear since there is nothing to restore.
+        val calls = mutableListOf<String>()
+        val ok = MyWhisperAccessibility.withTranscriptionClip<String>(
+            capturePrior = { throw SecurityException("read denied") },
+            priorCount = { error("unused") },
+            publish = { calls += "publish" },
+            doPaste = { calls += "paste"; true },
+            restore = { calls += "restore" },
+            clear = { calls += "clear" },
+        )
+        assertTrue(ok)
+        assertEquals(listOf("publish", "paste", "clear"), calls)
+    }
+
     private fun occurrences(haystack: String, needle: String): Int =
         haystack.split(needle, ignoreCase = false, limit = 0).size - 1
 }

@@ -81,6 +81,55 @@ class MyWhisperAccessibility : AccessibilityService() {
         }
 
         /**
+         * Clipboard round-trip for the paste commit: capture the
+         * user's prior clip, publish the transcription, paste, then
+         * restore the prior clip (when it holds items) or clear the
+         * clipboard (nothing to restore — clearPrimaryClip is API 28+,
+         * minSdk 29 is safe). The transcription must never survive as
+         * the live clip: it would overwrite the user's clipboard and
+         * persist in keyboard history below API 33.
+         *
+         * Exceptions route to a clear fallback so a mid-round-trip
+         * failure cannot leak the transcription — except when publish
+         * itself threw (nothing was overwritten, so the user's clip is
+         * untouched and clearing would destroy it). Generic over the
+         * clip handle so JVM tests drive it with fakes.
+         */
+        internal fun <C> withTranscriptionClip(
+            capturePrior: () -> C?,
+            priorCount: (C) -> Int,
+            publish: () -> Unit,
+            doPaste: () -> Boolean,
+            restore: (C) -> Unit,
+            clear: () -> Unit,
+        ): Boolean {
+            var overwrote = false
+            try {
+                val prior = try {
+                    capturePrior()
+                } catch (_: Exception) {
+                    null
+                }
+                publish()
+                overwrote = true
+                val ok = doPaste()
+                try {
+                    if (prior != null && priorCount(prior) > 0) restore(prior) else clear()
+                } catch (_: Exception) {
+                }
+                return ok
+            } catch (_: Exception) {
+                if (overwrote) {
+                    try {
+                        clear()
+                    } catch (_: Exception) {
+                    }
+                }
+                return false
+            }
+        }
+
+        /**
          * Paste [text] into the currently focused editable field at
          * the app's own cursor via clipboard + ACTION_PASTE.
          * Returns false when there is no service, no focus, the field
@@ -127,7 +176,7 @@ class MyWhisperAccessibility : AccessibilityService() {
                         "insertLen=${text.length} payloadLen=${payload.length} " +
                         "before=<$existing> insert=<$text> payload=<$payload>",
                 )
-                try {
+                val ok = try {
                     val cm = s.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                     val clip = ClipData.newPlainText("mw-transcription", payload)
                     if (shouldMarkSensitive(Build.VERSION.SDK_INT)) {
@@ -136,12 +185,18 @@ class MyWhisperAccessibility : AccessibilityService() {
                         }
                         clip.description.setExtras(xb)
                     }
-                    cm.setPrimaryClip(clip)
+                    withTranscriptionClip(
+                        capturePrior = { cm.primaryClip },
+                        priorCount = { it.itemCount },
+                        publish = { cm.setPrimaryClip(clip) },
+                        doPaste = { node.performAction(AccessibilityNodeInfo.ACTION_PASTE) },
+                        restore = { prior -> cm.setPrimaryClip(prior) },
+                        clear = { cm.clearPrimaryClip() },
+                    )
                 } catch (e: Exception) {
                     android.util.Log.i("MwCommit", "commit clip-fail: ${e.message}")
                     return false
                 }
-                val ok = node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
                 val after = try {
                     root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)?.text?.toString()
                 } catch (_: Exception) {
