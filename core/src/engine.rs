@@ -11,13 +11,13 @@
 //! `transcribe.rs`: same default prompt, same system+dictionary
 //! suffix, same `<transcript>` tags, same Ollama `/api/chat` sampling
 //! and cloud endpoints, same first-answer-wins failover. `Local`
-//! entries route through `local_llm` (on-device MediaPipe `.task`);
+//! entries route through `local_llm` (on-device LiteRT-LM `.litertlm`);
 //! when no model is ready they fail over to the next entry.
 
-use crate::audio::{self, MIN_SAMPLES_16K, Recorder};
+use crate::audio::{self, Recorder, MIN_SAMPLES_16K};
 use crate::server_stt::{
-    TickOutcome, Transcript, capped_text, record_stop, server_status as chain_status,
-    stt_fingerprint, stt_primary_id, stt_watcher_tick, transcribe_chain_witnessed,
+    capped_text, record_stop, server_status as chain_status, stt_fingerprint, stt_primary_id,
+    stt_watcher_tick, transcribe_chain_witnessed, TickOutcome, Transcript,
 };
 use crate::settings::{AppSettings, HistoryEntry, LlmEntry};
 use crate::store::Store;
@@ -163,7 +163,7 @@ fn http_post_json(
 
 /// One cleanup call against a configured entry (faithful desktop
 /// `llm_cleanup` port; see module docs). `data_dir` resolves `Local`
-/// entries (on-device `.task` under `<data>/models`).
+/// entries (on-device `.litertlm` under `<data>/models`).
 fn llm_cleanup_one(
     entry: &LlmEntry,
     system: &str,
@@ -173,7 +173,7 @@ fn llm_cleanup_one(
     use crate::settings::{CloudLlm, LlmKind};
     let user = format!("<transcript>{raw}</transcript>");
     match entry.kind {
-        // Cleanup path only: on-device MediaPipe `.task` via
+        // Cleanup path only: on-device LiteRT-LM `.litertlm` via
         // `local_llm`; unavailable → Err so the chain falls through
         // to Ollama/cloud (default order unchanged). Never STT.
         LlmKind::Local => crate::local_llm::try_local_cleanup(entry, system, raw, data_dir),
@@ -1181,7 +1181,7 @@ mod tests {
 
     #[test]
     fn unready_local_falls_through_to_next_cleanup_entry() {
-        // Cleanup path only: an unready `Local` entry (no `.task`
+        // Cleanup path only: an unready `Local` entry (no `.litertlm`
         // downloaded) must not block or swallow the utterance — the
         // chain falls through to Ollama/cloud (default order intact).
         let _guard = status_test_lock();
@@ -1195,7 +1195,7 @@ mod tests {
         )))
         .unwrap();
         settings.language_models.entries = vec![
-            local_entry("missing.task"),
+            local_entry("missing.litertlm"),
             ollama_entry(&format!("http://127.0.0.1:{llm_port}")),
         ];
         eng.put_settings(&serde_json::to_string(&settings).unwrap())

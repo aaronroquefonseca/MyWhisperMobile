@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fetch an on-device LLM `.task` model with SHA-256 verification.
+# Fetch an on-device LLM `.litertlm` model with SHA-256 verification.
 #
 # Binaries are NEVER committed: this downloads to <dir>/models/ (default:
 # <app filesDir> on device via Settings, or ./models for bench).
@@ -7,7 +7,7 @@
 # publisher hash before use (placeholder zeros fail closed).
 #
 # Usage:
-#   scripts/fetch-local-llm.sh --id smollm2-360m-instruct [--out DIR]
+#   scripts/fetch-local-llm.sh --id gemma4-e2b-it [--out DIR]
 #   scripts/fetch-local-llm.sh --list
 set -euo pipefail
 
@@ -44,7 +44,7 @@ if [ "$SHA" = "0000000000000000000000000000000000000000000000000000000000000000"
 fi
 
 mkdir -p "$OUT_DIR/models"
-DEST="$OUT_DIR/models/cleanup.task"
+DEST="$OUT_DIR/models/cleanup.litertlm"
 TMP="$DEST.part"
 
 echo "downloading $MODEL_ID (~$SIZE bytes) -> $DEST"

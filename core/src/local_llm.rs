@@ -1,25 +1,24 @@
 //! On-device LLM cleanup (text polish only — never STT).
 //!
-//! Chosen provider: MediaPipe LLM Inference `.task` family
-//! (Google AI Edge; successor API: LiteRT-LM Kotlin). The actual
-//! inference lives in Kotlin (`LocalLlmManager.kt`, GPU delegate);
-//! this module owns the portable pieces the engine needs:
-//! prompt packing, model-asset manifest + SHA-256 verification,
-//! sidecar/bridge backend plumbing, and the cleanup-path hook.
+//! Chosen provider: LiteRT-LM `.litertlm` family (Google AI Edge).
+//! The actual inference lives in Kotlin (`LocalLlmManager.kt`,
+//! LiteRT-LM `Engine`, GPU backend with CPU fallback); this module
+//! owns the portable pieces the engine needs: prompt packing,
+//! model-asset manifest + SHA-256 verification, sidecar/bridge
+//! backend plumbing, and the cleanup-path hook.
 //!
 //! ## Spike comparison (literature numbers, see PR body)
 //!
 //! | Provider | Pack / model size | Decode (1-2B, flagship) | APK delta | RAM (1B) | License | Android API |
 //! |---|---|---|---|---|---|---|
 //! | llama.cpp via JNI (Llama-3.2-1B Q4_0 GGUF ~0.77 GB, Q8 ~1.3 GB) | GGUF download, not bundled | ~8-15 tok/s CPU (ARM NEON); ExecuTorch XNNPACK proxy 1B q4 decode ~46-50 tok/s, TTFT ~0.3 s / 64-prompt (OnePlus 12) | ~1-2 MB `.so` + OpenMP | ~1.5-2 GB | MIT | hand-rolled JNI, no official SDK |
-//! | **MediaPipe LLM Inference `.task` (CHOSEN)** (SmolLM2-360M ~0.4 GB, Gemma-3 1B int4 ~0.7 GB, Gemma2-2B int8 ~2.5 GB) | single `.task` download, not bundled | ~10-20 tok/s decode, prefill hundreds tok/s (Pixel 8 / S23 class, Google blog, 1024-in / 1280-max, int4/8) | ~5-10 MB AAR (`tasks-genai`) | ~1-2 GB | Apache-2.0 (models: Gemma license) | official Kotlin `LlmInference.generateResponse`, GPU delegate; maintenance-only → LiteRT-LM successor |
+//! | **LiteRT-LM `.litertlm` (CHOSEN)** (Gemma-4 E2B ~2.6 GB, E4B ~3.7 GB) | single `.litertlm` download, not bundled | GPU backend, CPU fallback (decode rates TBD on-device via `scripts/bench-local-llm.sh`) | `litertlm-android` AAR | ~4-6 GB+ | Apache-2.0 (models: Gemma license) | official Kotlin `Engine.sendMessage`, GPU backend with CPU fallback; Gemma-4-first lineup |
 //! | MLC (Qwen2.5-1.5B q4f16 ~1.2 GB assets, Llama-3.2-3B q4f16 ~2 GB) | TVM-compiled lib + weights download; >1 GB if bundled | ~11 tok/s measured (TinyBench S24 Ultra: 312 tok, prefill 2341 ms, decode 28.2 s) | runtime + per-model lib (tens of MB) + assets | ~3-4.2 GB est. VRAM | Apache-2.0 | OpenAI-compatible, heaviest toolchain (TVM compile/model, 5-15 min build, NDK 27) |
 //!
 //! Pick rationale: cleanup prompts are short (one utterance +
-//! system prompt); MediaPipe gives a single downloadable `.task`
-//! file, the official Kotlin `LlmInference` API with GPU delegate,
-//! and no NDK/TVM build. Decode/prefill rows above are
-//! literature-sourced, not bench-verified here — polish latency is
+//! system prompt); LiteRT-LM gives a single downloadable `.litertlm`
+//! file, the official Kotlin `Engine` API with GPU backend (CPU
+//! fallback), and no NDK/TVM build. Decode/prefill rows above are
 //! unmeasured until the owner runs `scripts/bench-local-llm.sh`
 //! on-device. Caveat (Google docs): the API targets high-end
 //! devices (Pixel 8 / S23+) and does not reliably support
@@ -34,12 +33,12 @@ use crate::settings::LlmEntry;
 use std::path::Path;
 
 /// Portable config for one on-device cleanup call, derived from an
-/// `LlmEntry` of kind `Local`: `model` is the `.task` file path (or
+/// `LlmEntry` of kind `Local`: `model` is the `.litertlm` file path (or
 /// model id when unresolved), `url` optionally overrides the model
 /// dir / sidecar endpoint.
 #[derive(Debug, Clone)]
 pub struct LocalLlmConfig {
-    /// Absolute `.task` path when resolved, else the stored id.
+    /// Absolute `.litertlm` path when resolved, else the stored id.
     pub model_path: String,
     /// Model dir, or `http(s)://` sidecar endpoint for tests/bridges.
     pub model_dir: String,
@@ -54,7 +53,7 @@ impl LocalLlmConfig {
         let resolved = if std::path::Path::new(model).is_absolute() {
             model.to_string()
         } else if model.is_empty() {
-            default_task_path(data_dir)
+            default_model_path(data_dir)
         } else {
             data_dir
                 .join("models")
@@ -76,17 +75,17 @@ impl LocalLlmConfig {
         }
     }
 
-    /// True when a `.task` file exists at `model_path`.
+    /// True when a `.litertlm` file exists at `model_path`.
     pub fn model_ready(&self) -> bool {
         !self.model_path.trim().is_empty() && Path::new(&self.model_path).is_file()
     }
 }
 
-/// Default on-device model location: `<data>/models/cleanup.task`.
-pub fn default_task_path(data_dir: &Path) -> String {
+/// Default on-device model location: `<data>/models/cleanup.litertlm`.
+pub fn default_model_path(data_dir: &Path) -> String {
     data_dir
         .join("models")
-        .join("cleanup.task")
+        .join("cleanup.litertlm")
         .to_string_lossy()
         .into_owned()
 }
@@ -99,7 +98,7 @@ pub fn build_cleanup_prompt(system: &str, raw: &str) -> String {
 
 // -- model manifest (download manager + SHA pinning) --------------------
 
-/// One downloadable `.task` asset. Binaries are NEVER committed;
+/// One downloadable `.litertlm` asset. Binaries are NEVER committed;
 /// `scripts/fetch-local-llm.sh` downloads + verifies these.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct ModelAsset {
@@ -237,7 +236,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 
 // -- backends ------------------------------------------------------------
 
-/// Generation backend. Production Android injects the MediaPipe
+/// Generation backend. Production Android injects the LiteRT-LM
 /// runner from Kotlin (via sidecar/JNI bridge); hosts and tests use
 /// [`FnBackend`] or [`SidecarBackend`].
 pub trait LocalBackend {
@@ -260,7 +259,7 @@ impl<F: Fn(&str) -> Result<String, String>> LocalBackend for FnBackend<F> {
     }
 }
 
-/// HTTP sidecar backend (MediaPipe bridge / llama server exposing
+/// HTTP sidecar backend (LiteRT-LM bridge / llama server exposing
 /// `POST {base}/generate {"prompt": ...}` -> `{"text": ...}`).
 /// Bounded fetch: 5 s connect, `timeout_secs` total, 1 MiB cap.
 pub struct SidecarBackend {
@@ -351,7 +350,7 @@ pub fn try_local_cleanup(
     // bridge rather than failing silently. Kotlin drives generation
     // through LocalLlmManager and never calls this path with a
     // ready model (it short-circuits above via sidecar in tests).
-    Err("local llm runs in-process on Android (MediaPipe); no Rust runner".to_string())
+    Err("local llm runs in-process on Android (LiteRT-LM); no Rust runner".to_string())
 }
 
 /// Status snapshot for the Settings UI / JNI.
@@ -359,7 +358,7 @@ pub fn status_json(entry: &LlmEntry, data_dir: &Path) -> String {
     let cfg = LocalLlmConfig::from_entry(entry, data_dir);
     let size: Option<u64> = std::fs::metadata(&cfg.model_path).ok().map(|m| m.len());
     serde_json::json!({
-        "provider": "mediapipe",
+        "provider": "litertlm",
         "modelPath": cfg.model_path,
         "ready": cfg.model_ready(),
         "sizeBytes": size,
@@ -386,7 +385,7 @@ mod tests {
             kind: crate::settings::LlmKind::Local,
             enabled: true,
             url: String::new(),
-            model: "smollm2.task".into(),
+            model: "gemma4-e2b-it.litertlm".into(),
             provider: crate::settings::CloudLlm::OpenAI,
             api_key: String::new(),
             keep_alive: String::new(),
@@ -394,7 +393,7 @@ mod tests {
             thinking: None,
         };
         let cfg = LocalLlmConfig::from_entry(&e, Path::new("/data"));
-        assert_eq!(cfg.model_path, "/data/models/smollm2.task");
+        assert_eq!(cfg.model_path, "/data/models/gemma4-e2b-it.litertlm");
         assert!(!cfg.model_ready());
     }
 
@@ -434,7 +433,7 @@ mod tests {
             kind: crate::settings::LlmKind::Local,
             enabled: true,
             url: String::new(),
-            model: "missing.task".into(),
+            model: "missing.litertlm".into(),
             provider: crate::settings::CloudLlm::OpenAI,
             api_key: String::new(),
             keep_alive: String::new(),
@@ -447,10 +446,10 @@ mod tests {
 
     #[test]
     fn manifest_parses_and_rejects_bad_json() {
-        let json = r#"{"models":[{"id":"smollm2-360m","url":"https://example/x.task","sha256":"abc","size_bytes":1}]}"#;
+        let json = r#"{"models":[{"id":"gemma4-e2b-it","url":"https://example/x.litertlm","sha256":"abc","size_bytes":1}]}"#;
         let m = parse_manifest(json).unwrap();
         assert_eq!(m.len(), 1);
-        assert_eq!(m[0].id, "smollm2-360m");
+        assert_eq!(m[0].id, "gemma4-e2b-it");
         assert!(parse_manifest("{}").is_err());
     }
 
@@ -461,13 +460,11 @@ mod tests {
         let _ = std::fs::create_dir_all(&dir);
         let f = dir.join("v.bin");
         std::fs::write(&f, b"abc").unwrap();
-        assert!(
-            verify_file_sha256(
-                &f,
-                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-            )
-            .is_ok()
-        );
+        assert!(verify_file_sha256(
+            &f,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        )
+        .is_ok());
         assert!(verify_file_sha256(&f, "00".repeat(32).as_str()).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Owner on-device bench for the chosen provider (MediaPipe `.task`).
+# Owner on-device bench for the chosen provider (LiteRT-LM `.litertlm`).
 #
-# The MediaPipe LLM Inference API targets physical GPUs (Pixel 8 / S23+)
+# The LiteRT-LM Engine API targets physical GPUs (Pixel 8 / S23+)
 # and does not reliably support emulators — run on hardware.
 # Records: model id/size, load latency, TTFT, tok/s, RAM (dumpsys), APK delta.
 #
 # Usage (device with the model pushed to /data/local/tmp/llm/):
-#   scripts/bench-local-llm.sh --model cleanup.task --prompt "fix: hello world"
+#   scripts/bench-local-llm.sh --model cleanup.litertlm --prompt "fix: hello world"
 set -euo pipefail
 
-MODEL="cleanup.task"
+MODEL="cleanup.litertlm"
 PROMPT="Clean this dictation: hello world this is a test period new line total three hundred dollars"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -29,7 +29,7 @@ echo "  prompt: $PROMPT"
 echo
 echo "Then paste below: load_ms, ttft_ms, decode_tok_s, ram_mb."
 echo "Reference (literature, NOT this device):"
-echo "  MediaPipe Gemma-2B int4 GPU: prefill 100s tok/s, decode ~10-20 tok/s (Pixel 8/S23, Google blog)"
+echo "  LiteRT-LM Gemma-4 E2B GPU: TBD on-device (this script)"
 echo "  llama.cpp Llama-3.2-1B Q4 CPU: decode ~8-15 tok/s (ARM NEON, mid phones)"
 echo "  MLC Qwen2.5-1.5B q4f16: ~11 tok/s measured (TinyBench, S24 Ultra)"
 echo

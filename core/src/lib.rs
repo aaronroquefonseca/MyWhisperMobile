@@ -627,7 +627,7 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeSyncAll
 // -- on-device LLM (cleanup path only) ----------------------------------
 
 /// Local-LLM status for the Settings UI:
-/// `{"provider":"mediapipe","modelPath","ready","sizeBytes"}`.
+/// `{"provider":"litertlm","modelPath","ready","sizeBytes"}`.
 /// Reads the stored `Local` entry (first enabled) or reports not-ready.
 /// # Safety
 /// Called from the JVM with valid JNI handles (`env` attached, object args valid local refs).
@@ -655,7 +655,7 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeLocalLl
                 .and_then(|v| serde_json::from_value(v.clone()).ok());
             match entry {
                 Some(en) => crate::local_llm::status_json(&en, e.dir()),
-                None => serde_json::json!({"provider":"mediapipe","ready":false}).to_string(),
+                None => serde_json::json!({"provider":"litertlm","ready":false}).to_string(),
             }
         },
         || err_json("engine not open"),
