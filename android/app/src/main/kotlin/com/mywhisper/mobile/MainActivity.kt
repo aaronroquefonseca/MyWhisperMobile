@@ -97,6 +97,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
@@ -128,6 +129,9 @@ class MainActivity : ComponentActivity() {
     private var micDeniedBefore = false
     private val workers = Executors.newSingleThreadExecutor()
     private var multicastLock: WifiManager.MulticastLock? = null
+
+    /** On-device pack state for the STT/LLM Local rows. Pure for unit tests. */
+    internal enum class LocalPackState { PRESENT, MISSING, MISMATCH }
 
     companion object {
         /** Next step when the mic request is denied. Pure for unit tests. */
@@ -205,6 +209,80 @@ class MainActivity : ComponentActivity() {
         @JvmStatic
         internal fun resetNeedsRetry(warning: String?): Boolean =
             CoreBridge.SettingsJobs.resetNeedsRetry(warning)
+
+        /**
+         * Placeholder SHA pins (all zeros / blank) never verify: the
+         * model is not downloadable and the entry must stay off.
+         * Pure for unit tests.
+         */
+        @JvmStatic
+        internal fun isPlaceholderSha(sha: String): Boolean {
+            val t = sha.trim()
+            return t.isEmpty() || t.all { it == '0' }
+        }
+
+        /**
+         * STT pack state via the existing verify ([LocalStt.isAvailable]:
+         * all three pack files present and non-empty). Pure for unit tests.
+         */
+        @JvmStatic
+        internal fun sttLocalPackState(packPresent: Boolean): LocalPackState =
+            if (packPresent) LocalPackState.PRESENT else LocalPackState.MISSING
+
+        /**
+         * LLM pack state for [taskFile] against [assets] (parsed from
+         * [LLM_MANIFEST_JSON]): missing file or placeholder-only pins
+         * read as MISSING (fail closed — never enable on an unverified
+         * file), a file matching no real pin reads as MISMATCH.
+         * Pure for unit tests (java.io only, no Context).
+         */
+        @JvmStatic
+        internal fun llmLocalPackState(
+            taskFile: File,
+            assets: List<LocalLlmManager.ModelAsset>,
+        ): LocalPackState {
+            if (!taskFile.isFile) return LocalPackState.MISSING
+            val pins = assets.map { it.sha256 }.filter { !isPlaceholderSha(it) }
+            if (pins.isEmpty()) return LocalPackState.MISSING
+            return if (pins.any { LocalLlmManager.verifySha256(taskFile, it) }) {
+                LocalPackState.PRESENT
+            } else {
+                LocalPackState.MISMATCH
+            }
+        }
+
+        /**
+         * Fail-closed gate: a Local entry may only be switched on with
+         * a verified pack. Pure for unit tests.
+         */
+        @JvmStatic
+        internal fun localToggleAllowed(state: LocalPackState): Boolean =
+            state == LocalPackState.PRESENT
+
+        /**
+         * Downloadable LLM assets, parsed by [LocalLlmManager]. Kept
+         * byte-identical in parsed content to
+         * `scripts/local-llm-models.json` (see `LocalEnablementTest`
+         * sync guard); binaries are NEVER committed.
+         */
+        internal const val LLM_MANIFEST_JSON = """{
+  "provider": "mediapipe",
+  "notes": "Binaries NEVER committed. Download via scripts/fetch-local-llm.sh. Fill in sha256 from the publisher before use (placeholder zeros fail closed).",
+  "models": [
+    {
+      "id": "smollm2-360m-instruct",
+      "url": "https://huggingface.co/litert-community/SmolLM2-360M-Instruct/resolve/main/SmolLM2-360M-Instruct_multi-prompt-seq_q8.task?download=true",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "size_bytes": 412000000
+    },
+    {
+      "id": "gemma3-1b-it-q4",
+      "url": "https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/Gemma3-1B-IT_q4.task?download=true",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "size_bytes": 700000000
+    }
+  ]
+}"""
     }
 
     /** Speech language codes (stored code, shown label). */
@@ -693,7 +771,7 @@ class MainActivity : ComponentActivity() {
                 Text(statusState.value, style = MaterialTheme.typography.bodyMedium)
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "Server-only build: configure a self-hosted or cloud speech service under Speech. On-device models come later.",
+                    stringResource(R.string.setup_server_only),
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -989,12 +1067,59 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Parsed LLM download assets (empty when the manifest is
+     * unreadable — download and enable stay fail-closed).
+     */
+    private fun llmAssets(): List<LocalLlmManager.ModelAsset> =
+        try {
+            LocalLlmManager.parseManifest(LLM_MANIFEST_JSON)
+        } catch (_: Exception) {
+            emptyList()
+        }
+
+    /** STT pack state for this device (existing verify: [LocalStt.isAvailable]). */
+    private fun sttPackState(): LocalPackState =
+        try {
+            sttLocalPackState(LocalStt.isAvailable(filesDir))
+        } catch (_: Exception) {
+            LocalPackState.MISSING
+        }
+
+    /** LLM pack state for this device (existing verify: [LocalLlmManager] SHA check). */
+    private fun llmPackState(): LocalPackState =
+        try {
+            llmLocalPackState(LocalLlmManager.defaultTaskFile(filesDir), llmAssets())
+        } catch (_: Exception) {
+            LocalPackState.MISSING
+        }
+
+    /** Fail-closed Local toggle: ON only with a verified pack, else a clear message. */
+    private fun onLocalToggle(
+        e: JSONObject,
+        on: Boolean,
+        state: LocalPackState,
+        bump: () -> Unit,
+    ) {
+        if (on && !localToggleAllowed(state)) {
+            toast(getString(R.string.local_enable_blocked))
+            bump()
+            return
+        }
+        e.put("enabled", on)
+        save()
+        bump()
+    }
+
     @Composable
     private fun SttScreen(s: JSONObject) {
         val stt = sttObj(s)
         var dialog by remember { mutableStateOf<JSONObject?>(null) }
         var localInfo by remember { mutableStateOf(false) }
         var version by remember { mutableIntStateOf(0) }
+        // Pack check runs once per save-generation (not per row or
+        // keystroke); enabling Local without a verified pack fails closed.
+        val packState = remember(version) { sttPackState() }
         @Suppress("UNUSED_EXPRESSION") version
         Column(
             modifier = Modifier
@@ -1031,13 +1156,44 @@ class MainActivity : ComponentActivity() {
                                 Text(entrySummary(e), style = MaterialTheme.typography.bodySmall)
                                 if (isLocal) {
                                     Text(
-                                        "Coming later — needs no configuration.",
+                                        when (packState) {
+                                            LocalPackState.PRESENT ->
+                                                stringResource(R.string.local_pack_present)
+                                            LocalPackState.MISSING ->
+                                                stringResource(R.string.local_pack_missing)
+                                            LocalPackState.MISMATCH ->
+                                                stringResource(R.string.local_pack_mismatch)
+                                        },
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        color = if (packState == LocalPackState.PRESENT) {
+                                            MaterialTheme.colorScheme.primary
+                                        } else {
+                                            MaterialTheme.colorScheme.error
+                                        },
                                     )
+                                    if (packState != LocalPackState.PRESENT) {
+                                        // No in-app fetch path for the STT pack:
+                                        // sideload note with the exact filesDir path.
+                                        Text(
+                                            stringResource(
+                                                R.string.stt_pack_sideload,
+                                                LocalStt.packDir(filesDir).absolutePath,
+                                            ),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
                                 }
                             }
-                            if (!isLocal) {
+                            if (isLocal) {
+                                Switch(
+                                    checked = e.optBoolean("enabled", true),
+                                    onCheckedChange = {
+                                        onLocalToggle(e, it, packState) { version++ }
+                                    },
+                                )
+                                TextButton(onClick = { localInfo = true }) { Text(stringResource(R.string.stt_local_why)) }
+                            } else {
                                 Switch(
                                     checked = e.optBoolean("enabled", true),
                                     onCheckedChange = {
@@ -1047,8 +1203,6 @@ class MainActivity : ComponentActivity() {
                                 IconButton(onClick = { dialog = JSONObject(e.toString()) }) {
                                     Icon(Icons.Filled.Edit, contentDescription = stringResource(R.string.action_edit))
                                 }
-                            } else {
-                                TextButton(onClick = { localInfo = true }) { Text(stringResource(R.string.stt_local_why)) }
                             }
                             IconButton(onClick = {
                                 val next = JSONArray()
@@ -1070,6 +1224,26 @@ class MainActivity : ComponentActivity() {
                     Icon(Icons.Filled.Add, contentDescription = null)
                     Spacer(Modifier.width(4.dp))
                     Text(stringResource(R.string.stt_add))
+                }
+                // A deleted Local row must be re-addable (default-off,
+                // fail-closed on enable like the seeded entry).
+                if (entryList(entries).none { it.optString("kind") == "Local" }) {
+                    OutlinedButton(onClick = {
+                        upsertEntry(
+                            stt,
+                            "entries",
+                            JSONObject()
+                                .put("id", "stt-${UUID.randomUUID()}")
+                                .put("name", "Local")
+                                .put("kind", "Local")
+                                .put("enabled", false),
+                        )
+                        save(); version++
+                    }) {
+                        Icon(Icons.Filled.Add, contentDescription = null)
+                        Spacer(Modifier.width(4.dp))
+                        Text(stringResource(R.string.stt_add_local))
+                    }
                 }
             }
             Section(stringResource(R.string.stt_capture)) {
@@ -1136,12 +1310,21 @@ class MainActivity : ComponentActivity() {
                 onDismissRequest = { localInfo = false },
                 title = { Text(stringResource(R.string.stt_local_title)) },
                 text = {
-                    Text(
-                        "The Local entry uses the live local configuration (models on this phone). " +
-                            "On-device inference is not implemented in this build yet, so the entry " +
-                            "is skipped. Add a Self-hosted or Cloud entry above it to dictate now — " +
-                            "order decides priority.",
-                    )
+                    Column {
+                        Text(stringResource(R.string.stt_local_body))
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            when (packState) {
+                                LocalPackState.PRESENT ->
+                                    stringResource(R.string.local_pack_present)
+                                LocalPackState.MISSING ->
+                                    stringResource(R.string.local_pack_missing)
+                                LocalPackState.MISMATCH ->
+                                    stringResource(R.string.local_pack_mismatch)
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
                 },
                 confirmButton = { TextButton(onClick = { localInfo = false }) { Text(stringResource(R.string.action_gotit)) } },
             )
@@ -1343,7 +1526,15 @@ class MainActivity : ComponentActivity() {
         }
         var dialog by remember { mutableStateOf<JSONObject?>(null) }
         var localInfo by remember { mutableStateOf(false) }
+        var llmDlAssetId by remember { mutableStateOf<String?>(null) }
+        var llmDlBusy by remember { mutableStateOf(false) }
+        var llmDlMsg by remember { mutableStateOf<String?>(null) }
         var version by remember { mutableIntStateOf(0) }
+        // Pack check (SHA over a hundreds-of-MB file) runs once per
+        // save-generation, not per row or keystroke; enabling Local
+        // without a verified file fails closed.
+        val llmState = remember(version) { llmPackState() }
+        val assets = remember { llmAssets() }
         @Suppress("UNUSED_EXPRESSION") version
         Column(
             modifier = Modifier
@@ -1482,8 +1673,7 @@ class MainActivity : ComponentActivity() {
             }
             Section(stringResource(R.string.cleanup_models)) {
                 Text(
-                    "If the first enabled model fails or returns nothing, the next one is tried. " +
-                        "Local entries have no engine yet (same as desktop) and are skipped.",
+                    stringResource(R.string.cleanup_models_sub),
                     style = MaterialTheme.typography.bodySmall,
                 )
                 val entries = entriesOf(lm, "entries")
@@ -1513,8 +1703,34 @@ class MainActivity : ComponentActivity() {
                                     else "${e.optString("kind")} · ${e.optString("model")}",
                                     style = MaterialTheme.typography.bodySmall,
                                 )
+                                if (isLocal) {
+                                    Text(
+                                        when (llmState) {
+                                            LocalPackState.PRESENT ->
+                                                stringResource(R.string.local_pack_present)
+                                            LocalPackState.MISSING ->
+                                                stringResource(R.string.local_pack_missing)
+                                            LocalPackState.MISMATCH ->
+                                                stringResource(R.string.local_pack_mismatch)
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = if (llmState == LocalPackState.PRESENT) {
+                                            MaterialTheme.colorScheme.primary
+                                        } else {
+                                            MaterialTheme.colorScheme.error
+                                        },
+                                    )
+                                }
                             }
-                            if (!isLocal) {
+                            if (isLocal) {
+                                Switch(
+                                    checked = e.optBoolean("enabled", true),
+                                    onCheckedChange = {
+                                        onLocalToggle(e, it, llmState) { version++ }
+                                    },
+                                )
+                                TextButton(onClick = { localInfo = true }) { Text(stringResource(R.string.stt_local_why)) }
+                            } else {
                                 Switch(
                                     checked = e.optBoolean("enabled", true),
                                     onCheckedChange = {
@@ -1524,8 +1740,6 @@ class MainActivity : ComponentActivity() {
                                 IconButton(onClick = { dialog = JSONObject(e.toString()) }) {
                                     Icon(Icons.Filled.Edit, contentDescription = stringResource(R.string.action_edit))
                                 }
-                            } else {
-                                TextButton(onClick = { localInfo = true }) { Text(stringResource(R.string.stt_local_why)) }
                             }
                             IconButton(onClick = {
                                 val next = JSONArray()
@@ -1564,11 +1778,79 @@ class MainActivity : ComponentActivity() {
                 onDismissRequest = { localInfo = false },
                 title = { Text(stringResource(R.string.cleanup_local_title)) },
                 text = {
-                    Text(
-                        "Local LLM cleanup has no engine on desktop either — " +
-                            "the entry is skipped and the chain moves on. " +
-                            "Point at an Ollama server or a cloud model instead.",
-                    )
+                    Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                        Text(stringResource(R.string.cleanup_local_body))
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            when (llmState) {
+                                LocalPackState.PRESENT ->
+                                    stringResource(R.string.local_pack_present)
+                                LocalPackState.MISSING ->
+                                    stringResource(R.string.local_pack_missing)
+                                LocalPackState.MISMATCH ->
+                                    stringResource(R.string.local_pack_mismatch)
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Text(
+                            stringResource(
+                                R.string.llm_pack_dest,
+                                LocalLlmManager.defaultTaskFile(filesDir).absolutePath,
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        // Download via the existing fetch path
+                        // (LocalLlmManager.downloadModel, SHA-verified).
+                        val picked = assets.firstOrNull { it.id == llmDlAssetId } ?: assets.firstOrNull()
+                        if (picked != null) {
+                            DropDown(
+                                getString(R.string.llm_model_label),
+                                picked.id,
+                                assets.map { it.id },
+                            ) { llmDlAssetId = it }
+                            if (isPlaceholderSha(picked.sha256)) {
+                                Text(
+                                    stringResource(R.string.llm_no_pin),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                            } else {
+                                Button(
+                                    enabled = !llmDlBusy,
+                                    onClick = {
+                                        llmDlBusy = true
+                                        llmDlMsg = getString(R.string.local_downloading, picked.id)
+                                        workers.execute {
+                                            try {
+                                                val dest = LocalLlmManager.defaultTaskFile(filesDir)
+                                                LocalLlmManager.downloadModel(picked, dest)
+                                                runOnUiThread {
+                                                    llmDlBusy = false
+                                                    llmDlMsg = getString(R.string.local_downloaded, picked.id)
+                                                    version++
+                                                }
+                                            } catch (ex: Exception) {
+                                                runOnUiThread {
+                                                    llmDlBusy = false
+                                                    llmDlMsg = getString(
+                                                        R.string.local_download_failed,
+                                                        ex.message ?: "failed",
+                                                    )
+                                                    version++
+                                                }
+                                            }
+                                        }
+                                    },
+                                ) { Text(stringResource(R.string.local_download)) }
+                            }
+                        }
+                        llmDlMsg?.let {
+                            Spacer(Modifier.height(4.dp))
+                            Text(it, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
                 },
                 confirmButton = { TextButton(onClick = { localInfo = false }) { Text(stringResource(R.string.action_gotit)) } },
             )
@@ -1622,7 +1904,7 @@ class MainActivity : ComponentActivity() {
                     }
                     if (kind == "Local") {
                         Text(
-                            "Local has no engine yet (same as desktop) — the entry will be skipped.",
+                            stringResource(R.string.llm_local_note),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.error,
                         )
@@ -1673,11 +1955,14 @@ class MainActivity : ComponentActivity() {
             },
             confirmButton = {
                 TextButton(onClick = {
+                    // New Local entries always start off (default-off):
+                    // the list toggle enables them only with a verified pack.
+                    val localKind = kind == "Local"
                     e.put("name", name).put("kind", kind)
                         .put("url", url.trim()).put("model", model.trim())
                         .put("provider", provider).put("api_key", key)
                         .put("keep_alive", keepAlive.trim())
-                        .put("enabled", enabled)
+                        .put("enabled", enabled && !localKind)
                     when (thinking) {
                         "On" -> e.put("thinking", true)
                         "Off" -> e.put("thinking", false)
