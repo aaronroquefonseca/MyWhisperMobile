@@ -33,6 +33,14 @@ class Dictation(
         }
     },
     private val finishTranscription: () -> Pair<String, String> = { CoreBridge.finishUtterance() },
+    /**
+     * On-device decode attempt, run before any server upload. Returns
+     * text on a local hit, null on a local miss (fall through to the
+     * server chain). Default misses: stock builds have no local
+     * engine, so every utterance takes the server path — with the
+     * same session re-check below before uploading.
+     */
+    private val tryLocalDecode: () -> String? = { null },
     private val cancelTranscription: () -> Unit = { CoreBridge.cancelUtterance() },
     private val log: (String) -> Unit = { msg -> android.util.Log.i("MwDict", msg) },
     private val workers: ExecutorService = Executors.newSingleThreadExecutor(),
@@ -164,7 +172,9 @@ class Dictation(
         if (state == State.IDLE) return
         // Invalidate the finish worker FIRST so a blocked
         // finishTranscription that returns later drops, never commits.
+        val was = state
         session.incrementAndGet()
+        log("cancel $was->IDLE session=${session.get()}")
         hardStop()
         try {
             cancelTranscription()
@@ -210,6 +220,7 @@ class Dictation(
         secondDown = false
         set(State.WORKING)
         val gen = session.get()
+        log("finish ->WORKING gen=$gen")
         workers.execute {
             if (tail > 0) {
                 try {
@@ -221,31 +232,75 @@ class Dictation(
             // token rules — capture nullness alone races (worker may
             // have snapshotted non-null just before cancel). Return
             // silently: state already belongs to cancel()/a new press.
-            if (gen != session.get()) return@execute
+            if (gen != session.get()) {
+                log("finish drop stale-tail gen=$gen session=${session.get()}")
+                return@execute
+            }
             val cap = capture
-            if (cap == null || gen != session.get()) return@execute
+            if (cap == null || gen != session.get()) {
+                log("finish drop stale-capture gen=$gen session=${session.get()}")
+                return@execute
+            }
             try {
                 cap.stop()
             } catch (_: Exception) {
             }
             capture = null
-            val text: String
-            try {
-                text = finishTranscription().first
-            } catch (e: Exception) {
-                if (gen == session.get()) {
-                    listener?.onError(e.message ?: "transcription failed")
-                    set(State.IDLE)
-                }
-                return@execute
+            // On-device attempt first: a local hit never uploads.
+            // A local decode failure is a miss (fall through to the
+            // server chain), never a user-facing error.
+            val local: String? = try {
+                tryLocalDecode()
+            } catch (_: Exception) {
+                null
             }
-            // Cancelled while blocked in transcription: the call above
-            // returned after cancel() — drop, never commit to the IME.
-            if (gen != session.get()) return@execute
-            log("utterance max peak=%.2f".format(maxPeak))
-            log("utterance text len=${text.length} hasListener=${listener != null}")
+            val text: String
+            if (local != null) {
+                // Local hit — still honor a cancel that landed
+                // mid-decode: drop before committing.
+                if (gen != session.get()) {
+                    log("finish drop stale-local gen=$gen session=${session.get()}")
+                    return@execute
+                }
+                log("utterance local hit len=${local.length}")
+                text = local
+            } else {
+                // Local miss: recheck BEFORE the server upload. A
+                // cancel that landed mid-decode must neither upload
+                // dead audio (waste + privacy) nor commit.
+                if (gen != session.get()) {
+                    log("finish drop stale-before-upload gen=$gen session=${session.get()}")
+                    return@execute
+                }
+                try {
+                    text = finishTranscription().first
+                } catch (e: Exception) {
+                    if (gen == session.get()) {
+                        listener?.onError(e.message ?: "transcription failed")
+                        set(State.IDLE)
+                    } else {
+                        log("finish drop stale-error gen=$gen session=${session.get()}")
+                    }
+                    return@execute
+                }
+                // Cancelled while blocked in transcription: the call above
+                // returned after cancel() — drop, never commit to the IME.
+                if (gen != session.get()) {
+                    log("finish drop stale-result gen=$gen session=${session.get()}")
+                    return@execute
+                }
+                log("utterance max peak=%.2f".format(maxPeak))
+                log("utterance text len=${text.length} hasListener=${listener != null}")
+            }
             if (text.isBlank()) {
-                listener?.onError("empty transcript")
+                // Silence is never committed and never surfaced: the
+                // "silence" tag maps to the empty state on every
+                // surface (IME shows its idle hint, the bubble toast
+                // filter already drops it). Only a real stop-with-
+                // silence reaches here — a cancelled session drops
+                // above, keeping its "Cancelled" note.
+                log("finish blank gen=$gen: empty state, no commit")
+                listener?.onError("silence")
             } else {
                 listener?.onResult(text)
             }
