@@ -1,0 +1,19 @@
+{
+  "pack": "sherpa-onnx-moonshine-tiny-en-quantized-2026-02-27",
+  "source": "https://huggingface.co/csukuangfj2/sherpa-onnx-moonshine-tiny-en-quantized-2026-02-27",
+  "dir": "models/sherpa-moonshine-v2-tiny.en",
+  "files": {
+    "encoder_model.ort": {
+      "sha256": "94e90a4654fc45cdfedb77c4c08e1739f48862998e58fada384b25118134f221",
+      "bytes": 13281600
+    },
+    "decoder_model_merged.ort": {
+      "sha256": "cf524c4862d36e9e5ab032eddc73637efd822d70e868ac575cf1a46e1e4708a0",
+      "bytes": 30412256
+    },
+    "tokens.txt": {
+      "sha256": "2870d843e14c1e187bf1913a521562a63b53933814bd7f2145120468f494a049",
+      "bytes": 549350
+    }
+  }
+}

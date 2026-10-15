@@ -67,6 +67,12 @@ dependencies {
     // successor API: LiteRT-LM). Loaded lazily via reflection in
     // LocalLlmManager so JVM unit tests run without the native runner.
     implementation("com.google.mediapipe:tasks-genai:0.10.27")
+    // On-device STT runtime (sherpa-onnx 1.13.8, arm64-v8a + x86_64 JNI).
+    // AAR fetched by scripts/fetch-sherpa-aar.sh (run once after
+    // checkout, CI does it too), never committed. Runtime misses (no
+    // pack, no native lib) degrade to the server chain via LocalStt
+    // null returns.
+    implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar", "*.jar"))))
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")
 }

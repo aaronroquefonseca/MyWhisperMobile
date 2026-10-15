@@ -1,0 +1,4 @@
+// sherpa-onnx AAR (on-device STT): fetched, never committed.
+// Run `bash scripts/fetch-sherpa-aar.sh` to download + SHA256-verify
+// `sherpa-onnx-1.13.8.aar` here. The ~50MB binary stays out of git
+// (see .gitignore); gradle picks up whatever `*.aar` is present.

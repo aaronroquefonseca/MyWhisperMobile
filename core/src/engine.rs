@@ -559,6 +559,12 @@ impl Engine {
         let pcm16 = audio::f32_to_i16(&selected);
 
         let words = self.store.load_words().unwrap_or_default();
+        // On-device inference lives in Kotlin `LocalStt` (sherpa-onnx
+        // AAR), never in Rust: the server chain below skips `Local`
+        // entries, so there is deliberately no pack hashing on this hot
+        // path (a full SHA256 over ~44MB per utterance would burn
+        // disk+CPU on every server-fallback dictate). Pack verification
+        // stays in `local_stt::verify_pack` for tests/meter only.
         // Witness before the blocking chain: a provider switch or Stop
         // applied mid-transcribe bumps the generation; stale results
         // then settle instead of delivering for a dead chain.
@@ -595,10 +601,28 @@ impl Engine {
         // Cleanup fetches are blocking: recheck the witness before the
         // history write so a cancel that landed mid-cleanup settles
         // instead of storing a phantom row.
+        #[cfg(test)]
+        crate::server_stt::finish_cleanup_pause_point();
         if crate::server_stt::server_generation() != generation_at_entry {
             return Err("superseded (provider switched mid-utterance)".to_string());
         }
 
+        Ok(self.finalize_delivery(&raw, &text, &engine, duration_secs))
+    }
+
+    /// Shared delivery tail: retention first, then store only when
+    /// history is on (mirrors desktop deliver).
+    /// Leased-work join before finalization (desktop #22 shutdown
+    /// parity at utterance scope): the history write completes before
+    /// `checkpoint` finalizes the database — never checkpoint first
+    /// and leave the row behind on crash.
+    fn finalize_delivery(
+        &mut self,
+        raw: &str,
+        text: &str,
+        engine: &str,
+        duration_secs: i64,
+    ) -> FinishOutcome {
         // Retention first, then store only when history is on
         // (mirrors desktop deliver). Leased-work join before
         // finalization (desktop #22 shutdown parity at utterance
@@ -614,24 +638,24 @@ impl Engine {
             let node = self.node_id.clone();
             let _ = with_busy_retry(|| {
                 self.store
-                    .add_history(&raw, &text, word_count, duration_secs, &node)
+                    .add_history(raw, text, word_count, duration_secs, &node)
             });
             let _ = with_busy_retry(|| self.store.checkpoint());
-            Ok(FinishOutcome {
-                text,
-                raw,
-                engine,
+            FinishOutcome {
+                text: text.to_string(),
+                raw: raw.to_string(),
+                engine: engine.to_string(),
                 duration_secs,
                 words: word_count,
-            })
+            }
         } else {
-            Ok(FinishOutcome {
+            FinishOutcome {
                 words: text.split_whitespace().count() as u32,
-                text,
-                raw,
-                engine,
+                text: text.to_string(),
+                raw: raw.to_string(),
+                engine: engine.to_string(),
                 duration_secs,
-            })
+            }
         }
     }
 
@@ -802,8 +826,9 @@ mod tests {
     // -- desktop #11 port: status + provider-switch reconcile --------
 
     use crate::server_stt::{
-        clear_finish_guard_pause, clear_poll_snapshot_pause, reset_status_state, server_generation,
-        set_finish_guard_pause, set_poll_snapshot_pause, status_test_lock,
+        clear_finish_cleanup_pause, clear_finish_guard_pause, clear_poll_snapshot_pause,
+        reset_status_state, server_generation, set_finish_cleanup_pause, set_finish_guard_pause,
+        set_poll_snapshot_pause, status_test_lock,
     };
     use crate::settings::{SttChainEntry, SttEntryKind, SttSettings};
     use std::sync::mpsc;
@@ -1184,5 +1209,53 @@ mod tests {
         assert_eq!(out.text, "Hello world.");
         stt_stub.join().unwrap();
         llm_stub.join().unwrap();
+    }
+
+    #[test]
+    fn finish_superseded_during_cleanup_settles() {
+        // Witness recheck after post_process (cleanup fetches are
+        // blocking): park between cleanup and the recheck, land a Stop
+        // inside the window. The stale result must settle with no
+        // history write — never a phantom row.
+        let _guard = status_test_lock();
+        reset_status_state();
+        let (port, stub) = stub_transcription_server();
+        let mut eng = open_engine();
+        // Hermetic: disable LLM cleanup (the default legacy Ollama
+        // chain would otherwise polish via any localhost server).
+        let mut settings: AppSettings = serde_json::from_str(&settings_with(self_hosted_entry(
+            "Stub",
+            &format!("http://127.0.0.1:{port}"),
+        )))
+        .unwrap();
+        settings.language_models.cleanup_enabled = false;
+        eng.put_settings(&serde_json::to_string(&settings).unwrap())
+            .unwrap();
+        assert_eq!(eng.poll_stt(), TickOutcome::Unchanged);
+        let (tx_entered, rx_entered) = mpsc::channel();
+        let (tx_proceed, rx_proceed) = mpsc::channel();
+        set_finish_cleanup_pause(tx_entered, rx_proceed);
+        eng.start_utterance(16000);
+        eng.push_pcm(&vec![1000i16; 8000]);
+        let handle = std::thread::spawn(move || {
+            let history_before = eng.history_json(10);
+            let out = eng.finish_utterance();
+            (eng, history_before, out)
+        });
+        rx_entered.recv_timeout(Duration::from_secs(10)).unwrap();
+        crate::server_stt::record_stop("");
+        tx_proceed.send(()).unwrap();
+        let (eng, history_before, out) = handle.join().unwrap();
+        clear_finish_cleanup_pause();
+        stub.join().unwrap();
+        match out {
+            Ok(_) => panic!("stale result must settle, not deliver"),
+            Err(err) => assert!(
+                err.contains("superseded"),
+                "stale result must settle, got: {err}"
+            ),
+        }
+        assert_eq!(history_before, "[]");
+        assert_eq!(eng.history_json(10), "[]");
     }
 }

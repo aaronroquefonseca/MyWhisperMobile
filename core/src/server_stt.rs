@@ -1196,6 +1196,39 @@ pub(crate) fn finish_guard_pause_point() {
     }
 }
 
+/// Test-only barrier parked after `post_process` (LLM cleanup) but
+/// before the pre-history witness recheck. Lets a test land a
+/// Stop/switch strictly inside the blocking-cleanup window and prove
+/// the cancelled utterance settles instead of storing a phantom row.
+/// Production builds contain no hook.
+#[cfg(test)]
+static FINISH_CLEANUP_PAUSE: Mutex<
+    Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>,
+> = Mutex::new(None);
+
+/// Install the finish-cleanup barrier (single-shot).
+#[cfg(test)]
+pub(crate) fn set_finish_cleanup_pause(
+    tx: std::sync::mpsc::Sender<()>,
+    rx: std::sync::mpsc::Receiver<()>,
+) {
+    *FINISH_CLEANUP_PAUSE.lock().unwrap() = Some((tx, rx));
+}
+
+/// Clear a parked (never reached) barrier so later tests never block.
+#[cfg(test)]
+pub(crate) fn clear_finish_cleanup_pause() {
+    FINISH_CLEANUP_PAUSE.lock().unwrap().take();
+}
+
+#[cfg(test)]
+pub(crate) fn finish_cleanup_pause_point() {
+    if let Some((entered, proceed)) = FINISH_CLEANUP_PAUSE.lock().ok().and_then(|mut g| g.take()) {
+        let _ = entered.send(());
+        let _ = proceed.recv_timeout(std::time::Duration::from_secs(10));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
