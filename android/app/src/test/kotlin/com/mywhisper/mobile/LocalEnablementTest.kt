@@ -108,10 +108,12 @@ class LocalEnablementTest {
     @Test
     fun llmManifest_parsesTwoKnownAssets() {
         val assets = LocalLlmManager.parseManifest(MainActivity.LLM_MANIFEST_JSON)
-        assertEquals(listOf("smollm2-360m-instruct", "gemma3-1b-it-q4"), assets.map { it.id })
-        // Both pins are placeholders until the publisher hashes land
-        // (downloads failed: smollm2 file gone upstream, gemma gated).
-        assertTrue(assets.all { MainActivity.isPlaceholderSha(it.sha256) })
+        assertEquals(listOf("gemma3-1b-it-int4", "gemma2-2b-it-q8"), assets.map { it.id })
+        // Real pins: verified by full download + sha256sum (public
+        // repos, no auth) — downloads are live, fail-closed otherwise.
+        assertTrue(assets.none { MainActivity.isPlaceholderSha(it.sha256) })
+        assertTrue(assets.all { it.sizeBytes > 0 })
+        assertTrue(assets.all { it.minRamMb > 0 })
     }
 
     @Test

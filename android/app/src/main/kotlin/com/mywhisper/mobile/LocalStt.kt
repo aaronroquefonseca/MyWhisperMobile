@@ -2,6 +2,7 @@ package com.mywhisper.mobile
 
 import android.content.Context
 import android.util.Log
+import androidx.core.content.edit
 import java.io.File
 import kotlin.math.sqrt
 
@@ -38,6 +39,28 @@ object LocalStt {
     const val ENGINE_NAME = "local moonshine-v2-tiny.en"
     private const val TAG = "MwLocalStt"
 
+    /**
+     * Legacy moonshine pack id (registry [LocalSttModels.MOONSHINE_ID]
+     * is the source of truth; kept for URL/shape compat).
+     */
+    const val PACK_ID = "sherpa-onnx-moonshine-tiny-en-quantized-2026-02-27"
+
+    /** Registry view of the legacy moonshine pack. */
+    fun moonshineEntry(): LocalSttModels.Entry =
+        LocalSttModels.findById(LocalSttModels.MOONSHINE_ID)
+
+    data class PackAsset(
+        val fileName: String,
+        val url: String,
+        val sha256: String,
+        val sizeBytes: Long,
+    )
+
+    /** Legacy pack files (registry moonshine entry, same content). */
+    fun packAssets(): List<PackAsset> = moonshineEntry().files.map {
+        PackAsset(it.name, it.url, it.sha256, it.sizeBytes)
+    }
+
     // Chunk constants: mirror core/src/local_stt.rs.
     const val MAX_CHUNK_SECS = 8.0
     const val MIN_CHUNK_SECS = 1.0
@@ -56,6 +79,34 @@ object LocalStt {
             f.isFile && f.length() > 0
         }
     }
+
+    /** SHA-verified legacy pack state (registry moonshine entry). */
+    fun packState(filesDir: File): LocalModelDownload.RowState =
+        LocalSttModels.stateFor(filesDir, moonshineEntry())
+
+    /** Legacy pack download (registry moonshine entry). */
+    fun downloadPack(
+        filesDir: File,
+        onProgress: (receivedBytes: Long, totalBytes: Long) -> Unit = { _, _ -> },
+    ) = LocalSttModels.download(filesDir, moonshineEntry(), onProgress)
+
+    /** Legacy pack delete (registry moonshine entry). */
+    fun deletePack(filesDir: File) = LocalSttModels.delete(filesDir, moonshineEntry())
+
+    /** Selected catalog model (SharedPreferences, default = moonshine fast pack). */
+    fun selectedEntry(prefs: android.content.SharedPreferences): LocalSttModels.Entry =
+        LocalSttModels.findById(
+            prefs.getString(LocalSttModels.PREF_SELECTED_MODEL, LocalSttModels.DEFAULT_ID),
+        )
+
+    fun setSelectedEntry(prefs: android.content.SharedPreferences, id: String) {
+        prefs.edit {
+            putString(LocalSttModels.PREF_SELECTED_MODEL, id)
+        }
+        unload()
+    }
+
+    fun engineName(entry: LocalSttModels.Entry): String = "local ${entry.id}"
 
     @Volatile private var recognizer: Any? = null
     @Volatile private var packKey: String? = null
@@ -143,10 +194,13 @@ object LocalStt {
     }
 
     /**
-     * Transcribe 16 kHz mono PCM with VAD-chunked decode. Null when
-     * unavailable — caller keeps the server fallback. Never throws
-     * (all errors → null + log). `language` is accepted for API
-     * symmetry; the tiny-en pack is English-only.
+     * Transcribe 16 kHz mono PCM with VAD-chunked decode using the
+     * selected catalog model ([LocalSttModels]). Null when the model
+     * is not installed, the Local chain entry is disabled, or the
+     * native lib fails — caller keeps the server fallback. Never
+     * throws (all errors → null + log). `language` is the Capture
+     * picker code; AUTO catalog entries map `auto` to sherpa
+     * auto-detect, MANUAL entries pin their single language.
      */
     fun transcribe(
         context: Context,
@@ -155,12 +209,17 @@ object LocalStt {
         language: String = "en",
     ): Result? {
         try {
-            val dir = packDir(context.filesDir)
-            if (!isAvailable(context.filesDir)) return null
+            val prefs = context.getSharedPreferences("mw_state", Context.MODE_PRIVATE)
+            val entry = selectedEntry(prefs)
+            val dir = LocalSttModels.dirFor(context.filesDir, entry)
+            if (!LocalSttModels.isInstalled(context.filesDir, entry)) return null
             if (pcm16.isEmpty()) return null
+            val whisperLang = LocalSttModels.whisperLanguageFor(language, entry)
             val ranges = chunkPcm(pcm16, sampleRate)
             if (ranges.isEmpty()) return null
-            val key = dir.absolutePath
+            // Cache key covers model dir + whisper language (changing
+            // either rebuilds the native recognizer).
+            val key = dir.absolutePath + "|" + entry.id + "|" + whisperLang
             var loadMs = 0L
             val rec: com.k2fsa.sherpa.onnx.OfflineRecognizer = synchronized(lock) {
                 val cached = if (packKey == key) recognizer as? com.k2fsa.sherpa.onnx.OfflineRecognizer else null
@@ -170,7 +229,7 @@ object LocalStt {
                     val t0 = android.os.SystemClock.elapsedRealtime()
                     try { (recognizer as? com.k2fsa.sherpa.onnx.OfflineRecognizer)?.release() } catch (_: Exception) {}
                     recognizer = null
-                    val created = createRecognizer(dir) ?: return null
+                    val created = createRecognizer(dir, entry, whisperLang) ?: return null
                     loadMs = android.os.SystemClock.elapsedRealtime() - t0
                     recognizer = created
                     packKey = key
@@ -216,22 +275,35 @@ object LocalStt {
 
     /**
      * Production entry for the [Dictation] local-first hook: enabled
-     * Local chain entry + pack present + non-blank decode, else null
-     * (server fallback). Never throws.
+     * Local chain entry + selected model installed + non-blank
+     * decode, else null (server fallback). The Capture language
+     * comes from committed settings (AUTO models follow it,
+     * MANUAL models pin theirs). Never throws.
      */
     fun transcribeIfEnabled(context: Context, pcm16: ShortArray): Pair<String, String>? {
         try {
             if (pcm16.isEmpty()) return null
             if (!isLocalEntryEnabled()) return null
-            val r = transcribe(context, pcm16) ?: return null
+            val prefs = context.getSharedPreferences("mw_state", Context.MODE_PRIVATE)
+            val entry = selectedEntry(prefs)
+            val r = transcribe(context, pcm16, 16000, captureLanguage()) ?: return null
             if (r.text.isBlank()) return null
-            return r.text to ENGINE_NAME
+            return r.text to engineName(entry)
         } catch (_: OutOfMemoryError) {
             // OOM is an Error: drop native state and fall back to server.
             try { unload() } catch (_: Throwable) {}
             return null
         } catch (_: Exception) {
             return null
+        }
+    }
+
+    private fun captureLanguage(): String {
+        return try {
+            val s = CoreBridge.getSettings().getOrThrow()
+            s.optJSONObject("stt")?.optString("language", "auto")?.ifBlank { "auto" } ?: "auto"
+        } catch (_: Exception) {
+            "auto"
         }
     }
 
@@ -259,18 +331,47 @@ object LocalStt {
 
     private fun createRecognizer(
         dir: File,
+        entry: LocalSttModels.Entry,
+        whisperLang: String,
     ): com.k2fsa.sherpa.onnx.OfflineRecognizer? {
         return try {
-            val moonshine = com.k2fsa.sherpa.onnx.OfflineMoonshineModelConfig(
-                encoder = File(dir, ENCODER).absolutePath,
-                mergedDecoder = File(dir, MERGED_DECODER).absolutePath,
-            )
-            val model = com.k2fsa.sherpa.onnx.OfflineModelConfig(
-                moonshine = moonshine,
-                numThreads = 2,
-                provider = "cpu",
-                tokens = File(dir, TOKENS).absolutePath,
-            )
+            val tokens = File(
+                dir,
+                entry.files.first { it.name.endsWith("tokens.txt") }.name,
+            ).absolutePath
+            val model = when (entry.engine) {
+                LocalSttModels.Engine.MOONSHINE -> {
+                    val moonshine = com.k2fsa.sherpa.onnx.OfflineMoonshineModelConfig(
+                        encoder = File(dir, ENCODER).absolutePath,
+                        mergedDecoder = File(dir, MERGED_DECODER).absolutePath,
+                    )
+                    com.k2fsa.sherpa.onnx.OfflineModelConfig(
+                        moonshine = moonshine,
+                        numThreads = 2,
+                        provider = "cpu",
+                        tokens = tokens,
+                    )
+                }
+                LocalSttModels.Engine.WHISPER -> {
+                    val enc = entry.files.first { "encoder" in it.name }.name
+                    val dec = entry.files.first { "decoder" in it.name }.name
+                    val whisper = com.k2fsa.sherpa.onnx.OfflineWhisperModelConfig(
+                        encoder = File(dir, enc).absolutePath,
+                        decoder = File(dir, dec).absolutePath,
+                        language = whisperLang,
+                        task = "transcribe",
+                        tailPaddings = 1000,
+                        enableTokenTimestamps = false,
+                        enableSegmentTimestamps = false,
+                    )
+                    com.k2fsa.sherpa.onnx.OfflineModelConfig(
+                        whisper = whisper,
+                        numThreads = 2,
+                        provider = "cpu",
+                        tokens = tokens,
+                    )
+                }
+            }
             val config = com.k2fsa.sherpa.onnx.OfflineRecognizerConfig(
                 featConfig = com.k2fsa.sherpa.onnx.FeatureConfig(sampleRate = 16000, featureDim = 80),
                 modelConfig = model,

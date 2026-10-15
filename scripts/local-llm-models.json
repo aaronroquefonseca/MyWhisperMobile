@@ -1,18 +1,22 @@
 {
   "provider": "mediapipe",
-  "notes": "Binaries NEVER committed. Download via scripts/fetch-local-llm.sh. Fill in sha256 from the publisher before use (placeholder zeros fail closed).",
+  "notes": "Binaries NEVER committed. Download via the in-app Text cleanup > Local row (SHA-256 verified) or scripts/fetch-local-llm.sh. SHAs below were verified by full download + sha256sum (public repos, no auth).",
   "models": [
     {
-      "id": "smollm2-360m-instruct",
-      "url": "https://huggingface.co/litert-community/SmolLM2-360M-Instruct/resolve/main/SmolLM2-360M-Instruct_multi-prompt-seq_q8.task?download=true",
-      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
-      "size_bytes": 412000000
+      "id": "gemma3-1b-it-int4",
+      "url": "https://huggingface.co/aquhm/gemma3-1b-it-int4-litert/resolve/main/gemma3-1b-it-int4.task",
+      "sha256": "e3d981c01aeaaac69a84ffa0d4be13281b3176731063f1bea1c9fe6887bd9dee",
+      "size_bytes": 554661243,
+      "min_ram_mb": 3072,
+      "note": "Small-phone option: ~0.5GB weights, fits 4-6GB phones (Note9-class)."
     },
     {
-      "id": "gemma3-1b-it-q4",
-      "url": "https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/Gemma3-1B-IT_q4.task?download=true",
-      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
-      "size_bytes": 700000000
+      "id": "gemma2-2b-it-q8",
+      "url": "https://huggingface.co/MiCkSoftware/Gemma2-2B-IT-LiteRT/resolve/main/gemma2_q8_multi-prefill-seq_ekv1280.task",
+      "sha256": "407aaa8f86f5450370d5fc6d274aae2e62f07ae91f9c5e97d1d7b1e05078c752",
+      "size_bytes": 2702868915,
+      "min_ram_mb": 7168,
+      "note": "Capable phones only: ~2.5GB weights, needs 8GB+ RAM (Note9-class: use the 1B)."
     }
   ]
 }
