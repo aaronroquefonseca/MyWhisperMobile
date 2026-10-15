@@ -98,4 +98,35 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(AppTheme.parse("bogus"), .system)
         XCTAssertNil(AppTheme.system.colorScheme)
     }
+
+    // MARK: - Theme persists via preferences.theme (write-back, not local)
+
+    func testThemeWriteTransformRoundTripsThroughSettings() {
+        let base: [String: Any] = ["preferences": ["theme": "System", "mic_mode": "Smart"]]
+        let updated = applyingTheme(.dark, to: base)
+        // Picked theme reads back exactly (this is what applyTheme persists).
+        XCTAssertEqual(AppTheme.from(settings: updated), .dark)
+        // Unrelated prefs survive the read-modify-write.
+        let prefs = updated["preferences"] as? [String: Any]
+        XCTAssertEqual(prefs?["mic_mode"] as? String, "Smart")
+    }
+
+    func testThemeWriteTransformCreatesMissingPreferences() {
+        let updated = applyingTheme(.light, to: [:])
+        XCTAssertEqual(AppTheme.from(settings: updated), .light)
+    }
+
+    // MARK: - Tabs: every case has a label in both languages
+
+    func testEveryTabHasTitleAndIcon() {
+        for tab in AppTab.allCases {
+            XCTAssertFalse(tab.title(using: .english).isEmpty)
+            XCTAssertFalse(tab.title(using: .spanish).isEmpty)
+            XCTAssertFalse(tab.systemImage.isEmpty)
+        }
+        XCTAssertEqual(AppTab.record.title(using: .english), "Record")
+        XCTAssertEqual(AppTab.setup.title(using: .spanish), "Configuración")
+        XCTAssertEqual(TabStrings.current(languageCode: nil), .english)
+        XCTAssertEqual(TabStrings.current(languageCode: "es"), .spanish)
+    }
 }

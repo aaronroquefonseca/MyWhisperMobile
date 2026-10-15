@@ -10,59 +10,55 @@ struct ContentView: View {
 
     var body: some View {
         TabView(selection: $flow.selectedTab) {
-            NavigationStack {
-                recordTab
+            ForEach(AppTab.allCases, id: \.self) { tab in
+                NavigationStack {
+                    tabContent(for: tab)
+                }
+                .tabItem { Label(tab.title(using: tabStrings), systemImage: tab.systemImage) }
+                .tag(tab)
             }
-            .tabItem { Label("Record", systemImage: "mic") }
-            .tag(AppTab.record)
-            NavigationStack {
-                SetupView(
-                    settings: flow.settings,
-                    micGranted: flow.micGranted,
-                    testPassed: flow.testPassed,
-                    testRunning: flow.testRunning,
-                    testError: flow.testError,
-                    theme: flow.theme,
-                    strings: SetupStrings.current(languageCode: languageCode),
-                    onRequestMic: { flow.requestMic() },
-                    onOpenSettings: { flow.openSystemSettings() },
-                    onRunTest: { flow.runSetupTest() },
-                    onThemeChange: { flow.applyTheme($0) }
-                )
-            }
-            .tabItem { Label("Setup", systemImage: "checklist") }
-            .tag(AppTab.setup)
-            NavigationStack {
-                SttSettingsView()
-            }
-            .tabItem { Label("Speech", systemImage: "waveform") }
-            .tag(AppTab.speech)
-            NavigationStack {
-                CleanupSettingsView()
-            }
-            .tabItem { Label("Cleanup", systemImage: "wand.and.stars") }
-            .tag(AppTab.cleanup)
-            NavigationStack {
-                DictionaryView()
-            }
-            .tabItem { Label("Dictionary", systemImage: "book") }
-            .tag(AppTab.dictionary)
-            NavigationStack {
-                HistoryView()
-            }
-            .tabItem { Label("History", systemImage: "clock") }
-            .tag(AppTab.history)
-            NavigationStack {
-                DevicesView()
-            }
-            .tabItem { Label("Devices", systemImage: "antenna.radiowaves.left.and.right") }
-            .tag(AppTab.devices)
         }
         .preferredColorScheme(flow.theme.colorScheme)
         .sheet(isPresented: shareVisible) {
             if let text = flow.shareText {
                 ShareSheet(items: [text])
             }
+        }
+    }
+
+    /// Exhaustive: adding an `AppTab` case without a screen is a compile
+    /// error, so the tab root can never silently drop a merged screen.
+    @ViewBuilder
+    private func tabContent(for tab: AppTab) -> some View {
+        switch tab {
+        case .record:
+            recordTab
+        case .setup:
+            SetupView(
+                settings: flow.settings,
+                micGranted: flow.micGranted,
+                testPassed: flow.testPassed,
+                // Reserved for a future headless test utterance (v1 routes
+                // to the Record tab instead); SetupView's branch stays off.
+                testRunning: false,
+                testError: flow.testError,
+                theme: flow.theme,
+                strings: SetupStrings.current(languageCode: languageCode),
+                onRequestMic: { flow.requestMic() },
+                onOpenSettings: { flow.openSystemSettings() },
+                onRunTest: { flow.runSetupTest() },
+                onThemeChange: { flow.applyTheme($0) }
+            )
+        case .speech:
+            SttSettingsView()
+        case .cleanup:
+            CleanupSettingsView()
+        case .dictionary:
+            DictionaryView()
+        case .history:
+            HistoryView()
+        case .devices:
+            DevicesView()
         }
     }
 
@@ -114,5 +110,9 @@ struct ContentView: View {
     /// Language code for the en/es string twins (nil = English).
     private var languageCode: String? {
         Locale.current.language.languageCode?.identifier
+    }
+
+    private var tabStrings: TabStrings {
+        TabStrings.current(languageCode: languageCode)
     }
 }

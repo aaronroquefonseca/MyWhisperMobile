@@ -11,6 +11,79 @@ enum AppTab: String, Hashable, CaseIterable {
     case dictionary
     case history
     case devices
+
+    /// Exhaustive: adding a tab without a title is a compile error.
+    func title(using strings: TabStrings) -> String {
+        switch self {
+        case .record: return strings.record
+        case .setup: return strings.setup
+        case .speech: return strings.speech
+        case .cleanup: return strings.cleanup
+        case .dictionary: return strings.dictionary
+        case .history: return strings.history
+        case .devices: return strings.devices
+        }
+    }
+
+    /// Exhaustive: adding a tab without an icon is a compile error.
+    var systemImage: String {
+        switch self {
+        case .record: return "mic"
+        case .setup: return "checklist"
+        case .speech: return "waveform"
+        case .cleanup: return "wand.and.stars"
+        case .dictionary: return "book"
+        case .history: return "clock"
+        case .devices: return "antenna.radiowaves.left.and.right"
+        }
+    }
+}
+
+/// Pure `preferences.theme` write transform (read-modify-write twin of
+/// `AppTheme.from`): pins the exact settings-dict edit `applyTheme`
+/// persists, so XCTest covers the write path without the core.
+func applyingTheme(_ theme: AppTheme, to settings: [String: Any]) -> [String: Any] {
+    var settings = settings
+    var prefs = settings["preferences"] as? [String: Any] ?? [:]
+    prefs["theme"] = theme.rawValue
+    settings["preferences"] = prefs
+    return settings
+}
+
+/// Tab labels with Spanish twins (same en/es-twin pattern as `SttStrings` /
+/// `SetupStrings`: no `.lproj` infrastructure exists yet, so twins live
+/// beside the English copy and resolve via an explicit language code).
+struct TabStrings: Equatable {
+    let record: String
+    let setup: String
+    let speech: String
+    let cleanup: String
+    let dictionary: String
+    let history: String
+    let devices: String
+
+    static let english = TabStrings(
+        record: "Record",
+        setup: "Setup",
+        speech: "Speech",
+        cleanup: "Cleanup",
+        dictionary: "Dictionary",
+        history: "History",
+        devices: "Devices"
+    )
+    static let spanish = TabStrings(
+        record: "Grabar",
+        setup: "Configuración",
+        speech: "Voz",
+        cleanup: "Limpieza",
+        dictionary: "Diccionario",
+        history: "Historial",
+        devices: "Dispositivos"
+    )
+
+    static func current(languageCode: String?) -> TabStrings {
+        languageCode == "es" ? .spanish : .english
+    }
 }
 
 /// v1 composition root: owns core open, settings/theme, mic permission,
@@ -48,7 +121,6 @@ final class AppFlow: ObservableObject, Dictation.Listener {
     // Mic + setup-test state.
     @Published private(set) var micGranted = false
     @Published private(set) var testPassed = false
-    @Published private(set) var testRunning = false
     @Published private(set) var testError: String?
 
     // Record screen state (mirrors Dictation callbacks, main queue).
@@ -149,13 +221,23 @@ final class AppFlow: ObservableObject, Dictation.Listener {
     /// `testPassed` flips on the first successful `onResult`; `testError`
     /// carries the last mapped failure. Documented limitation, not logic.
     func runSetupTest() {
-        testRunning = false
         testError = nil
         selectedTab = .record
     }
 
+    /// Persist the theme to core `preferences.theme` (read-modify-write,
+    /// same pattern as `SttSettingsStore.persist`): `SetupView` reads the
+    /// theme back from settings on every launch, so a local-only set would
+    /// revert to System on relaunch.
     func applyTheme(_ next: AppTheme) {
-        theme = next
+        do {
+            let updated = applyingTheme(next, to: try CoreBridge.getSettings())
+            try CoreBridge.putSettings(updated)
+            settings = updated
+            theme = next
+        } catch {
+            coreError = String(describing: error)
+        }
     }
 
     // MARK: - Result actions (Delivery surface)
