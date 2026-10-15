@@ -31,7 +31,7 @@ pub fn now_ms() -> i64 {
 const SCHEMA: &str = "
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
-PRAGMA user_version = 2;
+PRAGMA user_version = 3;
 CREATE TABLE IF NOT EXISTS kv (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS devices (
     addresses TEXT NOT NULL DEFAULT '[]',
     trusted INTEGER NOT NULL DEFAULT 0,
     pending INTEGER NOT NULL DEFAULT 0,
+    outgoing INTEGER NOT NULL DEFAULT 0,
     introducer INTEGER NOT NULL DEFAULT 0,
     last_seen INTEGER NOT NULL DEFAULT 0,
     last_sync INTEGER NOT NULL DEFAULT 0
@@ -394,7 +395,7 @@ impl Store {
         // Refuse to open a database written by a newer build instead of
         // silently running on a schema we do not understand.
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if version > 2 {
+        if version > 3 {
             return Err(rusqlite::Error::ToSqlConversionFailure(
                 "database schema is newer than this MyWhisper build".into(),
             ));
@@ -423,6 +424,7 @@ impl Store {
             "ALTER TABLE devices ADD COLUMN addresses TEXT NOT NULL DEFAULT '[]'",
             "ALTER TABLE devices ADD COLUMN trusted INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE devices ADD COLUMN pending INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE devices ADD COLUMN outgoing INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE devices ADD COLUMN introducer INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE devices ADD COLUMN last_sync INTEGER NOT NULL DEFAULT 0",
         ] {
@@ -1310,7 +1312,7 @@ impl Store {
         let peer: Option<Peer> = conn
             .query_row(
                 "SELECT node_id, name, address, addresses, trusted, pending,
-                        introducer, last_seen, last_sync
+                        outgoing, introducer, last_seen, last_sync
                  FROM devices WHERE node_id = ?1",
                 [peer_id],
                 Self::peer_from_row,
@@ -1359,7 +1361,7 @@ impl Store {
         let peer: Option<Peer> = tx
             .query_row(
                 "SELECT node_id, name, address, addresses, trusted, pending,
-                        introducer, last_seen, last_sync
+                        outgoing, introducer, last_seen, last_sync
                  FROM devices WHERE node_id = ?1",
                 [peer_id],
                 Self::peer_from_row,
@@ -1440,7 +1442,9 @@ pub struct HistoryRecord {
 /// `address` is the legacy single last-known address; `addresses` is
 /// the JSON list fed by mDNS, gossip and direct contact. Dial tries
 /// all of them. `pending` marks an incoming request awaiting a
-/// decision; `introducer` peers auto-add the devices they vouch for.
+/// decision (incoming-only: our own outgoing requests never set it);
+/// `outgoing` marks a request WE sent that awaits their accept;
+/// `introducer` peers auto-add the devices they vouch for.
 #[derive(Debug, Clone)]
 pub struct Peer {
     pub node_id: String,
@@ -1449,6 +1453,7 @@ pub struct Peer {
     pub addresses: Vec<String>,
     pub trusted: bool,
     pub pending: bool,
+    pub outgoing: bool,
     pub introducer: bool,
     pub last_seen: i64,
     pub last_sync: i64,
@@ -1508,16 +1513,17 @@ impl Store {
             addresses: parse_addresses(&addresses_raw, &address),
             trusted: row.get::<_, i64>(4)? != 0,
             pending: row.get::<_, i64>(5)? != 0,
-            introducer: row.get::<_, i64>(6)? != 0,
-            last_seen: row.get(7)?,
-            last_sync: row.get(8)?,
+            outgoing: row.get::<_, i64>(6)? != 0,
+            introducer: row.get::<_, i64>(7)? != 0,
+            last_seen: row.get(8)?,
+            last_sync: row.get(9)?,
         })
     }
 
     pub fn list_peers(&self) -> rusqlite::Result<Vec<Peer>> {
         let mut stmt = self.conn.prepare(
             "SELECT node_id, name, address, addresses, trusted, pending,
-                    introducer, last_seen, last_sync
+                    outgoing, introducer, last_seen, last_sync
              FROM devices ORDER BY name",
         )?;
         stmt.query_map([], Self::peer_from_row)?.collect()
@@ -1528,7 +1534,7 @@ impl Store {
             .conn
             .query_row(
                 "SELECT node_id, name, address, addresses, trusted, pending,
-                        introducer, last_seen, last_sync
+                        outgoing, introducer, last_seen, last_sync
                  FROM devices WHERE node_id = ?1",
                 [node_id],
                 Self::peer_from_row,
@@ -1539,9 +1545,11 @@ impl Store {
 
     /// Insert or update a peer row (manual add / edits). Trust changes
     /// advance the sync epoch so in-flight authorized exports for this
-    /// peer fail closed. Re-trusting clears the revocation; introduction
+    /// peer fail closed. Re-trusting clears the revocation and any
+    /// outgoing request marker (mutual contact resolved); introduction
     /// authority is NOT granted here — it stays an explicit local choice
-    /// (`set_peer_introducer`), and is revoked when trust is removed.
+    /// (`set_peer_introducer`) or comes from accepting a request
+    /// (`decide_request`), and is revoked when trust is removed.
     pub fn upsert_peer(
         &self,
         node_id: &str,
@@ -1566,16 +1574,17 @@ impl Store {
         };
         tx.execute(
             "INSERT INTO devices
-               (node_id, name, address, addresses, trusted, pending, introducer,
+               (node_id, name, address, addresses, trusted, pending, outgoing, introducer,
                 last_seen, last_sync)
-             VALUES (?1, ?2, ?3, ?4, ?5, 0, 0, 0, 0)
+             VALUES (?1, ?2, ?3, ?4, ?5, 0, 0, 0, 0, 0)
              ON CONFLICT (node_id) DO UPDATE SET
                name = excluded.name,
                address = excluded.address,
                addresses = excluded.addresses,
                trusted = excluded.trusted,
                introducer = CASE WHEN excluded.trusted THEN devices.introducer ELSE 0 END,
-               pending = 0",
+               pending = 0,
+               outgoing = 0",
             (node_id, name, address, addresses, trusted as i64),
         )?;
         tx.commit()
@@ -1610,7 +1619,7 @@ impl Store {
         let peer: Option<Peer> = tx
             .query_row(
                 "SELECT node_id, name, address, addresses, trusted, pending,
-                        introducer, last_seen, last_sync
+                        outgoing, introducer, last_seen, last_sync
                  FROM devices WHERE node_id = ?1",
                 [node_id],
                 Self::peer_from_row,
@@ -1635,7 +1644,7 @@ impl Store {
         tx.commit()
     }
 
-    /// Rename without touching trust, pending or introducer flags.
+    /// Rename without touching trust, pending, outgoing or introducer flags.
     pub fn rename_peer(&self, node_id: &str, name: &str) -> rusqlite::Result<()> {
         self.conn.execute(
             "UPDATE devices SET name = ?2 WHERE node_id = ?1",
@@ -1669,9 +1678,9 @@ impl Store {
     }
 
     /// Record inbound contact. Unknown nodes become pending requests
-    /// (never auto-trusted); known nodes refresh addresses/last_seen.
-    /// Revoked or malformed identities are refused outright — they must
-    /// never regain even a pending row.
+    /// (never auto-trusted, never outgoing); known nodes refresh
+    /// addresses/last_seen. Revoked or malformed identities are refused
+    /// outright — they must never regain even a pending row.
     pub fn record_seen(
         &self,
         node_id: &str,
@@ -1689,8 +1698,8 @@ impl Store {
             None => {
                 self.conn.execute(
                     "INSERT INTO devices
-                       (node_id, name, addresses, trusted, pending, last_seen)
-                     VALUES (?1, ?2, ?3, 0, 1, ?4)",
+                       (node_id, name, addresses, trusted, pending, outgoing, last_seen)
+                     VALUES (?1, ?2, ?3, 0, 1, 0, ?4)",
                     (node_id, name, dump_addresses(addresses), now),
                 )?;
                 Ok(true)
@@ -1712,15 +1721,99 @@ impl Store {
         }
     }
 
-    /// Decide a pending request. Accepting trusts the peer and clears
-    /// the pending flag; introduction authority stays off until
-    /// explicitly granted (`set_peer_introducer`). Rejecting revokes
-    /// the id durably. Both paths advance the sync epoch.
+    /// Record OUR outgoing pairing request. Fresh rows park as
+    /// `outgoing` with `pending` clear (pending stays incoming-only, so
+    /// our own request never renders with an Accept button); known rows
+    /// keep their trust/pending state and just gain the marker plus
+    /// fresh addresses. Already-trusted rows only refresh addresses.
+    /// Revoked or malformed identities are refused like `record_seen`.
+    pub fn record_outgoing(
+        &self,
+        node_id: &str,
+        name: &str,
+        addresses: &[String],
+    ) -> rusqlite::Result<bool> {
+        if !valid_node_id(node_id) || self.is_revoked(node_id)? {
+            return Err(rusqlite::Error::ToSqlConversionFailure(
+                "invalid or revoked peer".into(),
+            ));
+        }
+        let now = now_ms() / 1000;
+        let existing = self.get_peer(node_id)?;
+        match existing {
+            None => {
+                self.conn.execute(
+                    "INSERT INTO devices
+                       (node_id, name, addresses, trusted, pending, outgoing, last_seen)
+                     VALUES (?1, ?2, ?3, 0, 0, 1, ?4)",
+                    (node_id, name, dump_addresses(addresses), now),
+                )?;
+                Ok(true)
+            }
+            Some(peer) => {
+                if peer.trusted {
+                    let merged = merge_addresses(&peer.addresses, addresses);
+                    let peer_name = if name.is_empty() {
+                        peer.name
+                    } else {
+                        name.to_string()
+                    };
+                    self.conn.execute(
+                        "UPDATE devices SET name = ?2, addresses = ?3, last_seen = ?4
+                         WHERE node_id = ?1",
+                        (node_id, peer_name, dump_addresses(&merged), now),
+                    )?;
+                    return Ok(false);
+                }
+                let merged = merge_addresses(&peer.addresses, addresses);
+                let peer_name = if name.is_empty() {
+                    peer.name
+                } else {
+                    name.to_string()
+                };
+                self.conn.execute(
+                    "UPDATE devices
+                     SET name = ?2, addresses = ?3, outgoing = 1, last_seen = ?4
+                     WHERE node_id = ?1",
+                    (node_id, peer_name, dump_addresses(&merged), now),
+                )?;
+                Ok(false)
+            }
+        }
+    }
+
+    /// Withdraw OUR outgoing request without revoking: the row is
+    /// dropped and the id stays pairable (unlike `decide_request`
+    /// reject, which durably denies the id). Refused unless the row is
+    /// an untrusted outgoing marker.
+    pub fn withdraw_outgoing(&self, node_id: &str) -> rusqlite::Result<()> {
+        let peer = self.get_peer(node_id)?;
+        let Some(peer) = peer else {
+            return Err(rusqlite::Error::ToSqlConversionFailure(
+                "unknown peer".into(),
+            ));
+        };
+        if peer.trusted || !peer.outgoing {
+            return Err(rusqlite::Error::ToSqlConversionFailure(
+                "no outgoing request to withdraw".into(),
+            ));
+        }
+        self.conn
+            .execute("DELETE FROM devices WHERE node_id = ?1", [node_id])?;
+        Ok(())
+    }
+
+    /// Decide a pairing request. Accepting trusts the peer, clears both
+    /// request markers and grants introduction authority (desktop trust
+    /// flow: its vouched devices join automatically on the next merge).
+    /// Use `set_peer_introducer` to revoke that authority afterwards.
+    /// Rejecting revokes the id durably. Both paths advance the sync
+    /// epoch.
     pub fn decide_request(&self, node_id: &str, accept: bool) -> rusqlite::Result<()> {
         if accept {
             let tx = self.conn.unchecked_transaction()?;
             tx.execute(
-                "UPDATE devices SET trusted = 1, pending = 0, introducer = 0
+                "UPDATE devices SET trusted = 1, pending = 0, outgoing = 0, introducer = 1
                  WHERE node_id = ?1",
                 [node_id],
             )?;
@@ -1737,6 +1830,16 @@ impl Store {
             .list_peers()?
             .into_iter()
             .filter(|p| p.pending)
+            .collect())
+    }
+
+    /// Our sent requests awaiting their accept (never includes incoming
+    /// `pending` rows on their own — the two markers are independent).
+    pub fn list_outgoing(&self) -> rusqlite::Result<Vec<Peer>> {
+        Ok(self
+            .list_peers()?
+            .into_iter()
+            .filter(|p| p.outgoing && !p.trusted)
             .collect())
     }
 
@@ -1794,7 +1897,7 @@ impl Store {
             let peer: Option<Peer> = conn
                 .query_row(
                     "SELECT node_id, name, address, addresses, trusted, pending,
-                            introducer, last_seen, last_sync
+                            outgoing, introducer, last_seen, last_sync
                      FROM devices WHERE node_id = ?1",
                     [&g.node_id],
                     Self::peer_from_row,
@@ -1820,8 +1923,8 @@ impl Store {
                 None if introducer => {
                     conn.execute(
                         "INSERT INTO devices
-                           (node_id, name, addresses, trusted, pending, last_seen)
-                         VALUES (?1, ?2, ?3, 1, 0, ?4)",
+                           (node_id, name, addresses, trusted, pending, outgoing, last_seen)
+                         VALUES (?1, ?2, ?3, 1, 0, 0, ?4)",
                         (
                             g.node_id.clone(),
                             g.name.clone(),
@@ -2367,19 +2470,86 @@ mod tests {
         trust(&store, &peer);
         // Granting to an unknown peer is refused...
         assert!(store.set_peer_introducer(&peer_id(0x99), true).is_err());
-        // ...trust alone grants nothing...
+        // ...manual trust alone grants nothing...
         assert!(!store.get_peer(&peer).unwrap().unwrap().introducer);
-        // ...and accepting a request leaves it off (explicit grant only).
+        // ...but accepting a request grants it (desktop mesh flow: the
+        // vouched devices join automatically on the next gossip merge)...
         let pending = peer_id(0x9a);
         store.record_seen(&pending, "new", &[]).unwrap();
         store.decide_request(&pending, true).unwrap();
         let row = store.get_peer(&pending).unwrap().unwrap();
-        assert!(row.trusted && !row.pending && !row.introducer);
+        assert!(row.trusted && !row.pending && !row.outgoing && row.introducer);
+        // ...and it stays explicitly revocable afterwards.
+        store.set_peer_introducer(&pending, false).unwrap();
+        assert!(!store.get_peer(&pending).unwrap().unwrap().introducer);
         // Rejecting revokes durably.
         let denied = peer_id(0x9b);
         store.record_seen(&denied, "denied", &[]).unwrap();
         store.decide_request(&denied, false).unwrap();
         assert!(store.is_revoked(&denied).unwrap());
+    }
+
+    #[test]
+    fn outgoing_shows_waiting_not_incoming() {
+        let store = Store::open_memory().unwrap();
+        // Our sent request parks as outgoing, never as incoming pending:
+        // it must not render with an Accept button.
+        let peer = peer_id(0xc5);
+        store.record_outgoing(&peer, "other", &[]).unwrap();
+        let row = store.get_peer(&peer).unwrap().unwrap();
+        assert!(row.outgoing && !row.pending && !row.trusted);
+        assert!(
+            store.list_pending().unwrap().is_empty(),
+            "own request must not render as an incoming request"
+        );
+        assert_eq!(store.list_outgoing().unwrap().len(), 1);
+        // Inbound contact still lands as incoming pending alongside it.
+        let inbound = peer_id(0xc6);
+        store.record_seen(&inbound, "asker", &[]).unwrap();
+        assert_eq!(store.list_pending().unwrap().len(), 1);
+        assert_eq!(store.list_outgoing().unwrap().len(), 1);
+        // Accepting clears the outgoing marker with the rest.
+        store.decide_request(&peer, true).unwrap();
+        let row = store.get_peer(&peer).unwrap().unwrap();
+        assert!(row.trusted && !row.pending && !row.outgoing);
+        assert!(store.list_outgoing().unwrap().is_empty());
+        // Cancelling withdraws without revoking: the id stays pairable.
+        let cancel = peer_id(0xc7);
+        store.record_outgoing(&cancel, "other2", &[]).unwrap();
+        store.withdraw_outgoing(&cancel).unwrap();
+        assert!(store.get_peer(&cancel).unwrap().is_none());
+        assert!(!store.is_revoked(&cancel).unwrap());
+        store.record_outgoing(&cancel, "other2", &[]).unwrap();
+        assert_eq!(store.list_outgoing().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn accept_grants_introducer_mesh() {
+        let store = Store::open_memory().unwrap();
+        let a = peer_id(0xd5);
+        let b = peer_id(0xd6);
+        // A asks to pair; accepting trusts A AND marks them introducer
+        // (desktop flow), so devices A vouches for join automatically.
+        store.record_seen(&a, "a", &[]).unwrap();
+        store.decide_request(&a, true).unwrap();
+        let row = store.get_peer(&a).unwrap().unwrap();
+        assert!(row.trusted && !row.pending && row.introducer);
+        // A's gossip vouches for B: B joins trusted with no manual step.
+        let vouches = store.get_peer(&a).unwrap().unwrap().introducer;
+        let gossip = vec![PeerGossip {
+            node_id: b.clone(),
+            name: "b".to_string(),
+            addresses: vec![],
+            last_seen: 0,
+        }];
+        assert_eq!(
+            store
+                .apply_gossip(&gossip, vouches, &peer_id(0xd7))
+                .unwrap(),
+            1
+        );
+        let brow = store.get_peer(&b).unwrap().unwrap();
+        assert!(brow.trusted && !brow.pending && !brow.outgoing);
     }
 
     #[test]
@@ -2691,5 +2861,74 @@ mod tests {
             .unwrap();
         assert!(store.load_settings().sync.enabled);
         assert!(!store.sync_enabled_explicit());
+    }
+
+    #[test]
+    fn v2_database_migrates_outgoing_column() {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(2000);
+        // Pin the db key so file-backed opens in this process use it.
+        // Fresh temp DBs elsewhere are unaffected: any valid key opens
+        // them, and no test asserts the keyring source.
+        unsafe {
+            std::env::set_var("MYWHISPER_DB_KEY", "ab".repeat(32));
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "mywhisper-v2migrate-test-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("state.db");
+        // A previous-release file: current schema minus the outgoing
+        // column, stamped user_version 2.
+        let v2_schema = SCHEMA
+            .replace("    outgoing INTEGER NOT NULL DEFAULT 0,\n", "")
+            .replace("PRAGMA user_version = 3;", "PRAGMA user_version = 2;");
+        assert!(!v2_schema.contains("outgoing"));
+        let incoming = peer_id(0xe5);
+        let buddy = peer_id(0xe6);
+        {
+            let plain = Connection::open(&path).unwrap();
+            plain.execute_batch(&v2_schema).unwrap();
+            plain
+                .execute(
+                    "INSERT INTO devices
+                        (node_id, name, addresses, trusted, pending, last_seen)
+                     VALUES (?1, 'asker', '[]', 0, 1, 0)",
+                    [&incoming],
+                )
+                .unwrap();
+            plain
+                .execute(
+                    "INSERT INTO devices
+                        (node_id, name, addresses, trusted, pending, last_seen)
+                     VALUES (?1, 'buddy', '[]', 1, 0, 0)",
+                    [&buddy],
+                )
+                .unwrap();
+            drop(plain);
+        }
+        // Opening migrates (plaintext legacy encrypts in place, then the
+        // v2 columns gain `outgoing` defaulting to 0).
+        let store = Store::open(&path).unwrap();
+        let version: i64 = store
+            .conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 3);
+        assert!(has_column(&store.conn, "devices", "outgoing"));
+        // Pre-existing rows read back with outgoing clear: the old
+        // pending row is still incoming-only.
+        let row = store.get_peer(&incoming).unwrap().unwrap();
+        assert!(row.pending && !row.outgoing && !row.trusted);
+        assert_eq!(store.list_pending().unwrap().len(), 1);
+        assert!(store.list_outgoing().unwrap().is_empty());
+        // ...and the new outgoing path works on the migrated file.
+        let fresh = peer_id(0xe7);
+        store.record_outgoing(&fresh, "fresh", &[]).unwrap();
+        assert_eq!(store.list_outgoing().unwrap().len(), 1);
+        assert_eq!(store.list_pending().unwrap().len(), 1);
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

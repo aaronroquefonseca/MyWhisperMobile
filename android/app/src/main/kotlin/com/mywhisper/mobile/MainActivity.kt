@@ -3662,11 +3662,13 @@ getString(R.string.sync_running, shown)
                     )
                 }
             }
-            val trusted = peers.filter { it.optBoolean("trusted") }
-            val requests = peers.filter { it.optBoolean("pending") }
-            val nearby = peers.filter {
-                !it.optBoolean("trusted") && !it.optBoolean("pending") && it.optBoolean("discovered")
-            }
+            val trusted = peers.filter { it.syncBucket() == PeerBucket.TRUSTED }
+            // Incoming requests (Accept/Reject) vs our own sent requests
+            // (waiting for their accept: cancel only, never Accept).
+            // Mutual rows (both flags) stay incoming: Accept clears both.
+            val requests = peers.filter { it.syncBucket() == PeerBucket.INCOMING }
+            val waiting = peers.filter { it.syncBucket() == PeerBucket.WAITING }
+            val nearby = peers.filter { it.syncBucket() == PeerBucket.NEARBY }
             Section(stringResource(R.string.sync_trusted, trusted.size)) {
                 if (trusted.isEmpty()) Text(stringResource(R.string.sync_none), style = MaterialTheme.typography.bodySmall)
                 trusted.forEach { p ->
@@ -3710,6 +3712,34 @@ getString(R.string.sync_running, shown)
                         p,
                         note = notes[id],
                         onAccept = { acceptPeer(id, nm, { note(id, it) }) { refresh() } },
+                        onRemove = {
+                            workers.execute {
+                                try {
+                                    CoreBridge.syncTrust(id, false).getOrThrow()
+                                } catch (_: Exception) {
+                                }
+                                runOnUiThread { refresh() }
+                            }
+                        },
+                    )
+                }
+            }
+            Section("Waiting for response (${waiting.size})") {
+                if (waiting.isNotEmpty()) Text(
+                    "You sent a pairing request. Accept it on the other device; " +
+                        "no action needed here except cancel.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                if (waiting.isEmpty()) Text(stringResource(R.string.sync_requests_none), style = MaterialTheme.typography.bodySmall)
+                waiting.forEach { p ->
+                    val id = p.optString("nodeId")
+                    val nm = p.optString("name").ifEmpty { id.take(12) + "…" }
+                    PeerRow(
+                        p,
+                        // No onAccept: our own request is never acceptable
+                        // locally. Cancel withdraws without revoking, so
+                        // the id stays pairable.
+                        note = notes[id] ?: getString(R.string.sync_waiting, nm),
                         onRemove = {
                             workers.execute {
                                 try {
@@ -3873,6 +3903,14 @@ getString(R.string.sync_running, shown)
         }
     }
 
+    /** Bucket a sync-tab peer row: the UI split behind `peerBucket`. */
+    private fun JSONObject.syncBucket(): PeerBucket = peerBucket(
+        trusted = optBoolean("trusted"),
+        pending = optBoolean("pending"),
+        outgoing = optBoolean("outgoing"),
+        discovered = optBoolean("discovered"),
+    )
+
     @Composable
     private fun PeerRow(
         p: JSONObject,
@@ -3924,4 +3962,27 @@ getString(R.string.sync_running, shown)
             }
         }
     }
+}
+
+/** Sync-tab bucket for a peer row. INCOMING rows get Accept/Reject;
+ *  WAITING rows (requests we sent) get cancel only, never Accept. */
+internal enum class PeerBucket { TRUSTED, INCOMING, WAITING, NEARBY, OTHER }
+
+/**
+ * Pure split behind the sync tab (unit-tested): `pending` stays
+ * incoming-only (our sent requests never set it), mutual rows (both
+ * flags) stay incoming so one Accept clears both, trusted wins over
+ * everything, undiscovered strangers stay out of Nearby.
+ */
+internal fun peerBucket(
+    trusted: Boolean,
+    pending: Boolean,
+    outgoing: Boolean,
+    discovered: Boolean,
+): PeerBucket = when {
+    trusted -> PeerBucket.TRUSTED
+    pending -> PeerBucket.INCOMING
+    outgoing -> PeerBucket.WAITING
+    discovered -> PeerBucket.NEARBY
+    else -> PeerBucket.OTHER
 }

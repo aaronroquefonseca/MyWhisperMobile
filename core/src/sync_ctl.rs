@@ -231,6 +231,7 @@ pub fn sync_peers_json(dir: &std::path::Path) -> String {
             "addresses": p.addresses,
             "trusted": p.trusted,
             "pending": p.pending,
+            "outgoing": p.outgoing,
             "introducer": p.introducer,
             "lastSeen": p.last_seen,
             "lastSync": p.last_sync,
@@ -248,6 +249,7 @@ pub fn sync_peers_json(dir: &std::path::Path) -> String {
                 "addresses": [],
                 "trusted": false,
                 "pending": false,
+                "outgoing": false,
                 "introducer": false,
                 "lastSeen": 0,
                 "lastSync": 0,
@@ -268,9 +270,12 @@ fn short_id(id: &str) -> String {
     }
 }
 
-/// Accept (trust + introducer, then sync) or reject a peer.
+/// Accept (trust + introducer, then sync), reject, or withdraw a peer.
 /// Unknown-but-discovered nodes are recorded first so the accept
 /// path has a row to promote (mirrors desktop trust flow).
+/// Cancelling our own sent request (outgoing, no incoming pending)
+/// withdraws it without revoking, so the id stays pairable; rejecting
+/// an incoming request revokes durably.
 pub fn sync_set_trust(
     dir: &std::path::Path,
     node_id: &str,
@@ -296,6 +301,17 @@ pub fn sync_set_trust(
         } else {
             return Err("unknown peer (not discovered)".to_string());
         }
+    } else if !accept {
+        let peer = store
+            .get_peer(node_id)
+            .map_err(|e| format!("peer lookup: {e}"))?
+            .ok_or_else(|| "unknown peer".to_string())?;
+        if peer.outgoing && !peer.pending && !peer.trusted {
+            store
+                .withdraw_outgoing(node_id)
+                .map_err(|e| format!("withdraw request: {e}"))?;
+            return Ok("request withdrawn".to_string());
+        }
     }
     store
         .decide_request(node_id, accept)
@@ -314,11 +330,12 @@ pub fn sync_set_trust(
     Ok("rejected".to_string())
 }
 
-/// Manual pairing by ID (mirrors desktop Add device): park the row,
-/// dial once. The expected outcome is the remote's "not trusted"
-/// verdict — that verdict IS the delivered pairing request (the
-/// remote records us as pending). Reported as such so the UI can say
-/// "accept it on the other device".
+/// Manual pairing by ID (mirrors desktop Add device): park the row as
+/// OUR outgoing request (never as an incoming pending row), dial once.
+/// The expected outcome is the remote's "not trusted" verdict — that
+/// verdict IS the delivered pairing request (the remote records us as
+/// pending). Reported as such so the UI can say "accept it on the
+/// other device".
 pub fn sync_add(
     dir: &std::path::Path,
     node_id: &str,
@@ -344,7 +361,7 @@ pub fn sync_add(
         addrs.push(address.trim().to_string());
     }
     store
-        .record_seen(&node_id, name.trim(), &addrs)
+        .record_outgoing(&node_id, name.trim(), &addrs)
         .map_err(|e| format!("record contact: {e}"))?;
     let settings = store.load_settings();
     let creds = slot()
