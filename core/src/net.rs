@@ -370,7 +370,8 @@ pub fn exchange(
     let is_new = store
         .record_seen(&peer.node_id, &peer.name, &contact_addrs)
         .map_err(|e| format!("record contact: {e}"))?;
-    let trusted = store
+    // Re-read below: mutual-consent completion can flip it.
+    let mut trusted = store
         .get_peer(&peer.node_id)
         .map_err(|e| format!("peer lookup: {e}"))?
         .map(|p| p.trusted)
@@ -385,16 +386,41 @@ pub fn exchange(
                 verdict.error
             });
         }
-    } else if !trusted {
-        session.send_json(&Verdict {
-            ok: false,
-            error: "not trusted: request recorded, ask them to accept".to_string(),
-        })?;
-        return Err(if is_new {
-            format!("new pairing request from {}", short(&peer.node_id))
-        } else {
-            "peer not trusted".to_string()
-        });
+    } else {
+        if !trusted {
+            // Responder-side ONLY latch (never on initiator paths): the
+            // dialer's identity proof verified above, so this contact is
+            // their genuine consent — it latches an incoming request
+            // even on known rows (record_seen only parks unknowns).
+            store
+                .mark_incoming_request(&peer.node_id)
+                .map_err(|e| format!("record request: {e}"))?;
+            // Mutual consent: we requested them (outgoing) and they
+            // dialed back — complete trust now (desktop accept flow:
+            // trusted + introducer, markers cleared), no local Accept
+            // needed. Strangers stay pending and are rejected below.
+            let mutual = store
+                .get_peer(&peer.node_id)
+                .map_err(|e| format!("peer lookup: {e}"))?
+                .is_some_and(|p| p.outgoing && !p.trusted);
+            if mutual {
+                store
+                    .decide_request(&peer.node_id, true)
+                    .map_err(|e| format!("trust peer: {e}"))?;
+                trusted = true;
+            }
+        }
+        if !trusted {
+            session.send_json(&Verdict {
+                ok: false,
+                error: "not trusted: request recorded, ask them to accept".to_string(),
+            })?;
+            return Err(if is_new {
+                format!("new pairing request from {}", short(&peer.node_id))
+            } else {
+                "peer not trusted".to_string()
+            });
+        }
     }
     if !initiator {
         session.send_json(&Verdict {
@@ -466,12 +492,16 @@ fn short(node_id: &str) -> String {
 /// Dial a peer's known addresses in order; first success wins.
 /// Runs the Noise handshake, then requires the proven session to
 /// belong to `expect_node` before any record moves.
+/// `own_addresses` advertises our listen address in hello so the peer
+/// stores a dialable address and can dial back (see
+/// [`own_listen_addrs`]).
 pub fn sync_now(
     addresses: &[String],
     db_path: &Path,
     creds: &SyncCreds,
     name: &str,
     expect_node: &str,
+    own_addresses: &[String],
 ) -> Result<SyncReport, String> {
     if addresses.is_empty() {
         return Err("no known address for peer".to_string());
@@ -509,7 +539,7 @@ pub fn sync_now(
             &store,
             creds,
             name,
-            &[],
+            own_addresses,
             true,
             Some(expect_node),
             None,
@@ -608,6 +638,21 @@ pub fn lan_ip() -> Option<IpAddr> {
     let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
     socket.connect("8.8.8.8:80").ok()?;
     socket.local_addr().ok().map(|a| a.ip())
+}
+
+/// Our dialable listen address for hello advertisements, built from
+/// the same listen state `serve` uses (configured port + LAN IP).
+/// Empty when we do not listen (port 0) or have no LAN address: the
+/// hello then carries no addresses, as before. Without this, a peer
+/// that only ever saw our dials stores nothing but the ephemeral
+/// source port and can never dial back.
+pub fn own_listen_addrs(port: u16) -> Vec<String> {
+    if port == 0 {
+        return Vec::new();
+    }
+    lan_ip()
+        .map(|ip| vec![format!("{ip}:{port}")])
+        .unwrap_or_default()
 }
 
 /// Dial our own sync port through our LAN address, the way a peer
@@ -756,9 +801,17 @@ pub fn sync_all_trusted(db_path: &Path, creds: &SyncCreds) -> Vec<String> {
         .into_iter()
         .filter(|p| p.trusted && !p.dial_targets().is_empty())
         .collect();
+    let own_addresses = own_listen_addrs(settings.sync.listen_port);
     let mut out = Vec::new();
     for peer in peers {
-        match sync_now(&peer.dial_targets(), db_path, creds, &name, &peer.node_id) {
+        match sync_now(
+            &peer.dial_targets(),
+            db_path,
+            creds,
+            &name,
+            &peer.node_id,
+            &own_addresses,
+        ) {
             Ok(r) => out.push(format!(
                 "synced {} ({} words in)",
                 short(&r.peer_node),
@@ -872,7 +925,7 @@ pub fn watch_discovered(
 mod tests {
     use super::*;
     use crate::device::DeviceIdentity;
-    use crate::store::Store;
+    use crate::store::open_test_db;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEST_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -892,8 +945,8 @@ mod tests {
         let id_b = DeviceIdentity::ephemeral();
         let db_a = temp_db("a");
         let db_b = temp_db("b");
-        let store_a = Store::open(&db_a).unwrap();
-        let store_b = Store::open(&db_b).unwrap();
+        let store_a = open_test_db(&db_a).unwrap();
+        let store_b = open_test_db(&db_b).unwrap();
 
         // A trusts B; B trusts A.
         store_a
@@ -922,7 +975,7 @@ mod tests {
             let (stream, _) = listener.accept().unwrap();
             let (mut session, hash, _remote) =
                 NoiseStream::handshake(stream, &creds_a.noise_static, false).unwrap();
-            let store = Store::open(&db_a2).unwrap();
+            let store = open_test_db(&db_a2).unwrap();
             exchange(
                 &mut session,
                 &hash,
@@ -944,6 +997,7 @@ mod tests {
             &id_b.creds(),
             "b",
             &id_a.node_id,
+            &[],
         )
         .unwrap();
         server.join().unwrap();
@@ -965,7 +1019,7 @@ mod tests {
         // Untrusted dialer is rejected: fresh node C, trusted nowhere.
         let id_c = DeviceIdentity::ephemeral();
         let db_c = temp_db("c");
-        Store::open(&db_c).unwrap();
+        open_test_db(&db_c).unwrap();
         let listener2 = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port2 = listener2.local_addr().unwrap().port();
         let db_a3 = db_a.clone();
@@ -974,7 +1028,7 @@ mod tests {
             let (stream, _) = listener2.accept().unwrap();
             let (mut session, hash, _remote) =
                 NoiseStream::handshake(stream, &creds_a2.noise_static, false).unwrap();
-            let store = Store::open(&db_a3).unwrap();
+            let store = open_test_db(&db_a3).unwrap();
             exchange(
                 &mut session,
                 &hash,
@@ -993,6 +1047,7 @@ mod tests {
             &id_c.creds(),
             "c",
             &id_a.node_id,
+            &[],
         )
         .unwrap_err();
         let server_err = server2.join().unwrap().unwrap_err();
@@ -1009,6 +1064,166 @@ mod tests {
         std::fs::remove_file(&db_c).ok();
     }
 
+    /// Requester-side completion without a local Accept: A sent B a
+    /// pairing request (WAITING: outgoing, never Accepted locally) and B
+    /// accepted there, then dials back. B's proof-verified dial-back IS
+    /// B's consent, so A's responder completes trust (trusted +
+    /// introducer) inside the round — data moves both ways and B's
+    /// vouched peer joins A through the mesh.
+    ///
+    /// Address honesty: NOTHING hands A's listen port to B out-of-band.
+    /// B learns it only from A's hello addresses (phase 1) and dials
+    /// back using only stored targets (phase 2). Without hello
+    /// advertisement B stores just the ephemeral source port and the
+    /// dial-back refuses — this test fails.
+    #[test]
+    fn requester_waiting_plus_acceptor_dialback_completes_without_accept() {
+        let id_a = DeviceIdentity::ephemeral();
+        let id_b = DeviceIdentity::ephemeral();
+        let id_c = DeviceIdentity::ephemeral();
+        let db_a = temp_db("ea");
+        let db_b = temp_db("eb");
+        let store_a = open_test_db(&db_a).unwrap();
+        let store_b = open_test_db(&db_b).unwrap();
+
+        // A sent B a pairing request: WAITING, never Accepted on A.
+        store_a
+            .record_outgoing(&id_b.node_id, "b", &[], &id_a.node_id)
+            .unwrap();
+        assert_eq!(store_a.list_pending().unwrap().len(), 0);
+        // B vouches for C (joins A through the mesh on completion).
+        store_b
+            .upsert_peer(&id_c.node_id, "c", "unused", true)
+            .unwrap();
+
+        // Divergent content on both sides.
+        store_a.upsert_word("from-a", &id_a.node_id).unwrap();
+        store_b.upsert_word("from-b", &id_b.node_id).unwrap();
+
+        // A listens on an ephemeral port; B listens too, for the
+        // request-delivery dial. Neither port leaves this test except
+        // inside hello addresses.
+        let listener_a = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port_a = listener_a.local_addr().unwrap().port();
+        let addr_a = format!("127.0.0.1:{port_a}");
+        let listener_b = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port_b = listener_b.local_addr().unwrap().port();
+
+        // Phase 1: B serves; A dials to deliver the request, advertising
+        // its own listen address. B rejects (trusts nobody yet) — the
+        // rejection IS the delivered request.
+        let db_b2 = db_b.clone();
+        let creds_b = id_b.creds();
+        let phase1 = std::thread::spawn(move || {
+            let (stream, _) = listener_b.accept().unwrap();
+            let (mut session, hash, _remote) =
+                NoiseStream::handshake(stream, &creds_b.noise_static, false).unwrap();
+            let store = open_test_db(&db_b2).unwrap();
+            let res = exchange(
+                &mut session,
+                &hash,
+                &store,
+                &creds_b,
+                "b",
+                &[],
+                false,
+                None,
+                None,
+            );
+            res.unwrap_err();
+        });
+        let err = sync_now(
+            &[format!("127.0.0.1:{port_b}")],
+            &db_a,
+            &id_a.creds(),
+            "a",
+            &id_b.node_id,
+            std::slice::from_ref(&addr_a),
+        )
+        .unwrap_err();
+        assert!(err.contains("not trusted"), "got: {err}");
+        phase1.join().unwrap();
+
+        // B learned a dialable address for A ONLY via the hello, and
+        // accepts there (desktop flow: trusted + introducer).
+        let targets = open_test_db(&db_b)
+            .unwrap()
+            .get_peer(&id_a.node_id)
+            .unwrap()
+            .unwrap()
+            .dial_targets();
+        assert!(
+            targets.contains(&addr_a),
+            "B must learn A's listen addr from hello, got {targets:?}"
+        );
+        store_b
+            .upsert_peer(&id_a.node_id, "a", "unused", true)
+            .unwrap();
+        store_b.set_peer_introducer(&id_a.node_id, true).unwrap();
+
+        // Phase 2: A serves the dial-back; B dials using ONLY stored
+        // (exchanged) targets — the live port is never passed explicitly.
+        let db_a2 = db_a.clone();
+        let creds_a = id_a.creds();
+        let phase2 = std::thread::spawn(move || {
+            let (stream, _) = listener_a.accept().unwrap();
+            let (mut session, hash, _remote) =
+                NoiseStream::handshake(stream, &creds_a.noise_static, false).unwrap();
+            let store = open_test_db(&db_a2).unwrap();
+            exchange(
+                &mut session,
+                &hash,
+                &store,
+                &creds_a,
+                "a",
+                &[],
+                false,
+                None,
+                None,
+            )
+            .unwrap();
+        });
+        let report = sync_now(
+            &targets,
+            &db_b,
+            &id_b.creds(),
+            "b",
+            &id_a.node_id,
+            &[format!("127.0.0.1:{port_b}")],
+        )
+        .unwrap();
+        phase2.join().unwrap();
+
+        assert_eq!(report.peer_node, id_a.node_id);
+        // Data moved both ways through the completed round.
+        assert!(
+            store_a
+                .load_words()
+                .unwrap()
+                .contains(&"from-b".to_string())
+        );
+        assert!(
+            store_b
+                .load_words()
+                .unwrap()
+                .contains(&"from-a".to_string())
+        );
+
+        // A's WAITING row completed with NO local Accept on A: trusted +
+        // introducer, both markers cleared.
+        let row = store_a.get_peer(&id_b.node_id).unwrap().unwrap();
+        assert!(row.trusted && row.introducer && !row.pending && !row.outgoing);
+        assert!(store_a.list_pending().unwrap().is_empty());
+        assert!(store_a.list_outgoing().unwrap().is_empty());
+
+        // Mesh: B's vouched C joined A as trusted automatically.
+        let c = store_a.get_peer(&id_c.node_id).unwrap().unwrap();
+        assert!(c.trusted && !c.pending && !c.outgoing);
+
+        std::fs::remove_file(&db_a).ok();
+        std::fs::remove_file(&db_b).ok();
+    }
+
     /// An attacker with their own valid keypair who claims someone
     /// else's node id in hello is rejected: the session proof cannot
     /// verify against the victim's key.
@@ -1017,7 +1232,7 @@ mod tests {
         let id_victim = DeviceIdentity::ephemeral();
         let id_attacker = DeviceIdentity::ephemeral();
         let db_v = temp_db("v");
-        let store_v = Store::open(&db_v).unwrap();
+        let store_v = open_test_db(&db_v).unwrap();
         // Victim trusts... nobody relevant; attacker dials claiming
         // to BE the victim's trusted peer would need that peer's key.
         // Here the attacker claims victim's own id to a fresh server
@@ -1036,7 +1251,7 @@ mod tests {
             let (stream, _) = listener.accept().unwrap();
             let (mut session, hash, _remote) =
                 NoiseStream::handshake(stream, &creds_vk.noise_static, false).unwrap();
-            let store = Store::open(&db_v2).unwrap();
+            let store = open_test_db(&db_v2).unwrap();
             exchange(
                 &mut session,
                 &hash,
@@ -1054,7 +1269,7 @@ mod tests {
         // sign with their own key: build the exchange manually with a
         // forged hello over a valid attacker handshake.
         let db_x = temp_db("x");
-        Store::open(&db_x).unwrap();
+        open_test_db(&db_x).unwrap();
         let stream = TcpStream::connect_timeout(
             &format!("127.0.0.1:{port}")
                 .to_socket_addrs()

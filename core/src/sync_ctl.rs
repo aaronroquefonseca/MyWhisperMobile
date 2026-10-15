@@ -231,6 +231,7 @@ pub fn sync_peers_json(dir: &std::path::Path) -> String {
             "addresses": p.addresses,
             "trusted": p.trusted,
             "pending": p.pending,
+            "outgoing": p.outgoing,
             "introducer": p.introducer,
             "lastSeen": p.last_seen,
             "lastSync": p.last_sync,
@@ -248,6 +249,7 @@ pub fn sync_peers_json(dir: &std::path::Path) -> String {
                 "addresses": [],
                 "trusted": false,
                 "pending": false,
+                "outgoing": false,
                 "introducer": false,
                 "lastSeen": 0,
                 "lastSync": 0,
@@ -268,9 +270,12 @@ fn short_id(id: &str) -> String {
     }
 }
 
-/// Accept (trust + introducer, then sync) or reject a peer.
+/// Accept (trust + introducer, then sync), reject, or withdraw a peer.
 /// Unknown-but-discovered nodes are recorded first so the accept
 /// path has a row to promote (mirrors desktop trust flow).
+/// Cancelling our own sent request (outgoing, no incoming pending)
+/// withdraws it without revoking, so the id stays pairable; rejecting
+/// an incoming request revokes durably.
 pub fn sync_set_trust(
     dir: &std::path::Path,
     node_id: &str,
@@ -296,6 +301,17 @@ pub fn sync_set_trust(
         } else {
             return Err("unknown peer (not discovered)".to_string());
         }
+    } else if !accept {
+        let peer = store
+            .get_peer(node_id)
+            .map_err(|e| format!("peer lookup: {e}"))?
+            .ok_or_else(|| "unknown peer".to_string())?;
+        if peer.outgoing && !peer.pending && !peer.trusted {
+            store
+                .withdraw_outgoing(node_id)
+                .map_err(|e| format!("withdraw request: {e}"))?;
+            return Ok("request withdrawn".to_string());
+        }
     }
     store
         .decide_request(node_id, accept)
@@ -314,11 +330,12 @@ pub fn sync_set_trust(
     Ok("rejected".to_string())
 }
 
-/// Manual pairing by ID (mirrors desktop Add device): park the row,
-/// dial once. The expected outcome is the remote's "not trusted"
-/// verdict — that verdict IS the delivered pairing request (the
-/// remote records us as pending). Reported as such so the UI can say
-/// "accept it on the other device".
+/// Manual pairing by ID (mirrors desktop Add device): park the row as
+/// OUR outgoing request (never as an incoming pending row), dial once.
+/// The expected outcome is the remote's "not trusted" verdict — that
+/// verdict IS the delivered pairing request (the remote records us as
+/// pending). Reported as such so the UI can say "accept it on the
+/// other device".
 pub fn sync_add(
     dir: &std::path::Path,
     node_id: &str,
@@ -328,6 +345,13 @@ pub fn sync_add(
     let node_id = node_id.trim().to_lowercase();
     if node_id.len() != 64 || !node_id.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err("enter the other device's full 64-character hexadecimal ID".to_string());
+    }
+    // Never pair with self: an outgoing row to our own id is a nonsense
+    // WAITING entry that can never complete.
+    let own = DeviceIdentity::load_or_create(&dir.join("device.key"))
+        .map_err(|e| format!("identity: {e}"))?;
+    if node_id == own.node_id {
+        return Err("that is this device's own ID — pair with a different device".to_string());
     }
     let db_path = dir.join("state.db");
     let store = Store::open(&db_path).map_err(|e| format!("open db: {e}"))?;
@@ -344,7 +368,7 @@ pub fn sync_add(
         addrs.push(address.trim().to_string());
     }
     store
-        .record_seen(&node_id, name.trim(), &addrs)
+        .record_outgoing(&node_id, name.trim(), &addrs, &own.node_id)
         .map_err(|e| format!("record contact: {e}"))?;
     let settings = store.load_settings();
     let creds = slot()
@@ -358,7 +382,14 @@ pub fn sync_add(
     } else {
         settings.sync.device_name.clone()
     };
-    match net::sync_now(&addrs, &db_path, &creds, &own_name, &node_id) {
+    match net::sync_now(
+        &addrs,
+        &db_path,
+        &creds,
+        &own_name,
+        &node_id,
+        &net::own_listen_addrs(settings.sync.listen_port),
+    ) {
         Ok(r) => Ok(format!("synced {}: {} words in", r.peer_name, r.words_in)),
         Err(e) if e.contains("not trusted") => {
             Ok("pairing request sent — accept it on the other device, then sync".to_string())
@@ -418,8 +449,15 @@ pub fn sync_peer_now(dir: &std::path::Path, node_id: &str) -> Result<String, Str
     } else {
         peer.name.clone()
     };
-    let r = net::sync_now(&addrs, &db_path, &creds, &name, node_id)
-        .map_err(|e| format!("{display}: {e} — is the device online with sync running?"))?;
+    let r = net::sync_now(
+        &addrs,
+        &db_path,
+        &creds,
+        &name,
+        node_id,
+        &net::own_listen_addrs(settings.sync.listen_port),
+    )
+    .map_err(|e| format!("{display}: {e} — is the device online with sync running?"))?;
     Ok(format!(
         "synced {}: {} words, {} snippets, {} history in, {} introduced",
         r.peer_name, r.words_in, r.snippets_in, r.history_in, r.introduced
@@ -434,4 +472,42 @@ pub fn sync_all_now(dir: &std::path::Path) -> Vec<String> {
         None => return vec!["sync is not running".to_string()],
     };
     net::sync_all_trusted(&db_path, &creds)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static N: AtomicU64 = AtomicU64::new(0);
+
+    fn temp_dir() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "mywhisper-syncctl-test-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::SeqCst)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Pairing with our own id is refused before anything parks: no
+    /// nonsense WAITING row, whatever the spelling (case/padding).
+    #[test]
+    fn sync_add_rejects_own_id_without_parking() {
+        crate::store::ensure_test_db_key();
+        let dir = temp_dir();
+        let own = DeviceIdentity::load_or_create(&dir.join("device.key"))
+            .unwrap()
+            .node_id;
+        let err = sync_add(&dir, &own, "", "").unwrap_err();
+        assert!(err.contains("own ID"), "unexpected error: {err}");
+        let spelled = format!("  {}  ", own.to_uppercase());
+        let err = sync_add(&dir, &spelled, "", "").unwrap_err();
+        assert!(err.contains("own ID"), "unexpected error: {err}");
+        let store = crate::store::open_test_db(&dir.join("state.db")).unwrap();
+        assert!(store.get_peer(&own).unwrap().is_none());
+        assert!(store.list_outgoing().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

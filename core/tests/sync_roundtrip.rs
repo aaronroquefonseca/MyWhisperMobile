@@ -42,6 +42,7 @@ fn untrusted_dialer_gets_clean_rejection_and_pending_row() {
         &bob_id.creds(),
         "bob",
         &alice_id.node_id,
+        &[],
     )
     .unwrap_err();
     assert!(err.contains("not trusted"), "got: {err}");
@@ -82,6 +83,7 @@ fn unresolvable_first_address_does_not_abort_round() {
         &bob_id.creds(),
         "bob",
         &alice_id.node_id,
+        &[],
     )
     .expect("round survives a bad first address");
     assert_eq!(report.peer_name, "alice");
@@ -123,6 +125,7 @@ fn trusted_peers_merge_words_and_history_both_ways() {
         &bob_id.creds(),
         "bob",
         &alice_id.node_id,
+        &[],
     )
     .expect("sync round");
     assert_eq!(report.words_in, 1);
