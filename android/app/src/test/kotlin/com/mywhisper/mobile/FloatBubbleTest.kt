@@ -329,6 +329,40 @@ class FloatBubbleTest {
         assertEquals(16, VIZ_MARGIN_DP)
     }
 
+    // -- Visualizer pill symmetry (floating-bubble pill) --------------
+
+    @Test
+    fun vizStrip_contentWidthPinned() {
+        // 11 bars x 3dp + 10 inner gaps x 3dp = 63dp, no trailing gap
+        // (mirrors BarsView.onDraw: last bar ends at count*(w+gap)-gap).
+        assertEquals(11, VIZ_BAR_COUNT)
+        assertEquals(3, VIZ_BAR_W_DP)
+        assertEquals(3, VIZ_BAR_GAP_DP)
+        assertEquals(63, vizBarsContentWidthDp())
+        assertEquals(24, VIZ_BARS_H_DP)
+    }
+
+    @Test
+    fun vizStrip_centeredEqualMarginsBothEdges() {
+        // (108 - 63) / 2 = 22.5dp per edge: left margin == right
+        // margin, so the strip reads centered with no margin-right bias.
+        val margin = vizBarsSideMarginDp()
+        assertEquals(22.5f, margin, 0.001f)
+        val content = vizBarsContentWidthDp()
+        val left = (VIZ_W_DP - content) / 2f
+        val right = VIZ_W_DP - content - left
+        assertEquals(left, right, 0.001f)
+        assertEquals(margin, left, 0.001f)
+    }
+
+    @Test
+    fun vizWindow_dockEdgeIndependent() {
+        // The viz pill is its own centered window: x = 0 whether the
+        // bubble docks left or right — never an edge-side offset.
+        assertEquals(0, vizWindowXForDock(dockedLeft = true))
+        assertEquals(0, vizWindowXForDock(dockedLeft = false))
+    }
+
     // -- Overlay-denial latch --------------------------------------
 
     @Test

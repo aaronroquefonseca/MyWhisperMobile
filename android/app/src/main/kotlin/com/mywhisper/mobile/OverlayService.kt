@@ -966,6 +966,10 @@ class OverlayService : Service(), Dictation.Listener {
             PixelFormat.TRANSLUCENT,
         ).also {
             it.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+            // Screen-center anchor: x = 0 always, independent of the
+            // bubble dock edge (see vizWindowXForDock). Never inherit an
+            // edge-side offset here.
+            it.x = 0
             it.y = margin
         }
         vizParams = lp
@@ -979,12 +983,17 @@ class OverlayService : Service(), Dictation.Listener {
         }
         val bars = BarsView(this).apply {
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            // Exact strip width, centered: BarsView draws its bar strip
+            // left-aligned from x = 0, so a MATCH_PARENT view leaves the
+            // trailing (stripW..viewW) dead space on the right and the
+            // pill reads off-center with more margin right. Sizing the
+            // view to the strip content and centering it in the pill
+            // gives equal margins on both edges.
             layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT,
-            ).apply {
-                setMargins(dp(12), dp(6), dp(12), dp(6))
-            }
+                dp(vizBarsContentWidthDp()),
+                dp(VIZ_BARS_H_DP),
+                Gravity.CENTER,
+            )
         }
         vizBars = bars
         pill.addView(bars)
@@ -1144,6 +1153,54 @@ internal const val VIZ_H_DP = 36
 
 /** Visualizer pill bottom margin (dp): above IME / nav bar / edge. */
 internal const val VIZ_MARGIN_DP = 16
+
+/** Visualizer bar-strip bar count (mirrors BarsView: 11 bars). */
+internal const val VIZ_BAR_COUNT = 11
+
+/** Visualizer bar-strip bar width (dp, mirrors BarsView). */
+internal const val VIZ_BAR_W_DP = 3
+
+/** Visualizer bar-strip gap (dp, mirrors BarsView). */
+internal const val VIZ_BAR_GAP_DP = 3
+
+/**
+ * Visualizer bar-strip view height (dp): pill height minus the former
+ * 6dp top/bottom padding (36 - 12 = 24). Width is exact content (see
+ * [vizBarsContentWidthDp]), height keeps the old vertical inset.
+ */
+internal const val VIZ_BARS_H_DP = 24
+
+/**
+ * Exact bar-strip content width (dp): bars plus inner gaps, no
+ * trailing gap (mirrors BarsView.onDraw: last bar ends at
+ * count * (w + gap) - gap).
+ */
+internal fun vizBarsContentWidthDp(
+    count: Int = VIZ_BAR_COUNT,
+    barDp: Int = VIZ_BAR_W_DP,
+    gapDp: Int = VIZ_BAR_GAP_DP,
+): Int =
+    if (count <= 0) 0 else count * barDp + (count - 1) * gapDp
+
+/**
+ * Per-edge side margin (dp) centering a [contentDp]-wide strip inside
+ * a [pillDp]-wide pill: left and right margins are equal by
+ * construction. The pill centers the exact-width strip view via
+ * Gravity.CENTER, so this is the margin each edge gets.
+ */
+internal fun vizBarsSideMarginDp(
+    pillDp: Int = VIZ_W_DP,
+    contentDp: Int = vizBarsContentWidthDp(),
+): Float = (pillDp - contentDp) / 2f
+
+/**
+ * Viz window horizontal offset (px): always screen-center (0),
+ * independent of which edge the bubble is docked to. The viz pill is
+ * its own window — it must never inherit an edge-side offset from the
+ * bubble position.
+ */
+@Suppress("UNUSED_PARAMETER")
+internal fun vizWindowXForDock(dockedLeft: Boolean): Int = 0
 
 /**
  * Pure hit-rect (framework-free so JVM tests pin it): TouchDelegate
