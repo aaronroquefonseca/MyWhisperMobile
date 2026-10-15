@@ -421,6 +421,9 @@ final class DiscoveryStore: ObservableObject {
     let discovery = SyncDiscovery()
 
     init() {
+        // Class scope (not the struct above): `weak` is legal here and
+        // required — `store -> discovery -> onChange -> store` would
+        // otherwise cycle and leak the browser after dismissal.
         discovery.onChange = { [weak self] in
             DispatchQueue.main.async { self?.objectWillChange.send() }
         }
