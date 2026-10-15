@@ -300,26 +300,178 @@ object LocalStt {
             emptyList()
         }
 
+    private fun loadWordsOrEmpty(): List<String> =
+        try {
+            CoreBridge.getWords()
+        } catch (_: Throwable) {
+            // Same loader hazard as snippets above (getWords only
+            // catches Exception; native-link failures are Errors).
+            emptyList()
+        }
+
+    /**
+     * Latency guard for [applyWordBoost]: the finish worker runs the
+     * boost inline, so a pathological dictionary (sync-merged across
+     * peers) cannot turn the scan quadratic. The server prompt budget
+     * (~900 chars ≈ dozens of words) drops everything past its tail
+     * anyway; 128 head words is generous by comparison.
+     */
+    const val MAX_WORD_BOOST_WORDS = 128
+
+    private fun boostAllowedDistance(len: Int): Int = when {
+        len < 4 -> -1 // short tokens: exact (case-insensitive) repair only
+        len <= 5 -> 1
+        else -> 2
+    }
+
+    /** Levenshtein distance with early exit past [cap]. Pure, JVM-testable. */
+    internal fun levenshteinCapped(a: String, b: String, cap: Int): Int {
+        if (a == b) return 0
+        if (cap < 0) return cap + 1
+        if (a.isEmpty()) return b.length
+        if (b.isEmpty()) return a.length
+        if (kotlin.math.abs(a.length - b.length) > cap) return cap + 1
+        var prev = IntArray(b.length + 1) { it }
+        var cur = IntArray(b.length + 1)
+        for (i in 1..a.length) {
+            cur[0] = i
+            var rowMin = i
+            for (j in 1..b.length) {
+                val cost = if (a[i - 1] == b[j - 1]) 0 else 1
+                cur[j] = minOf(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost)
+                if (cur[j] < rowMin) rowMin = cur[j]
+            }
+            if (rowMin > cap) return cap + 1
+            val tmp = prev
+            prev = cur
+            cur = tmp
+        }
+        return prev[b.length]
+    }
+
+    private fun canonicalBoostFor(token: String, words: List<String>): String? {
+        if (token.isEmpty()) return null
+        val folded = token.lowercase()
+        // Exact pass first: the curated spelling always beats a fuzzy
+        // neighbor, regardless of entry-length ordering below.
+        for (w in words) {
+            val entry = w.trim()
+            if (entry.isEmpty() || ' ' in entry) continue
+            if (folded == entry.lowercase() && token != entry) return entry
+        }
+        if (token.any { it.isDigit() }) return null
+        for (w in words) {
+            val entry = w.trim()
+            if (entry.isEmpty() || ' ' in entry) continue
+            if (folded == entry.lowercase()) continue
+            val target = entry.lowercase()
+            val allowed = boostAllowedDistance(maxOf(token.length, entry.length))
+            if (allowed < 0) continue
+            // First-letter gate: real misspellings keep the onset;
+            // without it short tokens collide across the dictionary.
+            if (folded[0] != target[0]) continue
+            if (levenshteinCapped(folded, target, allowed) <= allowed) return entry
+        }
+        return null
+    }
+
+    /**
+     * Dictionary WORD post-process over STT text: repairs each
+     * word-token to the dictionary's exact spelling on an exact
+     * case-insensitive match (decoder output is usually lowercase, so
+     * casing repair alone is a real win) or a near-miss within
+     * [boostAllowedDistance] (same onset; digit-bearing tokens get
+     * exact repair only — versions and numbers are never
+     * fuzzy-rewritten). Multi-word entries repair on exact
+     * case-insensitive phrase match only.
+     *
+     * Documented approximation, NOT decoder bias: sherpa-onnx 1.13.8
+     * exposes no bias channel for our engines (see [postProcessLocal]),
+     * so a word the decoder drops entirely cannot be recovered — only
+     * close misspellings snap to the curated spelling. Pure: no
+     * Android calls, JVM-testable. Never throws (empty words → passthrough).
+     */
+    fun applyWordBoost(text: String, words: List<String>): String {
+        val cleaned = words.mapNotNull { w ->
+            val t = w.trim()
+            if (t.isEmpty()) null else t
+        }.take(MAX_WORD_BOOST_WORDS)
+        if (text.isEmpty() || cleaned.isEmpty()) return text
+        val single = cleaned.filter { ' ' !in it }
+        val phrases = cleaned.filter { ' ' in it }
+        // Single-token pass: longest entries first so overlapping
+        // spellings are deterministic.
+        val ordered = single.sortedByDescending { it.length }
+        val chars = text.toList()
+        val out = StringBuilder(text.length)
+        var i = 0
+        while (i < chars.size) {
+            if (isWordChar(chars[i])) {
+                var j = i
+                while (j < chars.size && isWordChar(chars[j])) j++
+                val token = chars.subList(i, j).joinToString("")
+                out.append(canonicalBoostFor(token, ordered) ?: token)
+                i = j
+            } else {
+                out.append(chars[i])
+                i++
+            }
+        }
+        var boosted = out.toString()
+        // Phrase pass: exact case-insensitive whole-phrase repair.
+        for (p in phrases.sortedByDescending { it.length }) {
+            val idx = boosted.lowercase().indexOf(p.lowercase())
+            if (idx < 0) continue
+            val beforeOk = idx == 0 || !isWordChar(boosted[idx - 1])
+            val end = idx + p.length
+            val afterOk = end == boosted.length || !isWordChar(boosted[end])
+            if (beforeOk && afterOk && boosted.substring(idx, end) != p) {
+                boosted = boosted.substring(0, idx) + p + boosted.substring(end)
+            }
+        }
+        return boosted
+    }
+
     /**
      * Local-path dictionary post-process: the same snippet expansion
      * the server path gets in `engine.rs::finish_inner`
-     * (`expand_snippets` over comma-split pairs). Applied EXACTLY once,
-     * in [Dictation.finish] on local hits only — server text is already
+     * (`expand_snippets` over comma-split pairs), followed by the
+     * WORD word-boost ([applyWordBoost]). Applied EXACTLY once, in
+     * [Dictation.finish] on local hits only — server text is already
      * expanded in Rust, and double application would diverge on nested
      * triggers. Never throws (loader failures → passthrough).
      *
-     * Dictionary WORDS have no deterministic local equivalent: on the
-     * server they travel as STT prompt bias (sherpa JNI exposes no
-     * prompt channel) and as the LLM-cleanup suffix (local hits bypass
-     * Rust `post_process` entirely). Words parity needs a Rust bridge
-     * hook — deliberately out of this fix.
+     * Channel findings (sherpa-onnx 1.13.8, verified against
+     * `classes.jar` via javap + upstream `sherpa-onnx/csrc` at
+     * tag v1.13.8):
+     * - (1) whisper prompt: NO channel. `OfflineWhisperModelConfig`
+     *   exposes only encoder/decoder/language/task/tailPaddings/
+     *   timestamps — no prompt setter (the server path sends `prompt`
+     *   as an HTTP multipart field; nothing equivalent exists offline).
+     * - (2) ruleFsts/ruleFars: knob exists on
+     *   `OfflineRecognizerConfig`, but it is inverse-text-normalization
+     *   (kaldifst rewrite rules applied post-decode), not word bias —
+     *   it needs precompiled .fst/.far artifacts per dictionary state
+     *   and cannot be synthesized Kotlin-side.
+     * - (3) hotwordsFile/hotwordsScore: knobs exist, but native
+     *   `Validate()` hard-fails unless
+     *   `decoding_method=modified_beam_search`, which is transducer-only;
+     *   our moonshine/whisper path runs greedy_search, so setting
+     *   hotwords would break recognizer creation outright (whisper +
+     *   moonshine impls never consult hotwords).
+     * With no viable decoder channel, WORDS ship as this explicit
+     * post-process approximation: near-miss repair, never acoustic
+     * re-bias. A word the decoder drops entirely is NOT recovered.
      */
-    fun postProcessLocal(text: String, snippets: List<Pair<String, String>>): String =
-        expandSnippets(text, snippetPairs(snippets))
+    fun postProcessLocal(
+        text: String,
+        snippets: List<Pair<String, String>>,
+        words: List<String> = emptyList(),
+    ): String = applyWordBoost(expandSnippets(text, snippetPairs(snippets)), words)
 
     fun postProcessLocal(text: String): String =
         try {
-            postProcessLocal(text, loadSnippetsOrEmpty())
+            postProcessLocal(text, loadSnippetsOrEmpty(), loadWordsOrEmpty())
         } catch (_: Throwable) {
             text
         }
