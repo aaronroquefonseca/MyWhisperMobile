@@ -1,0 +1,18 @@
+{
+  "provider": "mediapipe",
+  "notes": "Binaries NEVER committed. Download via scripts/fetch-local-llm.sh. Fill in sha256 from the publisher before use (placeholder zeros fail closed).",
+  "models": [
+    {
+      "id": "smollm2-360m-instruct",
+      "url": "https://huggingface.co/litert-community/SmolLM2-360M-Instruct/resolve/main/SmolLM2-360M-Instruct_multi-prompt-seq_q8.task?download=true",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "size_bytes": 412000000
+    },
+    {
+      "id": "gemma3-1b-it-q4",
+      "url": "https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/Gemma3-1B-IT_q4.task?download=true",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "size_bytes": 700000000
+    }
+  ]
+}

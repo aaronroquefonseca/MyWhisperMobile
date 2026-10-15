@@ -15,7 +15,8 @@ Portable MyWhisper engine for Android, exposed over JNI (`lib.rs`).
 | `viz_types.rs` | mobile-only | serde clones of desktop `viz.rs` pref enums (no pill on Android) |
 | `server_stt.rs` | mobile-only | server STT chain client; wire protocols mirror desktop `transcribe.rs` |
 | `sync_ctl.rs` | mobile-only | sync lifecycle (listener + mDNS + loops) over `net.rs` |
-| `engine.rs` | mobile-only | utterance pipeline mirroring desktop `deliver`; cleanup is a faithful `post_process` port (same default prompt, same endpoints, same failover) |
+| `engine.rs` | mobile-only | utterance pipeline mirroring desktop `deliver`; cleanup is a faithful `post_process` port (same default prompt, same endpoints, same failover; `Local` entries route through `local_llm` with fallback) |
+| `local_llm.rs` | mobile-only | on-device LLM cleanup (MediaPipe `.task` chosen provider): prompt packing, SHA-256 manifest verify, sidecar/Fn backends; cleanup path only, never STT |
 | `lib.rs` | mobile-only | JNI bridge |
 
 Desktop source: `github:aaronroquefonseca/MyWhisper`, `src/`.

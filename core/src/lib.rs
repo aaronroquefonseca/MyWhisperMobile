@@ -8,6 +8,7 @@
 pub mod audio;
 pub mod device;
 pub mod engine;
+pub mod local_llm;
 pub mod net;
 pub mod server_stt;
 pub mod settings;
@@ -572,6 +573,62 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeSyncAll
                 .collect(),
         )),
         Err(err) => err_json(err),
+    };
+    jstr(&mut env, &out)
+}
+
+// -- on-device LLM (cleanup path only) ----------------------------------
+
+/// Local-LLM status for the Settings UI:
+/// `{"provider":"mediapipe","modelPath","ready","sizeBytes"}`.
+/// Reads the stored `Local` entry (first enabled) or reports not-ready.
+/// # Safety
+/// Called from the JVM with valid JNI handles (`env` attached, object args valid local refs).
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeLocalLlmStatus(
+    mut env: JNIEnv,
+    _cls: JClass,
+) -> jstring {
+    let out = with_engine(
+        |e| {
+            let s: serde_json::Value =
+                serde_json::from_str(&e.settings_json()).unwrap_or(serde_json::Value::Null);
+            let entry = s
+                .pointer("/language_models/entries")
+                .and_then(|v| v.as_array())
+                .and_then(|arr| {
+                    arr.iter().find(|v| {
+                        v.pointer("/kind").and_then(|k| k.as_str()) == Some("Local")
+                            && v.pointer("/enabled")
+                                .and_then(|x| x.as_bool())
+                                .unwrap_or(false)
+                    })
+                })
+                .and_then(|v| serde_json::from_value(v.clone()).ok());
+            match entry {
+                Some(en) => crate::local_llm::status_json(&en, e.dir()),
+                None => serde_json::json!({"provider":"mediapipe","ready":false}).to_string(),
+            }
+        },
+        || err_json("engine not open"),
+    );
+    jstr(&mut env, &out)
+}
+
+/// Byte-stable cleanup prompt packing (mirrors Kotlin so both sides agree).
+/// # Safety
+/// Called from the JVM with valid JNI handles (`env` attached, object args valid local refs).
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeLocalLlmPrompt(
+    mut env: JNIEnv,
+    _cls: JClass,
+    system: JString,
+    transcript: JString,
+) -> jstring {
+    let out = {
+        let sys = get_string(&mut env, &system).unwrap_or_default();
+        let raw = get_string(&mut env, &transcript).unwrap_or_default();
+        crate::local_llm::build_cleanup_prompt(&sys, &raw)
     };
     jstr(&mut env, &out)
 }

@@ -63,6 +63,10 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    // On-device LLM cleanup (MediaPipe LLM Inference .task, GPU delegate;
+    // successor API: LiteRT-LM). Loaded lazily via reflection in
+    // LocalLlmManager so JVM unit tests run without the native runner.
+    implementation("com.google.mediapipe:tasks-genai:0.10.27")
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")
 }

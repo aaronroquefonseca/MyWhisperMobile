@@ -11,8 +11,8 @@
 //! `transcribe.rs`: same default prompt, same system+dictionary
 //! suffix, same `<transcript>` tags, same Ollama `/api/chat` sampling
 //! and cloud endpoints, same first-answer-wins failover. `Local`
-//! entries have no engine on desktop either ("local engines not
-//! implemented") and are skipped by the chain.
+//! entries route through `local_llm` (on-device MediaPipe `.task`);
+//! when no model is ready they fail over to the next entry.
 
 use crate::audio::{self, MIN_SAMPLES_16K, Recorder};
 use crate::server_stt::{
@@ -162,12 +162,21 @@ fn http_post_json(
 }
 
 /// One cleanup call against a configured entry (faithful desktop
-/// `llm_cleanup` port; see module docs).
-fn llm_cleanup_one(entry: &LlmEntry, system: &str, raw: &str) -> Result<String, String> {
+/// `llm_cleanup` port; see module docs). `data_dir` resolves `Local`
+/// entries (on-device `.task` under `<data>/models`).
+fn llm_cleanup_one(
+    entry: &LlmEntry,
+    system: &str,
+    raw: &str,
+    data_dir: &std::path::Path,
+) -> Result<String, String> {
     use crate::settings::{CloudLlm, LlmKind};
     let user = format!("<transcript>{raw}</transcript>");
     match entry.kind {
-        LlmKind::Local => Err("local engines not implemented".to_string()),
+        // Cleanup path only: on-device MediaPipe `.task` via
+        // `local_llm`; unavailable → Err so the chain falls through
+        // to Ollama/cloud (default order unchanged). Never STT.
+        LlmKind::Local => crate::local_llm::try_local_cleanup(entry, system, raw, data_dir),
         LlmKind::Ollama => {
             let mut body = serde_json::json!({
                 "model": entry.model,
@@ -310,6 +319,7 @@ fn post_process(
     lm: &crate::settings::LanguageModelSettings,
     words: &[String],
     witness: u64,
+    data_dir: &std::path::Path,
 ) -> String {
     if !lm.cleanup_enabled {
         return raw.to_string();
@@ -326,7 +336,7 @@ fn post_process(
         if crate::server_stt::server_generation() != witness {
             break;
         }
-        match llm_cleanup_one(entry, &system, raw) {
+        match llm_cleanup_one(entry, &system, raw, data_dir) {
             Ok(text) if !text.trim().is_empty() => return text.trim().to_string(),
             Ok(_) => continue,
             Err(_) => continue,
@@ -580,6 +590,7 @@ impl Engine {
             &self.settings.language_models,
             &words,
             generation_at_entry,
+            &self._dir,
         );
         // Cleanup fetches are blocking: recheck the witness before the
         // history write so a cancel that landed mid-cleanup settles
@@ -1063,5 +1074,115 @@ mod tests {
             history.contains(&out.text),
             "history row must be stored before finish returns, got: {history}"
         );
+    }
+
+    /// Single-shot stub answering Ollama `/api/chat` cleanups.
+    fn stub_ollama_server() -> (u16, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let handle = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            let mut buf = Vec::new();
+            let mut tmp = [0u8; 4096];
+            loop {
+                let n = sock.read(&mut tmp).unwrap();
+                buf.extend_from_slice(&tmp[..n]);
+                if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let head_end = buf.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+            let headers = String::from_utf8_lossy(&buf[..head_end]);
+            let len: usize = headers
+                .lines()
+                .find_map(|l| {
+                    let (k, v) = l.split_once(':')?;
+                    if k.trim().eq_ignore_ascii_case("content-length") {
+                        v.trim().parse().ok()
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(0);
+            while buf.len() - head_end < len {
+                let n = sock.read(&mut tmp).unwrap();
+                if n == 0 {
+                    break;
+                }
+                buf.extend_from_slice(&tmp[..n]);
+            }
+            let body = r#"{"message":{"content":"Hello world."}}"#;
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            sock.write_all(resp.as_bytes()).unwrap();
+        });
+        (port, handle)
+    }
+
+    fn local_entry(model: &str) -> crate::settings::LlmEntry {
+        crate::settings::LlmEntry {
+            id: "lm-local".to_string(),
+            name: "Local".to_string(),
+            kind: crate::settings::LlmKind::Local,
+            enabled: true,
+            url: String::new(),
+            model: model.to_string(),
+            provider: crate::settings::CloudLlm::OpenAI,
+            api_key: String::new(),
+            keep_alive: String::new(),
+            num_ctx: None,
+            thinking: None,
+        }
+    }
+
+    fn ollama_entry(url: &str) -> crate::settings::LlmEntry {
+        crate::settings::LlmEntry {
+            id: "lm-ollama".to_string(),
+            name: "Ollama".to_string(),
+            kind: crate::settings::LlmKind::Ollama,
+            enabled: true,
+            url: url.to_string(),
+            model: "test".to_string(),
+            provider: crate::settings::CloudLlm::OpenAI,
+            api_key: String::new(),
+            keep_alive: String::new(),
+            num_ctx: None,
+            thinking: None,
+        }
+    }
+
+    #[test]
+    fn unready_local_falls_through_to_next_cleanup_entry() {
+        // Cleanup path only: an unready `Local` entry (no `.task`
+        // downloaded) must not block or swallow the utterance — the
+        // chain falls through to Ollama/cloud (default order intact).
+        let _guard = status_test_lock();
+        reset_status_state();
+        let (stt_port, stt_stub) = stub_transcription_server();
+        let (llm_port, llm_stub) = stub_ollama_server();
+        let mut eng = open_engine();
+        let mut settings: AppSettings = serde_json::from_str(&settings_with(self_hosted_entry(
+            "Stub",
+            &format!("http://127.0.0.1:{stt_port}"),
+        )))
+        .unwrap();
+        settings.language_models.entries = vec![
+            local_entry("missing.task"),
+            ollama_entry(&format!("http://127.0.0.1:{llm_port}")),
+        ];
+        eng.put_settings(&serde_json::to_string(&settings).unwrap())
+            .unwrap();
+        assert_eq!(eng.poll_stt(), TickOutcome::Unchanged);
+        eng.start_utterance(16000);
+        eng.push_pcm(&vec![1000i16; 8000]);
+        let out = eng.finish_utterance().unwrap();
+        // Raw STT ("hello world") polished by the Ollama fallback.
+        assert_eq!(out.raw, "hello world");
+        assert_eq!(out.text, "Hello world.");
+        stt_stub.join().unwrap();
+        llm_stub.join().unwrap();
     }
 }
