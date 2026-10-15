@@ -559,6 +559,43 @@ impl Engine {
         let pcm16 = audio::f32_to_i16(&selected);
 
         let words = self.store.load_words().unwrap_or_default();
+        // On-device first: Local entries attempt the filesDir pack
+        // (Kotlin LocalStt does the real sherpa moonshine-v2 decode;
+        // Rust verifies the pack here so a future runtime can hook
+        // in). Any Err falls through to the server chain — fallback
+        // intact. Snippet/cleanup tail mirrors the server path below.
+        if self
+            .settings
+            .stt
+            .entries
+            .iter()
+            .any(|e| e.enabled && matches!(e.kind, crate::settings::SttEntryKind::Local))
+            && let Ok(raw) = crate::local_stt::try_transcribe(&self._dir, &pcm16)
+        {
+            let generation_at_entry = crate::server_stt::server_generation();
+            let pairs: Vec<(String, String)> = self
+                .settings
+                .dictionary
+                .snippets
+                .iter()
+                .flat_map(|s| s.triggers().into_iter().map(|t| (t, s.replacement.clone())))
+                .collect();
+            let expanded = expand_snippets(&raw, &pairs);
+            let text = post_process(
+                &expanded,
+                &self.settings.language_models,
+                &words,
+                generation_at_entry,
+            );
+            let word_count = text.split_whitespace().count() as u32;
+            return Ok(FinishOutcome {
+                words: word_count,
+                text,
+                raw,
+                engine: "local moonshine-v2-tiny.en".to_string(),
+                duration_secs,
+            });
+        }
         // Witness before the blocking chain: a provider switch or Stop
         // applied mid-transcribe bumps the generation; stale results
         // then settle instead of delivering for a dead chain.

@@ -114,6 +114,9 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
             smartTapMs = { readSmartTapMs() },
             mode = { readMicMode() },
             releaseDelayMs = { readReleaseDelayMs() },
+            // On-device first (moonshine-v2 pack, VAD-chunked); miss or
+            // throw → server chain. Pack-gated: null without the pack.
+            localTranscribe = { pcm -> LocalStt.transcribeIfEnabled(this, pcm) },
         )
         dictation.listener = this
         dictation.onLevel = { peak ->
