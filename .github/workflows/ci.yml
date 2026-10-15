@@ -76,15 +76,18 @@ jobs:
         run: bash scripts/fetch-sherpa-aar.sh
       - uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d # v4
       - name: Lint (errors fail), unit tests, unsigned debug APK
-        # lintDebug aborts on error severity by default; no emulator, no device.
+        # Per-flavor lint/test tasks (apk-slim flavors: lintDebug no longer
+        # exists); assembleDebug still aggregates BOTH flavors. No emulator.
         # assembleDebug is unsigned (release signing needs secrets, out of scope).
         run: |
-          ./gradlew :app:lintDebug
-          ./gradlew :app:testDebugUnitTest
+          ./gradlew :app:lintFullDebug :app:lintLiteDebug
+          ./gradlew :app:testFullDebugUnitTest :app:testLiteDebugUnitTest
           ./gradlew :app:assembleDebug
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: app-debug
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: |
+            android/app/build/outputs/apk/full/debug/app-full-debug.apk
+            android/app/build/outputs/apk/lite/debug/app-lite-debug.apk
           if-no-files-found: error
           retention-days: 7

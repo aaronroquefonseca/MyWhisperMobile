@@ -69,9 +69,11 @@ jobs:
         run: bash scripts/fetch-sherpa-aar.sh
       - uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d # v4
       - name: Assemble unsigned release APK
-        # No signingConfig wired: produces app-release-unsigned.apk-style
+        # No signingConfig wired: produces app-full-release-unsigned.apk-style
         # unsigned artifact. Release signing via secrets is out of scope.
-        run: ./gradlew :app:assembleRelease
+        # APK-slim default: FULL flavor (on-device STT+LLM). Lite publishes
+        # no release artifact; see PR body for the lite size note.
+        run: ./gradlew :app:assembleFullRelease
       - name: Create GitHub Release with changelog notes + APK
         working-directory: ${{ github.workspace }}
         env:
@@ -83,8 +85,8 @@ jobs:
           VERSION="${TAG#v}"
           awk -v ver="$VERSION" 'index($0, "## [" ver "]") == 1 {flag=1; next} /^## / {flag=0} flag' CHANGELOG.md | sed -e '/^[[:space:]]*$/d' > notes.md
           test -s notes.md || { echo "empty notes for $TAG" >&2; exit 1; }
-          APK=android/app/build/outputs/apk/release/app-release-unsigned.apk
-          META=android/app/build/outputs/apk/release/output-metadata.json
+          APK=android/app/build/outputs/apk/full/release/app-full-release-unsigned.apk
+          META=android/app/build/outputs/apk/full/release/output-metadata.json
           test -f "$APK" || { echo "missing $APK" >&2; exit 1; }
           ARGS=(--title "$TAG" --notes-file notes.md)
           [[ "$TAG" == *-* ]] && ARGS+=(--prerelease)

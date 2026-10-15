@@ -14,3 +14,12 @@ cargo ndk \
   -t x86_64 \
   -o "$ROOT/android/app/src/main/jniLibs" \
   build --release
+
+# APK SLIM: belt-and-braces strip of the staged .so files (cargo
+# `strip = true` already strips at link time; llvm-strip catches any
+# stragglers, e.g. mixed toolchains). Never fails the build.
+STRIP="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+if [[ -x "$STRIP" ]]; then
+  find "$ROOT/android/app/src/main/jniLibs" -name '*.so' -print0 \
+    | xargs -0 -r "$STRIP" --strip-unneeded 2>/dev/null || true
+fi

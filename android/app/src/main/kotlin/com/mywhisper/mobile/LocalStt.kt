@@ -11,6 +11,13 @@ import kotlin.math.sqrt
  * moonshine v2 tiny-en quantized pack under
  * `<filesDir>/models/sherpa-moonshine-v2-tiny.en`).
  *
+ * The AAR is full-flavor-only and NEVER on the lite classpath: every
+ * `com.k2fsa.sherpa.onnx` touch goes through the [SherpaRunner]
+ * reflection bridge (mirroring
+ * `LocalLlmManager.MediaPipeRunner`), so this file compiles and runs
+ * with no sherpa classes present — misses degrade to null and callers
+ * keep the server fallback.
+ *
  * V2 layout (quantized `sherpa-onnx-moonshine-tiny-en-quantized-2026-02-27`):
  * `encoder_model.ort` + `decoder_model_merged.ort` + `tokens.txt`, wired
  * through `OfflineMoonshineModelConfig(mergedDecoder=...)` (no
@@ -221,15 +228,15 @@ object LocalStt {
             // either rebuilds the native recognizer).
             val key = dir.absolutePath + "|" + entry.id + "|" + whisperLang
             var loadMs = 0L
-            val rec: com.k2fsa.sherpa.onnx.OfflineRecognizer = synchronized(lock) {
-                val cached = if (packKey == key) recognizer as? com.k2fsa.sherpa.onnx.OfflineRecognizer else null
+            val rec: Any = synchronized(lock) {
+                val cached = if (packKey == key) recognizer else null
                 if (cached != null) {
                     cached
                 } else {
                     val t0 = android.os.SystemClock.elapsedRealtime()
-                    try { (recognizer as? com.k2fsa.sherpa.onnx.OfflineRecognizer)?.release() } catch (_: Exception) {}
+                    SherpaRunner.release(recognizer)
                     recognizer = null
-                    val created = createRecognizer(dir, entry, whisperLang) ?: return null
+                    val created = SherpaRunner.createRecognizer(dir, entry, whisperLang) ?: return null
                     loadMs = android.os.SystemClock.elapsedRealtime() - t0
                     recognizer = created
                     packKey = key
@@ -242,17 +249,10 @@ object LocalStt {
                 val slice = pcm16.sliceArray(r)
                 val samples = FloatArray(slice.size) { i -> slice[i] / 32768.0f }
                 val t1 = android.os.SystemClock.elapsedRealtime()
-                val stream = rec.createStream()
-                try {
-                    stream.acceptWaveform(samples, sampleRate)
-                    rec.decode(stream)
-                    val text = rec.getResult(stream).text ?: ""
-                    if (text.isNotBlank()) {
-                        if (sb.isNotEmpty()) sb.append(' ')
-                        sb.append(text.trim())
-                    }
-                } finally {
-                    try { stream.release() } catch (_: Exception) {}
+                val text = SherpaRunner.decodeChunkText(rec, samples, sampleRate) ?: ""
+                if (text.isNotBlank()) {
+                    if (sb.isNotEmpty()) sb.append(' ')
+                    sb.append(text.trim())
                 }
                 decodeMs += android.os.SystemClock.elapsedRealtime() - t1
             }
@@ -323,66 +323,150 @@ object LocalStt {
 
     fun unload() {
         synchronized(lock) {
-            try { (recognizer as? com.k2fsa.sherpa.onnx.OfflineRecognizer)?.release() } catch (_: Exception) {}
+            SherpaRunner.release(recognizer)
             recognizer = null
             packKey = null
         }
     }
 
-    private fun createRecognizer(
-        dir: File,
-        entry: LocalSttModels.Entry,
-        whisperLang: String,
-    ): com.k2fsa.sherpa.onnx.OfflineRecognizer? {
-        return try {
-            val tokens = File(
-                dir,
-                entry.files.first { it.name.endsWith("tokens.txt") }.name,
-            ).absolutePath
-            val model = when (entry.engine) {
-                LocalSttModels.Engine.MOONSHINE -> {
-                    val moonshine = com.k2fsa.sherpa.onnx.OfflineMoonshineModelConfig(
-                        encoder = File(dir, ENCODER).absolutePath,
-                        mergedDecoder = File(dir, MERGED_DECODER).absolutePath,
-                    )
-                    com.k2fsa.sherpa.onnx.OfflineModelConfig(
-                        moonshine = moonshine,
-                        numThreads = 2,
-                        provider = "cpu",
-                        tokens = tokens,
-                    )
-                }
-                LocalSttModels.Engine.WHISPER -> {
-                    val enc = entry.files.first { "encoder" in it.name }.name
-                    val dec = entry.files.first { "decoder" in it.name }.name
-                    val whisper = com.k2fsa.sherpa.onnx.OfflineWhisperModelConfig(
-                        encoder = File(dir, enc).absolutePath,
-                        decoder = File(dir, dec).absolutePath,
-                        language = whisperLang,
-                        task = "transcribe",
-                        tailPaddings = 1000,
-                        enableTokenTimestamps = false,
-                        enableSegmentTimestamps = false,
-                    )
-                    com.k2fsa.sherpa.onnx.OfflineModelConfig(
-                        whisper = whisper,
-                        numThreads = 2,
-                        provider = "cpu",
-                        tokens = tokens,
-                    )
-                }
+    /**
+     * Reflection bridge to `com.k2fsa.sherpa.onnx` (mirrors
+     * `LocalLlmManager.MediaPipeRunner`): the sherpa AAR is
+     * full-flavor-only, so no direct references may appear here —
+     * everything resolves via `Class.forName` at call time. Missing
+     * classes / native lib → null (callers keep the server fallback).
+     * Configs are built with the public no-arg constructor + setters
+     * (verified against sherpa-onnx 1.13.8 `classes.jar`), never the
+     * synthetic Kotlin-default constructors.
+     */
+    internal object SherpaRunner {
+        private const val PKG = "com.k2fsa.sherpa.onnx"
+
+        /** False on lite builds / JVM tests (no sherpa classes). */
+        fun isSupported(): Boolean = loadClass("$PKG.OfflineRecognizer") != null
+
+        internal fun loadClass(name: String): Class<*>? =
+            try {
+                Class.forName(name)
+            } catch (_: Exception) {
+                null
+            } catch (_: LinkageError) {
+                null
             }
-            val config = com.k2fsa.sherpa.onnx.OfflineRecognizerConfig(
-                featConfig = com.k2fsa.sherpa.onnx.FeatureConfig(sampleRate = 16000, featureDim = 80),
-                modelConfig = model,
-                decodingMethod = "greedy_search",
-                maxActivePaths = 4,
-            )
-            // Null assets → newFromFile: models live in filesDir, not APK assets.
-            com.k2fsa.sherpa.onnx.OfflineRecognizer(null, config)
-        } catch (e: Exception) {
-            Log.w(TAG, "recognizer create failed: ${e.message}")
-            null
+
+        private fun newOf(name: String): Any? =
+            try {
+                loadClass(name)?.getDeclaredConstructor()?.newInstance()
+            } catch (_: Exception) {
+                null
+            } catch (_: LinkageError) {
+                null
+            }
+
+        private fun call(target: Any, method: String, vararg args: Any?): Any? =
+            try {
+                val m = target.javaClass.methods.firstOrNull {
+                    it.name == method && it.parameterCount == args.size
+                } ?: return null
+                m.invoke(target, *args)
+            } catch (_: Exception) {
+                null
+            } catch (_: LinkageError) {
+                null
+            }
+
+        private fun modelConfig(moonshine: Any? = null, whisper: Any? = null, tokens: String): Any? {
+            val mc = newOf("$PKG.OfflineModelConfig") ?: return null
+            if (moonshine != null) call(mc, "setMoonshine", moonshine)
+            if (whisper != null) call(mc, "setWhisper", whisper)
+            call(mc, "setNumThreads", 2)
+            call(mc, "setProvider", "cpu")
+            call(mc, "setTokens", tokens)
+            return mc
+        }
+
+        /** Null when the AAR is absent, files are missing, or the native lib fails. */
+        fun createRecognizer(
+            dir: File,
+            entry: LocalSttModels.Entry,
+            whisperLang: String,
+        ): Any? {
+            try {
+                val tokens = File(
+                    dir,
+                    entry.files.first { it.name.endsWith("tokens.txt") }.name,
+                ).absolutePath
+                val model = when (entry.engine) {
+                    LocalSttModels.Engine.MOONSHINE -> {
+                        val moonshine = newOf("$PKG.OfflineMoonshineModelConfig") ?: return null
+                        call(moonshine, "setEncoder", File(dir, ENCODER).absolutePath)
+                        call(moonshine, "setMergedDecoder", File(dir, MERGED_DECODER).absolutePath)
+                        modelConfig(moonshine = moonshine, tokens = tokens) ?: return null
+                    }
+                    LocalSttModels.Engine.WHISPER -> {
+                        val enc = entry.files.first { "encoder" in it.name }.name
+                        val dec = entry.files.first { "decoder" in it.name }.name
+                        val whisper = newOf("$PKG.OfflineWhisperModelConfig") ?: return null
+                        call(whisper, "setEncoder", File(dir, enc).absolutePath)
+                        call(whisper, "setDecoder", File(dir, dec).absolutePath)
+                        call(whisper, "setLanguage", whisperLang)
+                        call(whisper, "setTask", "transcribe")
+                        call(whisper, "setTailPaddings", 1000)
+                        call(whisper, "setEnableTokenTimestamps", false)
+                        call(whisper, "setEnableSegmentTimestamps", false)
+                        modelConfig(whisper = whisper, tokens = tokens) ?: return null
+                    }
+                }
+                val feat = newOf("$PKG.FeatureConfig") ?: return null
+                call(feat, "setSampleRate", 16000)
+                call(feat, "setFeatureDim", 80)
+                val config = newOf("$PKG.OfflineRecognizerConfig") ?: return null
+                call(config, "setFeatConfig", feat)
+                call(config, "setModelConfig", model)
+                call(config, "setDecodingMethod", "greedy_search")
+                call(config, "setMaxActivePaths", 4)
+                val recCls = loadClass("$PKG.OfflineRecognizer") ?: return null
+                // OfflineRecognizer(AssetManager, OfflineRecognizerConfig):
+                // null assets → newFromFile, models live in filesDir.
+                val ctor = recCls.constructors.firstOrNull { it.parameterCount == 2 } ?: return null
+                return ctor.newInstance(null, config)
+            } catch (_: Exception) {
+                Log.w(TAG, "recognizer create failed")
+                return null
+            } catch (_: UnsatisfiedLinkError) {
+                Log.w(TAG, "sherpa native missing")
+                return null
+            } catch (_: LinkageError) {
+                Log.w(TAG, "sherpa classes missing (lite build?)")
+                return null
+            }
+        }
+
+        /** Decoded text for one VAD chunk, or null (→ blank, skipped). Never throws. */
+        fun decodeChunkText(rec: Any, samples: FloatArray, sampleRate: Int): String? {
+            try {
+                val stream = call(rec, "createStream") ?: return null
+                try {
+                    call(stream, "acceptWaveform", samples, sampleRate)
+                    call(rec, "decode", stream)
+                    val result = call(rec, "getResult", stream) ?: return null
+                    return call(result, "getText") as? String
+                } finally {
+                    call(stream, "release")
+                }
+            } catch (_: Exception) {
+                return null
+            } catch (_: UnsatisfiedLinkError) {
+                return null
+            } catch (_: LinkageError) {
+                return null
+            }
+        }
+
+        /** Best-effort native release. Never throws (unload-safe). */
+        fun release(rec: Any?) {
+            if (rec == null) return
+            call(rec, "release")
         }
     }
 }

@@ -40,3 +40,11 @@ rusqlite = { version = "0.40", features = ["bundled", "bundled-sqlcipher"] }
 # Keychain key via MYWHISPER_DB_KEY (see store.rs db_key).
 [target.'cfg(all(not(target_os = "android"), not(target_os = "ios")))'.dependencies]
 keyring = "4.2.0"
+
+# APK SLIM: squeeze the JNI .so (libmywhisper_core.so is ~12MB/arch
+# unoptimized). LTO + size-opt + symbol strip + single codegen unit.
+[profile.release]
+lto = true
+opt-level = "z"
+strip = true
+codegen-units = 1
