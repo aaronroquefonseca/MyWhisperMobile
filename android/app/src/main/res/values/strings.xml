@@ -74,12 +74,12 @@
     <string name="unified_notif_channel">MyWhisper status</string>
     <string name="float_notif_title">MyWhisper bubble</string>
     <string name="float_notif_text">Floating dictation active</string>
-    <string name="float_notif_rec_text">Recording… tap Stop to end</string>
+    <string name="float_notif_rec_text">Recording… tap ✕ to cancel</string>
     <string name="float_need_overlay">Allow display over other apps first</string>
     <string name="float_overlay_recovery">Overlay permission was revoked — re-enable “Display over other apps” to restore the bubble</string>
-    <string name="float_drag_handle">Drag handle — move bubble</string>
-    <string name="float_move_hint">Drag the handle below the mic to move the bubble</string>
-    <string name="float_stop">Stop — end dictation</string>
+    <string name="float_drag_handle">Drag handle — move bubble, pull down to cancel</string>
+    <string name="float_move_hint">Drag the handle to move • pull it down to cancel • drop the mic on ✕ to cancel</string>
+    <string name="float_stop">Cancel — discard dictation</string>
     <string name="float_processing">Transcribing…</string>
     <string name="float_no_field">No editable field focused — open one and dictate again</string>
     <string name="a11y_desc">Commits floating-bubble dictations into the focused text field.</string>
