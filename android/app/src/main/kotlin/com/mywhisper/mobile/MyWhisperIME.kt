@@ -68,6 +68,24 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
 
         /** Mic press/release visual transition (ms): owner wants ~150-250. */
         const val MIC_ANIM_MS = 180L
+        /** Pill strip bottom gap (dp): pill floats above the bar. */
+        const val PILL_BOTTOM_MARGIN_DP = 10
+        /** Pill strip side margins (dp): zero bias, centered. */
+        const val PILL_SIDE_MARGIN_DP = 0
+        /** Strip shell side margins (dp): equal start/end. */
+        const val STRIP_SIDE_MARGIN_DP = 8
+
+        /**
+         * Pill strip placement: centered with equal start/end margins,
+         * LTR/RTL-safe. CENTER_HORIZONTAL is direction-agnostic; side
+         * margins are pinned equal (0) so no neighbor weight/padding
+         * can bias the pill off-center. Pure (no views): unit-tested.
+         */
+        fun pillLayoutGravity(): Int = Gravity.CENTER_HORIZONTAL
+
+        /** Symmetry gate: start/end margins must match exactly. */
+        fun sideMarginsSymmetric(startPx: Int, endPx: Int): Boolean =
+            startPx == endPx
         /** Slide-hint nudge distance (dp): gentle, never blocking. */
         const val SLIDE_HINT_DP = 10
         /**
@@ -280,7 +298,11 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
             ).also {
-                it.setMargins(dp(8), dp(4), dp(8), 0)
+                it.setMargins(dp(STRIP_SIDE_MARGIN_DP), dp(4), dp(STRIP_SIDE_MARGIN_DP), 0)
+                // RTL-safe: physical left/right above are equal, pin
+                // start/end explicitly so mirroring never biases.
+                it.marginStart = dp(STRIP_SIDE_MARGIN_DP)
+                it.marginEnd = dp(STRIP_SIDE_MARGIN_DP)
             }
         }
         // No reserved slot: the pill is GONE while idle so the window
@@ -313,7 +335,15 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
         root.addView(pill, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT,
             ViewGroup.LayoutParams.WRAP_CONTENT,
-        ).also { it.bottomMargin = dp(10) })
+        ).also {
+            // Explicit center + equal start/end: do not rely on parent
+            // gravity alone — that left the pill's placement implicit
+            // and off-center in the owner photo (more margin right).
+            it.gravity = pillLayoutGravity()
+            it.bottomMargin = dp(PILL_BOTTOM_MARGIN_DP)
+            it.marginStart = dp(PILL_SIDE_MARGIN_DP)
+            it.marginEnd = dp(PILL_SIDE_MARGIN_DP)
+        })
         // Opaque bar, rounded top corners only, flush with the
         // screen bottom.
         val bar = LinearLayout(this).apply {
