@@ -39,6 +39,9 @@
 		E2E720B20000000000000002 /* StatsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2E720B20000000000000001 /* StatsStore.swift */; };
 		E2E720B20000000000000004 /* HistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2E720B20000000000000003 /* HistoryView.swift */; };
 		E2E720B20000000000000006 /* HistoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2E720B20000000000000005 /* HistoryTests.swift */; };
+		CC11CC11CC11CC11CC11CC04 /* SyncDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC11CC11CC11CC11CC11CC01 /* SyncDiscovery.swift */; };
+		CC11CC11CC11CC11CC11CC05 /* DevicesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC11CC11CC11CC11CC11CC02 /* DevicesView.swift */; };
+		CC11CC11CC11CC11CC11CC06 /* SyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC11CC11CC11CC11CC11CC03 /* SyncTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -87,6 +90,9 @@
 		E2E720B20000000000000001 /* StatsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatsStore.swift; sourceTree = "<group>"; };
 		E2E720B20000000000000003 /* HistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryView.swift; sourceTree = "<group>"; };
 		E2E720B20000000000000005 /* HistoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryTests.swift; sourceTree = "<group>"; };
+		CC11CC11CC11CC11CC11CC01 /* SyncDiscovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncDiscovery.swift; sourceTree = "<group>"; };
+		CC11CC11CC11CC11CC11CC02 /* DevicesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevicesView.swift; sourceTree = "<group>"; };
+		CC11CC11CC11CC11CC11CC03 /* SyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncTests.swift; sourceTree = "<group>"; };
 		602A6F78559E7FAC27690B4A /* Tests Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		D82908387D374745193668C2 /* MyWhisper.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MyWhisper.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		8965188E778D2EEAECC16395 /* MyWhisperTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MyWhisperTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -145,6 +151,8 @@
 				5E77140000000000000001 /* EntryDialogs.swift */,
 				E2E720B20000000000000001 /* StatsStore.swift */,
 				E2E720B20000000000000003 /* HistoryView.swift */,
+				CC11CC11CC11CC11CC11CC01 /* SyncDiscovery.swift */,
+				CC11CC11CC11CC11CC11CC02 /* DevicesView.swift */,
 				7EB0EE73123791A0202B4796 /* MyWhisper.entitlements */,
 				658CB18E2E567D501D0E64F8 /* Info.plist */,
 				F32B3BDBD273F3BCD8875B1B /* PrivacyInfo.xcprivacy */,
@@ -164,6 +172,7 @@
 				CC0100CC0100CC04000001 /* SetupTests.swift */,
 				5E77150000000000000001 /* SettingsTests.swift */,
 				E2E720B20000000000000005 /* HistoryTests.swift */,
+				CC11CC11CC11CC11CC11CC03 /* SyncTests.swift */,
 				602A6F78559E7FAC27690B4A /* Tests Info.plist */,
 			);
 			path = MyWhisperTests;
@@ -297,6 +306,8 @@
 				5E77140000000000000002 /* EntryDialogs.swift in Sources */,
 				E2E720B20000000000000002 /* StatsStore.swift in Sources */,
 				E2E720B20000000000000004 /* HistoryView.swift in Sources */,
+				CC11CC11CC11CC11CC11CC04 /* SyncDiscovery.swift in Sources */,
+				CC11CC11CC11CC11CC11CC05 /* DevicesView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -313,6 +324,7 @@
 				CC0100CC0100CC04000002 /* SetupTests.swift in Sources */,
 				5E77150000000000000002 /* SettingsTests.swift in Sources */,
 				E2E720B20000000000000006 /* HistoryTests.swift in Sources */,
+				CC11CC11CC11CC11CC11CC06 /* SyncTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
