@@ -10,10 +10,13 @@
 		5F1C0CC30E5D70202DCA2EE4 /* MyWhisperApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21DD60AF35D373E1C54DA8A7 /* MyWhisperApp.swift */; };
 		E52CBAC9A1DF1CFF99131633 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AB7341CB99DDAA5CA52EC23 /* ContentView.swift */; };
 		480131A0731D72ABA1949877 /* CoreBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAF7AA9058417D529285795E /* CoreBridge.swift */; };
+		C1EAAC110000000000000002 /* Cleanup.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1EAAC110000000000000001 /* Cleanup.swift */; };
+		D1C710A90000000000000002 /* DictionaryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1C710A90000000000000001 /* DictionaryStore.swift */; };
 		B4BA9F4546BCCF39C98E2918 /* libmywhisper_core.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = ADFAB3C47FDCEBDD8A00F72E /* libmywhisper_core.xcframework */; };
 		4D2DCE83303D7ED85DCD61B5 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = F32B3BDBD273F3BCD8875B1B /* PrivacyInfo.xcprivacy */; };
 		2D3275124A5A3FCA7E1F8CAD /* CoreBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC75167B1E2B32413C59E564 /* CoreBridgeTests.swift */; };
 		85252389B093CE46404738B4 /* SettingsJobsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F563518FFFD727440F23503 /* SettingsJobsTests.swift */; };
+		CE1EAA900000000000000002 /* CleanupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE1EAA900000000000000001 /* CleanupTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -30,6 +33,8 @@
 		21DD60AF35D373E1C54DA8A7 /* MyWhisperApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyWhisperApp.swift; sourceTree = "<group>"; };
 		9AB7341CB99DDAA5CA52EC23 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		FAF7AA9058417D529285795E /* CoreBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreBridge.swift; sourceTree = "<group>"; };
+		C1EAAC110000000000000001 /* Cleanup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Cleanup.swift; sourceTree = "<group>"; };
+		D1C710A90000000000000001 /* DictionaryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictionaryStore.swift; sourceTree = "<group>"; };
 		7EB0EE73123791A0202B4796 /* MyWhisper.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = MyWhisper.entitlements; sourceTree = "<group>"; };
 		658CB18E2E567D501D0E64F8 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		F32B3BDBD273F3BCD8875B1B /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
@@ -37,6 +42,7 @@
 		ADFAB3C47FDCEBDD8A00F72E /* libmywhisper_core.xcframework */ = {isa = PBXFileReference; explicitFileType = wrapper.xcframework; path = libmywhisper_core.xcframework; sourceTree = "<group>"; };
 		EC75167B1E2B32413C59E564 /* CoreBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreBridgeTests.swift; sourceTree = "<group>"; };
 		1F563518FFFD727440F23503 /* SettingsJobsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsJobsTests.swift; sourceTree = "<group>"; };
+		CE1EAA900000000000000001 /* CleanupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CleanupTests.swift; sourceTree = "<group>"; };
 		602A6F78559E7FAC27690B4A /* Tests Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		D82908387D374745193668C2 /* MyWhisper.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MyWhisper.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		8965188E778D2EEAECC16395 /* MyWhisperTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MyWhisperTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -77,6 +83,8 @@
 				21DD60AF35D373E1C54DA8A7 /* MyWhisperApp.swift */,
 				9AB7341CB99DDAA5CA52EC23 /* ContentView.swift */,
 				FAF7AA9058417D529285795E /* CoreBridge.swift */,
+				C1EAAC110000000000000001 /* Cleanup.swift */,
+				D1C710A90000000000000001 /* DictionaryStore.swift */,
 				7EB0EE73123791A0202B4796 /* MyWhisper.entitlements */,
 				658CB18E2E567D501D0E64F8 /* Info.plist */,
 				F32B3BDBD273F3BCD8875B1B /* PrivacyInfo.xcprivacy */,
@@ -89,6 +97,7 @@
 			children = (
 				EC75167B1E2B32413C59E564 /* CoreBridgeTests.swift */,
 				1F563518FFFD727440F23503 /* SettingsJobsTests.swift */,
+				CE1EAA900000000000000001 /* CleanupTests.swift */,
 				602A6F78559E7FAC27690B4A /* Tests Info.plist */,
 			);
 			path = MyWhisperTests;
@@ -204,6 +213,8 @@
 				5F1C0CC30E5D70202DCA2EE4 /* MyWhisperApp.swift in Sources */,
 				E52CBAC9A1DF1CFF99131633 /* ContentView.swift in Sources */,
 				480131A0731D72ABA1949877 /* CoreBridge.swift in Sources */,
+				C1EAAC110000000000000002 /* Cleanup.swift in Sources */,
+				D1C710A90000000000000002 /* DictionaryStore.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -213,6 +224,7 @@
 			files = (
 				2D3275124A5A3FCA7E1F8CAD /* CoreBridgeTests.swift in Sources */,
 				85252389B093CE46404738B4 /* SettingsJobsTests.swift in Sources */,
+				CE1EAA900000000000000002 /* CleanupTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
