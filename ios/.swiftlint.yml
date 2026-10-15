@@ -1,0 +1,20 @@
+# Minimal SwiftLint config for ios/ (T1 skeleton).
+# Run: swiftlint --config ios/.swiftlint.yml
+# CI/device note: keep this list stable; new rules need T1 owner sign-off
+# so downstream T2-T10 snapshots don't churn.
+
+disabled_rules:
+  - todo
+
+opt_in_rules:
+  - empty_count
+  - force_unwrapping
+
+excluded:
+  - Libs
+
+line_length: 140
+type_name:
+  min_length: 3
+identifier_name:
+  min_length: 1
