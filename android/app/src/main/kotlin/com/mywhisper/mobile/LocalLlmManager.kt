@@ -1,5 +1,6 @@
 package com.mywhisper.mobile
 
+import android.os.StatFs
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -102,6 +103,18 @@ object LocalLlmManager {
         file.isFile && sha256Hex(file).equals(expectedHex.trim(), ignoreCase = true)
 
     /**
+     * Per-asset partial-download slot: concurrent downloads of
+     * different assets into the same directory must not clobber
+     * each other, so the temp name carries the asset id.
+     */
+    fun partFileFor(dest: File, assetId: String): File =
+        File(dest.parentFile, dest.name + ".part." + assetId)
+
+    /** Pure free-space gate (StatFs itself is Android-only; kept out for JVM tests). */
+    fun hasFreeSpace(availableBytes: Long, requiredBytes: Long): Boolean =
+        availableBytes >= requiredBytes
+
+    /**
      * Download [asset] to [dest] (atomic rename), verifying SHA-256.
      * Returns the file on success, throws otherwise. Skips the
      * download when [dest] already verifies.
@@ -109,7 +122,19 @@ object LocalLlmManager {
     fun downloadModel(asset: ModelAsset, dest: File): File {
         dest.parentFile?.mkdirs()
         if (verifySha256(dest, asset.sha256)) return dest
-        val tmp = File(dest.parentFile, dest.name + ".part")
+        if (asset.sizeBytes > 0) {
+            val dir = dest.parentFile
+            if (dir != null) {
+                val avail = StatFs(dir.absolutePath).availableBytes
+                if (!hasFreeSpace(avail, asset.sizeBytes)) {
+                    throw IllegalStateException(
+                        "local-llm insufficient storage for ${asset.id}: " +
+                            "need ${asset.sizeBytes}, have $avail",
+                    )
+                }
+            }
+        }
+        val tmp = partFileFor(dest, asset.id)
         val conn = (URL(asset.url).openConnection() as HttpURLConnection).apply {
             connectTimeout = 10_000
             readTimeout = 60_000

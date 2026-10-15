@@ -72,6 +72,26 @@ class LocalLlmManagerTest {
     }
 
     @Test
+    fun partFiles_areUniquePerAsset() {
+        val dir = createTempDir("llm-part")
+        try {
+            val dest = File(dir, "cleanup.task")
+            val a = LocalLlmManager.partFileFor(dest, "smollm2-360m")
+            val b = LocalLlmManager.partFileFor(dest, "gemma3-1b")
+            assertFalse(a == b)
+            assertEquals(File(dir, "cleanup.task.part.smollm2-360m"), a)
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun freeSpace_gateRejectsShortfall() {
+        assertTrue(LocalLlmManager.hasFreeSpace(412_000_000L, 412_000_000L))
+        assertFalse(LocalLlmManager.hasFreeSpace(1L, 412_000_000L))
+    }
+
+    @Test
     fun download_skipsWhenDestAlreadyVerifies() {
         val dest = File.createTempFile("llm-dl", ".task")
         try {

@@ -16,13 +16,14 @@
 //! | MLC (Qwen2.5-1.5B q4f16 ~1.2 GB assets, Llama-3.2-3B q4f16 ~2 GB) | TVM-compiled lib + weights download; >1 GB if bundled | ~11 tok/s measured (TinyBench S24 Ultra: 312 tok, prefill 2341 ms, decode 28.2 s) | runtime + per-model lib (tens of MB) + assets | ~3-4.2 GB est. VRAM | Apache-2.0 | OpenAI-compatible, heaviest toolchain (TVM compile/model, 5-15 min build, NDK 27) |
 //!
 //! Pick rationale: cleanup prompts are short (one utterance +
-//! system prompt); MediaPipe gives the smallest APK delta, a single
-//! downloadable `.task` file, an official Kotlin API with GPU
-//! delegate, and no NDK build — at decode speeds that polish a
-//! dictation burst in ~1-3 s. Caveat (Google docs): the API targets
-//! high-end devices (Pixel 8 / S23+) and does not reliably support
-//! emulators — hence unit tests first, on-device numbers by the
-//! owner (bench script in `scripts/`).
+//! system prompt); MediaPipe gives a single downloadable `.task`
+//! file, the official Kotlin `LlmInference` API with GPU delegate,
+//! and no NDK/TVM build. Decode/prefill rows above are
+//! literature-sourced, not bench-verified here — polish latency is
+//! unmeasured until the owner runs `scripts/bench-local-llm.sh`
+//! on-device. Caveat (Google docs): the API targets high-end
+//! devices (Pixel 8 / S23+) and does not reliably support
+//! emulators — hence unit tests first, numbers later.
 //!
 //! Fallback: the engine tries `Local` entries through
 //! [`try_local_cleanup`]; when no model is ready it returns `Err`
