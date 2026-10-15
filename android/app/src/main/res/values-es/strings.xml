@@ -134,7 +134,9 @@
     <string name="local_downloading">Descargando %1$s…</string>
     <string name="local_downloaded">%1$s descargado — pack verificado.</string>
     <string name="local_download_failed">Falló la descarga: %1$s</string>
-    <string name="llm_model_label">Modelo</string>
+    <string name="local_selected_needs_download">Elegido %1$s — descárgalo para usarlo en el teléfono; hasta verificarlo se usa la cadena del servidor.</string>
+    <string name="local_deleted_active">Eliminado %1$s — cambiado a %2$s.</string>
+    <string name="local_deleted_active_none">Eliminado %1$s — no queda modelo local; se usa la cadena del servidor.</string>
     <string name="llm_no_pin">Aún no hay SHA fijado para este modelo — descarga desactivada hasta fijar un hash.</string>
     <string name="llm_pack_dest">Archivo del modelo:\n%1$s</string>
     <string name="stt_add">Añadir servicio</string>
@@ -336,8 +338,8 @@
     <string name="local_arm64_note">Requiere arm64-v8a — si actualizas desde un dispositivo antiguo, conserva tu versión actual.</string>
     <string name="local_state_enabled">activado</string>
     <string name="local_state_disabled">desactivado</string>
-    <string name="llm_local_models_title">Modelo local</string>
-    <string name="llm_local_models_sub">Descarga el archivo del modelo y activa la entrada Local de arriba. Sin su archivo verificado la entrada se omite y la cadena sigue.</string>
+    <string name="llm_local_models_title">Modelos locales</string>
+    <string name="llm_local_models_sub">Descarga un modelo y elígelo con Usar. La entrada Local limpia con el modelo elegido; sin su archivo verificado la entrada se omite y la cadena sigue.</string>
     <string name="llm_selftest_run">Ejecutar prueba</string>
     <string name="llm_selftest_running">Probando modelo local…</string>
     <string name="llm_selftest_pass">OK · %1$d ms · %2$s</string>

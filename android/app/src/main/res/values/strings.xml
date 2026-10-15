@@ -134,7 +134,9 @@
     <string name="local_downloading">Downloading %1$s…</string>
     <string name="local_downloaded">Downloaded %1$s — pack verified.</string>
     <string name="local_download_failed">Download failed: %1$s</string>
-    <string name="llm_model_label">Model</string>
+    <string name="local_selected_needs_download">Selected %1$s — download it to go on-device; until verified the server chain is used.</string>
+    <string name="local_deleted_active">Deleted %1$s — switched to %2$s.</string>
+    <string name="local_deleted_active_none">Deleted %1$s — no on-device model left; the server chain is used.</string>
     <string name="llm_no_pin">No SHA pinned for this model yet — download disabled until a hash is pinned.</string>
     <string name="llm_pack_dest">Model file:\n%1$s</string>
     <string name="stt_add">Add service</string>
@@ -336,8 +338,8 @@
     <string name="local_arm64_note">Requires arm64-v8a — if you update from an older device, keep your current version.</string>
     <string name="local_state_enabled">enabled</string>
     <string name="local_state_disabled">disabled</string>
-    <string name="llm_local_models_title">On-device model</string>
-    <string name="llm_local_models_sub">Download the model file, then enable the Local entry above. Without its verified file the entry is skipped and the chain moves on.</string>
+    <string name="llm_local_models_title">On-device models</string>
+    <string name="llm_local_models_sub">Download a model, then select it with Use. The Local chain entry cleans up with the selected model; without its verified file the entry is skipped and the chain moves on.</string>
     <string name="llm_selftest_run">Run test</string>
     <string name="llm_selftest_running">Testing local model…</string>
     <string name="llm_selftest_pass">PASS · %1$d ms · %2$s</string>

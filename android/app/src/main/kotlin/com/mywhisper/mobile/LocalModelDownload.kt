@@ -38,6 +38,35 @@ object LocalModelDownload {
     fun toggleAllowed(state: RowState): Boolean = state == RowState.PRESENT
 
     /**
+     * True when tapping Select on a row in [state] must offer Download:
+     * anything but PRESENT transcribes via the server chain until its
+     * own pack verifies. Selecting never removes other packs — packs
+     * coexist, exactly one stays active (see [fallbackAfterDelete]).
+     * Pure for unit tests.
+     */
+    @JvmStatic
+    fun selectNeedsDownload(state: RowState): Boolean = state != RowState.PRESENT
+
+    /**
+     * Single-active fallback after deleting [deletedId]: a deleted
+     * bystander keeps [selectedId]; deleting the active pack reselects
+     * the first still-[presentIds] entry (catalog/manifest order), else
+     * [defaultId]. Always returns a known id — never a dead Local
+     * selection; callers pair the default fallback with a server-chain
+     * note. Pure for unit tests.
+     */
+    @JvmStatic
+    fun fallbackAfterDelete(
+        deletedId: String,
+        selectedId: String,
+        presentIds: List<String>,
+        defaultId: String,
+    ): String {
+        if (deletedId != selectedId) return selectedId
+        return presentIds.firstOrNull { it != deletedId } ?: defaultId
+    }
+
+    /**
      * Whole-MB progress fraction for a LinearProgressIndicator, null
      * when the total is unknown (indeterminate bar). Pure for tests.
      */
