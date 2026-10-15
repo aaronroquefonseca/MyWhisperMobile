@@ -47,10 +47,11 @@ object ModelDownloadNotifications {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 
-    fun openIntent(ctx: Context): PendingIntent =
+    fun openIntent(ctx: Context, target: String = ModelDownloadSchedule.TARGET_STT): PendingIntent =
         PendingIntent.getActivity(
-            ctx, 0,
-            Intent(ctx, MainActivity::class.java),
+            ctx, target.hashCode(),
+            Intent(ctx, MainActivity::class.java)
+                .putExtra(ModelDownloadSchedule.EXTRA_TARGET, target),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 
@@ -62,6 +63,7 @@ object ModelDownloadNotifications {
         totalBytes: Long?,
         workName: String,
         notifId: Int,
+        target: String = ModelDownloadSchedule.TARGET_STT,
     ): Notification {
         val pct = ModelDownloadSchedule.progressPercent(receivedBytes, totalBytes)
         val text = if (totalBytes != null && totalBytes > 0) {
@@ -79,7 +81,7 @@ object ModelDownloadNotifications {
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setSmallIcon(R.drawable.ic_stat_sync)
-            .setContentIntent(openIntent(ctx))
+            .setContentIntent(openIntent(ctx, target))
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .addAction(
@@ -92,21 +94,30 @@ object ModelDownloadNotifications {
         return b.build()
     }
 
-    fun buildComplete(ctx: Context, label: String): Notification =
+    fun buildComplete(
+        ctx: Context,
+        label: String,
+        target: String = ModelDownloadSchedule.TARGET_STT,
+    ): Notification =
         NotificationCompat.Builder(ctx, CHANNEL)
             .setContentTitle(ctx.getString(R.string.download_complete_title))
             .setContentText(ctx.getString(R.string.local_downloaded, label))
             .setSmallIcon(R.drawable.ic_stat_sync)
-            .setContentIntent(openIntent(ctx))
+            .setContentIntent(openIntent(ctx, target))
             .setAutoCancel(true)
             .build()
 
-    fun buildFailed(ctx: Context, label: String, detail: String): Notification =
+    fun buildFailed(
+        ctx: Context,
+        label: String,
+        detail: String,
+        target: String = ModelDownloadSchedule.TARGET_STT,
+    ): Notification =
         NotificationCompat.Builder(ctx, CHANNEL)
             .setContentTitle(ctx.getString(R.string.download_failed_title))
             .setContentText(ctx.getString(R.string.local_download_failed, detail.ifBlank { label }))
             .setSmallIcon(R.drawable.ic_stat_sync)
-            .setContentIntent(openIntent(ctx))
+            .setContentIntent(openIntent(ctx, target))
             .setAutoCancel(true)
             .build()
 

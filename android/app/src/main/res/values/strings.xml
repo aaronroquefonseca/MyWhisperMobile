@@ -131,6 +131,7 @@
     <string name="local_pack_mismatch">Pack: present but SHA mismatch — re-download.</string>
     <string name="local_enable_blocked">Local stays off: no verified model pack — download it first.</string>
     <string name="local_download">Download model</string>
+    <string name="local_resume">Resume</string>
     <string name="local_downloading">Downloading %1$s…</string>
     <string name="local_downloaded">Downloaded %1$s — pack verified.</string>
     <string name="local_download_failed">Download failed: %1$s</string>
@@ -341,6 +342,7 @@
     <string name="llm_local_models_title">On-device models</string>
     <string name="llm_local_models_sub">Download a model, then select it with Use. The Local chain entry cleans up with the selected model; without its verified file the entry is skipped and the chain moves on.</string>
     <string name="llm_selftest_run">Run test</string>
+    <string name="llm_selftest_unavailable">Local test isn\'t available in this build — no on-device test bridge yet.</string>
     <string name="llm_selftest_running">Testing local model…</string>
     <string name="llm_selftest_pass">PASS · %1$d ms · %2$s</string>
     <string name="llm_selftest_fail">FAIL · %1$d ms · %2$s</string>
@@ -351,6 +353,7 @@
     <string name="provider_test_fail">FAIL · %1$d ms · %2$s</string>
     <string name="provider_test_need_url">Enter a server URL first.</string>
     <string name="provider_test_need_model">Enter a model first.</string>
+    <string name="provider_test_need_pack">Download and verify the on-device pack first.</string>
     <string name="provider_test_bad_url">URL must start with http(s):// or ws(s)://.</string>
     <string name="provider_test_bad_base">Base URL must start with http(s)://.</string>
     <string name="provider_test_looks_good">Looks good — save, then dictate to verify against the server.</string>

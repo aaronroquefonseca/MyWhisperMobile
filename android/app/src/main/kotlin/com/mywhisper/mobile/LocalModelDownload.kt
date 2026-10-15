@@ -6,18 +6,23 @@ package com.mywhisper.mobile
  * actions + in-place progress). Pure JVM, unit-tested.
  *
  * States: MISSING (nothing usable) / DOWNLOADING (worker in flight)
- * / PRESENT (verified, toggle live) / MISMATCH (files fail verify,
+ * / INCOMPLETE (interrupted set: subset of files, short file, or
+ * stale `.part` — resumable, NEVER "SHA mismatch") / PRESENT
+ * (verified, toggle live) / MISMATCH (COMPLETE files fail verify,
  * re-download) / FAILED (last download threw, Retry offered).
  * Fail-closed: only PRESENT enables the toggle.
  */
 object LocalModelDownload {
-    enum class RowState { MISSING, DOWNLOADING, PRESENT, MISMATCH, FAILED }
+    enum class RowState { MISSING, DOWNLOADING, INCOMPLETE, PRESENT, MISMATCH, FAILED }
 
     /**
      * Resolve the row state. Precedence: an in-flight download wins
      * over everything (progress shows in place); otherwise a terminal
      * error pins FAILED until Retry/Delete clears it; otherwise the
-     * verified-pack outcome decides.
+     * verified-pack outcome decides. [incomplete] (subset/short/stale
+     * partial, nothing verified) reads as INCOMPLETE — resumable —
+     * and never as MISMATCH; MISMATCH needs [packMismatch] (complete
+     * files that fail verify).
      */
     @JvmStatic
     fun resolve(
@@ -25,11 +30,13 @@ object LocalModelDownload {
         packMismatch: Boolean,
         downloading: Boolean,
         error: String?,
+        incomplete: Boolean = false,
     ): RowState = when {
         downloading -> RowState.DOWNLOADING
         !error.isNullOrEmpty() -> RowState.FAILED
         packPresent -> RowState.PRESENT
         packMismatch -> RowState.MISMATCH
+        incomplete -> RowState.INCOMPLETE
         else -> RowState.MISSING
     }
 

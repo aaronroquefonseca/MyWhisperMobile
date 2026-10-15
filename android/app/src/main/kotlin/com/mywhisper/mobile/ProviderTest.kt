@@ -208,6 +208,21 @@ object ProviderTest {
     fun localTestAllowed(runnerSupported: Boolean, packVerified: Boolean): Boolean =
         runnerSupported && packVerified
 
+    /** Why a local test button stays disabled (pure, UI maps to strings). */
+    enum class LocalBlocked { NONE, NEED_RUNNER, NEED_PACK }
+
+    /**
+     * Disabled-reason for the local test buttons: no runner (lite
+     * flavor / no bridge) outranks a missing pack. NONE = enabled.
+     * Pure for unit tests.
+     */
+    fun localTestBlocked(runnerSupported: Boolean, packVerified: Boolean): LocalBlocked =
+        when {
+            !runnerSupported -> LocalBlocked.NEED_RUNNER
+            !packVerified -> LocalBlocked.NEED_PACK
+            else -> LocalBlocked.NONE
+        }
+
     /** Server STT button goes live when the config validates. */
     fun sttServerTestAllowed(kind: String, url: String, model: String): Boolean =
         validateStt(kind, url, model) == SttError.NONE

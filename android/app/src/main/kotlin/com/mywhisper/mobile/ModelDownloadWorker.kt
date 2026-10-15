@@ -43,6 +43,9 @@ class ModelDownloadWorker(
         val label = inputData.getString(ModelDownloadSchedule.KEY_LABEL).orEmpty()
         val workName = ModelDownloadSchedule.workNameFor(kind.orEmpty(), modelId.orEmpty())
         val notifId = ModelDownloadSchedule.notifIdFor(workName)
+        // Deep-link target: the tap opens the right page (STT models
+        // vs LLM models) from cold start via MainActivity tab routing.
+        val target = ModelDownloadSchedule.targetForKind(kind)
         ModelDownloadNotifications.ensureChannel(applicationContext)
         // Clean restart first: drop stale partials from a kill, then
         // the download fns skip already-verified finals.
@@ -57,14 +60,14 @@ class ModelDownloadWorker(
         // doWork into a silent retry loop (see
         // ModelDownloadSchedule.degradeToNotificationOnly).
         try {
-            setForegroundAsync(foregroundInfo(label.ifBlank { modelId.orEmpty() }, 0L, null, workName, notifId)).get()
+            setForegroundAsync(foregroundInfo(label.ifBlank { modelId.orEmpty() }, 0L, null, workName, notifId, target)).get()
         } catch (e: Exception) {
             if (!ModelDownloadSchedule.degradeToNotificationOnly(e)) throw e
         }
         try {
             when (kind) {
-                ModelDownloadSchedule.KIND_STT -> downloadStt(modelId, label, workName, notifId)
-                ModelDownloadSchedule.KIND_LLM -> downloadLlm(label, workName, notifId)
+                ModelDownloadSchedule.KIND_STT -> downloadStt(modelId, label, workName, notifId, target)
+                ModelDownloadSchedule.KIND_LLM -> downloadLlm(label, workName, notifId, target)
                 else -> return@withContext Result.failure()
             }
             if (isStopped) {
@@ -76,7 +79,7 @@ class ModelDownloadWorker(
             }
             ModelDownloadNotifications.notify(
                 applicationContext, notifId,
-                ModelDownloadNotifications.buildComplete(applicationContext, label.ifBlank { modelId.orEmpty() }),
+                ModelDownloadNotifications.buildComplete(applicationContext, label.ifBlank { modelId.orEmpty() }, target),
             )
             Result.success()
         } catch (e: CancellationException) {
@@ -109,6 +112,7 @@ class ModelDownloadWorker(
                         applicationContext,
                         label.ifBlank { modelId.orEmpty() },
                         detail,
+                        target,
                     ),
                 )
                 return@withContext Result.failure(
@@ -124,12 +128,13 @@ class ModelDownloadWorker(
         label: String,
         workName: String,
         notifId: Int,
+        target: String,
     ) {
         val entry = LocalSttModels.MODELS.firstOrNull { it.id == modelId }
             ?: throw IllegalArgumentException("unknown stt model $modelId")
         LocalSttModels.download(applicationContext.filesDir, entry) { r, t ->
             if (isStopped) throw CancellationException("cancelled")
-            reportProgress(label.ifBlank { entry.name }, r, t, workName, notifId)
+            reportProgress(label.ifBlank { entry.name }, r, t, workName, notifId, target)
         }
     }
 
@@ -137,6 +142,7 @@ class ModelDownloadWorker(
         label: String,
         workName: String,
         notifId: Int,
+        target: String,
     ) {
         val url = inputData.getString(ModelDownloadSchedule.KEY_URL)
             ?: throw IllegalArgumentException("llm asset lacks url")
@@ -154,7 +160,7 @@ class ModelDownloadWorker(
         val dest = MainActivity.llmTaskFileFor(applicationContext.filesDir, assetId)
         LocalLlmManager.downloadModel(asset, dest) { r, t ->
             if (isStopped) throw CancellationException("cancelled")
-            reportProgress(label.ifBlank { assetId }, r, t, workName, notifId)
+            reportProgress(label.ifBlank { assetId }, r, t, workName, notifId, target)
         }
     }
 
@@ -164,6 +170,7 @@ class ModelDownloadWorker(
         total: Long?,
         workName: String,
         notifId: Int,
+        target: String,
     ) {
         try {
             setProgressAsync(workDataOf(ModelDownloadSchedule.PROG_RECEIVED to received, ModelDownloadSchedule.PROG_TOTAL to (total ?: -1L)))
@@ -172,7 +179,7 @@ class ModelDownloadWorker(
         try {
             ModelDownloadNotifications.notify(
                 applicationContext, notifId,
-                ModelDownloadNotifications.buildProgress(applicationContext, label, received, total, workName, notifId),
+                ModelDownloadNotifications.buildProgress(applicationContext, label, received, total, workName, notifId, target),
             )
         } catch (_: Exception) {
         }
@@ -184,10 +191,11 @@ class ModelDownloadWorker(
         total: Long?,
         workName: String,
         notifId: Int,
+        target: String,
     ): ForegroundInfo =
         ForegroundInfo(
             notifId,
-            ModelDownloadNotifications.buildProgress(applicationContext, label, received, total, workName, notifId),
+            ModelDownloadNotifications.buildProgress(applicationContext, label, received, total, workName, notifId, target),
         )
 
     /** Best-effort partial cleanup (cancel + kill-restart paths). */

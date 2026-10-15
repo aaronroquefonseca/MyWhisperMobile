@@ -372,23 +372,47 @@ object LocalSttModels {
         }
     }
 
-    /** Per-model install state (missing / present / mismatch). Pure java.io. */
+    /**
+     * Per-model install state. MISMATCH needs a COMPLETE set that
+     * fails verify; a subset of files, short files, or stale `.part`
+     * leftovers (interrupted download) read as INCOMPLETE — resumable
+     * via [download] (verified files are skipped), never "SHA
+     * mismatch". Pure java.io.
+     */
     fun stateFor(filesDir: File, entry: Entry): LocalModelDownload.RowState {
         val dir = dirFor(filesDir, entry)
-        var anyFile = false
+        var present = 0
         for (f in entry.files) {
             val file = File(dir, f.name)
-            if (!file.isFile || file.length() <= 0) continue
-            anyFile = true
-            if (!LocalLlmManager.verifySha256(file, f.sha256)) {
-                return LocalModelDownload.RowState.MISMATCH
+            if (file.isFile && file.length() > 0) present++
+        }
+        if (present == 0 && !hasPartials(dir, entry)) {
+            return LocalModelDownload.RowState.MISSING
+        }
+        if (present == entry.files.size && isInstalled(filesDir, entry)) {
+            return LocalModelDownload.RowState.PRESENT
+        }
+        if (present == entry.files.size) {
+            return LocalModelDownload.RowState.MISMATCH
+        }
+        return LocalModelDownload.RowState.INCOMPLETE
+    }
+
+    /** True when a stale `.part` from an interrupted download lingers. Pure java.io. */
+    fun hasPartials(dir: File, entry: Entry): Boolean =
+        entry.files.any { f -> File(dir, "${f.name}.part").isFile }
+
+    /** Verified bytes already on disk (INCOMPLETE progress numerator). Pure java.io. */
+    fun presentBytes(filesDir: File, entry: Entry): Long {
+        val dir = dirFor(filesDir, entry)
+        var sum = 0L
+        for (f in entry.files) {
+            val file = File(dir, f.name)
+            if (file.isFile && LocalLlmManager.verifySha256(file, f.sha256)) {
+                sum += file.length()
             }
         }
-        return when {
-            anyFile && isInstalled(filesDir, entry) -> LocalModelDownload.RowState.PRESENT
-            anyFile -> LocalModelDownload.RowState.MISMATCH
-            else -> LocalModelDownload.RowState.MISSING
-        }
+        return sum
     }
 
     /**
