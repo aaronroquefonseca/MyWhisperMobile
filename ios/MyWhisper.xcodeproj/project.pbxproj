@@ -42,6 +42,8 @@
 		CC11CC11CC11CC11CC11CC04 /* SyncDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC11CC11CC11CC11CC11CC01 /* SyncDiscovery.swift */; };
 		CC11CC11CC11CC11CC11CC05 /* DevicesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC11CC11CC11CC11CC11CC02 /* DevicesView.swift */; };
 		CC11CC11CC11CC11CC11CC06 /* SyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC11CC11CC11CC11CC11CC03 /* SyncTests.swift */; };
+		DD0100DD0100DD01000002 /* AppFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD0100DD0100DD01000001 /* AppFlow.swift */; };
+		DD0100DD0100DD02000002 /* IntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD0100DD0100DD02000001 /* IntegrationTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -93,6 +95,8 @@
 		CC11CC11CC11CC11CC11CC01 /* SyncDiscovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncDiscovery.swift; sourceTree = "<group>"; };
 		CC11CC11CC11CC11CC11CC02 /* DevicesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevicesView.swift; sourceTree = "<group>"; };
 		CC11CC11CC11CC11CC11CC03 /* SyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncTests.swift; sourceTree = "<group>"; };
+		DD0100DD0100DD01000001 /* AppFlow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppFlow.swift; sourceTree = "<group>"; };
+		DD0100DD0100DD02000001 /* IntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntegrationTests.swift; sourceTree = "<group>"; };
 		602A6F78559E7FAC27690B4A /* Tests Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		D82908387D374745193668C2 /* MyWhisper.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MyWhisper.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		8965188E778D2EEAECC16395 /* MyWhisperTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MyWhisperTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -132,6 +136,7 @@
 			children = (
 				21DD60AF35D373E1C54DA8A7 /* MyWhisperApp.swift */,
 				9AB7341CB99DDAA5CA52EC23 /* ContentView.swift */,
+				DD0100DD0100DD01000001 /* AppFlow.swift */,
 				FAF7AA9058417D529285795E /* CoreBridge.swift */,
 				C1EAAC110000000000000001 /* Cleanup.swift */,
 				D1C710A90000000000000001 /* DictionaryStore.swift */,
@@ -173,6 +178,7 @@
 				5E77150000000000000001 /* SettingsTests.swift */,
 				E2E720B20000000000000005 /* HistoryTests.swift */,
 				CC11CC11CC11CC11CC11CC03 /* SyncTests.swift */,
+				DD0100DD0100DD02000001 /* IntegrationTests.swift */,
 				602A6F78559E7FAC27690B4A /* Tests Info.plist */,
 			);
 			path = MyWhisperTests;
@@ -308,6 +314,7 @@
 				E2E720B20000000000000004 /* HistoryView.swift in Sources */,
 				CC11CC11CC11CC11CC11CC04 /* SyncDiscovery.swift in Sources */,
 				CC11CC11CC11CC11CC11CC05 /* DevicesView.swift in Sources */,
+				DD0100DD0100DD01000002 /* AppFlow.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -325,6 +332,7 @@
 				5E77150000000000000002 /* SettingsTests.swift in Sources */,
 				E2E720B20000000000000006 /* HistoryTests.swift in Sources */,
 				CC11CC11CC11CC11CC11CC06 /* SyncTests.swift in Sources */,
+				DD0100DD0100DD02000002 /* IntegrationTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

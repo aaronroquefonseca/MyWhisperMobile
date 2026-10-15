@@ -1,51 +1,118 @@
 import SwiftUI
 
-/// T1 stub screen: proves the core opens, reports its version, and that
-/// the settings JSON loads. Dictation UI lands in T2.
+/// v1 root: tab navigation across every merged screen (T1–T9), owned by an
+/// `AppFlow` composition root. Record hosts the end-to-end dictation path
+/// (RecordView → Dictation/AudioCapture → core → ResultView +
+/// copy/share); history rows land via the core and HistoryView refreshes
+/// on tab-appear.
 struct ContentView: View {
-    @State private var version = "…"
-    @State private var settingsJSON = "loading…"
-    @State private var status = "starting"
+    @StateObject private var flow = AppFlow()
 
     var body: some View {
-        NavigationStack {
-            List {
+        TabView(selection: $flow.selectedTab) {
+            NavigationStack {
+                recordTab
+            }
+            .tabItem { Label("Record", systemImage: "mic") }
+            .tag(AppTab.record)
+            NavigationStack {
+                SetupView(
+                    settings: flow.settings,
+                    micGranted: flow.micGranted,
+                    testPassed: flow.testPassed,
+                    testRunning: flow.testRunning,
+                    testError: flow.testError,
+                    theme: flow.theme,
+                    strings: SetupStrings.current(languageCode: languageCode),
+                    onRequestMic: { flow.requestMic() },
+                    onOpenSettings: { flow.openSystemSettings() },
+                    onRunTest: { flow.runSetupTest() },
+                    onThemeChange: { flow.applyTheme($0) }
+                )
+            }
+            .tabItem { Label("Setup", systemImage: "checklist") }
+            .tag(AppTab.setup)
+            NavigationStack {
+                SttSettingsView()
+            }
+            .tabItem { Label("Speech", systemImage: "waveform") }
+            .tag(AppTab.speech)
+            NavigationStack {
+                CleanupSettingsView()
+            }
+            .tabItem { Label("Cleanup", systemImage: "wand.and.stars") }
+            .tag(AppTab.cleanup)
+            NavigationStack {
+                DictionaryView()
+            }
+            .tabItem { Label("Dictionary", systemImage: "book") }
+            .tag(AppTab.dictionary)
+            NavigationStack {
+                HistoryView()
+            }
+            .tabItem { Label("History", systemImage: "clock") }
+            .tag(AppTab.history)
+            NavigationStack {
+                DevicesView()
+            }
+            .tabItem { Label("Devices", systemImage: "antenna.radiowaves.left.and.right") }
+            .tag(AppTab.devices)
+        }
+        .preferredColorScheme(flow.theme.colorScheme)
+        .sheet(isPresented: shareVisible) {
+            if let text = flow.shareText {
+                ShareSheet(items: [text])
+            }
+        }
+    }
+
+    private var recordTab: some View {
+        List {
+            if let error = flow.coreError {
                 Section("Core") {
-                    LabeledContent("Version", value: version)
-                    LabeledContent("Status", value: status)
-                }
-                Section("Settings JSON") {
-                    Text(settingsJSON)
-                        .font(.system(.caption, design: .monospaced))
+                    Text("Core error: \(error)")
+                        .foregroundStyle(.red)
                         .textSelection(.enabled)
-                }
-                Section {
-                    Button("Reload") { load() }
+                    Button("Retry") { flow.openCore() }
                 }
             }
-            .navigationTitle("MyWhisper")
-            .onAppear { load() }
+            Section {
+                RecordView(
+                    state: flow.recordState,
+                    toggled: flow.toggled,
+                    micMode: flow.micMode,
+                    levels: flow.levels,
+                    onPressDown: { flow.pressDown() },
+                    onPressUp: { flow.pressUp() },
+                    onCancel: { flow.cancelRecording() }
+                )
+                .frame(maxWidth: .infinity, alignment: .center)
+                .listRowBackground(Color.clear)
+            }
+            if let content = flow.result {
+                Section("Result") {
+                    ResultView(
+                        content: content,
+                        onCopy: { flow.copyResult() },
+                        onShare: { flow.shareResult() },
+                        onRetry: { flow.retryResult() },
+                        strings: SttStrings.current(languageCode: languageCode)
+                    )
+                }
+            }
         }
+        .navigationTitle("MyWhisper")
     }
 
-    private func load() {
-        do {
-            let dir = try appFilesDir()
-            let key = try CoreBridge.dbKeyHex()
-            version = try CoreBridge.open(filesDir: dir, dbKeyHex: key)
-            settingsJSON = try CoreBridge.settingsJSON()
-            status = "open"
-        } catch {
-            status = "error: \(error)"
-        }
+    private var shareVisible: Binding<Bool> {
+        Binding(
+            get: { flow.shareText != nil },
+            set: { if !$0 { flow.shareText = nil } }
+        )
     }
 
-    private func appFilesDir() throws -> String {
-        let url = try FileManager.default.url(
-            for: .applicationSupportDirectory, in: .userDomainMask,
-            appropriateFor: nil, create: true
-        ).appendingPathComponent("MyWhisper", isDirectory: true)
-        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-        return url.path
+    /// Language code for the en/es string twins (nil = English).
+    private var languageCode: String? {
+        Locale.current.language.languageCode?.identifier
     }
 }
