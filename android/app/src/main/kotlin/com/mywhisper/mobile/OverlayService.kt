@@ -1165,6 +1165,7 @@ class OverlayService : Service(), Dictation.Listener {
 
     override fun onResult(text: String) {
         micBtn?.post { refreshChrome(Dictation.State.IDLE) }
+        android.util.Log.i("MwFloat", "onResult len=${text.length} text=<$text>")
         deliver(text)
     }
 
@@ -1189,10 +1190,16 @@ class OverlayService : Service(), Dictation.Listener {
     fun deliver(text: String) {
         bgWorkers.execute {
             val t = text.trim()
-            android.util.Log.i("MwFloat", "deliver len=${t.length}")
-            if (t.isEmpty()) return@execute
+            android.util.Log.i(
+                "MwFloat",
+                "deliver entry len=${text.length} trimmedLen=${t.length} text=<$t>",
+            )
+            if (t.isEmpty()) {
+                android.util.Log.i("MwFloat", "deliver drop-empty")
+                return@execute
+            }
             val ok = MyWhisperAccessibility.commit(t)
-            android.util.Log.i("MwFloat", "commit ok=$ok")
+            android.util.Log.i("MwFloat", "deliver commit ok=$ok text=<$t>")
             if (!ok) {
                 // Toast must run on the main thread (this is a worker).
                 mainHandler.post {

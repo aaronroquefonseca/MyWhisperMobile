@@ -33,15 +33,37 @@ class MyWhisperAccessibility : AccessibilityService() {
          * with [insert]. Stale/invalid selection (negative, reversed,
          * or past the end — e.g. node recycled between read and
          * ACTION_SET_TEXT) falls back to appending, never duplicating
-         * [existing].
+         * [existing]. A true end-append (cursor at the end, or the
+         * stale-selection fallback) joins with one space when a word
+         * char meets a word char ("REF"+"X" -> "REF X"); mid-text
+         * inserts and selection replaces stay byte-exact.
          */
         fun spliceAtCursor(existing: String, selStart: Int, selEnd: Int, insert: String): String {
             if (insert.isEmpty()) return existing
             val n = existing.length
             if (selStart < 0 || selEnd < 0 || selStart > selEnd || selStart > n || selEnd > n) {
-                return existing + insert
+                return appendWord(existing, insert)
+            }
+            if (selStart == n && selEnd == n) {
+                return appendWord(existing, insert)
             }
             return existing.substring(0, selStart) + insert + existing.substring(selEnd)
+        }
+
+        /**
+         * Word-append join: at most one separating space, only between
+         * two word chars. Punctuation appends directly ("hello"+"," =
+         * "hello,"); already-spaced sides never double up.
+         */
+        private fun appendWord(existing: String, insert: String): String {
+            if (existing.isEmpty() || insert.isEmpty()) return existing + insert
+            val leftSpaced = existing.last().isWhitespace()
+            val rightSpaced = insert.first().isWhitespace()
+            if (leftSpaced || rightSpaced) return existing + insert
+            if (existing.last().isLetterOrDigit() && insert.first().isLetterOrDigit()) {
+                return "$existing $insert"
+            }
+            return existing + insert
         }
 
         /**
@@ -49,20 +71,43 @@ class MyWhisperAccessibility : AccessibilityService() {
          * the cursor (replacing any selected range).
          * Returns false when there is no service, no focus, or the
          * field is not editable (caller should surface a hint).
+         *
+         * Bubble-commit trace (repro aid): logs the exact field bytes
+         * before, the exact bytes sent, and the exact bytes after, so a
+         * logcat capture discriminates deliver-twice vs stale-read vs
+         * app-side echo. Logcat is on-device local; the repro uses
+         * synthetic reference text.
          */
         fun commit(text: String): Boolean {
-            val s = live ?: return false
+            val s = live ?: run {
+                android.util.Log.i("MwCommit", "commit no-service insertLen=${text.length}")
+                return false
+            }
             return try {
-                val root = s.rootInActiveWindow ?: return false
-                val node = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-                    ?: return false
-                if (!node.isEditable) return false
+                val root = s.rootInActiveWindow ?: run {
+                    android.util.Log.i("MwCommit", "commit no-root insertLen=${text.length}")
+                    return false
+                }
+                val node = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: run {
+                    android.util.Log.i("MwCommit", "commit no-focus insertLen=${text.length}")
+                    return false
+                }
+                if (!node.isEditable) {
+                    android.util.Log.i("MwCommit", "commit not-editable")
+                    return false
+                }
                 val existing = node.text?.toString() ?: ""
-                val merged = spliceAtCursor(
-                    existing,
-                    node.textSelectionStart,
-                    node.textSelectionEnd,
-                    text,
+                val selS = node.textSelectionStart
+                val selE = node.textSelectionEnd
+                android.util.Log.i(
+                    "MwCommit",
+                    "commit before len=${existing.length} sel=($selS,$selE) " +
+                        "insertLen=${text.length} before=<$existing> insert=<$text>",
+                )
+                val merged = spliceAtCursor(existing, selS, selE, text)
+                android.util.Log.i(
+                    "MwCommit",
+                    "commit merged len=${merged.length} merged=<$merged>",
                 )
                 val args = Bundle().apply {
                     putCharSequence(
@@ -70,7 +115,18 @@ class MyWhisperAccessibility : AccessibilityService() {
                         merged,
                     )
                 }
-                node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+                val ok = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+                val after = try {
+                    root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)?.text?.toString()
+                } catch (_: Exception) {
+                    null
+                }
+                android.util.Log.i(
+                    "MwCommit",
+                    "commit result ok=$ok afterLen=${after?.length} " +
+                        "match=${after == merged} after=<$after>",
+                )
+                ok
             } catch (_: Exception) {
                 false
             }
