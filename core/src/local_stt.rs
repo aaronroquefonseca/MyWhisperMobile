@@ -3,17 +3,17 @@
 //! The actual inference lives on the Kotlin side via the sherpa-onnx
 //! AAR (`LocalStt.kt`, `OfflineRecognizer` + `OfflineMoonshineModelConfig`
 //! with `mergedDecoder`). This module owns the shared contract: pack
-//! layout under `filesDir`, the pinned SHA256 manifest, the
-//! `try_transcribe` entry the engine calls with `filesDir` plumbed
-//! through, plus the host-testable pieces of the decode strategy:
+//! layout under `filesDir`, the pinned SHA256 manifest (checked by
+//! `verify_pack` for tests/meter only — never on the dictate hot
+//! path), plus the host-testable pieces of the decode strategy:
 //! VAD chunking (works around the merged-decoder ORT broadcast bug
 //! that breaks WER past ~9s of continuous audio) and the WER scorer
 //! with the ship gates.
 //!
-//! Rust has no ONNX runtime linked, so `try_transcribe` verifies the
-//! pack and returns `Err` when inference must happen elsewhere
-//! (Kotlin) or the pack is absent — the server chain fallback stays
-//! intact. The meter harness + `LocalStt.kt` do the real decode, using
+//! Rust has no ONNX runtime linked and runs no inference here; the
+//! engine's dictate path goes straight to the server chain (which
+//! skips `Local` entries) while Kotlin `LocalStt` owns the real
+//! decode. The meter harness + `LocalStt.kt` do the real decode, using
 //! the same chunk constants below (mirrored in `LocalStt.chunkPcm`).
 
 use sha2::{Digest, Sha256};
@@ -81,6 +81,11 @@ pub fn pack_dir(files_dir: &Path) -> PathBuf {
 }
 
 /// Verify pack presence (+ SHA256 when pinned). `Ok(())` = usable.
+///
+/// Tests/meter only: the dictate hot path never calls this (hashing
+/// ~44MB per utterance would burn disk+CPU on every server-fallback
+/// dictate once a pack is installed). Kotlin `LocalStt.isAvailable`
+/// gates availability on the real decode side.
 pub fn verify_pack(files_dir: &Path) -> Result<(), String> {
     let dir = pack_dir(files_dir);
     if !dir.is_dir() {
@@ -100,42 +105,6 @@ pub fn verify_pack(files_dir: &Path) -> Result<(), String> {
         }
     }
     Ok(())
-}
-
-/// Engine entry: `filesDir` plumbed through. Returns `Err` when the
-/// pack is absent/invalid (caller falls back to the server chain) —
-/// Rust never runs inference here; Kotlin `LocalStt` does.
-pub fn try_transcribe(files_dir: &Path, _pcm16: &[i16]) -> Result<String, String> {
-    #[cfg(test)]
-    if let Some(over) = test_transcribe_override() {
-        return over;
-    }
-    verify_pack(files_dir)?;
-    Err("local inference lives in LocalStt.kt (sherpa-onnx AAR); rust try_transcribe verifies pack only".to_string())
-}
-
-/// Test-only canned result for `try_transcribe` (production Rust never
-/// runs inference; the override lets engine tests drive the local tail
-/// without a pack or ONNX runtime).
-#[cfg(test)]
-static TEST_TRANSCRIBE_OVERRIDE: std::sync::Mutex<Option<Result<String, String>>> =
-    std::sync::Mutex::new(None);
-
-#[cfg(test)]
-fn test_transcribe_override() -> Option<Result<String, String>> {
-    TEST_TRANSCRIBE_OVERRIDE.lock().ok()?.clone()
-}
-
-/// Install a canned `try_transcribe` result (single-shot per test).
-#[cfg(test)]
-pub(crate) fn set_test_transcribe(result: Result<String, String>) {
-    *TEST_TRANSCRIBE_OVERRIDE.lock().unwrap() = Some(result);
-}
-
-/// Clear a parked override so later tests never observe it.
-#[cfg(test)]
-pub(crate) fn clear_test_transcribe() {
-    TEST_TRANSCRIBE_OVERRIDE.lock().unwrap().take();
 }
 
 /// Split 16 kHz mono PCM into decode chunks, returned as
@@ -309,22 +278,14 @@ mod tests {
 
     #[test]
     fn missing_pack_fails_closed() {
-        // Serialized with the engine local-tail tests: they install a
-        // canned try_transcribe override on the same static.
-        let _guard = crate::server_stt::status_test_lock();
-        clear_test_transcribe();
         let dir = std::env::temp_dir().join(format!("mw-local-missing-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let err = verify_pack(&dir).unwrap_err();
         assert!(err.contains("missing"), "{err}");
-        assert!(try_transcribe(&dir, &[0i16; 160]).is_err());
     }
 
     #[test]
     fn pinned_pack_rejects_wrong_content() {
-        // Serialized with the engine local-tail tests (shared override).
-        let _guard = crate::server_stt::status_test_lock();
-        clear_test_transcribe();
         let dir = std::env::temp_dir().join(format!("mw-local-present-{}", std::process::id()));
         let pack = dir.join(PACK_REL_DIR);
         let _ = std::fs::remove_dir_all(&dir);
@@ -335,7 +296,6 @@ mod tests {
         // Pins are live: fake content fails closed on sha mismatch.
         let err = verify_pack(&dir).unwrap_err();
         assert!(err.contains("sha mismatch"), "{err}");
-        assert!(try_transcribe(&dir, &[0i16; 160]).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -559,50 +559,12 @@ impl Engine {
         let pcm16 = audio::f32_to_i16(&selected);
 
         let words = self.store.load_words().unwrap_or_default();
-        // On-device first: Local entries attempt the filesDir pack
-        // (Kotlin LocalStt does the real sherpa moonshine-v2 decode;
-        // Rust verifies the pack here so a future runtime can hook
-        // in). Any Err falls through to the server chain — fallback
-        // intact. Snippet/cleanup tail mirrors the server path below.
-        if self
-            .settings
-            .stt
-            .entries
-            .iter()
-            .any(|e| e.enabled && matches!(e.kind, crate::settings::SttEntryKind::Local))
-            && let Ok(raw) = crate::local_stt::try_transcribe(&self._dir, &pcm16)
-        {
-            let generation_at_entry = crate::server_stt::server_generation();
-            let pairs: Vec<(String, String)> = self
-                .settings
-                .dictionary
-                .snippets
-                .iter()
-                .flat_map(|s| s.triggers().into_iter().map(|t| (t, s.replacement.clone())))
-                .collect();
-            let expanded = expand_snippets(&raw, &pairs);
-            let text = post_process(
-                &expanded,
-                &self.settings.language_models,
-                &words,
-                generation_at_entry,
-            );
-            // Cleanup fetches are blocking: recheck the witness before
-            // the history write so a cancel that landed mid-cleanup
-            // settles instead of storing a phantom row (server-path
-            // parity).
-            #[cfg(test)]
-            crate::server_stt::finish_cleanup_pause_point();
-            if crate::server_stt::server_generation() != generation_at_entry {
-                return Err("superseded (provider switched mid-utterance)".to_string());
-            }
-            return Ok(self.finalize_delivery(
-                &raw,
-                &text,
-                "local moonshine-v2-tiny.en",
-                duration_secs,
-            ));
-        }
+        // On-device inference lives in Kotlin `LocalStt` (sherpa-onnx
+        // AAR), never in Rust: the server chain below skips `Local`
+        // entries, so there is deliberately no pack hashing on this hot
+        // path (a full SHA256 over ~44MB per utterance would burn
+        // disk+CPU on every server-fallback dictate). Pack verification
+        // stays in `local_stt::verify_pack` for tests/meter only.
         // Witness before the blocking chain: a provider switch or Stop
         // applied mid-transcribe bumps the generation; stale results
         // then settle instead of delivering for a dead chain.
@@ -1249,50 +1211,27 @@ mod tests {
         llm_stub.join().unwrap();
     }
 
-    fn local_only_settings() -> String {
-        // Default settings already carry a single enabled Local entry;
-        // hermetic cleanup-off so no network is touched.
-        let mut s = AppSettings::default();
-        s.language_models.cleanup_enabled = false;
-        serde_json::to_string(&s).unwrap()
-    }
-
     #[test]
-    fn local_tail_persists_history_before_returning() {
-        // Finding 1: the local early-return skipped retention/history/
-        // checkpoint. The local tail now shares finalize_delivery, so a
-        // local hit stores its row before Ok.
+    fn finish_superseded_during_cleanup_settles() {
+        // Witness recheck after post_process (cleanup fetches are
+        // blocking): park between cleanup and the recheck, land a Stop
+        // inside the window. The stale result must settle with no
+        // history write — never a phantom row.
         let _guard = status_test_lock();
         reset_status_state();
-        crate::local_stt::clear_test_transcribe();
-        crate::local_stt::set_test_transcribe(Ok("hello local".to_string()));
+        let (port, stub) = stub_transcription_server();
         let mut eng = open_engine();
-        eng.put_settings(&local_only_settings()).unwrap();
-        eng.start_utterance(16000);
-        eng.push_pcm(&vec![1000i16; 8000]);
-        let out = eng.finish_utterance().unwrap();
-        crate::local_stt::clear_test_transcribe();
-        assert_eq!(out.text, "hello local");
-        assert_eq!(out.engine, "local moonshine-v2-tiny.en");
-        let history = eng.history_json(10);
-        assert!(
-            history.contains("hello local"),
-            "local hit must persist history before Ok, got: {history}"
-        );
-    }
-
-    #[test]
-    fn local_tail_superseded_during_cleanup_settles() {
-        // Finding 2: no witness recheck after local post_process meant a
-        // cancel landing mid-cleanup still stored a phantom row. Park
-        // between cleanup and the recheck; the stale local result must
-        // settle with no history write.
-        let _guard = status_test_lock();
-        reset_status_state();
-        crate::local_stt::clear_test_transcribe();
-        crate::local_stt::set_test_transcribe(Ok("hello local".to_string()));
-        let mut eng = open_engine();
-        eng.put_settings(&local_only_settings()).unwrap();
+        // Hermetic: disable LLM cleanup (the default legacy Ollama
+        // chain would otherwise polish via any localhost server).
+        let mut settings: AppSettings = serde_json::from_str(&settings_with(self_hosted_entry(
+            "Stub",
+            &format!("http://127.0.0.1:{port}"),
+        )))
+        .unwrap();
+        settings.language_models.cleanup_enabled = false;
+        eng.put_settings(&serde_json::to_string(&settings).unwrap())
+            .unwrap();
+        assert_eq!(eng.poll_stt(), TickOutcome::Unchanged);
         let (tx_entered, rx_entered) = mpsc::channel();
         let (tx_proceed, rx_proceed) = mpsc::channel();
         set_finish_cleanup_pause(tx_entered, rx_proceed);
@@ -1308,12 +1247,12 @@ mod tests {
         tx_proceed.send(()).unwrap();
         let (eng, history_before, out) = handle.join().unwrap();
         clear_finish_cleanup_pause();
-        crate::local_stt::clear_test_transcribe();
+        stub.join().unwrap();
         match out {
-            Ok(_) => panic!("stale local result must settle, not deliver"),
+            Ok(_) => panic!("stale result must settle, not deliver"),
             Err(err) => assert!(
                 err.contains("superseded"),
-                "stale local result must settle, got: {err}"
+                "stale result must settle, got: {err}"
             ),
         }
         assert_eq!(history_before, "[]");
