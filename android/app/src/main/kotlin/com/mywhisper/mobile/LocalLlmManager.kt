@@ -84,6 +84,88 @@ object LocalLlmManager {
     fun buildPrompt(system: String, transcript: String): String =
         "$system\n\n<transcript>$transcript</transcript>"
 
+    // -- Local LLM self-test (in-row "Run test", local-only) ---
+
+    /** Fixed raw transcription injected for the Local self-test. */
+    const val SELFTEST_TRANSCRIPT = "this is a test"
+
+    /** PASS requires a non-empty reply within this budget. */
+    const val SELFTEST_TIMEOUT_MS = 60_000L
+
+    /** Output excerpt cap for the inline row result. */
+    const val SELFTEST_EXCERPT_MAX = 120
+
+    /**
+     * Local-only self-test outcome (fail-closed, no fallback masking:
+     * any throw or blank/timeout reply is FAIL).
+     */
+    data class SelfTestResult(
+        val passed: Boolean,
+        val latencyMs: Long,
+        val excerpt: String,
+        val error: String?,
+        val timedOut: Boolean,
+    )
+
+    /** Fixed cleanup prompt for the self-test (system + fixed transcript). */
+    fun selfTestPrompt(system: String): String =
+        buildPrompt(system, SELFTEST_TRANSCRIPT)
+
+    /** Single-line excerpt, capped at [maxChars] with an ellipsis. */
+    fun selfTestExcerpt(output: String, maxChars: Int = SELFTEST_EXCERPT_MAX): String {
+        val flat = output.replace(Regex("\\s+"), " ").trim()
+        if (flat.length <= maxChars) return flat
+        return flat.take(maxChars).trimEnd() + "…"
+    }
+
+    /**
+     * Pure PASS/FAIL mapping: PASS = ran + non-empty + under timeout
+     * with no error. Excerpt carries the reply, else the error text.
+     */
+    fun mapSelfTestResult(
+        output: String?,
+        latencyMs: Long,
+        timeoutMs: Long,
+        error: String?,
+    ): SelfTestResult {
+        val timedOut = latencyMs > timeoutMs
+        val excerpt = when {
+            !output.isNullOrBlank() -> selfTestExcerpt(output)
+            !error.isNullOrBlank() -> selfTestExcerpt(error)
+            else -> ""
+        }
+        val passed = error == null && !timedOut && !output.isNullOrBlank()
+        return SelfTestResult(
+            passed = passed,
+            latencyMs = latencyMs,
+            excerpt = excerpt,
+            error = error,
+            timedOut = timedOut,
+        )
+    }
+
+    /**
+     * Local-path-only self-test: fixed prompt through [generate]
+     * (default = on-device [generate], never Ollama/cloud). Measures
+     * wall-clock latency and maps via [mapSelfTestResult].
+     */
+    fun runSelfTest(
+        taskFile: File,
+        systemPrompt: String,
+        timeoutMs: Long = SELFTEST_TIMEOUT_MS,
+        generateFn: (File, String) -> String = { f, p -> generate(f, p) },
+    ): SelfTestResult {
+        val start = System.nanoTime()
+        return try {
+            val out = generateFn(taskFile, selfTestPrompt(systemPrompt))
+            val latencyMs = (System.nanoTime() - start) / 1_000_000
+            mapSelfTestResult(out, latencyMs, timeoutMs, null)
+        } catch (e: Exception) {
+            val latencyMs = (System.nanoTime() - start) / 1_000_000
+            mapSelfTestResult(null, latencyMs, timeoutMs, e.message ?: "failed")
+        }
+    }
+
     fun statusFor(taskFile: File): Status = Status(
         modelPath = taskFile.absolutePath,
         ready = taskFile.isFile,

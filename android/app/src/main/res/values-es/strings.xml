@@ -338,4 +338,8 @@
     <string name="local_state_disabled">desactivado</string>
     <string name="llm_local_models_title">Modelo local</string>
     <string name="llm_local_models_sub">Descarga el archivo del modelo y activa la entrada Local de arriba. Sin su archivo verificado la entrada se omite y la cadena sigue.</string>
+    <string name="llm_selftest_run">Ejecutar prueba</string>
+    <string name="llm_selftest_running">Probando modelo local…</string>
+    <string name="llm_selftest_pass">OK · %1$d ms · %2$s</string>
+    <string name="llm_selftest_fail">FALLO · %1$d ms · %2$s</string>
 </resources>

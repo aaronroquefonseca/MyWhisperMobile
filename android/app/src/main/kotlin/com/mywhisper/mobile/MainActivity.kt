@@ -274,6 +274,18 @@ class MainActivity : ComponentActivity() {
             state == LocalPackState.PRESENT
 
         /**
+         * Local LLM self-test gate: the in-row "Run test" goes live
+         * only with a verified pack on a runner build. Fail-closed:
+         * missing/mismatch or lite (no runner) stays disabled.
+         * Pure for unit tests (runner presence + pack injected).
+         */
+        @JvmStatic
+        internal fun llmSelfTestAllowed(
+            runnerSupported: Boolean,
+            packState: LocalPackState,
+        ): Boolean = runnerSupported && packState == LocalPackState.PRESENT
+
+        /**
          * Lite-flavor gate for the Local STT/LLM rows: lite builds ship
          * no on-device runners (sherpa / MediaPipe are
          * fullImplementation-only), so downloads offered there could
@@ -2328,6 +2340,10 @@ class MainActivity : ComponentActivity() {
         var llmDlTotal by remember { mutableStateOf<Long?>(null) }
         var llmDlError by remember { mutableStateOf<String?>(null) }
         var llmDeleteConfirm by remember { mutableStateOf(false) }
+        // Local-only self-test ("Run test" in the Local row): fixed
+        // prompt + fixed transcript through the Local path only.
+        var llmTestBusy by remember { mutableStateOf(false) }
+        var llmTestResult by remember { mutableStateOf<LocalLlmManager.SelfTestResult?>(null) }
         var version by remember { mutableIntStateOf(0) }
         // Pack check (SHA over a hundreds-of-MB file) runs once per
         // save-generation, not per row or keystroke; enabling Local
@@ -2368,6 +2384,34 @@ class MainActivity : ComponentActivity() {
                         llmDlError = ex.message ?: "failed"
                         version++
                     }
+                }
+            }
+        }
+        fun startLlmSelfTest() {
+            // Fail-closed: verified pack + runner only; local path
+            // only, never Ollama/cloud (no fallback masking).
+            if (!llmSelfTestAllowed(llmRunner, llmState)) return
+            if (llmTestBusy) return
+            llmTestBusy = true
+            llmTestResult = null
+            workers.execute {
+                val result = try {
+                    val system = CoreBridge.defaultCleanupPrompt().getOrThrow()
+                    LocalLlmManager.runSelfTest(
+                        LocalLlmManager.defaultTaskFile(filesDir),
+                        system,
+                    )
+                } catch (ex: Exception) {
+                    LocalLlmManager.mapSelfTestResult(
+                        null,
+                        0L,
+                        LocalLlmManager.SELFTEST_TIMEOUT_MS,
+                        ex.message ?: "failed",
+                    )
+                }
+                runOnUiThread {
+                    llmTestResult = result
+                    llmTestBusy = false
                 }
             }
         }
@@ -2593,6 +2637,54 @@ class MainActivity : ComponentActivity() {
                             },
                             handle = handle,
                         )
+                        // Local-only self-test, inline in the Local row:
+                        // fixed prompt + "this is a test" via generate(),
+                        // never Ollama/cloud. Reports latency + excerpt +
+                        // PASS/FAIL. Disabled unless the pack verifies.
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            OutlinedButton(
+                                enabled = llmSelfTestAllowed(llmRunner, llmState) && !llmTestBusy,
+                                onClick = { startLlmSelfTest() },
+                            ) {
+                                Text(
+                                    if (llmTestBusy) stringResource(R.string.llm_selftest_running)
+                                    else stringResource(R.string.llm_selftest_run),
+                                )
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            val selfResult = llmTestResult
+                            if (llmTestBusy && selfResult == null) {
+                                Text(
+                                    stringResource(R.string.llm_selftest_running),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            } else if (selfResult != null) {
+                                Text(
+                                    if (selfResult.passed) {
+                                        stringResource(
+                                            R.string.llm_selftest_pass,
+                                            selfResult.latencyMs,
+                                            selfResult.excerpt,
+                                        )
+                                    } else {
+                                        stringResource(
+                                            R.string.llm_selftest_fail,
+                                            selfResult.latencyMs,
+                                            selfResult.excerpt.ifBlank {
+                                                selfResult.error ?: "failed"
+                                            },
+                                        )
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (selfResult.passed) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.error
+                                    },
+                                )
+                            }
+                        }
                     } else {
                     Card(
                         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
