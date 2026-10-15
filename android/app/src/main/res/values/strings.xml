@@ -356,4 +356,10 @@
     <string name="provider_test_looks_good">Looks good — save, then dictate to verify against the server.</string>
     <string name="provider_test_server_url_required">Server URL is required.</string>
     <string name="provider_test_model_required">Model is required.</string>
+
+    <!-- Background model downloads (own mw-downloads channel) -->
+    <string name="download_channel">Model downloads</string>
+    <string name="download_title">Downloading %1$s</string>
+    <string name="download_cancel">Cancel download</string>
+    <string name="download_complete_title">Download complete</string>
 </resources>

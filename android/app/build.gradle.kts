@@ -88,6 +88,10 @@ dependencies {
     // ~1000 unused vector glyphs into dex (~25-35MB win with R8).
     implementation("androidx.compose.material:material-icons-core")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    // Background pack downloads: WorkManager owns Doze-aware scheduling,
+    // the unmetered/battery-not-low constraints, and exponential-backoff
+    // retry + app-kill resume (see ModelDownloadSchedule for rationale).
+    implementation("androidx.work:work-runtime-ktx:2.9.0")
     // On-device LLM cleanup (MediaPipe LLM Inference .task, GPU delegate;
     // successor API: LiteRT-LM). Loaded lazily via reflection in
     // LocalLlmManager so lite builds and JVM unit tests run without the

@@ -356,4 +356,10 @@
     <string name="provider_test_looks_good">Correcto — guarda y dicta para verificar contra el servidor.</string>
     <string name="provider_test_server_url_required">La URL del servidor es obligatoria.</string>
     <string name="provider_test_model_required">El modelo es obligatorio.</string>
+
+    <!-- Descargas de modelos en segundo plano (canal propio mw-downloads) -->
+    <string name="download_channel">Descargas de modelos</string>
+    <string name="download_title">Descargando %1$s</string>
+    <string name="download_cancel">Cancelar descarga</string>
+    <string name="download_complete_title">Descarga completa</string>
 </resources>
