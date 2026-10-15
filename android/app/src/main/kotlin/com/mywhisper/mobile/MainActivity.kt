@@ -134,6 +134,17 @@ class MainActivity : ComponentActivity() {
     /** On-device pack state for the STT/LLM Local rows. Pure for unit tests. */
     internal enum class LocalPackState { PRESENT, MISSING, MISMATCH }
 
+    /**
+     * Lite-gated row state for the Local STT/LLM download rows.
+     * NEED_FULL_FLAVOR = runner absent (lite flavor): the full-APK
+     * pointer shows instead of Download; the rest mirror the
+     * verified-pack row machine ([LocalModelDownload.RowState]).
+     * Pure for unit tests.
+     */
+    internal enum class GatedRowState {
+        NEED_FULL_FLAVOR, MISSING, DOWNLOADING, PRESENT, MISMATCH, FAILED
+    }
+
     companion object {
         /** Next step when the mic request is denied. Pure for unit tests. */
         internal enum class MicDenyOutcome { RATIONALE, SETTINGS, TRANSIENT }
@@ -259,6 +270,64 @@ class MainActivity : ComponentActivity() {
         @JvmStatic
         internal fun localToggleAllowed(state: LocalPackState): Boolean =
             state == LocalPackState.PRESENT
+
+        /**
+         * Lite-flavor gate for the Local STT/LLM rows: lite builds ship
+         * no on-device runners (sherpa / MediaPipe are
+         * fullImplementation-only), so downloads offered there could
+         * never run. False (= runner absent) forces the NEED_FULL_FLAVOR
+         * row, which shows the full-APK pointer instead of Download.
+         * True (= full flavor) defers to the verified-pack row machine.
+         * Fail-closed: NEED_FULL_FLAVOR never enables the toggle.
+         * Pure for unit tests (runner presence injected).
+         */
+        @JvmStatic
+        internal fun gatedRowState(
+            packPresent: Boolean,
+            packMismatch: Boolean,
+            downloading: Boolean,
+            error: String?,
+            runnerSupported: Boolean,
+        ): GatedRowState {
+            if (!runnerSupported) return GatedRowState.NEED_FULL_FLAVOR
+            return when (
+                LocalModelDownload.resolve(packPresent, packMismatch, downloading, error)
+            ) {
+                LocalModelDownload.RowState.MISSING -> GatedRowState.MISSING
+                LocalModelDownload.RowState.DOWNLOADING -> GatedRowState.DOWNLOADING
+                LocalModelDownload.RowState.PRESENT -> GatedRowState.PRESENT
+                LocalModelDownload.RowState.MISMATCH -> GatedRowState.MISMATCH
+                LocalModelDownload.RowState.FAILED -> GatedRowState.FAILED
+            }
+        }
+
+        /** True when the Local toggle may go live under runner gating. */
+        @JvmStatic
+        internal fun gatedToggleAllowed(state: GatedRowState): Boolean =
+            state == GatedRowState.PRESENT
+
+        /** Sherpa STT runner present (false on lite builds / JVM tests). Never throws. */
+        @JvmStatic
+        internal fun sttRunnerSupported(): Boolean =
+            try {
+                LocalStt.SherpaRunner.isSupported()
+            } catch (_: Exception) {
+                false
+            } catch (_: LinkageError) {
+                false
+            }
+
+        /** MediaPipe LLM runner present (false on lite builds / JVM tests). Never throws. */
+        @JvmStatic
+        internal fun llmRunnerSupported(): Boolean =
+            try {
+                Class.forName("com.google.mediapipe.tasks.genai.llminference.LlmInference")
+                true
+            } catch (_: Exception) {
+                false
+            } catch (_: LinkageError) {
+                false
+            }
 
         /**
           * Downloadable LLM assets, parsed by [LocalLlmManager]. Kept
@@ -1120,7 +1189,13 @@ class MainActivity : ComponentActivity() {
         on: Boolean,
         state: LocalPackState,
         bump: () -> Unit,
+        runnerSupported: Boolean = true,
     ) {
+        if (!runnerSupported) {
+            toast(getString(R.string.local_need_full))
+            bump()
+            return
+        }
         if (on && !localToggleAllowed(state)) {
             toast(getString(R.string.local_enable_blocked))
             bump()
@@ -1148,6 +1223,9 @@ class MainActivity : ComponentActivity() {
         fun packOf(id: String): LocalPackState =
             modelPacks[id] ?: LocalPackState.MISSING
         val selPack = packOf(selectedModel.id)
+        // Lite flavor ships no sherpa runner: the chain toggle and all
+        // Download buttons gate on this (fail-closed, no download offered).
+        val sttRunner = remember { sttRunnerSupported() }
         // Per-model in-row download state (desktop fill_stt_models
         // parity: progress updates in place, Retry on failure).
         var dlBusy by remember { mutableStateOf(setOf<String>()) }
@@ -1162,6 +1240,11 @@ class MainActivity : ComponentActivity() {
                 dlErr[m.id],
             )
         fun startModelDownload(m: LocalSttModels.Entry) {
+            // Lite flavor: downloads could never run — refuse fail-closed.
+            if (!sttRunner) {
+                toast(getString(R.string.local_need_full))
+                return
+            }
             if (dlBusy.contains(m.id)) return
             dlBusy = dlBusy + m.id
             dlErr = dlErr - m.id
@@ -1220,22 +1303,32 @@ class MainActivity : ComponentActivity() {
                                     // model (downloads live in On-device
                                     // models below); the toggle stays
                                     // fail-closed on its verified pack.
-                                    Text(
-                                        when (selPack) {
-                                            LocalPackState.PRESENT ->
-                                                stringResource(R.string.local_pack_present)
-                                            LocalPackState.MISSING ->
-                                                stringResource(R.string.local_pack_missing)
-                                            LocalPackState.MISMATCH ->
-                                                stringResource(R.string.local_pack_mismatch)
-                                        },
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = if (selPack == LocalPackState.PRESENT) {
-                                            MaterialTheme.colorScheme.primary
-                                        } else {
-                                            MaterialTheme.colorScheme.error
-                                        },
-                                    )
+                                    // Lite flavor (no runner): full-APK
+                                    // pointer instead of pack status.
+                                    if (!sttRunner) {
+                                        Text(
+                                            stringResource(R.string.local_need_full),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.error,
+                                        )
+                                    } else {
+                                        Text(
+                                            when (selPack) {
+                                                LocalPackState.PRESENT ->
+                                                    stringResource(R.string.local_pack_present)
+                                                LocalPackState.MISSING ->
+                                                    stringResource(R.string.local_pack_missing)
+                                                LocalPackState.MISMATCH ->
+                                                    stringResource(R.string.local_pack_mismatch)
+                                            },
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = if (selPack == LocalPackState.PRESENT) {
+                                                MaterialTheme.colorScheme.primary
+                                            } else {
+                                                MaterialTheme.colorScheme.error
+                                            },
+                                        )
+                                    }
                                     Text(
                                         stringResource(
                                             R.string.stt_using_model,
@@ -1250,7 +1343,7 @@ class MainActivity : ComponentActivity() {
                                 Switch(
                                     checked = e.optBoolean("enabled", true),
                                     onCheckedChange = {
-                                        onLocalToggle(e, it, selPack) { version++ }
+                                        onLocalToggle(e, it, selPack, { version++ }, sttRunner)
                                     },
                                 )
                                 TextButton(onClick = { localInfo = true }) { Text(stringResource(R.string.stt_local_why)) }
@@ -1292,6 +1385,18 @@ class MainActivity : ComponentActivity() {
                     stringResource(R.string.stt_models_sub),
                     style = MaterialTheme.typography.bodySmall,
                 )
+                Text(
+                    stringResource(R.string.local_arm64_note),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (!sttRunner) {
+                    Text(
+                        stringResource(R.string.local_need_full),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
                 val captureLang = stt.optString("language", "auto").ifBlank { "auto" }
                 val captureLabel = langs.firstOrNull { it.first == captureLang }?.second
                     ?: captureLang
@@ -1436,7 +1541,15 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                when (row) {
+                                if (!sttRunner) {
+                                    // Lite flavor: no Download offered (could
+                                    // never run) — full-APK pointer instead.
+                                    Text(
+                                        stringResource(R.string.local_need_full),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.error,
+                                    )
+                                } else when (row) {
                                     LocalModelDownload.RowState.DOWNLOADING -> {}
                                     LocalModelDownload.RowState.FAILED -> {
                                         OutlinedButton(onClick = { startModelDownload(m) }) {
@@ -1538,6 +1651,14 @@ class MainActivity : ComponentActivity() {
                     Column {
                         Text(stringResource(R.string.stt_local_body))
                         Spacer(Modifier.height(4.dp))
+                        if (!sttRunner) {
+                            Text(
+                                stringResource(R.string.local_need_full),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                            Spacer(Modifier.height(4.dp))
+                        }
                         Text(
                             when (selPack) {
                                 LocalPackState.PRESENT ->
@@ -1821,7 +1942,14 @@ class MainActivity : ComponentActivity() {
             llmDlBusy,
             llmDlError,
         )
+        // Lite flavor ships no MediaPipe runner: no Download offered.
+        val llmRunner = remember { llmRunnerSupported() }
         fun startLlmDownload() {
+            // Lite flavor: downloads could never run — refuse fail-closed.
+            if (!llmRunner) {
+                toast(getString(R.string.local_need_full))
+                return
+            }
             val picked = llmPicked ?: return
             if (llmDlBusy || isPlaceholderSha(picked.sha256)) return
             llmDlBusy = true
@@ -1985,6 +2113,18 @@ class MainActivity : ComponentActivity() {
                     stringResource(R.string.cleanup_models_sub),
                     style = MaterialTheme.typography.bodySmall,
                 )
+                Text(
+                    stringResource(R.string.local_arm64_note),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (!llmRunner) {
+                    Text(
+                        stringResource(R.string.local_need_full),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
                 val entries = entriesOf(lm, "entries")
                 ReorderableEntries(
                     items = entryList(entries),
@@ -2013,43 +2153,53 @@ class MainActivity : ComponentActivity() {
                                     style = MaterialTheme.typography.bodySmall,
                                 )
                                 if (isLocal) {
-                                    Text(
-                                        when (llmRow) {
-                                            LocalModelDownload.RowState.PRESENT ->
-                                                stringResource(R.string.local_pack_present)
-                                            LocalModelDownload.RowState.MISMATCH ->
-                                                stringResource(R.string.local_pack_mismatch)
-                                            LocalModelDownload.RowState.DOWNLOADING -> {
-                                                val total = llmDlTotal
-                                                if (total != null && total > 0) {
-                                                    stringResource(
-                                                        R.string.local_downloading_mb,
-                                                        llmPicked?.id ?: "",
-                                                        llmDlReceived / 1_000_000,
-                                                        total / 1_000_000,
-                                                    )
-                                                } else {
-                                                    stringResource(
-                                                        R.string.local_downloading,
-                                                        llmPicked?.id ?: "",
-                                                    )
+                                    // Lite flavor (no runner): full-APK
+                                    // pointer instead of pack status.
+                                    if (!llmRunner) {
+                                        Text(
+                                            stringResource(R.string.local_need_full),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.error,
+                                        )
+                                    } else {
+                                        Text(
+                                            when (llmRow) {
+                                                LocalModelDownload.RowState.PRESENT ->
+                                                    stringResource(R.string.local_pack_present)
+                                                LocalModelDownload.RowState.MISMATCH ->
+                                                    stringResource(R.string.local_pack_mismatch)
+                                                LocalModelDownload.RowState.DOWNLOADING -> {
+                                                    val total = llmDlTotal
+                                                    if (total != null && total > 0) {
+                                                        stringResource(
+                                                            R.string.local_downloading_mb,
+                                                            llmPicked?.id ?: "",
+                                                            llmDlReceived / 1_000_000,
+                                                            total / 1_000_000,
+                                                        )
+                                                    } else {
+                                                        stringResource(
+                                                            R.string.local_downloading,
+                                                            llmPicked?.id ?: "",
+                                                        )
+                                                    }
                                                 }
-                                            }
-                                            LocalModelDownload.RowState.FAILED ->
-                                                stringResource(
-                                                    R.string.local_download_failed,
-                                                    llmDlError ?: "failed",
-                                                )
-                                            LocalModelDownload.RowState.MISSING ->
-                                                stringResource(R.string.local_pack_missing)
-                                        },
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = if (llmRow == LocalModelDownload.RowState.PRESENT) {
-                                            MaterialTheme.colorScheme.primary
-                                        } else {
-                                            MaterialTheme.colorScheme.error
-                                        },
-                                    )
+                                                LocalModelDownload.RowState.FAILED ->
+                                                    stringResource(
+                                                        R.string.local_download_failed,
+                                                        llmDlError ?: "failed",
+                                                    )
+                                                LocalModelDownload.RowState.MISSING ->
+                                                    stringResource(R.string.local_pack_missing)
+                                            },
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = if (llmRow == LocalModelDownload.RowState.PRESENT) {
+                                                MaterialTheme.colorScheme.primary
+                                            } else {
+                                                MaterialTheme.colorScheme.error
+                                            },
+                                        )
+                                    }
                                     // Secondary details line: model path only
                                     // (download is the primary path now).
                                     Text(
@@ -2113,7 +2263,16 @@ class MainActivity : ComponentActivity() {
                                         }
                                     }
                                     Row(verticalAlignment = Alignment.CenterVertically) {
-                                        when {
+                                        if (!llmRunner) {
+                                            // Lite flavor: no Download offered
+                                            // (could never run) — full-APK
+                                            // pointer instead.
+                                            Text(
+                                                stringResource(R.string.local_need_full),
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.error,
+                                            )
+                                        } else when {
                                             llmRow == LocalModelDownload.RowState.DOWNLOADING -> {}
                                             llmRow == LocalModelDownload.RowState.FAILED -> {
                                                 OutlinedButton(
@@ -2158,7 +2317,7 @@ class MainActivity : ComponentActivity() {
                                 Switch(
                                     checked = e.optBoolean("enabled", true),
                                     onCheckedChange = {
-                                        onLocalToggle(e, it, llmState) { version++ }
+                                        onLocalToggle(e, it, llmState, { version++ }, llmRunner)
                                     },
                                 )
                                 TextButton(onClick = { localInfo = true }) { Text(stringResource(R.string.stt_local_why)) }
@@ -2243,6 +2402,14 @@ class MainActivity : ComponentActivity() {
                     Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                         Text(stringResource(R.string.cleanup_local_body))
                         Spacer(Modifier.height(4.dp))
+                        if (!llmRunner) {
+                            Text(
+                                stringResource(R.string.local_need_full),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                            Spacer(Modifier.height(4.dp))
+                        }
                         Text(
                             when (llmState) {
                                 LocalPackState.PRESENT ->

@@ -323,4 +323,6 @@
     <string name="notif_pref_sync_sub">Mostrar actividad durante la sincronización.</string>
     <string name="notif_pref_sync_ongoing">Estado fijado</string>
     <string name="notif_pref_sync_ongoing_sub">Mantener fijada la notificación de sincronización.</string>
+    <string name="local_need_full">Los modelos locales necesitan la versión completa — esta versión ligera no puede ejecutarlos. Instala el APK completo para voz y limpieza locales.</string>
+    <string name="local_arm64_note">Requiere arm64-v8a — si actualizas desde un dispositivo antiguo, conserva tu versión actual.</string>
 </resources>

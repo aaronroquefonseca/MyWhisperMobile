@@ -323,4 +323,6 @@
     <string name="notif_pref_sync_sub">Show activity while a sync round runs.</string>
     <string name="notif_pref_sync_ongoing">Pinned sync status</string>
     <string name="notif_pref_sync_ongoing_sub">Keep the sync notification pinned while sync runs.</string>
+    <string name="local_need_full">Local models need the full flavor — this lite build can\'t run them. Install the full APK for on-device speech and cleanup.</string>
+    <string name="local_arm64_note">Requires arm64-v8a — if you update from an older device, keep your current version.</string>
 </resources>
