@@ -38,6 +38,7 @@ class DictationCancelTest {
         val transcribed = AtomicBoolean(false)
         val results: MutableList<String> = Collections.synchronizedList(mutableListOf())
         val errors: MutableList<String> = Collections.synchronizedList(mutableListOf())
+        val states: MutableList<Dictation.State> = Collections.synchronizedList(mutableListOf())
         var text = transcribeText
         val dictation = Dictation(
             mode = { "Push" },
@@ -56,7 +57,9 @@ class DictationCancelTest {
             workers = executor,
         ).also {
             it.listener = object : Dictation.Listener {
-                override fun onState(s: Dictation.State, toggled: Boolean) = Unit
+                override fun onState(s: Dictation.State, toggled: Boolean) {
+                    states.add(s)
+                }
                 override fun onResult(text: String) {
                     results.add(text)
                 }
@@ -196,6 +199,47 @@ class DictationCancelTest {
             h.settleWorker()
 
             assertEquals("stale drops, fresh commits exactly once", listOf("hello world"), h.results)
+            assertEquals(Dictation.State.IDLE, h.dictation.current)
+        } finally {
+            h.shutdown()
+        }
+    }
+
+    @Test
+    fun blankTranscription_neverCommits_routesToSilence() {
+        val h = Harness(transcribeText = "   ")
+        try {
+            h.dictation.pressDown()
+            h.dictation.pressUp() // genuine stop with silence
+            h.settleWorker()
+
+            assertTrue("blank must never commit", h.results.isEmpty())
+            assertEquals("silence routes to the empty state", listOf("silence"), h.errors)
+            assertEquals(Dictation.State.IDLE, h.dictation.current)
+        } finally {
+            h.shutdown()
+        }
+    }
+
+    @Test
+    fun cancelDuringWorking_neverShowsWorkingAfter() {
+        val h = Harness(transcribeBlock = CountDownLatch(1))
+        try {
+            h.dictation.pressDown()
+            h.dictation.pressUp() // WORKING, worker blocks in transcription
+            assertTrue(h.enteredTranscribe.await(10, TimeUnit.SECONDS))
+
+            h.states.clear()
+            h.dictation.cancel() // must land IDLE and stay there
+            h.transcribeBlock!!.countDown() // stale call returns text
+            h.settleWorker()
+
+            assertTrue("cancelled session must not commit", h.results.isEmpty())
+            assertTrue("cancelled session must not report either", h.errors.isEmpty())
+            assertFalse(
+                "WORKING must never reappear after cancel (saw ${h.states})",
+                h.states.contains(Dictation.State.WORKING),
+            )
             assertEquals(Dictation.State.IDLE, h.dictation.current)
         } finally {
             h.shutdown()

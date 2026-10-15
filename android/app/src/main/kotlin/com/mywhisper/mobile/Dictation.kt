@@ -228,7 +228,9 @@ class Dictation(
         if (state == State.IDLE) return
         // Invalidate the finish worker FIRST so a blocked
         // finishTranscription that returns later drops, never commits.
+        val was = state
         session.incrementAndGet()
+        log("cancel $was->IDLE session=${session.get()}")
         hardStop()
         try {
             cancelTranscription()
@@ -281,6 +283,7 @@ class Dictation(
         secondDown = false
         set(State.WORKING)
         val gen = session.get()
+        log("finish ->WORKING gen=$gen")
         workers.execute {
             if (tail > 0) {
                 try {
@@ -292,9 +295,15 @@ class Dictation(
             // token rules — capture nullness alone races (worker may
             // have snapshotted non-null just before cancel). Return
             // silently: state already belongs to cancel()/a new press.
-            if (gen != session.get()) return@execute
+            if (gen != session.get()) {
+                log("finish drop stale-tail gen=$gen session=${session.get()}")
+                return@execute
+            }
             val cap = capture
-            if (cap == null || gen != session.get()) return@execute
+            if (cap == null || gen != session.get()) {
+                log("finish drop stale-capture gen=$gen session=${session.get()}")
+                return@execute
+            }
             try {
                 cap.stop()
             } catch (_: Exception) {
@@ -338,16 +347,28 @@ class Dictation(
                 if (gen == session.get()) {
                     listener?.onError(e.message ?: "transcription failed")
                     set(State.IDLE)
+                } else {
+                    log("finish drop stale-error gen=$gen session=${session.get()}")
                 }
                 return@execute
             }
             // Cancelled while blocked in transcription: the call above
             // returned after cancel() — drop, never commit to the IME.
-            if (gen != session.get()) return@execute
+            if (gen != session.get()) {
+                log("finish drop stale-result gen=$gen session=${session.get()}")
+                return@execute
+            }
             log("utterance max peak=%.2f".format(maxPeak))
             log("utterance text len=${text.length} hasListener=${listener != null}")
             if (text.isBlank()) {
-                listener?.onError("empty transcript")
+                // Silence is never committed and never surfaced: the
+                // "silence" tag maps to the empty state on every
+                // surface (IME shows its idle hint, the bubble toast
+                // filter already drops it). Only a real stop-with-
+                // silence reaches here — a cancelled session drops
+                // above, keeping its "Cancelled" note.
+                log("finish blank gen=$gen: empty state, no commit")
+                listener?.onError("silence")
             } else {
                 listener?.onResult(text)
             }

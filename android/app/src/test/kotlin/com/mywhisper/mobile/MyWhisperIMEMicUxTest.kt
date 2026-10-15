@@ -29,6 +29,76 @@ class MyWhisperIMEMicUxTest {
         assertTrue(MyWhisperIME.cancelVisible(Dictation.State.WORKING))
     }
 
+    @Test
+    fun cancelSlot_reservedWhileIdle_neverGrowsBar() {
+        // Reserved slot (INVISIBLE, not GONE): the bar height is
+        // identical idle vs active — appearing never grows layout.
+        assertEquals(
+            android.view.View.VISIBLE,
+            MyWhisperIME.cancelVisibility(Dictation.State.RECORDING),
+        )
+        assertEquals(
+            android.view.View.VISIBLE,
+            MyWhisperIME.cancelVisibility(Dictation.State.WORKING),
+        )
+        assertEquals(
+            android.view.View.INVISIBLE,
+            MyWhisperIME.cancelVisibility(Dictation.State.IDLE),
+        )
+    }
+
+    @Test
+    fun pill_goneWhileIdle_visibleWhileActive() {
+        // No dead transparent strip idle; pill appears for RECORDING
+        // (live levels) and persists through WORKING (frozen).
+        assertEquals(
+            android.view.View.GONE,
+            MyWhisperIME.pillVisibility(Dictation.State.IDLE, enabled = true),
+        )
+        assertEquals(
+            android.view.View.VISIBLE,
+            MyWhisperIME.pillVisibility(Dictation.State.RECORDING, enabled = true),
+        )
+        assertEquals(
+            android.view.View.VISIBLE,
+            MyWhisperIME.pillVisibility(Dictation.State.WORKING, enabled = true),
+        )
+        assertEquals(
+            android.view.View.GONE,
+            MyWhisperIME.pillVisibility(Dictation.State.RECORDING, enabled = false),
+        )
+    }
+
+    @Test
+    fun commitGate_blankNeverCommits() {
+        assertFalse(MyWhisperIME.shouldCommitResult(""))
+        assertFalse(MyWhisperIME.shouldCommitResult("   "))
+        assertTrue(MyWhisperIME.shouldCommitResult("hello world"))
+    }
+
+    @Test
+    fun routineDrop_silenceIsEmptyState_notError() {
+        assertTrue(MyWhisperIME.isRoutineDrop("silence"))
+        assertTrue(MyWhisperIME.isRoutineDrop("audio too short, ignored"))
+        assertFalse(MyWhisperIME.isRoutineDrop(""))
+        assertFalse(
+            MyWhisperIME.isRoutineDrop("no server STT configured: add a Self-hosted entry"),
+        )
+    }
+
+    @Test
+    fun fixedRow_fitsScaledMic_glyphFillsButton() {
+        // Fixed row fits the mic at max press scale: never grows,
+        // never clips top/bottom.
+        assertTrue(
+            MyWhisperIME.MIC_DP * MyWhisperIME.MIC_MAX_SCALE <= MyWhisperIME.ROW_HEIGHT_DP,
+        )
+        // Glyph fills the button (was 84 - 2*20 = 44dp).
+        val glyph = MyWhisperIME.MIC_DP - 2 * MyWhisperIME.MIC_PAD_DP
+        assertTrue("glyph ${glyph}dp fills more of the button", glyph >= 56)
+        assertTrue(MyWhisperIME.STATUS_DP > 0)
+    }
+
     // -- First-hold slide hint -------------------------------------
 
     @Test

@@ -41,6 +41,7 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
     private var lastState = Dictation.State.IDLE
     private var lastToggled = false
     private var lastNote = ""
+    private var lastNoteIsError = false
     private var lastAnnounced = ""
 
     private var micDownRawY = 0f
@@ -49,6 +50,21 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
     companion object {
         /** Slide-down distance that cancels a hold (dp). */
         private const val SLIDE_CANCEL_DP = 90
+
+        /** Mic button box (dp): fixed, shared by layout and tests. */
+        const val MIC_DP = 84
+        /** Mic glyph padding (dp): small so the mark fills the button. */
+        const val MIC_PAD_DP = 12
+        /**
+         * Record-row height (dp): fixed so the row never grows or
+         * clips. Fits the mic at max press scale
+         * ([MIC_DP] * [MIC_MAX_SCALE] = 94.1 < 100), centered.
+         */
+        const val ROW_HEIGHT_DP = 100
+        /** Status-line height (dp): one line, never wraps or grows. */
+        const val STATUS_DP = 26
+        /** Largest mic press scale (RECORDING visual). */
+        const val MIC_MAX_SCALE = 1.12f
 
         /** Mic press/release visual transition (ms): owner wants ~150-250. */
         const val MIC_ANIM_MS = 180L
@@ -87,6 +103,36 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
          * Tap = [Dictation.cancel], never commit.
          */
         fun cancelVisible(s: Dictation.State): Boolean = s != Dictation.State.IDLE
+
+        /**
+         * Cancel slot: reserved (INVISIBLE while idle) so the bar height
+         * never changes when Cancel appears mid-session.
+         */
+        fun cancelVisibility(s: Dictation.State): Int =
+            if (cancelVisible(s)) View.VISIBLE else View.INVISIBLE
+
+        /**
+         * Visualizer pill: exists only while active. GONE while idle so
+         * no dead transparent strip is reserved; appearing grows the
+         * window upward with the buttons staying put.
+         */
+        fun pillVisibility(s: Dictation.State, enabled: Boolean): Int =
+            if (s != Dictation.State.IDLE && enabled) View.VISIBLE else View.GONE
+
+        /**
+         * Commit gate: blank results never reach the input connection.
+         * Defense in depth — [Dictation] already routes silence to the
+         * empty state instead of [Dictation.Listener.onResult].
+         */
+        fun shouldCommitResult(text: String): Boolean = text.isNotBlank()
+
+        /**
+         * Routine drops (silence / too-short audio): the empty state,
+         * never an error. Mirrors the bubble toast filter, which already
+         * drops messages containing these tags.
+         */
+        fun isRoutineDrop(msg: String): Boolean =
+            msg.contains("silence") || msg.contains("too short")
 
         /**
          * First-hold discovery hint: RECORDING + still held (not toggled)
@@ -237,8 +283,9 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
                 it.setMargins(dp(8), dp(4), dp(8), 0)
             }
         }
-        // No expanding spacer: the pill keeps its own measured
-        // slot (INVISIBLE idle) so the window never resizes.
+        // No reserved slot: the pill is GONE while idle so the window
+        // carries no dead transparent strip. Appearing grows the window
+        // upward only (buttons stay put); collapsing after.
         // Floating pill (desktop compact/Listening look): dark
         // rounded box with bars only — no buttons, no status dot.
         // The container stays so future states (live text, etc.)
@@ -255,9 +302,7 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
             }
             setPadding(dp(14), dp(10), dp(14), dp(10))
             elevation = dp(6).toFloat()
-            // INVISIBLE (not GONE): the slot stays measured so the
-            // window never resizes when the pill appears.
-            visibility = View.INVISIBLE
+            visibility = View.GONE
         }
         val bars = BarsView(this).apply {
             layoutParams = LinearLayout.LayoutParams(dp(66), dp(40))
@@ -295,10 +340,12 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(1))
         })
 
+        // Fixed-height record row: the mic at max press scale
+        // (84dp * 1.12 = 94.1dp) fits inside 100dp centered, so the
+        // circle is never cut top/bottom and the bar never grows.
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(8), 0, 0)
         }
 
         fun iconButton(
@@ -355,13 +402,18 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
             setImageResource(R.drawable.ic_stat_sync)
             contentDescription = getString(R.string.ime_mic)
             setBackground(micBackground(Dictation.State.IDLE))
-            setPadding(dp(20), dp(20), dp(20), dp(20))
+            // Small padding + explicit fit: the glyph fills the button
+            // (60dp mark). Without FIT_CENTER the raster renders at
+            // intrinsic size and padding alone never enlarges it.
+            scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+            setPadding(dp(MIC_PAD_DP), dp(MIC_PAD_DP), dp(MIC_PAD_DP), dp(MIC_PAD_DP))
             elevation = dp(4).toFloat()
             setOnTouchListener { _, ev ->
                 when (ev.actionMasked) {
                     MotionEvent.ACTION_DOWN -> {
                         micDownRawY = ev.rawY
                         micCancelled = false
+                        android.util.Log.i("MyWhisperIME", "ime.mic down")
                         tick()
                         dictation.pressDown()
                         true
@@ -373,17 +425,20 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
                             ev.rawY - micDownRawY > dp(SLIDE_CANCEL_DP)
                         ) {
                             micCancelled = true
+                            android.util.Log.i("MyWhisperIME", "ime.mic slide-cancel")
                             dictation.cancel()
                             showCancelled()
                         }
                         true
                     }
                     MotionEvent.ACTION_UP -> {
+                        android.util.Log.i("MyWhisperIME", "ime.mic up cancelled=$micCancelled")
                         tick()
                         dictation.pressUp()
                         true
                     }
                     MotionEvent.ACTION_CANCEL -> {
+                        android.util.Log.i("MyWhisperIME", "ime.mic action-cancel")
                         dictation.cancel()
                         true
                     }
@@ -413,20 +468,24 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
         rightBox.addView(backBtn, sideParams)
         rightBox.addView(settingsBtn, rightInner)
         row.addView(leftBox)
-        row.addView(mic, LinearLayout.LayoutParams(dp(84), dp(84)))
+        row.addView(mic, LinearLayout.LayoutParams(dp(MIC_DP), dp(MIC_DP)))
         row.addView(rightBox)
         bar.addView(row, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            ViewGroup.LayoutParams.MATCH_PARENT, dp(ROW_HEIGHT_DP)))
 
         // Explicit cancel below the mic: toggle mode's finger is off the
-        // button, so slide-down alone is unreachable. Visible only while
+        // button, so slide-down alone is unreachable. Present while
         // RECORDING/WORKING; tap = Dictation.cancel(), never commits.
+        // Slot reserved (INVISIBLE idle) so the bar height never changes;
+        // error-colored text so the destructive action reads prominent.
         val cancel = Button(this).apply {
             text = getString(R.string.ime_cancel)
             contentDescription = getString(R.string.ime_cancel)
-            visibility = View.GONE
+            setTextColor(errorColor())
+            visibility = View.INVISIBLE
             setOnClickListener {
                 micCancelled = true
+                android.util.Log.i("MyWhisperIME", "ime.cancel tap")
                 dictation.cancel()
                 showCancelled()
             }
@@ -436,6 +495,8 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
             ViewGroup.LayoutParams.WRAP_CONTENT,
             ViewGroup.LayoutParams.WRAP_CONTENT).also { it.topMargin = dp(2) })
 
+        // Fixed-height status line: one ellipsized line, so long errors
+        // wrap nowhere and the bar height never changes.
         val status = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL or Gravity.CENTER_HORIZONTAL
@@ -452,11 +513,16 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
             text = idleHint()
             setTextColor(barDim)
             textSize = 13f
+            setSingleLine(true)
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            gravity = Gravity.CENTER_HORIZONTAL
         }
         hintText = hint
         status.addView(spin)
-        status.addView(hint)
-        bar.addView(status)
+        status.addView(hint, LinearLayout.LayoutParams(
+            0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        bar.addView(status, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, dp(STATUS_DP)))
 
         refresh()
         return root
@@ -465,6 +531,8 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
     /** "Cancelled" flash + haptic tick after a slide-down cancel. */
     private fun showCancelled() {
         lastNote = getString(R.string.ime_cancelled)
+        lastNoteIsError = false
+        android.util.Log.i("MyWhisperIME", "ime.cancelled confirm")
         tick(60)
         postRefresh()
     }
@@ -645,11 +713,24 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
     override fun onState(s: Dictation.State, toggled: Boolean) {
         lastState = s
         lastToggled = toggled
+        android.util.Log.i("MyWhisperIME", "ime.onState $s toggled=$toggled")
         postRefresh()
     }
 
     override fun onResult(text: String) {
+        // Blank guard: silence never commits. Only a genuine stop can
+        // reach here with text (cancelled sessions drop in Dictation),
+        // and even then blanks show the empty state, never commitText.
+        if (!shouldCommitResult(text)) {
+            android.util.Log.i("MyWhisperIME", "ime.onResult drop blank len=${text.length}")
+            lastNote = ""
+            lastNoteIsError = false
+            postRefresh()
+            return
+        }
         lastNote = ""
+        lastNoteIsError = false
+        android.util.Log.i("MyWhisperIME", "ime.onResult commit len=${text.length}")
         try {
             currentInputConnection?.commitText(text, 1)
         } catch (_: Exception) {
@@ -658,12 +739,23 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
     }
 
     override fun onError(msg: String) {
-        lastNote = msg
+        if (isRoutineDrop(msg)) {
+            // Silence / too-short audio: the empty state, never red,
+            // never announced. Only a real stop reaches here — a
+            // cancelled session drops in Dictation first.
+            android.util.Log.i("MyWhisperIME", "ime.onError routine-drop: empty state")
+            lastNote = ""
+            lastNoteIsError = false
+        } else {
+            android.util.Log.i("MyWhisperIME", "ime.onError msg=$msg")
+            lastNote = msg
+            lastNoteIsError = true
+        }
         postRefresh()
     }
 
-    /** Floating pill: visible only while recording and enabled. */
-    private fun updatePill(recording: Boolean) {
+    /** Floating pill: present only while active, GONE while idle. */
+    private fun updatePill(s: Dictation.State) {
         val pill = pillBox ?: return
         val enabled = try {
             CoreBridge.getSettings().getOrThrow()
@@ -671,7 +763,7 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
         } catch (_: Exception) {
             true
         }
-        if (recording && enabled) {
+        if (pillVisibility(s, enabled) == View.VISIBLE) {
             if (pill.visibility != View.VISIBLE) {
                 pill.alpha = 0f
                 pill.visibility = View.VISIBLE
@@ -685,9 +777,13 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
                 val target = pill
                 target.animate().alpha(0f).setDuration(120).withEndAction {
                     if (!HardeningGuards.pillEndActionApplies(pillBox, target)) return@withEndAction
-                    target.visibility = View.INVISIBLE
+                    target.visibility = View.GONE
                     target.alpha = 1f
                 }.start()
+            } else if (pill.visibility != View.GONE) {
+                // No reserved slot while idle: collapse fully so the
+                // window carries no dead transparent strip.
+                pill.visibility = View.GONE
             }
         }
     }
@@ -717,9 +813,9 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
         }
         // Toggle-mode escape hatch: explicit cancel while RECORDING or
         // WORKING. Tap cancels via Dictation.cancel() (no commit); the
-        // slide gesture stays for hold mode.
-        cancelButton?.visibility =
-            if (cancelVisible(lastState)) View.VISIBLE else View.GONE
+        // slide gesture stays for hold mode. Slot reserved while idle
+        // (INVISIBLE) so the bar height never changes.
+        cancelButton?.visibility = cancelVisibility(lastState)
         // First-hold discovery: gentle nudge + label pulse, once per
         // process, never blocking (pure view animation, no input eaten).
         if (shouldShowSlideHint(lastState, lastToggled, slideHintShown)) {
@@ -728,7 +824,7 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
         }
         spinner?.visibility =
             if (lastState == Dictation.State.WORKING) View.VISIBLE else View.GONE
-        updatePill(lastState == Dictation.State.RECORDING)
+        updatePill(lastState)
         val hint = hintText
         hint?.text = when (lastState) {
             // Recording: slide-down cancels mid-hold; the explicit Cancel
@@ -738,10 +834,11 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
             Dictation.State.IDLE -> lastNote.ifEmpty { idleHint() }
         }
         // Errors in the theme error color, status in the theme dim color.
+        // A cancel confirmation is not an error: dim status color, silent.
         val night = (resources.configuration.uiMode
             and android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
             android.content.res.Configuration.UI_MODE_NIGHT_YES
-        val isError = lastState == Dictation.State.IDLE && lastNote.isNotEmpty()
+        val isError = lastNoteIsError && lastState == Dictation.State.IDLE && lastNote.isNotEmpty()
         hint?.setTextColor(
             if (isError) errorColor()
             else if (night) 0xFFA8A4B5.toInt() else 0xFF5F5B66.toInt(),
