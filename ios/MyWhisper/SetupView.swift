@@ -35,6 +35,10 @@ struct SetupChecklist: Equatable {
 /// (SelfHosted additionally needs a URL; Cloud allows blank URL = vendor
 /// default). Exact port of Android `MainActivity.isServerConfigured` over
 /// the decoded settings dict (`CoreBridge.getSettings()` shape).
+/// Divergence note (PR #54): Android's setup row now gates on
+/// `isSpeechConfigured(...)`, which additionally counts a verified Local
+/// pack. On-device Local is deferred on iOS, so this port intentionally
+/// keeps the `isServerConfigured` semantics (Local skipped).
 func isServerConfigured(settings: [String: Any]?) -> Bool {
     guard let entries = (settings?["stt"] as? [String: Any])?["entries"] as? [[String: Any]] else {
         return false

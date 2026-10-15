@@ -25,7 +25,8 @@ struct SetupStrings: Equatable {
     let actionChange: String
     let actionGotIt: String
     let actionRefresh: String
-    // iOS-only keys (no Android counterpart).
+    // iOS-only keys (no Android counterpart), except doneServer which
+    // pins setup_speech_configured ("Speech configured" / "Voz configurada").
     let noImeTitle: String
     let noImeBody: String
     let progress: String
@@ -70,7 +71,7 @@ struct SetupStrings: Equatable {
         stepServer: "2 · Speech server",
         stepTest: "3 · Test dictation",
         doneMic: "Microphone granted",
-        doneServer: "Speech server configured",
+        doneServer: "Speech configured",
         doneTest: "Test dictation passed",
         serverMissing: "No speech server yet — add a Self-hosted or Cloud entry under Transcription first.",
         testHint: "Records a short sample and runs it through the server chain.",
@@ -106,7 +107,7 @@ struct SetupStrings: Equatable {
         stepServer: "2 · Servidor de voz",
         stepTest: "3 · Probar dictado",
         doneMic: "Micrófono concedido",
-        doneServer: "Servidor de voz configurado",
+        doneServer: "Voz configurada",
         doneTest: "Prueba de dictado correcta",
         serverMissing: "Aún no hay servidor de voz — añade una entrada Autohospedada o en la Nube en Transcripción.",
         testHint: "Graba una muestra corta y la pasa por la cadena del servidor.",
