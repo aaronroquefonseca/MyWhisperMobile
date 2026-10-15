@@ -73,6 +73,26 @@ android {
 }
 
 dependencies {
+    // FAIL-FAST (2026-10-15 incident): a full-flavor APK assembled while
+    // libs/ holds no sherpa AAR builds fine — fileTree() silently matches
+    // nothing — and the resulting runner-less "full" APK wrongly reports
+    // NEED_FULL_FLAVOR on a full build. Refuse to even configure full APK
+    // production when no AAR is present; lite (server chain only) is
+    // unaffected and keeps building without it. Test/lint tasks are
+    // deliberately ungated (JVM tests bridge sherpa by reflection).
+    val fullApkRequested = gradle.startParameter.taskNames.any { t ->
+        val l = t.lowercase()
+        "full" in l && ("assemble" in l || "install" in l || "bundle" in l)
+    }
+    if (fullApkRequested && file("libs").listFiles { f -> f.extension == "aar" }.isNullOrEmpty()) {
+        throw GradleException(
+            "Full flavor requires the sherpa-onnx AAR in android/app/libs/ " +
+                "(none found — fileTree() would silently drop it and produce " +
+                "a runner-less 'full' APK). Run scripts/fetch-sherpa-aar.sh " +
+                "from the repo root, then rebuild. Lite flavor builds without it.",
+        )
+    }
+
     val composeBom = platform("androidx.compose:compose-bom:2025.05.00")
     implementation(composeBom)
     androidTestImplementation(composeBom)

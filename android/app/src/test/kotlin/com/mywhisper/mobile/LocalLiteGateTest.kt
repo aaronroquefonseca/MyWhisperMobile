@@ -65,6 +65,49 @@ class LocalLiteGateTest {
     }
 
     @Test
+    fun fullFlavor_runnerAbsent_reportsRunnerMissingNotPointer() {
+        // 2026-10-15 incident: a full APK built without the sherpa AAR
+        // (silent fileTree miss) reported NEED_FULL_FLAVOR — the full-APK
+        // pointer on a full build. Absent stack on FULL must separate
+        // into RUNNER_MISSING (broken build; the gradle gate refuses it)
+        // across every pack/download combination, and stay fail-closed.
+        val combos = listOf(
+            Triple(false, false, false),
+            Triple(true, false, false),
+            Triple(false, true, false),
+            Triple(false, false, true),
+            Triple(true, true, true),
+        )
+        for ((present, mismatch, downloading) in combos) {
+            for (error in listOf(null, "", "boom")) {
+                val state = MainActivity.gatedRowState(
+                    present, mismatch, downloading, error,
+                    runnerSupported = false, isFullFlavor = true,
+                )
+                assertEquals(
+                    "present=$present mismatch=$mismatch downloading=$downloading error=$error",
+                    MainActivity.GatedRowState.RUNNER_MISSING,
+                    state,
+                )
+                assertFalse(MainActivity.gatedToggleAllowed(state))
+            }
+        }
+    }
+
+    @Test
+    fun fullFlavor_runnerPresent_defersToPackRowMachine() {
+        // Healthy full build: same pack-machine outcomes as lite-present.
+        assertEquals(
+            MainActivity.GatedRowState.MISSING,
+            MainActivity.gatedRowState(false, false, false, null, true, isFullFlavor = true),
+        )
+        assertEquals(
+            MainActivity.GatedRowState.PRESENT,
+            MainActivity.gatedRowState(true, false, false, null, true, isFullFlavor = true),
+        )
+    }
+
+    @Test
     fun toggle_liveOnlyWhenPresent() {
         // Fail-closed in both flavors: NEED_FULL_FLAVOR never enables.
         assertFalse(
@@ -77,6 +120,7 @@ class LocalLiteGateTest {
         assertFalse(MainActivity.gatedToggleAllowed(MainActivity.GatedRowState.DOWNLOADING))
         assertFalse(MainActivity.gatedToggleAllowed(MainActivity.GatedRowState.MISMATCH))
         assertFalse(MainActivity.gatedToggleAllowed(MainActivity.GatedRowState.FAILED))
+        assertFalse(MainActivity.gatedToggleAllowed(MainActivity.GatedRowState.RUNNER_MISSING))
     }
 
     @Test

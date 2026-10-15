@@ -153,13 +153,16 @@ class MainActivity : ComponentActivity() {
 
     /**
      * Lite-gated row state for the Local STT/LLM download rows.
-     * NEED_FULL_FLAVOR = on-device stack absent (lite flavor): the full-APK
-     * pointer shows instead of Download; the rest mirror the
+     * NEED_FULL_FLAVOR = on-device stack absent on a lite build: the
+     * full-APK pointer shows instead of Download; RUNNER_MISSING =
+     * on-device stack absent on a FULL build (broken build — the gradle
+     * fail-fast gate should have refused it; never the full-APK
+     * pointer, which would be a lie here); the rest mirror the
      * verified-pack row machine ([LocalModelDownload.RowState]).
      * Pure for unit tests.
      */
     internal enum class GatedRowState {
-        NEED_FULL_FLAVOR, MISSING, DOWNLOADING, PRESENT, MISMATCH, FAILED
+        NEED_FULL_FLAVOR, RUNNER_MISSING, MISSING, DOWNLOADING, PRESENT, MISMATCH, FAILED
     }
 
     companion object {
@@ -528,11 +531,13 @@ class MainActivity : ComponentActivity() {
          * Lite-flavor gate for the Local STT/LLM rows: lite builds ship
          * no on-device stack (sherpa runner / LiteRT-LM packs are
          * fullImplementation-only), so downloads offered there could
-         * never run. False (= stack absent) forces the NEED_FULL_FLAVOR
-         * row, which shows the full-APK pointer instead of Download.
-         * True (= full flavor) defers to the verified-pack row machine.
-         * Fail-closed: NEED_FULL_FLAVOR never enables the toggle.
-         * Pure for unit tests (pack support injected).
+         * never run. Absent stack on lite forces NEED_FULL_FLAVOR,
+         * which shows the full-APK pointer instead of Download; absent
+         * stack on FULL ([isFullFlavor]) is a broken build and forces
+         * RUNNER_MISSING instead — never the pointer. Present stack
+         * defers to the verified-pack row machine. Fail-closed:
+         * neither absent-stack state enables the toggle.
+         * Pure for unit tests (pack support + flavor injected).
          */
         @JvmStatic
         internal fun gatedRowState(
@@ -542,8 +547,11 @@ class MainActivity : ComponentActivity() {
             error: String?,
             runnerSupported: Boolean,
             incomplete: Boolean = false,
+            isFullFlavor: Boolean = false,
         ): GatedRowState {
-            if (!runnerSupported) return GatedRowState.NEED_FULL_FLAVOR
+            if (!runnerSupported) {
+                return if (isFullFlavor) GatedRowState.RUNNER_MISSING else GatedRowState.NEED_FULL_FLAVOR
+            }
             return when (
                 LocalModelDownload.resolve(packPresent, packMismatch, downloading, error, incomplete)
             ) {
