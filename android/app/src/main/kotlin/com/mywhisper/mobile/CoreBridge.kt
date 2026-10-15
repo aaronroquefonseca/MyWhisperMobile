@@ -45,6 +45,8 @@ object CoreBridge {
     @JvmStatic external fun nativeGetSnippets(): String
     @JvmStatic external fun nativePutSnippet(trigger: String, replacement: String): String
     @JvmStatic external fun nativeDeleteSnippet(trigger: String): String
+    @JvmStatic external fun nativeLocalLlmStatus(): String
+    @JvmStatic external fun nativeLocalLlmPrompt(system: String, transcript: String): String
 
     /** Parse `{ok, data?, error?}`. Returns data or throws with error text. */
     fun dataOf(raw: String): Any? {
@@ -178,6 +180,13 @@ object CoreBridge {
         dataOf(nativeDeleteSnippet(trigger))
         Unit
     }
+
+    /** On-device LLM status (cleanup path only): raw JSON from core. */
+    fun localLlmStatusRaw(): String = nativeLocalLlmStatus()
+
+    /** Byte-stable cleanup prompt packing (core-mirrored). */
+    fun localLlmPrompt(system: String, transcript: String): String =
+        nativeLocalLlmPrompt(system, transcript)
 
     fun syncNow(nodeId: String): Result<String> = runCatching {
         dataOf(nativeSyncNow(nodeId)) as String
