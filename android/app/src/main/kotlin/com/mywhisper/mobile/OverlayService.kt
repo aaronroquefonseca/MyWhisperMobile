@@ -38,8 +38,10 @@ class OverlayService : Service(), Dictation.Listener {
         const val ACTION_START = "com.mywhisper.mobile.float.START"
         const val ACTION_STOP = "com.mywhisper.mobile.float.STOP"
         const val ACTION_REFRESH = "com.mywhisper.mobile.float.REFRESH_NOTIF"
-        private const val CHANNEL = "mw-float"
-        private const val NOTIF_ID = 42
+        // Shared row: same channel + ID as SyncService (see
+        // NotifPolicy.UNIFIED_*); one visible row, two FGS owners.
+        private const val CHANNEL = "mw-status"
+        private const val NOTIF_ID = 41
         private const val PREFS = "mw_state"
         private const val KEY_X = "float_x"
         private const val KEY_Y = "float_y"
@@ -139,8 +141,14 @@ class OverlayService : Service(), Dictation.Listener {
         super.onCreate()
         android.util.Log.i("MwFloat", "service onCreate")
         getSystemService(NotificationManager::class.java)?.createNotificationChannel(
-            NotificationChannel(CHANNEL, getString(R.string.float_notif_channel), NotificationManager.IMPORTANCE_LOW),
+            NotificationChannel(CHANNEL, getString(R.string.unified_notif_channel), NotificationManager.IMPORTANCE_LOW),
         )
+        // Drop the retired solo channels (pre-unification installs).
+        try {
+            val nm = getSystemService(NotificationManager::class.java)
+            for (id in NotifPolicy.LEGACY_CHANNEL_IDS) nm?.deleteNotificationChannel(id)
+        } catch (_: Exception) {
+        }
         dictation = Dictation(
             smartTapMs = { readLong("hotkeys", "smart_tap_ms", 150L) },
             mode = { readMode() },
@@ -171,17 +179,7 @@ class OverlayService : Service(), Dictation.Listener {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
-                // Detach first: in-flight Dictation.finish set(IDLE)
-                // would otherwise refreshNotif an ongoing notif (42)
-                // with no live service behind it.
-                try {
-                    if (::dictation.isInitialized) dictation.listener = null
-                } catch (_: Exception) {
-                }
-                removeBubble()
-                clearFloatState()
-                foregrounded = false
-                stopForeground(STOP_FOREGROUND_REMOVE)
+                teardownFloat()
                 stopSelf()
                 return START_NOT_STICKY
             }
@@ -217,20 +215,22 @@ class OverlayService : Service(), Dictation.Listener {
                         Toast.LENGTH_LONG,
                     ).show()
                     openOverlaySettings()
-                    removeBubble()
-                    clearFloatState()
+                    teardownFloat()
                     stopSelf()
                     return START_NOT_STICKY
                 }
                 FloatState.clearOverlayDenied()
+                // Publish before foregrounding so the shared builder sees us.
+                NotifPolicy.UnifiedState.floatActive = true
+                NotifPolicy.UnifiedState.floatState =
+                    if (::dictation.isInitialized) dictation.current else Dictation.State.IDLE
                 try {
                     startForegroundWithType()
                 } catch (e: Exception) {
                     // Background start denied (boot redelivery): never run
                     // un-foregrounded — the system kills us ~10s later.
                     android.util.Log.i("MwFloat", "fg denied, stopping: ${e.message}")
-                    removeBubble()
-                    clearFloatState()
+                    teardownFloat()
                     stopSelf()
                     return START_NOT_STICKY
                 }
@@ -256,7 +256,13 @@ class OverlayService : Service(), Dictation.Listener {
 
     private fun startForegroundWithType() {
         val s = if (::dictation.isInitialized) dictation.current else Dictation.State.IDLE
+        NotifPolicy.UnifiedState.floatState = s
         val notif = buildNotif(s)
+        // Drop the retired solo bubble row (pre-unification installs).
+        try {
+            getSystemService(NotificationManager::class.java)?.cancel(NotifPolicy.LEGACY_FLOAT_NOTIF_ID)
+        } catch (_: Exception) {
+        }
         if (Build.VERSION.SDK_INT >= 29) {
             var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
             if (Build.VERSION.SDK_INT >= 29) {
@@ -270,19 +276,39 @@ class OverlayService : Service(), Dictation.Listener {
     }
 
     /**
-     * Groundwork for the STOP action + tap target: notification tap
-     * opens Setup, STOP tears the service down. Per-mode copy driven
-     * by [NotifPolicy]: idle = base text, RECORDING = red recording
-     * text, WORKING = transcribing + indeterminate progress when the
-     * pref allows. STOP + contentIntent on every mode; BigTextStyle
-     * keeps the actions expanded.
+     * SHARED unified-row builder (same channel + ID + spec as
+     * SyncService): bubble wins while active (RECORDING/WORKING), else
+     * sync paints when alive, else the lone idle bubble. Self counts as
+     * alive (the builder runs foregrounded); the peer comes from
+     * [NotifPolicy.UnifiedState]. STOP stops both (SyncService STOP_ALL),
+     * tap opens Setup (MainActivity lands on Setup), BigTextStyle keeps
+     * the actions expanded, per-mode prefs via [NotifPolicy].
      */
     internal fun buildNotif(state: Dictation.State): Notification {
-        val prefs = NotifPolicy.floatPrefsJson(readPrefsObj())
-        val spec = NotifPolicy.forFloatState(state, prefs)
+        val prefsObj = readPrefsObj()
+        val floatPrefs = NotifPolicy.floatPrefsJson(prefsObj)
+        val syncPrefs = NotifPolicy.syncPrefsJson(prefsObj)
+        val spec = NotifPolicy.forUnified(
+            floatActive = true,
+            floatState = state,
+            floatPrefs = floatPrefs,
+            syncActive = NotifPolicy.UnifiedState.syncActive,
+            syncing = NotifPolicy.UnifiedState.syncing,
+            syncPrefs = syncPrefs,
+        ) ?: NotifPolicy.UnifiedSpec(
+            NotifPolicy.UnifiedChrome.FLOAT_IDLE,
+            ongoing = floatPrefs.idleOngoing,
+            showProgress = false,
+            showSyncNow = false,
+        )
         val stopIntent = PendingIntent.getService(
-            this, 0,
-            Intent(this, OverlayService::class.java).setAction(ACTION_STOP),
+            this, 10,
+            Intent(this, SyncService::class.java).setAction(SyncService.ACTION_STOP_ALL),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val nowIntent = PendingIntent.getService(
+            this, 2,
+            Intent(this, SyncService::class.java).setAction(SyncService.ACTION_SYNC_NOW),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val openIntent = PendingIntent.getActivity(
@@ -290,19 +316,31 @@ class OverlayService : Service(), Dictation.Listener {
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        val text = when (state) {
-            Dictation.State.RECORDING -> getString(R.string.float_notif_rec_text)
-            Dictation.State.WORKING -> getString(R.string.ime_working)
-            Dictation.State.IDLE -> getString(R.string.float_notif_text)
+        val text = when (spec.chrome) {
+            NotifPolicy.UnifiedChrome.FLOAT_RECORDING -> getString(R.string.float_notif_rec_text)
+            NotifPolicy.UnifiedChrome.FLOAT_WORKING -> getString(R.string.ime_working)
+            NotifPolicy.UnifiedChrome.FLOAT_IDLE -> getString(R.string.float_notif_text)
+            NotifPolicy.UnifiedChrome.SYNCING -> getString(R.string.notif_sync_working_text)
+            NotifPolicy.UnifiedChrome.SYNC_IDLE -> getString(R.string.notif_sync_text)
+        }
+        val title = when (spec.chrome) {
+            NotifPolicy.UnifiedChrome.FLOAT_RECORDING,
+            NotifPolicy.UnifiedChrome.FLOAT_WORKING,
+            NotifPolicy.UnifiedChrome.FLOAT_IDLE -> getString(R.string.float_notif_title)
+            NotifPolicy.UnifiedChrome.SYNCING,
+            NotifPolicy.UnifiedChrome.SYNC_IDLE -> getString(R.string.notif_sync_title)
         }
         val b = NotificationCompat.Builder(this, CHANNEL)
-            .setContentTitle(getString(R.string.float_notif_title))
+            .setContentTitle(title)
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setSmallIcon(R.drawable.ic_stat_sync)
             .setContentIntent(openIntent)
             .setOngoing(spec.ongoing)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, getString(R.string.notif_stop), stopIntent)
+        if (spec.showSyncNow) {
+            b.addAction(android.R.drawable.ic_popup_sync, getString(R.string.notif_sync_now), nowIntent)
+        }
         if (spec.showProgress) b.setProgress(0, 0, true) else b.setProgress(0, 0, false)
         return b.build()
     }
@@ -319,9 +357,10 @@ class OverlayService : Service(), Dictation.Listener {
         }
     }
 
-    /** Refresh the foreground notification for the live state (no stale mode). */
+    /** Refresh the shared foreground row for the live state (no stale mode). */
     private fun refreshNotif(state: Dictation.State) {
         try {
+            NotifPolicy.UnifiedState.floatState = state
             getSystemService(NotificationManager::class.java)?.notify(NOTIF_ID, buildNotif(state))
         } catch (_: Exception) {
         }
@@ -341,6 +380,49 @@ class OverlayService : Service(), Dictation.Listener {
         try {
             FloatState.onChange = null
         } catch (_: Exception) {
+        }
+    }
+
+    /**
+     * Shared teardown for every float death path (STOP, overlay-denied
+     * START, addView denial, FGS denial): detach first so in-flight
+     * Dictation.finish set(IDLE) can't refreshNotif an ongoing row with
+     * no live service behind it, drop the bubble + state, remove the
+     * shared row, and hand it back to sync when alive (recompose, not
+     * orphan — a bare stopSelf would leave stale float chrome while
+     * sync lives). Every step best-effort; callers stopSelf afterwards.
+     * Executes [floatTeardownPlan] field by field (JVM-tested matrix).
+     */
+    private fun teardownFloat() {
+        val plan = floatTeardownPlan(NotifPolicy.UnifiedState.syncActive)
+        if (plan.detachListener) {
+            try {
+                if (::dictation.isInitialized) dictation.listener = null
+            } catch (_: Exception) {
+            }
+        }
+        if (plan.removeBubble) removeBubble()
+        if (plan.clearState) clearFloatState()
+        foregrounded = false
+        if (plan.resetUnifiedState) {
+            NotifPolicy.UnifiedState.floatActive = false
+            NotifPolicy.UnifiedState.floatState = Dictation.State.IDLE
+        }
+        if (plan.removeSharedRow) {
+            try {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+            } catch (_: Exception) {
+            }
+            try {
+                getSystemService(NotificationManager::class.java)?.cancel(NotifPolicy.LEGACY_FLOAT_NOTIF_ID)
+            } catch (_: Exception) {
+            }
+        }
+        if (plan.recomposeSync) {
+            try {
+                SyncService.refreshNotif(this)
+            } catch (_: Exception) {
+            }
         }
     }
 
@@ -532,11 +614,7 @@ class OverlayService : Service(), Dictation.Listener {
             openOverlaySettings()
             Toast.makeText(this, getString(R.string.float_overlay_recovery), Toast.LENGTH_LONG).show()
             android.util.Log.i("MwFloat", "addView denied: ${e.message}")
-            holder = null
-            micBtn = null
-            dragHandle = null
-            stopBtn = null
-            spinner = null
+            teardownFloat()
             stopSelf()
             return
         }
@@ -831,6 +909,8 @@ class OverlayService : Service(), Dictation.Listener {
 
     override fun onDestroy() {
         foregrounded = false
+        NotifPolicy.UnifiedState.floatActive = false
+        NotifPolicy.UnifiedState.floatState = Dictation.State.IDLE
         try {
             if (::dictation.isInitialized) dictation.listener = null
         } catch (_: Exception) {
@@ -878,3 +958,30 @@ internal fun touchExpandPx(visualPx: Int, targetPx: Int): Int =
 /** Apply a TouchDelegate-style inset (negative = expand) to a rect. */
 internal fun expandHitRect(r: HitRect, insetPx: Int): HitRect =
     HitRect(r.left + insetPx, r.top + insetPx, r.right - insetPx, r.bottom - insetPx)
+
+/**
+ * Pure teardown matrix for the float death paths (STOP, overlay-denied
+ * START, addView denial, FGS denial): every path runs the same full
+ * teardown — detach, bubble, state, unified-state reset, shared-row
+ * removal — and only the survivor recompose varies with sync liveness.
+ * [OverlayService.teardownFloat] executes the plan field by field.
+ */
+internal data class FloatTeardown(
+    val detachListener: Boolean,
+    val removeBubble: Boolean,
+    val clearState: Boolean,
+    val resetUnifiedState: Boolean,
+    val removeSharedRow: Boolean,
+    val recomposeSync: Boolean,
+)
+
+/** Full teardown always; recompose the survivor row iff sync lives. */
+internal fun floatTeardownPlan(syncActive: Boolean): FloatTeardown =
+    FloatTeardown(
+        detachListener = true,
+        removeBubble = true,
+        clearState = true,
+        resetUnifiedState = true,
+        removeSharedRow = true,
+        recomposeSync = syncActive,
+    )
