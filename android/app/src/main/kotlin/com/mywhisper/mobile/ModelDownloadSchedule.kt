@@ -45,6 +45,20 @@ object ModelDownloadSchedule {
     const val KIND_STT = "stt"
     const val KIND_LLM = "llm"
 
+    /** Notification tap target: which page the tap deep-links to. */
+    const val EXTRA_TARGET = "mw_dl_target"
+    const val TARGET_STT = "stt"
+    const val TARGET_LLM = "llm"
+
+    /**
+     * Deep-link target for a download [kind]: LLM packs open the
+     * Text-cleanup page, everything else the Transcription page.
+     * Pure for unit tests.
+     */
+    @JvmStatic
+    fun targetForKind(kind: String?): String =
+        if (kind == KIND_LLM) TARGET_LLM else TARGET_STT
+
     const val WORK_PREFIX = "mw-dl"
 
     /** Initial backoff for WorkManager (exponential from here). */

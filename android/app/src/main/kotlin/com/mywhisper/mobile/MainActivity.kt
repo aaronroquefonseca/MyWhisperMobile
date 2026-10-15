@@ -140,8 +140,16 @@ class MainActivity : ComponentActivity() {
     /** Active background-download WorkInfo observers, keyed by unique work name. */
     private val dlWorkObservers = mutableMapOf<String, Observer<List<WorkInfo>>>()
 
+    /**
+     * Download-notification deep-link target: tapping a download
+     * notification opens [Root] directly on the right page (STT vs
+     * LLM models) via the [EXTRA_DL_TARGET] intent extra — cold start
+     * (onCreate) and warm tap (onNewIntent, singleTop) alike.
+     */
+    private val deepLinkTab = mutableStateOf<Int?>(null)
+
     /** On-device pack state for the STT/LLM Local rows. Pure for unit tests. */
-    internal enum class LocalPackState { PRESENT, MISSING, MISMATCH }
+    internal enum class LocalPackState { PRESENT, MISSING, MISMATCH, INCOMPLETE }
 
     /**
      * Lite-gated row state for the Local STT/LLM download rows.
@@ -309,36 +317,125 @@ class MainActivity : ComponentActivity() {
         /**
          * Install state of one LLM asset: PRESENT when its per-asset
          * file (or the legacy `cleanup.task` slot) verifies against
-         * its SHA; MISMATCH when files exist but nothing verifies;
-         * MISSING otherwise (placeholder pins included — never
-         * enable). Legacy-slot adoption keeps existing downloads live
-         * without a re-download. Pure for unit tests (java.io only).
+         * its SHA; MISMATCH when COMPLETE files exist but nothing
+         * verifies; INCOMPLETE when only a short file or a stale
+         * `.part` lingers (interrupted download — resumable, never
+         * "SHA mismatch"); MISSING otherwise (placeholder pins
+         * included — never enable). Legacy-slot adoption keeps
+         * existing downloads live without a re-download. Single-pass
+         * via [llmInspect]. Pure for unit tests (java.io only).
          */
         @JvmStatic
         internal fun llmStateFor(
             dir: File,
             asset: LocalLlmManager.ModelAsset,
-        ): LocalPackState {
-            if (isPlaceholderSha(asset.sha256)) return LocalPackState.MISSING
-            val slot = llmTaskFileFor(dir, asset.id)
-            if (LocalLlmManager.verifySha256(slot, asset.sha256)) {
-                return LocalPackState.PRESENT
+        ): LocalPackState = llmInspect(dir, asset).state
+
+        /** Single-pass LLM read: install state + verified on-disk bytes. */
+        internal data class LlmInspect(
+            val state: LocalPackState,
+            val verifiedBytes: Long,
+        )
+
+        /**
+         * LLM install state + verified bytes in ONE pass: the slot and
+         * the legacy slot are each SHA-verified at most once (length
+         * checks in [hasLlmTrace]/[hasCompleteLlmFile] hash nothing).
+         * [verify] is injected so unit tests can count calls. Pure for
+         * unit tests (java.io only).
+         */
+        @JvmStatic
+        internal fun llmInspectWithVerifier(
+            dir: File,
+            asset: LocalLlmManager.ModelAsset,
+            verify: (File, String) -> Boolean,
+        ): LlmInspect {
+            if (isPlaceholderSha(asset.sha256)) {
+                return LlmInspect(LocalPackState.MISSING, 0L)
             }
+            val slot = llmTaskFileFor(dir, asset.id)
+            val slotOk = verify(slot, asset.sha256)
+            // Legacy slot is only probed when the per-asset slot
+            // misses (adoption path) — a verified slot short-circuits.
+            val legacy: File? = try {
+                LocalLlmManager.defaultTaskFile(dir).takeIf { it != slot }
+            } catch (_: Exception) {
+                null
+            }
+            val legacyOk = !slotOk && legacy != null && verify(legacy, asset.sha256)
+            val state = when {
+                slotOk || legacyOk -> LocalPackState.PRESENT
+                !hasLlmTrace(dir, asset) -> LocalPackState.MISSING
+                hasCompleteLlmFile(dir, asset) -> LocalPackState.MISMATCH
+                else -> LocalPackState.INCOMPLETE
+            }
+            val bytes = when {
+                slotOk -> slot.length()
+                legacyOk -> legacy?.length() ?: 0L
+                else -> 0L
+            }
+            return LlmInspect(state, bytes)
+        }
+
+        /** Single-pass LLM inspect with the real SHA verifier. Pure. */
+        @JvmStatic
+        internal fun llmInspect(
+            dir: File,
+            asset: LocalLlmManager.ModelAsset,
+        ): LlmInspect =
+            llmInspectWithVerifier(dir, asset, LocalLlmManager::verifySha256)
+
+        /**
+         * True when any trace of [asset] lingers on disk: the slot, the
+         * legacy slot, or a stale per-asset `.part` from an interrupted
+         * download. Pure for unit tests (java.io only).
+         */
+        @JvmStatic
+        internal fun hasLlmTrace(dir: File, asset: LocalLlmManager.ModelAsset): Boolean {
+            val slot = llmTaskFileFor(dir, asset.id)
+            if (slot.isFile && slot.length() > 0) return true
             try {
                 val legacy = LocalLlmManager.defaultTaskFile(dir)
-                if (legacy != slot && LocalLlmManager.verifySha256(legacy, asset.sha256)) {
-                    return LocalPackState.PRESENT
-                }
+                if (legacy != slot && legacy.isFile && legacy.length() > 0) return true
             } catch (_: Exception) {
             }
-            val anyFile = slot.isFile ||
-                try {
-                    LocalLlmManager.defaultTaskFile(dir).isFile
-                } catch (_: Exception) {
-                    false
-                }
-            return if (anyFile) LocalPackState.MISMATCH else LocalPackState.MISSING
+            try {
+                val models = File(dir, "models")
+                val part = File(models, "${slot.name}.part.${asset.id}")
+                if (part.isFile) return true
+            } catch (_: Exception) {
+            }
+            return false
         }
+
+        /**
+         * True when a full-size (but unverified — PRESENT already
+         * ruled out) file backs [asset]: only then does the MISMATCH
+         * copy apply. A short file or a lone `.part` is an interrupted
+         * download (INCOMPLETE). Unknown expected size ([sizeBytes] <=
+         * 0) reads as complete (legacy MISMATCH behavior). Pure.
+         */
+        @JvmStatic
+        internal fun hasCompleteLlmFile(dir: File, asset: LocalLlmManager.ModelAsset): Boolean {
+            if (asset.sizeBytes <= 0) return true
+            val slot = llmTaskFileFor(dir, asset.id)
+            if (slot.isFile && slot.length() >= asset.sizeBytes) return true
+            return try {
+                val legacy = LocalLlmManager.defaultTaskFile(dir)
+                legacy != slot && legacy.isFile && legacy.length() >= asset.sizeBytes
+            } catch (_: Exception) {
+                false
+            }
+        }
+
+        /**
+         * Verified bytes already on disk for [asset] (INCOMPLETE
+         * progress numerator; 0 when nothing usable lingers).
+         * Single-pass via [llmInspect]. Pure.
+         */
+        @JvmStatic
+        internal fun llmPresentBytes(dir: File, asset: LocalLlmManager.ModelAsset): Long =
+            llmInspect(dir, asset).verifiedBytes
 
         /**
          * Ids with a verified LLM pack on disk, in manifest order.
@@ -381,7 +478,7 @@ class MainActivity : ComponentActivity() {
         /**
          * Local LLM self-test gate: the in-row "Run test" goes live
          * only with a verified pack on a runner build. Fail-closed:
-         * missing/mismatch or lite (no runner) stays disabled.
+         * missing/mismatch/incomplete or lite (no runner) stays disabled.
          * Pure for unit tests (runner presence + pack injected).
          */
         @JvmStatic
@@ -389,6 +486,17 @@ class MainActivity : ComponentActivity() {
             runnerSupported: Boolean,
             packState: LocalPackState,
         ): Boolean = runnerSupported && packState == LocalPackState.PRESENT
+
+        /**
+         * Whether the Local LLM self-test is offered at all. The
+         * on-device generate bridge (MediaPipe runner) is absent on
+         * lite builds and JVM tests: a test that cannot pass is not
+         * offered — the row shows the honest unavailable reason
+         * instead of a FAIL that means nothing. Pure for unit tests.
+         */
+        @JvmStatic
+        internal fun llmSelfTestOffered(runnerSupported: Boolean): Boolean =
+            runnerSupported
 
         // -- Provider tests: ONE pattern for every chain row ---------
 
@@ -433,13 +541,16 @@ class MainActivity : ComponentActivity() {
             downloading: Boolean,
             error: String?,
             runnerSupported: Boolean,
+            incomplete: Boolean = false,
         ): GatedRowState {
             if (!runnerSupported) return GatedRowState.NEED_FULL_FLAVOR
             return when (
-                LocalModelDownload.resolve(packPresent, packMismatch, downloading, error)
+                LocalModelDownload.resolve(packPresent, packMismatch, downloading, error, incomplete)
             ) {
                 LocalModelDownload.RowState.MISSING -> GatedRowState.MISSING
-                LocalModelDownload.RowState.DOWNLOADING -> GatedRowState.DOWNLOADING
+                LocalModelDownload.RowState.DOWNLOADING,
+                LocalModelDownload.RowState.INCOMPLETE,
+                -> GatedRowState.DOWNLOADING
                 LocalModelDownload.RowState.PRESENT -> GatedRowState.PRESENT
                 LocalModelDownload.RowState.MISMATCH -> GatedRowState.MISMATCH
                 LocalModelDownload.RowState.FAILED -> GatedRowState.FAILED
@@ -476,7 +587,46 @@ class MainActivity : ComponentActivity() {
 
         // -- Local sections UX (collapsible + unified STT/LLM pattern) ---
 
-        /** Persisted expansion flags for the on-device model sections. */
+        /** Notification tap target extra (see [tabForDownloadTarget]). */
+        internal const val EXTRA_DL_TARGET = "mw_dl_target"
+        internal const val DL_TARGET_STT = "stt"
+        internal const val DL_TARGET_LLM = "llm"
+
+        /**
+         * Root tab opened by a download-notification tap: LLM packs
+         * land on Text cleanup (index 2), everything else (null,
+         * unknown, STT) on Transcription (index 1). Matches the
+         * [Root] tab order. Pure for unit tests.
+         */
+        @JvmStatic
+        internal fun tabForDownloadTarget(target: String?): Int =
+            if (target == DL_TARGET_LLM || target == ModelDownloadSchedule.TARGET_LLM) 2 else 1
+
+        /**
+         * Tab after a deep-link tap: a pending target wins (repeat taps
+         * on the same target re-route identically); null keeps the
+         * user's current tab. The caller consumes the pending value
+         * (sets it null) right after routing so the next tap is a key
+         * change, never swallowed. Pure for unit tests.
+         */
+        @JvmStatic
+        internal fun deepLinkTargetTab(pendingTab: Int?, currentTab: Int): Int =
+            pendingTab ?: currentTab
+
+        /**
+         * One-shot deep-link seeding for [onCreate]: a fresh start
+         * routes to the notification's target; a recreation (rotation,
+         * config change, process-death restore) seeds null so the
+         * `rememberSaveable` tab restores instead of being yanked back
+         * to the tap target on every recreation. Pure for unit tests.
+         */
+        @JvmStatic
+        internal fun seedDeepLinkTab(hasSavedState: Boolean, target: String?): Int? =
+            if (hasSavedState) null else target?.let(::tabForDownloadTarget)
+
+        /**
+         * Persisted expansion flags for the on-device model sections.
+         */
         internal const val PREF_STT_LOCAL_EXPANDED = "local_stt_expanded"
         internal const val PREF_LLM_LOCAL_EXPANDED = "local_llm_expanded"
 
@@ -700,9 +850,24 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         micDeniedBefore = getSharedPreferences("mw_state", MODE_PRIVATE)
             .getBoolean("mic_denied_before", false)
+        // One-shot: recreations restore the saved tab (seed null),
+        // only a fresh start routes to the notification target.
+        deepLinkTab.value = seedDeepLinkTab(
+            savedInstanceState != null,
+            intent?.getStringExtra(EXTRA_DL_TARGET),
+        )
         refreshPermStates()
         reload()
         setContent { Root() }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        // Warm tap (singleTop): route to the tapped download's page.
+        intent.getStringExtra(EXTRA_DL_TARGET)?.let {
+            deepLinkTab.value = tabForDownloadTarget(it)
+        }
     }
 
     override fun onResume() {
@@ -941,7 +1106,17 @@ class MainActivity : ComponentActivity() {
                 else -> if (androidx.compose.foundation.isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()
             },
         ) {
-            var tab by rememberSaveable { mutableIntStateOf(0) }
+            var tab by rememberSaveable { mutableIntStateOf(deepLinkTab.value ?: 0) }
+            // Notification deep-link: a warm tap re-routes the open app.
+            // Consumed after routing (set null): without this a re-tap
+            // on the same target is a no-op key change and gets ignored.
+            LaunchedEffect(deepLinkTab.value) {
+                val pending = deepLinkTab.value
+                if (pending != null) {
+                    tab = deepLinkTargetTab(pending, tab)
+                    deepLinkTab.value = null
+                }
+            }
             val snackbarHost = remember { SnackbarHostState() }
             LaunchedEffect(Unit) {
                 snackbarEvents.collect { snackbarHost.showSnackbar(it) }
@@ -1133,9 +1308,12 @@ class MainActivity : ComponentActivity() {
 
     /**
      * THE provider-test affordance: one button, same placement
-     * under every chain row (STT + LLM, local + remote), same
-     * inline reporting (`latency + excerpt/status`). Disabled
-     * fail-closed via [enabled]; busy shows the testing copy.
+     * under every chain row (STT + LLM, local + remote) and under
+     * every add/edit dialog form, same inline reporting (`latency +
+     * excerpt/status`). Disabled fail-closed via [enabled]; busy shows
+     * the testing copy; a disabled button shows [disabledReason] so
+     * the blocker stays explicit even under a stale result
+     * ([ProviderTest.showDisabledReason]).
      */
     @Composable
     private fun ProviderTestRow(
@@ -1143,45 +1321,56 @@ class MainActivity : ComponentActivity() {
         result: ProviderTest.Result?,
         enabled: Boolean,
         onTest: () -> Unit,
+        disabledReason: String? = null,
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            OutlinedButton(
-                enabled = enabled && !busy,
-                onClick = onTest,
-            ) {
-                Text(
-                    if (busy) stringResource(R.string.provider_test_testing)
-                    else stringResource(R.string.provider_test_run),
-                )
+        Column {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedButton(
+                    enabled = enabled && !busy,
+                    onClick = onTest,
+                ) {
+                    Text(
+                        if (busy) stringResource(R.string.provider_test_testing)
+                        else stringResource(R.string.provider_test_run),
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                if (busy && result == null) {
+                    Text(
+                        stringResource(R.string.provider_test_testing),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else if (result != null) {
+                    Text(
+                        if (result.passed) {
+                            stringResource(
+                                R.string.provider_test_pass,
+                                result.latencyMs,
+                                result.excerpt,
+                            )
+                        } else {
+                            stringResource(
+                                R.string.provider_test_fail,
+                                result.latencyMs,
+                                result.excerpt.ifBlank { result.error ?: "failed" },
+                            )
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (result.passed) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.error
+                        },
+                    )
+                }
             }
-            Spacer(Modifier.width(8.dp))
-            if (busy && result == null) {
+            val reason = disabledReason
+            if (reason != null && ProviderTest.showDisabledReason(enabled, busy, reason)) {
                 Text(
-                    stringResource(R.string.provider_test_testing),
+                    reason,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            } else if (result != null) {
-                Text(
-                    if (result.passed) {
-                        stringResource(
-                            R.string.provider_test_pass,
-                            result.latencyMs,
-                            result.excerpt,
-                        )
-                    } else {
-                        stringResource(
-                            R.string.provider_test_fail,
-                            result.latencyMs,
-                            result.excerpt.ifBlank { result.error ?: "failed" },
-                        )
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (result.passed) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.error
-                    },
                 )
             }
         }
@@ -1226,6 +1415,91 @@ class MainActivity : ComponentActivity() {
             conn.disconnect()
         }
     }
+
+    /**
+     * THE server-probe implementations shared by chain rows and
+     * add/edit dialogs (one pattern, one result shape): lightweight
+     * endpoint checks, never a heavy transcribe/generate. STT: any
+     * HTTP response = reachable; `ws(s)` / blank vendor-default URL
+     * has no HTTP surface so config validation stands in. LLM: blank
+     * URL = config validation; Ollama checks model reachability via
+     * GET /api/tags where cheap; Cloud does the lightweight GET.
+     * Never touches engines/runners/services.
+     */
+    private fun probeSttEndpoint(url: String, model: String): ProviderTest.Result {
+        val u = url.trim()
+        val m = model.trim()
+        if (u.isEmpty() || u.startsWith("ws", ignoreCase = true)) {
+            return ProviderTest.runProbe(ProviderTest.SERVER_TIMEOUT_MS) {
+                "config ok · $m"
+            }
+        }
+        return ProviderTest.runProbe(ProviderTest.SERVER_TIMEOUT_MS) {
+            val code = httpGetCode(u)
+            "HTTP $code · $m"
+        }
+    }
+
+    private fun probeLlmEndpoint(kind: String, url: String, model: String): ProviderTest.Result {
+        val u = url.trim()
+        val m = model.trim()
+        if (u.isEmpty()) {
+            return ProviderTest.runProbe(ProviderTest.SERVER_TIMEOUT_MS) {
+                "config ok · $m"
+            }
+        }
+        if (kind == "Ollama") {
+            return ProviderTest.runProbe(ProviderTest.SERVER_TIMEOUT_MS) {
+                val base = u.trimEnd('/')
+                val body = httpGetBody("$base/api/tags")
+                if (!body.contains(m, ignoreCase = true)) {
+                    throw IllegalStateException("reachable · model not listed")
+                }
+                "model ok · $m"
+            }
+        }
+        return ProviderTest.runProbe(ProviderTest.SERVER_TIMEOUT_MS) {
+            val code = httpGetCode(u)
+            "HTTP $code · $m"
+        }
+    }
+
+    /**
+     * Disabled-reason copy for a server STT row/dialog (null when the
+     * test is live). Maps the shared [ProviderTest.validateStt] rule
+     * to the existing provider-test strings. Context access stays at
+     * the call site (this is a member for getString).
+     */
+    private fun sttTestDisabledReason(kind: String, url: String, model: String): String? =
+        when (ProviderTest.validateStt(kind, url, model)) {
+            ProviderTest.SttError.NONE -> null
+            ProviderTest.SttError.NEED_URL -> getString(R.string.provider_test_need_url)
+            ProviderTest.SttError.NEED_MODEL -> getString(R.string.provider_test_need_model)
+            ProviderTest.SttError.BAD_URL -> getString(R.string.provider_test_bad_url)
+            ProviderTest.SttError.BAD_BASE -> getString(R.string.provider_test_bad_base)
+        }
+
+    /** Same as [sttTestDisabledReason] for remote LLM rows/dialogs. */
+    private fun llmTestDisabledReason(kind: String, url: String, model: String): String? =
+        when (ProviderTest.validateLlm(kind, url, model)) {
+            ProviderTest.LlmError.NONE -> null
+            ProviderTest.LlmError.NEED_URL -> getString(R.string.provider_test_need_url)
+            ProviderTest.LlmError.NEED_MODEL -> getString(R.string.provider_test_need_model)
+            ProviderTest.LlmError.BAD_URL -> getString(R.string.provider_test_bad_base)
+        }
+
+    /**
+     * Disabled-reason copy for the on-device (Local STT / LLM
+     * self-test) buttons: no runner/bridge first, then the missing
+     * pack; null when live. Member for getString; the rule itself is
+     * [ProviderTest.localTestBlocked] (unit-tested).
+     */
+    private fun localTestDisabledReason(runnerSupported: Boolean, packVerified: Boolean): String? =
+        when (ProviderTest.localTestBlocked(runnerSupported, packVerified)) {
+            ProviderTest.LocalBlocked.NONE -> null
+            ProviderTest.LocalBlocked.NEED_RUNNER -> getString(R.string.local_need_full)
+            ProviderTest.LocalBlocked.NEED_PACK -> getString(R.string.provider_test_need_pack)
+        }
 
     @Composable
     private fun NotifToggle(
@@ -1725,14 +1999,19 @@ class MainActivity : ComponentActivity() {
             emptyList()
         }
 
-    /** Pack state for one catalog model (SHA-verified). */
+    /** Row state to chain-row pack state (1:1; DOWNLOADING/FAILED never persist here). */
+    private fun packStateForRow(row: LocalModelDownload.RowState): LocalPackState =
+        when (row) {
+            LocalModelDownload.RowState.PRESENT -> LocalPackState.PRESENT
+            LocalModelDownload.RowState.MISMATCH -> LocalPackState.MISMATCH
+            LocalModelDownload.RowState.INCOMPLETE -> LocalPackState.INCOMPLETE
+            else -> LocalPackState.MISSING
+        }
+
+    /** Pack state for one catalog model (SHA-verified, single-pass). */
     private fun sttModelPackState(model: LocalSttModels.Entry): LocalPackState =
         try {
-            when (LocalSttModels.stateFor(filesDir, model)) {
-                LocalModelDownload.RowState.PRESENT -> LocalPackState.PRESENT
-                LocalModelDownload.RowState.MISMATCH -> LocalPackState.MISMATCH
-                else -> LocalPackState.MISSING
-            }
+            packStateForRow(LocalSttModels.stateFor(filesDir, model))
         } catch (_: Exception) {
             LocalPackState.MISSING
         }
@@ -1782,11 +2061,21 @@ class MainActivity : ComponentActivity() {
         // save-generation (not per row or keystroke); enabling Local
         // without a verified selected model fails closed.
         val selectedModel = remember(version) { LocalStt.selectedEntry(statePrefs) }
-        val modelPacks = remember(version) {
-            LocalSttModels.MODELS.associate { m -> m.id to sttModelPackState(m) }
+        // One inspect per model per save-generation (state + verified
+        // bytes from a single SHA pass — never two full hash sweeps).
+        val modelInspects = remember(version) {
+            LocalSttModels.MODELS.associate { m ->
+                m.id to try {
+                    LocalSttModels.inspect(filesDir, m)
+                } catch (_: Exception) {
+                    LocalSttModels.PackInspect(LocalModelDownload.RowState.MISSING, 0L)
+                }
+            }
         }
         fun packOf(id: String): LocalPackState =
-            modelPacks[id] ?: LocalPackState.MISSING
+            modelInspects[id]?.let { packStateForRow(it.state) } ?: LocalPackState.MISSING
+        fun bytesOf(id: String): Long =
+            modelInspects[id]?.verifiedBytes ?: 0L
         val selPack = packOf(selectedModel.id)
         // Lite flavor ships no sherpa runner: the chain toggle and all
         // Download buttons gate on this (fail-closed, no download offered).
@@ -1803,6 +2092,7 @@ class MainActivity : ComponentActivity() {
                 packOf(m.id) == LocalPackState.MISMATCH,
                 dlBusy.contains(m.id),
                 dlErr[m.id],
+                packOf(m.id) == LocalPackState.INCOMPLETE,
             )
         fun startModelDownload(m: LocalSttModels.Entry) {
             // Lite flavor: downloads could never run — refuse fail-closed.
@@ -1839,21 +2129,8 @@ class MainActivity : ComponentActivity() {
         var sttLocalResult by remember { mutableStateOf<ProviderTest.Result?>(null) }
         var sttBusy by remember { mutableStateOf(setOf<String>()) }
         var sttResults by remember { mutableStateOf(mapOf<String, ProviderTest.Result>()) }
-        fun probeSttServer(kind: String, url: String, model: String): ProviderTest.Result {
-            val u = url.trim()
-            val m = model.trim()
-            // No HTTP surface: blank vendor-default URL or ws(s)
-            // sherpa protocol — config validation only, no transcribe.
-            if (u.isEmpty() || u.startsWith("ws", ignoreCase = true)) {
-                return ProviderTest.runProbe(ProviderTest.SERVER_TIMEOUT_MS) {
-                    "config ok · $m"
-                }
-            }
-            return ProviderTest.runProbe(ProviderTest.SERVER_TIMEOUT_MS) {
-                val code = httpGetCode(u)
-                "HTTP $code · $m"
-            }
-        }
+        fun probeSttServer(url: String, model: String): ProviderTest.Result =
+            probeSttEndpoint(url, model)
         fun startSttServerTest(e: JSONObject) {
             val id = e.optString("id")
             if (id.isBlank() || sttBusy.contains(id)) return
@@ -1865,7 +2142,7 @@ class MainActivity : ComponentActivity() {
             sttResults = sttResults - id
             workers.execute {
                 val result = try {
-                    probeSttServer(kind, url, model)
+                    probeSttServer(url, model)
                 } catch (ex: Exception) {
                     ProviderTest.mapServerSttResult(
                         null, 0L, ProviderTest.SERVER_TIMEOUT_MS,
@@ -1962,6 +2239,11 @@ class MainActivity : ComponentActivity() {
                                     getString(R.string.local_pack_missing)
                                 LocalPackState.MISMATCH ->
                                     getString(R.string.local_pack_mismatch)
+                                LocalPackState.INCOMPLETE ->
+                                    getString(
+                                        R.string.local_downloading,
+                                        selectedModel.name,
+                                    )
                             }
                         }
                         LocalChainRow(
@@ -1995,6 +2277,10 @@ class MainActivity : ComponentActivity() {
                             result = sttLocalResult,
                             enabled = sttLocalTestAllowed(sttRunner, selPack),
                             onTest = { startSttLocalTest() },
+                            disabledReason = localTestDisabledReason(
+                                sttRunner,
+                                selPack == LocalPackState.PRESENT,
+                            ),
                         )
                     } else {
                     Column(modifier = Modifier.fillMaxWidth()) {
@@ -2044,6 +2330,11 @@ class MainActivity : ComponentActivity() {
                                 e.optString("model"),
                             ),
                             onTest = { startSttServerTest(e) },
+                            disabledReason = sttTestDisabledReason(
+                                e.optString("kind"),
+                                e.optString("url"),
+                                e.optString("model"),
+                            ),
                         )
                     }
                     }
@@ -2247,9 +2538,22 @@ class MainActivity : ComponentActivity() {
                                         stringResource(R.string.local_pack_present)
                                     LocalModelDownload.RowState.MISMATCH ->
                                         stringResource(R.string.local_pack_mismatch)
-                                    LocalModelDownload.RowState.DOWNLOADING -> {
-                                        val total = prog?.second ?: 0L
-                                        val received = prog?.first ?: 0L
+                                    LocalModelDownload.RowState.DOWNLOADING,
+                                    LocalModelDownload.RowState.INCOMPLETE,
+                                    -> {
+                                        // DOWNLOADING = live worker progress;
+                                        // INCOMPLETE = interrupted set, resume from
+                                        // verified bytes already on disk.
+                                        val total = if (row == LocalModelDownload.RowState.DOWNLOADING) {
+                                            prog?.second ?: 0L
+                                        } else {
+                                            LocalSttModels.totalBytes(m)
+                                        }
+                                        val received = if (row == LocalModelDownload.RowState.DOWNLOADING) {
+                                            prog?.first ?: 0L
+                                        } else {
+                                            bytesOf(m.id)
+                                        }
                                         if (total > 0) {
                                             stringResource(
                                                 R.string.local_downloading_mb,
@@ -2284,12 +2588,21 @@ class MainActivity : ComponentActivity() {
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
-                            if (row == LocalModelDownload.RowState.DOWNLOADING) {
+                            if (row == LocalModelDownload.RowState.DOWNLOADING ||
+                                row == LocalModelDownload.RowState.INCOMPLETE
+                            ) {
                                 Spacer(Modifier.height(4.dp))
-                                val frac = LocalModelDownload.progressFraction(
-                                    prog?.first ?: 0L,
-                                    prog?.second?.takeIf { it > 0 },
-                                )
+                                val frac = if (row == LocalModelDownload.RowState.DOWNLOADING) {
+                                    LocalModelDownload.progressFraction(
+                                        prog?.first ?: 0L,
+                                        prog?.second?.takeIf { it > 0 },
+                                    )
+                                } else {
+                                    LocalModelDownload.progressFraction(
+                                        bytesOf(m.id),
+                                        LocalSttModels.totalBytes(m).takeIf { it > 0 },
+                                    )
+                                }
                                 if (frac != null) {
                                     LinearProgressIndicator(
                                         progress = { frac },
@@ -2313,6 +2626,18 @@ class MainActivity : ComponentActivity() {
                                     LocalModelDownload.RowState.FAILED -> {
                                         OutlinedButton(onClick = { startModelDownload(m) }) {
                                             Text(stringResource(R.string.action_retry))
+                                        }
+                                        Spacer(Modifier.width(8.dp))
+                                        TextButton(onClick = { deleteConfirm = m.id }) {
+                                            Text(stringResource(R.string.action_delete))
+                                        }
+                                    }
+                                    LocalModelDownload.RowState.INCOMPLETE -> {
+                                        // Interrupted set: Resume picks up where
+                                        // the bytes stopped (verified files are
+                                        // skipped, never re-downloaded).
+                                        OutlinedButton(onClick = { startModelDownload(m) }) {
+                                            Text(stringResource(R.string.local_resume))
                                         }
                                         Spacer(Modifier.width(8.dp))
                                         TextButton(onClick = { deleteConfirm = m.id }) {
@@ -2426,6 +2751,11 @@ class MainActivity : ComponentActivity() {
                                     stringResource(R.string.local_pack_missing)
                                 LocalPackState.MISMATCH ->
                                     stringResource(R.string.local_pack_mismatch)
+                                LocalPackState.INCOMPLETE ->
+                                    stringResource(
+                                        R.string.local_downloading,
+                                        selectedModel.name,
+                                    )
                             },
                             style = MaterialTheme.typography.bodySmall,
                         )
@@ -2583,19 +2913,34 @@ class MainActivity : ComponentActivity() {
         var streaming by remember { mutableStateOf(e.optBoolean("streaming", true)) }
         var enabled by remember { mutableStateOf(e.optBoolean("enabled", true)) }
         var showKey by remember { mutableStateOf(false) }
-        var testStatus by remember { mutableStateOf<String?>(null) }
+        // Draft test: same ONE ProviderTestRow pattern as the chain
+        // rows (same button + latency/excerpt inline), run against the
+        // unsaved draft values. Draft edits clear the stale result.
+        var draftBusy by remember { mutableStateOf(false) }
+        var draftResult by remember { mutableStateOf<ProviderTest.Result?>(null) }
         val urlRequired = kind == "SelfHosted"
         val urlBlank = url.isBlank() && urlRequired
         val modelBlank = model.isBlank() && !isLocalKind
         val canSave = !urlBlank && !modelBlank && !singletonBlocked
-        fun testConnection(): String {
-            // ONE validation rule shared with the row test gates.
-            return when (ProviderTest.validateStt(kind, url, model)) {
-                ProviderTest.SttError.NONE -> getString(R.string.provider_test_looks_good)
-                ProviderTest.SttError.NEED_URL -> getString(R.string.provider_test_need_url)
-                ProviderTest.SttError.NEED_MODEL -> getString(R.string.provider_test_need_model)
-                ProviderTest.SttError.BAD_URL -> getString(R.string.provider_test_bad_url)
-                ProviderTest.SttError.BAD_BASE -> getString(R.string.provider_test_bad_base)
+        fun startDraftTest() {
+            if (!sttServerTestAllowed(kind, url, model) || draftBusy) return
+            draftBusy = true
+            draftResult = null
+            val u = url
+            val m = model
+            workers.execute {
+                val result = try {
+                    probeSttEndpoint(u, m)
+                } catch (ex: Exception) {
+                    ProviderTest.mapServerSttResult(
+                        null, 0L, ProviderTest.SERVER_TIMEOUT_MS,
+                        ex.message ?: "failed",
+                    )
+                }
+                runOnUiThread {
+                    draftBusy = false
+                    draftResult = result
+                }
             }
         }
         AlertDialog(
@@ -2617,7 +2962,7 @@ class MainActivity : ComponentActivity() {
                         DropDown(getString(R.string.llm_kind), kind, listOf("SelfHosted", "Cloud", "Local")) {
                             kind = it
                             if (it == "Local") name = LOCAL_ENTRY_NAME
-                            testStatus = null
+                            draftResult = null
                         }
                     }
                     if (singletonBlocked) {
@@ -2651,7 +2996,7 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                     if (!isLocalKind) {
-                        OutlinedTextField(value = url, onValueChange = { url = it; testStatus = null },
+                        OutlinedTextField(value = url, onValueChange = { url = it; draftResult = null },
                             label = {
                                 Text(
                                     if (kind == "Cloud") stringResource(R.string.stt_url_cloud)
@@ -2672,7 +3017,7 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                     if (!isLocalKind) {
-                        OutlinedTextField(value = model, onValueChange = { model = it; testStatus = null },
+                        OutlinedTextField(value = model, onValueChange = { model = it; draftResult = null },
                             label = { Text(stringResource(R.string.stt_model)) },
                             isError = modelBlank,
                             supportingText = {
@@ -2718,19 +3063,14 @@ class MainActivity : ComponentActivity() {
                         Switch(checked = enabled, onCheckedChange = { enabled = it })
                     }
                     if (!isLocalKind) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            OutlinedButton(onClick = { testStatus = testConnection() }) {
-                                Text(stringResource(R.string.provider_test_run))
-                            }
-                        }
-                    }
-                    testStatus?.let {
-                        val looksGood = getString(R.string.provider_test_looks_good)
-                        Text(
-                            it,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (it == looksGood) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.error,
+                        // Draft probe: same ONE row pattern (button +
+                        // latency/excerpt), same gate as the saved rows.
+                        ProviderTestRow(
+                            busy = draftBusy,
+                            result = draftResult,
+                            enabled = sttServerTestAllowed(kind, url, model),
+                            onTest = { startDraftTest() },
+                            disabledReason = sttTestDisabledReason(kind, url, model),
                         )
                     }
                 }
@@ -2774,17 +3114,19 @@ class MainActivity : ComponentActivity() {
         val llmSelected = remember(version) {
             llmSelectedAsset(assets, statePrefs.getString(PREF_SELECTED_LLM, null))
         }
-        val llmPacks = remember(version) {
+        val llmInspects = remember(version) {
             assets.associate { a ->
                 a.id to try {
-                    llmStateFor(filesDir, a)
+                    llmInspect(filesDir, a)
                 } catch (_: Exception) {
-                    LocalPackState.MISSING
+                    LlmInspect(LocalPackState.MISSING, 0L)
                 }
             }
         }
         fun llmPackOf(id: String): LocalPackState =
-            llmPacks[id] ?: LocalPackState.MISSING
+            llmInspects[id]?.state ?: LocalPackState.MISSING
+        fun llmBytesOf(id: String): Long =
+            llmInspects[id]?.verifiedBytes ?: 0L
         val llmSelId = llmSelected?.id
         val llmSelPack = if (llmSelId != null) llmPackOf(llmSelId) else LocalPackState.MISSING
         // Per-asset in-row download state (desktop fill_stt_models
@@ -2807,6 +3149,7 @@ class MainActivity : ComponentActivity() {
                 llmPackOf(a.id) == LocalPackState.MISMATCH,
                 llmDlBusy.contains(a.id),
                 llmDlErr[a.id],
+                llmPackOf(a.id) == LocalPackState.INCOMPLETE,
             )
         /** Verified file backing [a]: per-asset slot, else the adopted legacy slot. */
         fun llmActiveFile(a: LocalLlmManager.ModelAsset): File {
@@ -2887,31 +3230,8 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-        fun probeLlmRemote(kind: String, url: String, model: String): ProviderTest.Result {
-            val u = url.trim()
-            val m = model.trim()
-            // Blank vendor-default URL: config validation only.
-            if (u.isEmpty()) {
-                return ProviderTest.runProbe(ProviderTest.SERVER_TIMEOUT_MS) {
-                    "config ok · $m"
-                }
-            }
-            // Ollama: model reachability where cheap (GET /api/tags).
-            if (kind == "Ollama") {
-                return ProviderTest.runProbe(ProviderTest.SERVER_TIMEOUT_MS) {
-                    val base = u.trimEnd('/')
-                    val body = httpGetBody("$base/api/tags")
-                    if (!body.contains(m, ignoreCase = true)) {
-                        throw IllegalStateException("reachable · model not listed")
-                    }
-                    "model ok · $m"
-                }
-            }
-            return ProviderTest.runProbe(ProviderTest.SERVER_TIMEOUT_MS) {
-                val code = httpGetCode(u)
-                "HTTP $code · $m"
-            }
-        }
+        fun probeLlmRemote(kind: String, url: String, model: String): ProviderTest.Result =
+            probeLlmEndpoint(kind, url, model)
         fun startLlmRemoteTest(e: JSONObject) {
             val id = e.optString("id")
             if (id.isBlank() || llmBusy.contains(id)) return
@@ -3132,6 +3452,11 @@ class MainActivity : ComponentActivity() {
                                     getString(R.string.local_pack_missing)
                                 LocalPackState.MISMATCH ->
                                     getString(R.string.local_pack_mismatch)
+                                LocalPackState.INCOMPLETE ->
+                                    getString(
+                                        R.string.local_downloading,
+                                        llmSelId ?: "",
+                                    )
                             }
                         }
                         LocalChainRow(
@@ -3158,17 +3483,32 @@ class MainActivity : ComponentActivity() {
                             },
                             handle = handle,
                         )
-                        // Local LLM test (existing self-test: fixed prompt
+                        // Local LLM self-test (existing self-test: fixed prompt
                         // + "this is a test" via generate(), never
                         // Ollama/cloud), same ONE row pattern as every
                         // provider row. Disabled unless the SELECTED pack
-                        // verifies (multi-pack: one active model).
-                        ProviderTestRow(
-                            busy = llmTestBusy,
-                            result = llmTestResult,
-                            enabled = llmSelfTestAllowed(llmRunner, llmSelPack),
-                            onTest = { startLlmSelfTest() },
-                        )
+                        // verifies (multi-pack: one active model). With no
+                        // on-device bridge the test cannot pass, so it is
+                        // not offered at all — the honest reason shows
+                        // instead of a button that only ever FAILs.
+                        if (!llmSelfTestOffered(llmRunner)) {
+                            Text(
+                                stringResource(R.string.llm_selftest_unavailable),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        } else {
+                            ProviderTestRow(
+                                busy = llmTestBusy,
+                                result = llmTestResult,
+                                enabled = llmSelfTestAllowed(llmRunner, llmSelPack),
+                                onTest = { startLlmSelfTest() },
+                                disabledReason = localTestDisabledReason(
+                                    llmRunner,
+                                    llmSelPack == LocalPackState.PRESENT,
+                                ),
+                            )
+                        }
                     } else {
                     Column(modifier = Modifier.fillMaxWidth()) {
                     Card(
@@ -3220,6 +3560,11 @@ class MainActivity : ComponentActivity() {
                                 e.optString("model"),
                             ),
                             onTest = { startLlmRemoteTest(e) },
+                            disabledReason = llmTestDisabledReason(
+                                e.optString("kind"),
+                                e.optString("url"),
+                                e.optString("model"),
+                            ),
                         )
                     }
                     }
@@ -3351,13 +3696,27 @@ class MainActivity : ComponentActivity() {
                                             stringResource(R.string.local_pack_present)
                                         LocalModelDownload.RowState.MISMATCH ->
                                             stringResource(R.string.local_pack_mismatch)
-                                        LocalModelDownload.RowState.DOWNLOADING -> {
-                                            val total = prog?.second
+                                        LocalModelDownload.RowState.DOWNLOADING,
+                                        LocalModelDownload.RowState.INCOMPLETE,
+                                        -> {
+                                            // DOWNLOADING = live worker progress;
+                                            // INCOMPLETE = interrupted file, resume
+                                            // from verified bytes on disk.
+                                            val total = if (row == LocalModelDownload.RowState.DOWNLOADING) {
+                                                prog?.second
+                                            } else {
+                                                a.sizeBytes.takeIf { it > 0 }
+                                            }
+                                            val received = if (row == LocalModelDownload.RowState.DOWNLOADING) {
+                                                prog?.first ?: 0L
+                                            } else {
+                                                llmBytesOf(a.id)
+                                            }
                                             if (total != null && total > 0) {
                                                 stringResource(
                                                     R.string.local_downloading_mb,
                                                     a.id,
-                                                    (prog?.first ?: 0L) / 1_000_000,
+                                                    received / 1_000_000,
                                                     total / 1_000_000,
                                                 )
                                             } else {
@@ -3391,11 +3750,20 @@ class MainActivity : ComponentActivity() {
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
-                            if (row == LocalModelDownload.RowState.DOWNLOADING) {
+                            if (row == LocalModelDownload.RowState.DOWNLOADING ||
+                                row == LocalModelDownload.RowState.INCOMPLETE
+                            ) {
                                 Spacer(Modifier.height(4.dp))
-                                val frac = LocalModelDownload.progressFraction(
-                                    prog?.first ?: 0L, prog?.second,
-                                )
+                                val frac = if (row == LocalModelDownload.RowState.DOWNLOADING) {
+                                    LocalModelDownload.progressFraction(
+                                        prog?.first ?: 0L, prog?.second,
+                                    )
+                                } else {
+                                    LocalModelDownload.progressFraction(
+                                        llmBytesOf(a.id),
+                                        a.sizeBytes.takeIf { it > 0 },
+                                    )
+                                }
                                 if (frac != null) {
                                     LinearProgressIndicator(
                                         progress = { frac },
@@ -3422,6 +3790,20 @@ class MainActivity : ComponentActivity() {
                                             onClick = { startLlmDownload(a) },
                                         ) {
                                             Text(stringResource(R.string.action_retry))
+                                        }
+                                        Spacer(Modifier.width(8.dp))
+                                        TextButton(onClick = { llmDeleteConfirm = a.id }) {
+                                            Text(stringResource(R.string.action_delete))
+                                        }
+                                    }
+                                    LocalModelDownload.RowState.INCOMPLETE -> {
+                                        // Interrupted file: Resume re-downloads
+                                        // (verified bytes are skipped).
+                                        OutlinedButton(
+                                            enabled = !noPin,
+                                            onClick = { startLlmDownload(a) },
+                                        ) {
+                                            Text(stringResource(R.string.local_resume))
                                         }
                                         Spacer(Modifier.width(8.dp))
                                         TextButton(onClick = { llmDeleteConfirm = a.id }) {
@@ -3571,6 +3953,11 @@ class MainActivity : ComponentActivity() {
                                     stringResource(R.string.local_pack_missing)
                                 LocalPackState.MISMATCH ->
                                     stringResource(R.string.local_pack_mismatch)
+                                LocalPackState.INCOMPLETE ->
+                                    stringResource(
+                                        R.string.local_downloading,
+                                        llmSelId ?: "",
+                                    )
                             },
                             style = MaterialTheme.typography.bodySmall,
                         )
@@ -3648,6 +4035,34 @@ class MainActivity : ComponentActivity() {
             )
         }
         var enabled by remember { mutableStateOf(e.optBoolean("enabled", true)) }
+        // Draft test: same ONE ProviderTestRow pattern as the chain
+        // rows (same button + latency/excerpt inline), run against the
+        // unsaved draft values. Local-kind rows have no endpoint to
+        // probe — the on-device test lives on the chain row instead.
+        var draftBusy by remember { mutableStateOf(false) }
+        var draftResult by remember { mutableStateOf<ProviderTest.Result?>(null) }
+        fun startDraftTest() {
+            if (isLocalKind || !llmRemoteTestAllowed(kind, url, model) || draftBusy) return
+            draftBusy = true
+            draftResult = null
+            val k = kind
+            val u = url
+            val m = model
+            workers.execute {
+                val result = try {
+                    probeLlmEndpoint(k, u, m)
+                } catch (ex: Exception) {
+                    ProviderTest.mapRemoteLlmResult(
+                        null, 0L, ProviderTest.SERVER_TIMEOUT_MS,
+                        ex.message ?: "failed",
+                    )
+                }
+                runOnUiThread {
+                    draftBusy = false
+                    draftResult = result
+                }
+            }
+        }
         AlertDialog(
             onDismissRequest = onClose,
             title = { Text(kind) },
@@ -3667,6 +4082,7 @@ class MainActivity : ComponentActivity() {
                         DropDown(getString(R.string.llm_kind), kind, listOf("Ollama", "Local", "Cloud")) {
                             kind = it
                             if (it == "Local") name = LOCAL_ENTRY_NAME
+                            draftResult = null
                         }
                     }
                     if (singletonBlocked) {
@@ -3693,11 +4109,11 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                     if (kind != "Local") {
-                        OutlinedTextField(value = url, onValueChange = { url = it },
+                        OutlinedTextField(value = url, onValueChange = { url = it; draftResult = null },
                             label = { Text(if (kind == "Cloud") stringResource(R.string.llm_url_cloud) else stringResource(R.string.llm_url)) },
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                             modifier = Modifier.fillMaxWidth())
-                        OutlinedTextField(value = model, onValueChange = { model = it },
+                        OutlinedTextField(value = model, onValueChange = { model = it; draftResult = null },
                             label = { Text(stringResource(R.string.stt_model)) }, modifier = Modifier.fillMaxWidth())
                     }
                     if (kind == "Cloud") {
@@ -3727,6 +4143,17 @@ class MainActivity : ComponentActivity() {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(stringResource(R.string.stt_enabled), modifier = Modifier.weight(1f))
                         Switch(checked = enabled, onCheckedChange = { enabled = it })
+                    }
+                    if (!isLocalKind) {
+                        // Draft probe: same ONE row pattern (button +
+                        // latency/excerpt), same gate as the saved rows.
+                        ProviderTestRow(
+                            busy = draftBusy,
+                            result = draftResult,
+                            enabled = llmRemoteTestAllowed(kind, url, model),
+                            onTest = { startDraftTest() },
+                            disabledReason = llmTestDisabledReason(kind, url, model),
+                        )
                     }
                 }
             },

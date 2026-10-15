@@ -372,24 +372,85 @@ object LocalSttModels {
         }
     }
 
-    /** Per-model install state (missing / present / mismatch). Pure java.io. */
-    fun stateFor(filesDir: File, entry: Entry): LocalModelDownload.RowState {
+    /**
+     * Per-model install state. MISMATCH needs COMPLETE files that
+     * fail verify (full count at the pinned sizes); a subset of
+     * files, truncated files (short of [ModelFile.sizeBytes] when
+     * known), or stale `.part` leftovers (interrupted download) read
+     * as INCOMPLETE — resumable via [download] (verified files are
+     * skipped), never "SHA mismatch". Single-pass via [inspect].
+     * Pure java.io.
+     */
+    fun stateFor(filesDir: File, entry: Entry): LocalModelDownload.RowState =
+        inspect(filesDir, entry).state
+
+    /** Single-pass pack read: row state + verified on-disk bytes. */
+    data class PackInspect(
+        val state: LocalModelDownload.RowState,
+        val verifiedBytes: Long,
+    )
+
+    /**
+     * Per-model install state + verified bytes in ONE pass: each
+     * present file is SHA-verified at most once (truncated files skip
+     * the hash — they can never verify). Two separate passes
+     * ([stateFor] then [presentBytes]) would hash full packs twice per
+     * recomposition bump. [verify] is injected so unit tests can count
+     * calls. Pure java.io.
+     */
+    fun inspectWithVerifier(
+        filesDir: File,
+        entry: Entry,
+        verify: (File, String) -> Boolean,
+    ): PackInspect {
         val dir = dirFor(filesDir, entry)
-        var anyFile = false
+        var present = 0
+        var complete = 0
+        var verified = 0
+        var verifiedBytes = 0L
         for (f in entry.files) {
             val file = File(dir, f.name)
             if (!file.isFile || file.length() <= 0) continue
-            anyFile = true
-            if (!LocalLlmManager.verifySha256(file, f.sha256)) {
-                return LocalModelDownload.RowState.MISMATCH
+            present++
+            // Unknown size (<= 0) reads as complete; otherwise the
+            // file must reach its pinned size — truncated files stay
+            // INCOMPLETE and skip the wasted hash.
+            if (f.sizeBytes > 0 && file.length() < f.sizeBytes) continue
+            complete++
+            if (verify(file, f.sha256)) {
+                verified++
+                verifiedBytes += file.length()
             }
         }
+        if (present == 0 && !hasPartials(dir, entry)) {
+            return PackInspect(LocalModelDownload.RowState.MISSING, 0L)
+        }
+        val fullSet = present == entry.files.size && complete == entry.files.size
         return when {
-            anyFile && isInstalled(filesDir, entry) -> LocalModelDownload.RowState.PRESENT
-            anyFile -> LocalModelDownload.RowState.MISMATCH
-            else -> LocalModelDownload.RowState.MISSING
+            fullSet && verified == entry.files.size ->
+                PackInspect(LocalModelDownload.RowState.PRESENT, verifiedBytes)
+            fullSet ->
+                PackInspect(LocalModelDownload.RowState.MISMATCH, verifiedBytes)
+            else ->
+                PackInspect(LocalModelDownload.RowState.INCOMPLETE, verifiedBytes)
         }
     }
+
+    /** Single-pass inspect with the real SHA verifier. Pure java.io. */
+    fun inspect(filesDir: File, entry: Entry): PackInspect =
+        inspectWithVerifier(filesDir, entry, LocalLlmManager::verifySha256)
+
+    /** True when a stale `.part` from an interrupted download lingers. Pure java.io. */
+    fun hasPartials(dir: File, entry: Entry): Boolean =
+        entry.files.any { f -> File(dir, "${f.name}.part").isFile }
+
+    /**
+     * Verified bytes already on disk (INCOMPLETE progress numerator).
+     * Single-pass via [inspect] — shares the one verify per file
+     * instead of re-hashing. Pure java.io.
+     */
+    fun presentBytes(filesDir: File, entry: Entry): Long =
+        inspect(filesDir, entry).verifiedBytes
 
     /**
      * Download missing/mismatched files for [entry] (atomic .part

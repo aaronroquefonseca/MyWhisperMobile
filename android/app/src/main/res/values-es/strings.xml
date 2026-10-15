@@ -131,6 +131,7 @@
     <string name="local_pack_mismatch">Pack: presente pero SHA no coincide — descárgalo de nuevo.</string>
     <string name="local_enable_blocked">Local sigue apagado: no hay pack verificado — descárgalo primero.</string>
     <string name="local_download">Descargar modelo</string>
+    <string name="local_resume">Continuar</string>
     <string name="local_downloading">Descargando %1$s…</string>
     <string name="local_downloaded">%1$s descargado — pack verificado.</string>
     <string name="local_download_failed">Falló la descarga: %1$s</string>
@@ -341,6 +342,7 @@
     <string name="llm_local_models_title">Modelos locales</string>
     <string name="llm_local_models_sub">Descarga un modelo y elígelo con Usar. La entrada Local limpia con el modelo elegido; sin su archivo verificado la entrada se omite y la cadena sigue.</string>
     <string name="llm_selftest_run">Ejecutar prueba</string>
+    <string name="llm_selftest_unavailable">La prueba local no está disponible en esta versión — aún no hay puente de prueba local.</string>
     <string name="llm_selftest_running">Probando modelo local…</string>
     <string name="llm_selftest_pass">OK · %1$d ms · %2$s</string>
     <string name="llm_selftest_fail">FALLO · %1$d ms · %2$s</string>
@@ -351,6 +353,7 @@
     <string name="provider_test_fail">FALLO · %1$d ms · %2$s</string>
     <string name="provider_test_need_url">Introduce primero la URL del servidor.</string>
     <string name="provider_test_need_model">Introduce primero el modelo.</string>
+    <string name="provider_test_need_pack">Descarga y verifica primero el pack local.</string>
     <string name="provider_test_bad_url">La URL debe empezar por http(s):// o ws(s)://.</string>
     <string name="provider_test_bad_base">La URL base debe empezar por http(s)://.</string>
     <string name="provider_test_looks_good">Correcto — guarda y dicta para verificar contra el servidor.</string>
