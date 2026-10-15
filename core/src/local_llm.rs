@@ -493,11 +493,13 @@ mod tests {
         let _ = std::fs::create_dir_all(&dir);
         let f = dir.join("v.bin");
         std::fs::write(&f, b"abc").unwrap();
-        assert!(verify_file_sha256(
-            &f,
-            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-        )
-        .is_ok());
+        assert!(
+            verify_file_sha256(
+                &f,
+                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+            )
+            .is_ok()
+        );
         assert!(verify_file_sha256(&f, "00".repeat(32).as_str()).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -14,10 +14,10 @@
 //! entries route through `local_llm` (on-device LiteRT-LM `.litertlm`);
 //! when no model is ready they fail over to the next entry.
 
-use crate::audio::{self, Recorder, MIN_SAMPLES_16K};
+use crate::audio::{self, MIN_SAMPLES_16K, Recorder};
 use crate::server_stt::{
-    capped_text, record_stop, server_status as chain_status, stt_fingerprint, stt_primary_id,
-    stt_watcher_tick, transcribe_chain_witnessed, TickOutcome, Transcript,
+    TickOutcome, Transcript, capped_text, record_stop, server_status as chain_status,
+    stt_fingerprint, stt_primary_id, stt_watcher_tick, transcribe_chain_witnessed,
 };
 use crate::settings::{AppSettings, HistoryEntry, LlmEntry};
 use crate::store::Store;
