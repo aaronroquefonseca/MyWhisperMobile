@@ -334,4 +334,8 @@
     <string name="local_state_disabled">disabled</string>
     <string name="llm_local_models_title">On-device model</string>
     <string name="llm_local_models_sub">Download the model file, then enable the Local entry above. Without its verified file the entry is skipped and the chain moves on.</string>
+    <string name="llm_selftest_run">Run test</string>
+    <string name="llm_selftest_running">Testing local model…</string>
+    <string name="llm_selftest_pass">PASS · %1$d ms · %2$s</string>
+    <string name="llm_selftest_fail">FAIL · %1$d ms · %2$s</string>
 </resources>
