@@ -3840,6 +3840,14 @@ getString(R.string.sync_running, shown)
                             try {
                                 val msg = CoreBridge.syncAdd(id, addr, nm).getOrThrow()
                                 runOnUiThread { notes = notes + ("__add" to msg) }
+                                // A mutual round means both sides already
+                                // consented: promote to trusted (nearby flow).
+                                if (msg.startsWith("synced")) {
+                                    try {
+                                        CoreBridge.syncTrust(id.trim().lowercase(), true).getOrThrow()
+                                    } catch (_: Exception) {
+                                    }
+                                }
                             } catch (e: Exception) {
                                 runOnUiThread { notes = notes + ("__add" to "failed: ${e.message}") }
                             }

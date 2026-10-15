@@ -1721,6 +1721,30 @@ impl Store {
         }
     }
 
+    /// Responder-side ONLY latch for an incoming pairing dial: sets
+    /// `pending` on an untrusted row. Unknown dialers were already parked
+    /// by `record_seen`, but known rows never gain `pending` there — so
+    /// without this latch their request would stay invisible forever.
+    /// Trusted rows are untouched. Revoked or malformed identities are
+    /// refused.
+    ///
+    /// Never call on initiator paths: our own dial must not self-approve
+    /// into an incoming request (the inverted-state hole). The responder
+    /// calls this after the identity proof verifies, so forgeries never
+    /// latch.
+    pub fn mark_incoming_request(&self, node_id: &str) -> rusqlite::Result<bool> {
+        if !valid_node_id(node_id) || self.is_revoked(node_id)? {
+            return Err(rusqlite::Error::ToSqlConversionFailure(
+                "invalid or revoked peer".into(),
+            ));
+        }
+        let n = self.conn.execute(
+            "UPDATE devices SET pending = 1 WHERE node_id = ?1 AND trusted = 0",
+            [node_id],
+        )?;
+        Ok(n > 0)
+    }
+
     /// Record OUR outgoing pairing request. Fresh rows park as
     /// `outgoing` with `pending` clear (pending stays incoming-only, so
     /// our own request never renders with an Accept button); known rows
@@ -2861,6 +2885,30 @@ mod tests {
             .unwrap();
         assert!(store.load_settings().sync.enabled);
         assert!(!store.sync_enabled_explicit());
+    }
+
+    #[test]
+    fn mark_incoming_request_latches_only_untrusted() {
+        let store = Store::open_memory().unwrap();
+        // Unknown id: nothing to latch.
+        assert!(!store.mark_incoming_request(&peer_id(0xf5)).unwrap());
+        // Known untrusted row latches pending (e.g. our WAITING row when
+        // they dial back, or a known stranger redialling).
+        let peer = peer_id(0xf6);
+        store.record_outgoing(&peer, "wanted", &[]).unwrap();
+        assert!(store.mark_incoming_request(&peer).unwrap());
+        let row = store.get_peer(&peer).unwrap().unwrap();
+        assert!(row.pending && row.outgoing && !row.trusted);
+        // Trusted rows are untouched.
+        let buddy = peer_id(0xf7);
+        trust(&store, &buddy);
+        assert!(!store.mark_incoming_request(&buddy).unwrap());
+        assert!(!store.get_peer(&buddy).unwrap().unwrap().pending);
+        // Revoked ids are refused, never latched.
+        let denied = peer_id(0xf8);
+        store.record_seen(&denied, "denied", &[]).unwrap();
+        store.decide_request(&denied, false).unwrap();
+        assert!(store.mark_incoming_request(&denied).is_err());
     }
 
     #[test]

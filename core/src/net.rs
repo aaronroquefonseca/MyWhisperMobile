@@ -370,7 +370,8 @@ pub fn exchange(
     let is_new = store
         .record_seen(&peer.node_id, &peer.name, &contact_addrs)
         .map_err(|e| format!("record contact: {e}"))?;
-    let trusted = store
+    // Re-read below: mutual-consent completion can flip it.
+    let mut trusted = store
         .get_peer(&peer.node_id)
         .map_err(|e| format!("peer lookup: {e}"))?
         .map(|p| p.trusted)
@@ -385,16 +386,41 @@ pub fn exchange(
                 verdict.error
             });
         }
-    } else if !trusted {
-        session.send_json(&Verdict {
-            ok: false,
-            error: "not trusted: request recorded, ask them to accept".to_string(),
-        })?;
-        return Err(if is_new {
-            format!("new pairing request from {}", short(&peer.node_id))
-        } else {
-            "peer not trusted".to_string()
-        });
+    } else {
+        if !trusted {
+            // Responder-side ONLY latch (never on initiator paths): the
+            // dialer's identity proof verified above, so this contact is
+            // their genuine consent — it latches an incoming request
+            // even on known rows (record_seen only parks unknowns).
+            store
+                .mark_incoming_request(&peer.node_id)
+                .map_err(|e| format!("record request: {e}"))?;
+            // Mutual consent: we requested them (outgoing) and they
+            // dialed back — complete trust now (desktop accept flow:
+            // trusted + introducer, markers cleared), no local Accept
+            // needed. Strangers stay pending and are rejected below.
+            let mutual = store
+                .get_peer(&peer.node_id)
+                .map_err(|e| format!("peer lookup: {e}"))?
+                .is_some_and(|p| p.outgoing && !p.trusted);
+            if mutual {
+                store
+                    .decide_request(&peer.node_id, true)
+                    .map_err(|e| format!("trust peer: {e}"))?;
+                trusted = true;
+            }
+        }
+        if !trusted {
+            session.send_json(&Verdict {
+                ok: false,
+                error: "not trusted: request recorded, ask them to accept".to_string(),
+            })?;
+            return Err(if is_new {
+                format!("new pairing request from {}", short(&peer.node_id))
+            } else {
+                "peer not trusted".to_string()
+            });
+        }
     }
     if !initiator {
         session.send_json(&Verdict {
@@ -1007,6 +1033,103 @@ mod tests {
         std::fs::remove_file(&db_a).ok();
         std::fs::remove_file(&db_b).ok();
         std::fs::remove_file(&db_c).ok();
+    }
+
+    /// Requester-side completion without a local Accept: A sent B a
+    /// pairing request (WAITING: outgoing, never Accepted locally) and B
+    /// accepted there, then dials back. B's proof-verified dial-back IS
+    /// B's consent, so A's responder completes trust (trusted +
+    /// introducer) inside the round — data moves both ways and B's
+    /// vouched peer joins A through the mesh.
+    #[test]
+    fn requester_waiting_plus_acceptor_dialback_completes_without_accept() {
+        let id_a = DeviceIdentity::ephemeral();
+        let id_b = DeviceIdentity::ephemeral();
+        let id_c = DeviceIdentity::ephemeral();
+        let db_a = temp_db("ra");
+        let db_b = temp_db("rb");
+        let store_a = Store::open(&db_a).unwrap();
+        let store_b = Store::open(&db_b).unwrap();
+
+        // A sent B a pairing request: WAITING, never Accepted on A.
+        store_a.record_outgoing(&id_b.node_id, "b", &[]).unwrap();
+        assert_eq!(store_a.list_pending().unwrap().len(), 0);
+        // B accepted there (desktop flow: trusted + introducer) and
+        // vouches for C.
+        store_b
+            .upsert_peer(&id_a.node_id, "a", "unused", true)
+            .unwrap();
+        store_b.set_peer_introducer(&id_a.node_id, true).unwrap();
+        store_b
+            .upsert_peer(&id_c.node_id, "c", "unused", true)
+            .unwrap();
+
+        // Divergent content on both sides.
+        store_a.upsert_word("from-a", &id_a.node_id).unwrap();
+        store_b.upsert_word("from-b", &id_b.node_id).unwrap();
+
+        // A serves on an ephemeral port; B (acceptor) dials back.
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let db_a2 = db_a.clone();
+        let creds_a = id_a.creds();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let (mut session, hash, _remote) =
+                NoiseStream::handshake(stream, &creds_a.noise_static, false).unwrap();
+            let store = Store::open(&db_a2).unwrap();
+            exchange(
+                &mut session,
+                &hash,
+                &store,
+                &creds_a,
+                "a",
+                &[],
+                false,
+                None,
+                None,
+            )
+            .unwrap();
+        });
+
+        let report = sync_now(
+            &[format!("127.0.0.1:{port}")],
+            &db_b,
+            &id_b.creds(),
+            "b",
+            &id_a.node_id,
+        )
+        .unwrap();
+        server.join().unwrap();
+
+        assert_eq!(report.peer_node, id_a.node_id);
+        // Data moved both ways through the completed round.
+        assert!(
+            store_a
+                .load_words()
+                .unwrap()
+                .contains(&"from-b".to_string())
+        );
+        assert!(
+            store_b
+                .load_words()
+                .unwrap()
+                .contains(&"from-a".to_string())
+        );
+
+        // A's WAITING row completed with NO local Accept on A: trusted +
+        // introducer, both markers cleared.
+        let row = store_a.get_peer(&id_b.node_id).unwrap().unwrap();
+        assert!(row.trusted && row.introducer && !row.pending && !row.outgoing);
+        assert!(store_a.list_pending().unwrap().is_empty());
+        assert!(store_a.list_outgoing().unwrap().is_empty());
+
+        // Mesh: B's vouched C joined A as trusted automatically.
+        let c = store_a.get_peer(&id_c.node_id).unwrap().unwrap();
+        assert!(c.trusted && !c.pending && !c.outgoing);
+
+        std::fs::remove_file(&db_a).ok();
+        std::fs::remove_file(&db_b).ok();
     }
 
     /// An attacker with their own valid keypair who claims someone
