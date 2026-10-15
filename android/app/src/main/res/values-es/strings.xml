@@ -326,6 +326,9 @@
     <string name="notif_pref_sync_ongoing">Estado fijado</string>
     <string name="notif_pref_sync_ongoing_sub">Mantener fijada la notificación de sincronización.</string>
     <string name="local_need_full">Los modelos locales necesitan la versión completa — esta versión ligera no puede ejecutarlos. Instala el APK completo para voz y limpieza locales.</string>
+    <string name="local_singleton_blocked">Solo se permite una entrada Local — ya existe. Cierra esto y usa la entrada Local existente.</string>
+    <string name="local_name_locked">Las entradas Local siempre usan el nombre «Local».</string>
+    <string name="local_show_existing">Mostrar existente</string>
     <string name="local_arm64_note">Requiere arm64-v8a — si actualizas desde un dispositivo antiguo, conserva tu versión actual.</string>
     <string name="local_state_enabled">activado</string>
     <string name="local_state_disabled">desactivado</string>

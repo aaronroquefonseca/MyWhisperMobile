@@ -326,6 +326,9 @@
     <string name="notif_pref_sync_ongoing">Pinned sync status</string>
     <string name="notif_pref_sync_ongoing_sub">Keep the sync notification pinned while sync runs.</string>
     <string name="local_need_full">Local models need the full flavor — this lite build can\'t run them. Install the full APK for on-device speech and cleanup.</string>
+    <string name="local_singleton_blocked">Only one Local entry is allowed — it already exists. Close this and use the existing Local entry.</string>
+    <string name="local_name_locked">Local entries always use the name “Local”.</string>
+    <string name="local_show_existing">Show existing</string>
     <string name="local_arm64_note">Requires arm64-v8a — if you update from an older device, keep your current version.</string>
     <string name="local_state_enabled">enabled</string>
     <string name="local_state_disabled">disabled</string>
