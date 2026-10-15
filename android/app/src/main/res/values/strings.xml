@@ -40,6 +40,7 @@
     <!-- Setup -->
     <string name="setup_status">Status</string>
     <string name="setup_server_only">On-device models are experimental and off by default: enable Local under Transcription / Text cleanup only after its model pack verifies — otherwise the server chain is used.</string>
+    <string name="setup_speech_configured">Speech configured</string>
     <string name="setup_step1">1 · Enable the input method</string>
     <string name="setup_enabled_yes">MyWhisper is enabled as an input method.</string>
     <string name="setup_enabled_no">MyWhisper is not enabled yet.</string>
@@ -326,4 +327,8 @@
     <string name="notif_pref_sync_ongoing_sub">Keep the sync notification pinned while sync runs.</string>
     <string name="local_need_full">Local models need the full flavor — this lite build can\'t run them. Install the full APK for on-device speech and cleanup.</string>
     <string name="local_arm64_note">Requires arm64-v8a — if you update from an older device, keep your current version.</string>
+    <string name="local_state_enabled">enabled</string>
+    <string name="local_state_disabled">disabled</string>
+    <string name="llm_local_models_title">On-device model</string>
+    <string name="llm_local_models_sub">Download the model file, then enable the Local entry above. Without its verified file the entry is skipped and the chain moves on.</string>
 </resources>

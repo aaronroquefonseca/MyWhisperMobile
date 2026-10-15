@@ -14,6 +14,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -93,6 +94,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.core.content.edit
 import androidx.core.app.ActivityCompat
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -328,6 +330,83 @@ class MainActivity : ComponentActivity() {
             } catch (_: LinkageError) {
                 false
             }
+
+        // -- Local sections UX (collapsible + unified STT/LLM pattern) ---
+
+        /** Persisted expansion flags for the on-device model sections. */
+        internal const val PREF_STT_LOCAL_EXPANDED = "local_stt_expanded"
+        internal const val PREF_LLM_LOCAL_EXPANDED = "local_llm_expanded"
+
+        /**
+         * Collapsed by default: a missing pref reads as collapsed so the
+         * on-device model cards stay out of the way on first run.
+         * Pure for unit tests (pref value injected).
+         */
+        @JvmStatic
+        internal fun localSectionExpanded(prefSet: Boolean?): Boolean = prefSet ?: false
+
+        /** Default expansion for on-device model sections: collapsed. */
+        @JvmStatic
+        internal fun localSectionDefaultExpanded(): Boolean = false
+
+        /**
+         * Collapsible header summary line, e.g. `moonshine tiny-en ·
+         * enabled`. The enabled/disabled words come from resources
+         * ([R.string.local_state_enabled]/[R.string.local_state_disabled])
+         * so es renders localized; this stays pure string templating.
+         * Pure for unit tests.
+         */
+        @JvmStatic
+        internal fun localSectionSummary(
+            modelLabel: String,
+            enabled: Boolean,
+            enabledWord: String = "enabled",
+            disabledWord: String = "disabled",
+        ): String = "$modelLabel · ${if (enabled) enabledWord else disabledWord}"
+
+        /**
+         * Speech counts as configured when the server chain does OR an
+         * enabled Local entry has a verified pack. JSON extraction stays
+         * at the call site (org.json is stubbed in JVM unit tests);
+         * this owns the counting rule. Pure for unit tests.
+         */
+        @JvmStatic
+        internal fun isSpeechConfigured(
+            serverConfigured: Boolean,
+            localEnabled: Boolean,
+            localVerified: Boolean,
+        ): Boolean = serverConfigured || (localEnabled && localVerified)
+
+        /**
+         * Canonical Local chain-row block order. SttScreen and
+         * CleanupScreen render the identical [LocalChainRow] in this
+         * order: title, summary, pack status, using-model line, then the
+         * enable toggle, Why? explainer and delete. Download, progress
+         * and delete-confirm live in the collapsible on-device section,
+         * never in the row. Pure for unit tests.
+         */
+        @JvmStatic
+        internal fun localChainRowBlocks(): List<String> =
+            listOf("title", "summary", "status", "using_model", "toggle", "why", "delete")
+
+        /** STT Local chain row follows [localChainRowBlocks]. */
+        @JvmStatic
+        internal fun sttLocalRowBlocks(): List<String> = localChainRowBlocks()
+
+        /** LLM Local chain row follows [localChainRowBlocks]. */
+        @JvmStatic
+        internal fun llmLocalRowBlocks(): List<String> = localChainRowBlocks()
+
+        /**
+         * Canonical on-device model card block order (STT per-model
+         * cards and the LLM on-device card alike): title, size, model
+         * picker (Use buttons / asset dropdown), badges/notes, pack
+         * status, dest path, progress bar, download/retry/delete
+         * actions. Pure for unit tests.
+         */
+        @JvmStatic
+        internal fun localModelCardBlocks(): List<String> =
+            listOf("title", "size", "use", "badges", "status", "dest", "progress", "actions")
 
         /**
           * Downloadable LLM assets, parsed by [LocalLlmManager]. Kept
@@ -676,6 +755,113 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Collapsible on-device model section (STT + LLM share this): a
+     * header card with title, summary line (e.g. `moonshine tiny-en ·
+     * enabled`) and chevron, collapsed by default with the expansion
+     * persisted under [prefKey] ([PREF_STT_LOCAL_EXPANDED] /
+     * [PREF_LLM_LOCAL_EXPANDED]). The expanded body holds the model
+     * cards in [localModelCardBlocks] order.
+     */
+    @Composable
+    private fun CollapsibleModelsSection(
+        title: String,
+        summary: String,
+        prefKey: String,
+        body: @Composable () -> Unit,
+    ) {
+        val prefs = getSharedPreferences("mw_state", MODE_PRIVATE)
+        var expanded by remember {
+            mutableStateOf(prefs.getBoolean(prefKey, localSectionDefaultExpanded()))
+        }
+        fun toggle() {
+            expanded = !expanded
+            prefs.edit { putBoolean(prefKey, expanded) }
+        }
+        Card(modifier = Modifier.fillMaxWidth().padding(8.dp)) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().clickable { toggle() },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(title, style = MaterialTheme.typography.titleMedium)
+                        Text(summary, style = MaterialTheme.typography.bodySmall)
+                    }
+                    IconButton(onClick = { toggle() }) {
+                        // Text chevron (icons-core has no expand glyphs):
+                        // TalkBack reads the expanded/collapsed state.
+                        Text(if (expanded) "▲" else "▼")
+                    }
+                }
+                if (expanded) {
+                    Spacer(Modifier.height(8.dp))
+                    body()
+                }
+            }
+        }
+    }
+
+    /**
+     * The ONE Local chain-row pattern ([localChainRowBlocks] order):
+     * title, summary, pack status, using-model line, then the enable
+     * toggle, Why? explainer and delete. Used identically by the STT
+     * and LLM chains; download / progress / delete-confirm live in
+     * the collapsible on-device section, never in the row.
+     */
+    @Composable
+    private fun LocalChainRow(
+        e: JSONObject,
+        summary: String,
+        statusText: String,
+        statusOk: Boolean,
+        usingModelText: String,
+        onToggle: (Boolean) -> Unit,
+        onWhy: () -> Unit,
+        onDelete: () -> Unit,
+        handle: @Composable () -> Unit,
+    ) {
+        Card(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant,
+            ),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(modifier = Modifier.padding(end = 4.dp)) { handle() }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(e.optString("name", "entry"))
+                    Text(summary, style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        statusText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (statusOk) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.error
+                        },
+                    )
+                    Text(
+                        usingModelText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = e.optBoolean("enabled", true),
+                    onCheckedChange = onToggle,
+                )
+                TextButton(onClick = onWhy) { Text(stringResource(R.string.stt_local_why)) }
+                IconButton(onClick = onDelete) {
+                    Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.action_delete))
+                }
+            }
+        }
+    }
+
     @Composable
     private fun NotifToggle(
         title: String,
@@ -818,7 +1004,29 @@ class MainActivity : ComponentActivity() {
         ) {
             val imeDone = imeEnabled()
             val micDone = micGranted.value
-            val serverDone = isServerConfigured(s)
+            // A verified on-device pack counts as configured:
+            // Local-only setups must not report "no speech configured".
+            val setupPrefs = getSharedPreferences("mw_state", MODE_PRIVATE)
+            val localEnabled = remember(s) {
+                val arr = s.optJSONObject("stt")?.optJSONArray("entries") ?: JSONArray()
+                var found = false
+                for (i in 0 until arr.length()) {
+                    val en = arr.optJSONObject(i) ?: continue
+                    if (en.optString("kind") == "Local" && en.optBoolean("enabled", true)) {
+                        found = true
+                        break
+                    }
+                }
+                found
+            }
+            val localVerified = remember(s) {
+                try {
+                    sttModelPackState(LocalStt.selectedEntry(setupPrefs)) == LocalPackState.PRESENT
+                } catch (_: Exception) {
+                    false
+                }
+            }
+            val serverDone = isSpeechConfigured(isServerConfigured(s), localEnabled, localVerified)
             val doneCount = onboardingDoneCount(imeDone, micDone, serverDone)
             Section("Setup progress: $doneCount of 3") {
                 if (doneCount == 3) {
@@ -837,7 +1045,7 @@ class MainActivity : ComponentActivity() {
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Text(
-                    (if (serverDone) "✓ " else "○ ") + "Speech server configured",
+                    (if (serverDone) "✓ " else "○ ") + stringResource(R.string.setup_speech_configured),
                     style = MaterialTheme.typography.bodyMedium,
                 )
             }
@@ -1284,11 +1492,53 @@ class MainActivity : ComponentActivity() {
                     },
                 ) { e, handle ->
                     val isLocal = e.optString("kind") == "Local"
+                    if (isLocal) {
+                        // Local follows the ONE chain-row pattern
+                        // ([localChainRowBlocks]): title, summary, pack
+                        // status, using-model line, toggle, Why?,
+                        // delete. Downloads live in the collapsible
+                        // on-device section below, never in the row.
+                        // Lite flavor (no runner): full-APK pointer
+                        // instead of pack status.
+                        val localStatus = if (!sttRunner) {
+                            getString(R.string.local_need_full)
+                        } else {
+                            when (selPack) {
+                                LocalPackState.PRESENT ->
+                                    getString(R.string.local_pack_present)
+                                LocalPackState.MISSING ->
+                                    getString(R.string.local_pack_missing)
+                                LocalPackState.MISMATCH ->
+                                    getString(R.string.local_pack_mismatch)
+                            }
+                        }
+                        LocalChainRow(
+                            e = e,
+                            summary = entrySummary(e),
+                            statusText = localStatus,
+                            statusOk = sttRunner && selPack == LocalPackState.PRESENT,
+                            usingModelText = getString(
+                                R.string.stt_using_model,
+                                selectedModel.name,
+                            ),
+                            onToggle = {
+                                onLocalToggle(e, it, selPack, { version++ }, sttRunner)
+                            },
+                            onWhy = { localInfo = true },
+                            onDelete = {
+                                val next = JSONArray()
+                                for (j in 0 until entries.length()) {
+                                    if (entries.optJSONObject(j)?.optString("id") != e.optString("id")) {
+                                        next.put(entries.get(j))
+                                    }
+                                }
+                                stt.put("entries", next); save(); version++
+                            },
+                            handle = handle,
+                        )
+                    } else {
                     Card(
                         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                        colors = if (isLocal) CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                        ) else CardDefaults.cardColors(),
                     ) {
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(8.dp),
@@ -1298,65 +1548,15 @@ class MainActivity : ComponentActivity() {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(e.optString("name", "entry"))
                                 Text(entrySummary(e), style = MaterialTheme.typography.bodySmall)
-                                if (isLocal) {
-                                    // Chain row follows the selected catalog
-                                    // model (downloads live in On-device
-                                    // models below); the toggle stays
-                                    // fail-closed on its verified pack.
-                                    // Lite flavor (no runner): full-APK
-                                    // pointer instead of pack status.
-                                    if (!sttRunner) {
-                                        Text(
-                                            stringResource(R.string.local_need_full),
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.error,
-                                        )
-                                    } else {
-                                        Text(
-                                            when (selPack) {
-                                                LocalPackState.PRESENT ->
-                                                    stringResource(R.string.local_pack_present)
-                                                LocalPackState.MISSING ->
-                                                    stringResource(R.string.local_pack_missing)
-                                                LocalPackState.MISMATCH ->
-                                                    stringResource(R.string.local_pack_mismatch)
-                                            },
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = if (selPack == LocalPackState.PRESENT) {
-                                                MaterialTheme.colorScheme.primary
-                                            } else {
-                                                MaterialTheme.colorScheme.error
-                                            },
-                                        )
-                                    }
-                                    Text(
-                                        stringResource(
-                                            R.string.stt_using_model,
-                                            selectedModel.name,
-                                        ),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
                             }
-                            if (isLocal) {
-                                Switch(
-                                    checked = e.optBoolean("enabled", true),
-                                    onCheckedChange = {
-                                        onLocalToggle(e, it, selPack, { version++ }, sttRunner)
-                                    },
-                                )
-                                TextButton(onClick = { localInfo = true }) { Text(stringResource(R.string.stt_local_why)) }
-                            } else {
-                                Switch(
-                                    checked = e.optBoolean("enabled", true),
-                                    onCheckedChange = {
-                                        e.put("enabled", it); save(); version++
-                                    },
-                                )
-                                IconButton(onClick = { dialog = JSONObject(e.toString()) }) {
-                                    Icon(Icons.Filled.Edit, contentDescription = stringResource(R.string.action_edit))
-                                }
+                            Switch(
+                                checked = e.optBoolean("enabled", true),
+                                onCheckedChange = {
+                                    e.put("enabled", it); save(); version++
+                                },
+                            )
+                            IconButton(onClick = { dialog = JSONObject(e.toString()) }) {
+                                Icon(Icons.Filled.Edit, contentDescription = stringResource(R.string.action_edit))
                             }
                             IconButton(onClick = {
                                 val next = JSONArray()
@@ -1371,6 +1571,7 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     }
+                    }
                 }
                 OutlinedButton(onClick = {
                     dialog = newSttEntry("SelfHosted")
@@ -1380,7 +1581,30 @@ class MainActivity : ComponentActivity() {
                     Text(stringResource(R.string.stt_add))
                 }
             }
-            Section(stringResource(R.string.stt_models_title)) {
+            // Collapsed by default (persisted): the model cards stay
+            // out of the way until the owner expands them.
+            val sttLocalOn = run {
+                val arr = entriesOf(stt, "entries")
+                var on = false
+                for (i in 0 until arr.length()) {
+                    val en = arr.optJSONObject(i) ?: continue
+                    if (en.optString("kind") == "Local") {
+                        on = en.optBoolean("enabled", true)
+                        break
+                    }
+                }
+                on
+            }
+            CollapsibleModelsSection(
+                title = stringResource(R.string.stt_models_title),
+                summary = localSectionSummary(
+                    selectedModel.name,
+                    sttLocalOn,
+                    getString(R.string.local_state_enabled),
+                    getString(R.string.local_state_disabled),
+                ),
+                prefKey = PREF_STT_LOCAL_EXPANDED,
+            ) {
                 Text(
                     stringResource(R.string.stt_models_sub),
                     style = MaterialTheme.typography.bodySmall,
@@ -2134,11 +2358,53 @@ class MainActivity : ComponentActivity() {
                     },
                 ) { e, handle ->
                     val isLocal = e.optString("kind") == "Local"
+                    if (isLocal) {
+                        // Same ONE chain-row pattern as STT
+                        // ([localChainRowBlocks]): title, summary, pack
+                        // status, using-model line, toggle, Why?,
+                        // delete. Download / progress / delete-confirm
+                        // live in the collapsible on-device section
+                        // below, never in the row. Lite flavor (no
+                        // runner): full-APK pointer instead of status.
+                        val llmStatus = if (!llmRunner) {
+                            getString(R.string.local_need_full)
+                        } else {
+                            when (llmState) {
+                                LocalPackState.PRESENT ->
+                                    getString(R.string.local_pack_present)
+                                LocalPackState.MISSING ->
+                                    getString(R.string.local_pack_missing)
+                                LocalPackState.MISMATCH ->
+                                    getString(R.string.local_pack_mismatch)
+                            }
+                        }
+                        LocalChainRow(
+                            e = e,
+                            summary = getString(R.string.cleanup_local_summary),
+                            statusText = llmStatus,
+                            statusOk = llmRunner && llmState == LocalPackState.PRESENT,
+                            usingModelText = getString(
+                                R.string.stt_using_model,
+                                llmPicked?.id ?: "",
+                            ),
+                            onToggle = {
+                                onLocalToggle(e, it, llmState, { version++ }, llmRunner)
+                            },
+                            onWhy = { localInfo = true },
+                            onDelete = {
+                                val next = JSONArray()
+                                for (j in 0 until entries.length()) {
+                                    if (entries.optJSONObject(j)?.optString("id") != e.optString("id")) {
+                                        next.put(entries.get(j))
+                                    }
+                                }
+                                lm.put("entries", next); save(); version++
+                            },
+                            handle = handle,
+                        )
+                    } else {
                     Card(
                         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                        colors = if (isLocal) CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                        ) else CardDefaults.cardColors(),
                     ) {
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(8.dp),
@@ -2148,189 +2414,18 @@ class MainActivity : ComponentActivity() {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(e.optString("name", "model"))
                                 Text(
-                                    if (isLocal) getString(R.string.cleanup_local_summary)
-                                    else "${e.optString("kind")} · ${e.optString("model")}",
+                                    "${e.optString("kind")} · ${e.optString("model")}",
                                     style = MaterialTheme.typography.bodySmall,
                                 )
-                                if (isLocal) {
-                                    // Lite flavor (no runner): full-APK
-                                    // pointer instead of pack status.
-                                    if (!llmRunner) {
-                                        Text(
-                                            stringResource(R.string.local_need_full),
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.error,
-                                        )
-                                    } else {
-                                        Text(
-                                            when (llmRow) {
-                                                LocalModelDownload.RowState.PRESENT ->
-                                                    stringResource(R.string.local_pack_present)
-                                                LocalModelDownload.RowState.MISMATCH ->
-                                                    stringResource(R.string.local_pack_mismatch)
-                                                LocalModelDownload.RowState.DOWNLOADING -> {
-                                                    val total = llmDlTotal
-                                                    if (total != null && total > 0) {
-                                                        stringResource(
-                                                            R.string.local_downloading_mb,
-                                                            llmPicked?.id ?: "",
-                                                            llmDlReceived / 1_000_000,
-                                                            total / 1_000_000,
-                                                        )
-                                                    } else {
-                                                        stringResource(
-                                                            R.string.local_downloading,
-                                                            llmPicked?.id ?: "",
-                                                        )
-                                                    }
-                                                }
-                                                LocalModelDownload.RowState.FAILED ->
-                                                    stringResource(
-                                                        R.string.local_download_failed,
-                                                        llmDlError ?: "failed",
-                                                    )
-                                                LocalModelDownload.RowState.MISSING ->
-                                                    stringResource(R.string.local_pack_missing)
-                                            },
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = if (llmRow == LocalModelDownload.RowState.PRESENT) {
-                                                MaterialTheme.colorScheme.primary
-                                            } else {
-                                                MaterialTheme.colorScheme.error
-                                            },
-                                        )
-                                    }
-                                    // Secondary details line: model path only
-                                    // (download is the primary path now).
-                                    Text(
-                                        stringResource(
-                                            R.string.llm_pack_dest,
-                                            LocalLlmManager.defaultTaskFile(filesDir).absolutePath,
-                                        ),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                    if (llmRow == LocalModelDownload.RowState.DOWNLOADING) {
-                                        Spacer(Modifier.height(4.dp))
-                                        val frac = LocalModelDownload.progressFraction(
-                                            llmDlReceived, llmDlTotal,
-                                        )
-                                        if (frac != null) {
-                                            LinearProgressIndicator(
-                                                progress = { frac },
-                                                modifier = Modifier.fillMaxWidth(),
-                                            )
-                                        } else {
-                                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                                        }
-                                    }
-                                    val noPin = llmPicked == null ||
-                                        isPlaceholderSha(llmPicked.sha256)
-                                    if (llmRow != LocalModelDownload.RowState.DOWNLOADING &&
-                                        llmRow != LocalModelDownload.RowState.PRESENT
-                                    ) {
-                                        if (llmPicked != null && assets.size > 1) {
-                                            DropDown(
-                                                getString(R.string.llm_model_label),
-                                                llmPicked.id,
-                                                assets.map { it.id },
-                                            ) { llmDlAssetId = it }
-                                        }
-                                    }
-                                    if (noPin && llmRow != LocalModelDownload.RowState.PRESENT) {
-                                        Text(
-                                            stringResource(R.string.llm_no_pin),
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.error,
-                                        )
-                                    }
-                                    val minRam = llmPicked?.minRamMb ?: 0L
-                                    if (minRam > 0) {
-                                        Text(
-                                            stringResource(R.string.llm_ram_need, minRam),
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        )
-                                        val ramMb = remember { totalRamMb() }
-                                        if (ramMb > 0 && ramMb < minRam &&
-                                            llmRow != LocalModelDownload.RowState.PRESENT
-                                        ) {
-                                            Text(
-                                                stringResource(R.string.llm_ram_warn),
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.error,
-                                            )
-                                        }
-                                    }
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        if (!llmRunner) {
-                                            // Lite flavor: no Download offered
-                                            // (could never run) — full-APK
-                                            // pointer instead.
-                                            Text(
-                                                stringResource(R.string.local_need_full),
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.error,
-                                            )
-                                        } else when {
-                                            llmRow == LocalModelDownload.RowState.DOWNLOADING -> {}
-                                            llmRow == LocalModelDownload.RowState.FAILED -> {
-                                                OutlinedButton(
-                                                    enabled = !noPin,
-                                                    onClick = { startLlmDownload() },
-                                                ) {
-                                                    Text(stringResource(R.string.action_retry))
-                                                }
-                                                Spacer(Modifier.width(8.dp))
-                                                TextButton(onClick = { llmDeleteConfirm = true }) {
-                                                    Text(stringResource(R.string.action_delete))
-                                                }
-                                            }
-                                            llmRow == LocalModelDownload.RowState.PRESENT ||
-                                                llmRow == LocalModelDownload.RowState.MISMATCH -> {
-                                                if (llmRow == LocalModelDownload.RowState.MISMATCH) {
-                                                    OutlinedButton(
-                                                        enabled = !noPin,
-                                                        onClick = { startLlmDownload() },
-                                                    ) {
-                                                        Text(stringResource(R.string.local_download))
-                                                    }
-                                                    Spacer(Modifier.width(8.dp))
-                                                }
-                                                TextButton(onClick = { llmDeleteConfirm = true }) {
-                                                    Text(stringResource(R.string.action_delete))
-                                                }
-                                            }
-                                            else -> {
-                                                OutlinedButton(
-                                                    enabled = !noPin,
-                                                    onClick = { startLlmDownload() },
-                                                ) {
-                                                    Text(stringResource(R.string.local_download))
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
                             }
-                            if (isLocal) {
-                                Switch(
-                                    checked = e.optBoolean("enabled", true),
-                                    onCheckedChange = {
-                                        onLocalToggle(e, it, llmState, { version++ }, llmRunner)
-                                    },
-                                )
-                                TextButton(onClick = { localInfo = true }) { Text(stringResource(R.string.stt_local_why)) }
-                            } else {
-                                Switch(
-                                    checked = e.optBoolean("enabled", true),
-                                    onCheckedChange = {
-                                        e.put("enabled", it); save(); version++
-                                    },
-                                )
-                                IconButton(onClick = { dialog = JSONObject(e.toString()) }) {
-                                    Icon(Icons.Filled.Edit, contentDescription = stringResource(R.string.action_edit))
-                                }
+                            Switch(
+                                checked = e.optBoolean("enabled", true),
+                                onCheckedChange = {
+                                    e.put("enabled", it); save(); version++
+                                },
+                            )
+                            IconButton(onClick = { dialog = JSONObject(e.toString()) }) {
+                                Icon(Icons.Filled.Edit, contentDescription = stringResource(R.string.action_edit))
                             }
                             IconButton(onClick = {
                                 val next = JSONArray()
@@ -2344,6 +2439,7 @@ class MainActivity : ComponentActivity() {
                                 Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.action_delete))
                             }
                         }
+                    }
                     }
                 }
                 OutlinedButton(onClick = {
@@ -2361,6 +2457,197 @@ class MainActivity : ComponentActivity() {
                     Icon(Icons.Filled.Add, contentDescription = null)
                     Spacer(Modifier.width(4.dp))
                     Text(stringResource(R.string.cleanup_add))
+                }
+            }
+            // On-device model file (collapsible, collapsed by
+            // default): same card-block order as the STT model cards
+            // ([localModelCardBlocks]) — picker, notes, status, dest,
+            // progress, actions. Moved out of the chain row so both
+            // chains share the ONE row pattern above.
+            val llmLocalOn = run {
+                val arr = entriesOf(lm, "entries")
+                var on = false
+                for (i in 0 until arr.length()) {
+                    val en = arr.optJSONObject(i) ?: continue
+                    if (en.optString("kind") == "Local") {
+                        on = en.optBoolean("enabled", true)
+                        break
+                    }
+                }
+                on
+            }
+            CollapsibleModelsSection(
+                title = stringResource(R.string.llm_local_models_title),
+                summary = localSectionSummary(
+                    llmPicked?.id ?: "",
+                    llmLocalOn,
+                    getString(R.string.local_state_enabled),
+                    getString(R.string.local_state_disabled),
+                ),
+                prefKey = PREF_LLM_LOCAL_EXPANDED,
+            ) {
+                Text(
+                    stringResource(R.string.llm_local_models_sub),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Text(
+                    stringResource(R.string.local_arm64_note),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (!llmRunner) {
+                    Text(
+                        stringResource(R.string.local_need_full),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                val llmNoPin = llmPicked == null ||
+                    isPlaceholderSha(llmPicked.sha256)
+                if (llmRow != LocalModelDownload.RowState.DOWNLOADING &&
+                    llmRow != LocalModelDownload.RowState.PRESENT
+                ) {
+                    if (llmPicked != null && assets.size > 1) {
+                        DropDown(
+                            getString(R.string.llm_model_label),
+                            llmPicked.id,
+                            assets.map { it.id },
+                        ) { llmDlAssetId = it }
+                    }
+                }
+                if (llmNoPin && llmRow != LocalModelDownload.RowState.PRESENT) {
+                    Text(
+                        stringResource(R.string.llm_no_pin),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                val llmMinRam = llmPicked?.minRamMb ?: 0L
+                if (llmMinRam > 0) {
+                    Text(
+                        stringResource(R.string.llm_ram_need, llmMinRam),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    val ramMb = remember { totalRamMb() }
+                    if (ramMb > 0 && ramMb < llmMinRam &&
+                        llmRow != LocalModelDownload.RowState.PRESENT
+                    ) {
+                        Text(
+                            stringResource(R.string.llm_ram_warn),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+                if (llmRunner) {
+                    Text(
+                        when (llmRow) {
+                            LocalModelDownload.RowState.PRESENT ->
+                                stringResource(R.string.local_pack_present)
+                            LocalModelDownload.RowState.MISMATCH ->
+                                stringResource(R.string.local_pack_mismatch)
+                            LocalModelDownload.RowState.DOWNLOADING -> {
+                                val total = llmDlTotal
+                                if (total != null && total > 0) {
+                                    stringResource(
+                                        R.string.local_downloading_mb,
+                                        llmPicked?.id ?: "",
+                                        llmDlReceived / 1_000_000,
+                                        total / 1_000_000,
+                                    )
+                                } else {
+                                    stringResource(
+                                        R.string.local_downloading,
+                                        llmPicked?.id ?: "",
+                                    )
+                                }
+                            }
+                            LocalModelDownload.RowState.FAILED ->
+                                stringResource(
+                                    R.string.local_download_failed,
+                                    llmDlError ?: "failed",
+                                )
+                            LocalModelDownload.RowState.MISSING ->
+                                stringResource(R.string.local_pack_missing)
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (llmRow == LocalModelDownload.RowState.PRESENT) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.error
+                        },
+                    )
+                }
+                Text(
+                    stringResource(
+                        R.string.llm_pack_dest,
+                        LocalLlmManager.defaultTaskFile(filesDir).absolutePath,
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (llmRow == LocalModelDownload.RowState.DOWNLOADING) {
+                    Spacer(Modifier.height(4.dp))
+                    val frac = LocalModelDownload.progressFraction(
+                        llmDlReceived, llmDlTotal,
+                    )
+                    if (frac != null) {
+                        LinearProgressIndicator(
+                            progress = { frac },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    } else {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (!llmRunner) {
+                        // Lite flavor: no Download offered (could never
+                        // run) — full-APK pointer instead.
+                        Text(
+                            stringResource(R.string.local_need_full),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    } else when {
+                        llmRow == LocalModelDownload.RowState.DOWNLOADING -> {}
+                        llmRow == LocalModelDownload.RowState.FAILED -> {
+                            OutlinedButton(
+                                enabled = !llmNoPin,
+                                onClick = { startLlmDownload() },
+                            ) {
+                                Text(stringResource(R.string.action_retry))
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            TextButton(onClick = { llmDeleteConfirm = true }) {
+                                Text(stringResource(R.string.action_delete))
+                            }
+                        }
+                        llmRow == LocalModelDownload.RowState.PRESENT ||
+                            llmRow == LocalModelDownload.RowState.MISMATCH -> {
+                            if (llmRow == LocalModelDownload.RowState.MISMATCH) {
+                                OutlinedButton(
+                                    enabled = !llmNoPin,
+                                    onClick = { startLlmDownload() },
+                                ) {
+                                    Text(stringResource(R.string.local_download))
+                                }
+                                Spacer(Modifier.width(8.dp))
+                            }
+                            TextButton(onClick = { llmDeleteConfirm = true }) {
+                                Text(stringResource(R.string.action_delete))
+                            }
+                        }
+                        else -> {
+                            OutlinedButton(
+                                enabled = !llmNoPin,
+                                onClick = { startLlmDownload() },
+                            ) {
+                                Text(stringResource(R.string.local_download))
+                            }
+                        }
+                    }
                 }
             }
         }

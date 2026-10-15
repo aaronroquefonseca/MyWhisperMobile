@@ -40,6 +40,7 @@
     <!-- Setup -->
     <string name="setup_status">Estado</string>
     <string name="setup_server_only">Los modelos locales son experimentales y están apagados por defecto: activa Local en Transcripción / Edición solo cuando su pack verifique — si no, se usa la cadena del servidor.</string>
+    <string name="setup_speech_configured">Voz configurada</string>
     <string name="setup_step1">1 · Activa el método de entrada</string>
     <string name="setup_enabled_yes">MyWhisper está activado como método de entrada.</string>
     <string name="setup_enabled_no">MyWhisper aún no está activado.</string>
@@ -326,4 +327,8 @@
     <string name="notif_pref_sync_ongoing_sub">Mantener fijada la notificación de sincronización.</string>
     <string name="local_need_full">Los modelos locales necesitan la versión completa — esta versión ligera no puede ejecutarlos. Instala el APK completo para voz y limpieza locales.</string>
     <string name="local_arm64_note">Requiere arm64-v8a — si actualizas desde un dispositivo antiguo, conserva tu versión actual.</string>
+    <string name="local_state_enabled">activado</string>
+    <string name="local_state_disabled">desactivado</string>
+    <string name="llm_local_models_title">Modelo local</string>
+    <string name="llm_local_models_sub">Descarga el archivo del modelo y activa la entrada Local de arriba. Sin su archivo verificado la entrada se omite y la cadena sigue.</string>
 </resources>
