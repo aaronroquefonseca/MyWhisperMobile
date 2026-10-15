@@ -1,0 +1,21 @@
+{
+  "pack": "sherpa-onnx-whisper-medium",
+  "source": "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-medium",
+  "dir": "models/sherpa-whisper-medium-int8",
+  "note": "Largest multilingual model (~902MB, over the 500MB phone-sane cap by design). Requires a flagship phone with 6GB+ total RAM and ~2GB free RAM; speed varies by phone — measured x-realtime shows after the first on-device run. Moonshine tiny-en stays the default.",
+  "verified": "2026-10-15: existence + onnx.quantize magic (both files) + full-download SHA-256",
+  "files": {
+    "medium-encoder.int8.onnx": {
+      "sha256": "1c54582b4d829de0089f6cb63bbbdb3bf7555398bacaf855fbecf1a84dfd193e",
+      "bytes": 374196283
+    },
+    "medium-decoder.int8.onnx": {
+      "sha256": "595d00a338a365a7bfa0ca7f296cabc639583bef770ab6130df90f49a6412747",
+      "bytes": 571059257
+    },
+    "medium-tokens.txt": {
+      "sha256": "b34b360dbb493e781e479794586d661700670d65564001f23024971d1f2fa126",
+      "bytes": 816730
+    }
+  }
+}

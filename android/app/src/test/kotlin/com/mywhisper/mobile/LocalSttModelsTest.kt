@@ -8,20 +8,24 @@ import org.junit.Test
 
 /**
  * Catalog registry tests (see LocalSttModels): metadata completeness
- * per entry + the per-model download matrix (state / delete), plus
- * the whisper language wiring rule (auto-detect vs pinned code,
- * fail-safe on unknown codes so the native decoder never hard-exits).
+ * per entry + the per-model download matrix (state / delete), copy
+ * honesty (no opt-in noise, no absolute speed claims — measured
+ * ×realtime only), the RTF label helpers, the flagship RAM gate, the
+ * medium SHA pins, plus the whisper language wiring rule
+ * (auto-detect vs pinned code, fail-safe on unknown codes so the
+ * native decoder never hard-exits).
  */
 class LocalSttModelsTest {
 
     @Test
-    fun catalog_hasFourPhoneSaneEntries() {
+    fun catalog_hasFivePhoneSaneEntries() {
         assertEquals(
             listOf(
                 LocalSttModels.MOONSHINE_ID,
                 LocalSttModels.WHISPER_TINY_ID,
                 LocalSttModels.WHISPER_BASE_ID,
                 LocalSttModels.WHISPER_SMALL_ID,
+                LocalSttModels.WHISPER_MEDIUM_ID,
             ),
             LocalSttModels.MODELS.map { it.id },
         )
@@ -66,6 +70,7 @@ class LocalSttModelsTest {
             LocalSttModels.WHISPER_TINY_ID,
             LocalSttModels.WHISPER_BASE_ID,
             LocalSttModels.WHISPER_SMALL_ID,
+            LocalSttModels.WHISPER_MEDIUM_ID,
         )) {
             val m = LocalSttModels.findById(id)
             assertEquals(LocalSttModels.Engine.WHISPER, m.engine)
@@ -81,37 +86,152 @@ class LocalSttModelsTest {
     }
 
     @Test
-    fun downloadMatrix_under500MbPerModel() {
+    fun downloadMatrix_sizesPinned() {
+        // Phone-sane cap (500MB) applies to every entry EXCEPT the
+        // flagship medium tier, which is over the cap by design
+        // (verified ~902MB) and gated by total RAM instead.
         for (m in LocalSttModels.MODELS) {
             val total = LocalSttModels.totalBytes(m)
-            assertTrue(total in 1..500_000_000)
+            if (m.id == LocalSttModels.WHISPER_MEDIUM_ID) {
+                assertEquals(946072270L, total)
+            } else {
+                assertTrue(m.id, total in 1..500_000_000)
+            }
         }
-        // Base costs more than tiny; small costs most; moonshine stays smallest.
+        // Cost ordering holds end to end; moonshine stays smallest.
         val tiny = LocalSttModels.totalBytes(LocalSttModels.findById(LocalSttModels.WHISPER_TINY_ID))
         val base = LocalSttModels.totalBytes(LocalSttModels.findById(LocalSttModels.WHISPER_BASE_ID))
         val small = LocalSttModels.totalBytes(LocalSttModels.findById(LocalSttModels.WHISPER_SMALL_ID))
+        val medium = LocalSttModels.totalBytes(LocalSttModels.findById(LocalSttModels.WHISPER_MEDIUM_ID))
         val moon = LocalSttModels.totalBytes(LocalSttModels.findById(LocalSttModels.MOONSHINE_ID))
         assertTrue(moon < tiny)
         assertTrue(tiny < base)
         assertTrue(base < small)
+        assertTrue(small < medium)
     }
 
     @Test
-    fun smallEntry_isOptInWithCostWarning() {
+    fun copy_hasNoOptInNoiseOrAbsoluteSpeedClaims() {
+        // ALL local models are opt-in by design — the label is noise;
+        // absolute speed adjectives are wrong (owner phone-tested).
+        // RAM-cost guidance ("needs ~N free RAM", "requires
+        // flagship") is the only cost copy allowed.
+        val banned = listOf("opt-in", "opt in", "slow", "fastest", "slower", "fast pick")
+        for (m in LocalSttModels.MODELS) {
+            val copy = "${m.name}\n${m.runtimeNote}\n${m.phoneTier}".lowercase()
+            for (b in banned) {
+                assertFalse("$b in ${m.id}", copy.contains(b))
+            }
+        }
+    }
+
+    @Test
+    fun smallEntry_neutralCopyWithRamNote() {
         val small = LocalSttModels.findById(LocalSttModels.WHISPER_SMALL_ID)
-        // Opt-in: never the default; unknown ids still fail closed to moonshine.
+        // Never the default; unknown ids still fail closed to moonshine.
         assertFalse(small.id == LocalSttModels.DEFAULT_ID)
         assertEquals(LocalSttModels.MOONSHINE_ID, LocalSttModels.DEFAULT_ID)
         // Verified download size pins (HF full-download, never invented).
         assertEquals(375485327L, LocalSttModels.totalBytes(small))
         assertEquals("~358MB", small.sizeLabel)
-        // Strong cost warning: slow on phone CPU + RAM note.
+        // RAM cost note only — no speed adjectives, no opt-in noise.
         val note = small.runtimeNote.lowercase()
-        assertTrue(note.contains("slow"))
-        assertTrue(note.contains("cpu"))
         assertTrue(note.contains("ram"))
-        val tier = small.phoneTier.lowercase()
-        assertTrue(tier.contains("flagship"))
+        assertTrue(note.contains("speed varies by phone"))
+    }
+
+    @Test
+    fun mediumEntry_verifiedShaPinsAndFlagshipGate() {
+        val medium = LocalSttModels.findById(LocalSttModels.WHISPER_MEDIUM_ID)
+        // Flagship tier: never the default.
+        assertFalse(medium.id == LocalSttModels.DEFAULT_ID)
+        assertEquals(LocalSttModels.Engine.WHISPER, medium.engine)
+        assertEquals(LocalSttModels.LangMode.AUTO, medium.langMode)
+        assertEquals("~902MB", medium.sizeLabel)
+        assertEquals("models/sherpa-whisper-medium-int8", medium.dirRel)
+        // Full-download SHA-256 pins verified 2026-10-15 (never invented).
+        val byName = medium.files.associateBy { it.name }
+        assertEquals(
+            "1c54582b4d829de0089f6cb63bbbdb3bf7555398bacaf855fbecf1a84dfd193e",
+            byName["medium-encoder.int8.onnx"]?.sha256,
+        )
+        assertEquals(374196283L, byName["medium-encoder.int8.onnx"]?.sizeBytes)
+        assertEquals(
+            "595d00a338a365a7bfa0ca7f296cabc639583bef770ab6130df90f49a6412747",
+            byName["medium-decoder.int8.onnx"]?.sha256,
+        )
+        assertEquals(571059257L, byName["medium-decoder.int8.onnx"]?.sizeBytes)
+        assertEquals(
+            "b34b360dbb493e781e479794586d661700670d65564001f23024971d1f2fa126",
+            byName["medium-tokens.txt"]?.sha256,
+        )
+        assertEquals(816730L, byName["medium-tokens.txt"]?.sizeBytes)
+        // Clear requires-flagship note: copy + RAM gate.
+        assertTrue(medium.phoneTier.lowercase().contains("flagship"))
+        assertTrue(medium.runtimeNote.lowercase().contains("flagship"))
+        assertEquals(LocalSttModels.MEDIUM_MIN_TOTAL_RAM_MB, medium.minTotalRamMb)
+        assertEquals(6_000L, medium.minTotalRamMb)
+    }
+
+    @Test
+    fun rtf_speedFactorMath() {
+        // 10s of audio decoded in 5s = 2.0× realtime.
+        assertEquals(2.0, LocalSttModels.speedFactor(10.0, 5_000)!!, 1e-9)
+        assertEquals(0.5, LocalSttModels.speedFactor(5.0, 10_000)!!, 1e-9)
+        // Fail-closed: bad timings never produce a claim.
+        assertEquals(null, LocalSttModels.speedFactor(0.0, 5_000))
+        assertEquals(null, LocalSttModels.speedFactor(-1.0, 5_000))
+        assertEquals(null, LocalSttModels.speedFactor(Double.NaN, 5_000))
+        assertEquals(null, LocalSttModels.speedFactor(10.0, 0))
+        assertEquals(null, LocalSttModels.speedFactor(10.0, -3))
+    }
+
+    @Test
+    fun rtf_labelFormatting() {
+        assertEquals("2.0× realtime on this phone", LocalSttModels.formatSpeedUs(2.0))
+        assertEquals("2.3× realtime on this phone", LocalSttModels.formatSpeedUs(2.34))
+        assertEquals("0.5× realtime on this phone", LocalSttModels.formatSpeedUs(0.5))
+        // Invalid / unmeasured → null (caller shows neutral copy).
+        assertEquals(null, LocalSttModels.formatSpeedUs(null))
+        assertEquals(null, LocalSttModels.formatSpeedUs(0.0))
+        assertEquals(null, LocalSttModels.formatSpeedUs(-1.0))
+        assertEquals(null, LocalSttModels.formatSpeedUs(Double.NaN))
+        assertEquals(null, LocalSttModels.formatSpeedUs(Double.POSITIVE_INFINITY))
+        // Stored-float path (SharedPreferences reads).
+        assertEquals("2.0× realtime on this phone", LocalSttModels.formatStoredSpeed(2.0f))
+        assertEquals(null, LocalSttModels.formatStoredSpeed(null))
+        assertEquals(null, LocalSttModels.formatStoredSpeed(Float.NaN))
+        assertEquals(null, LocalSttModels.formatStoredSpeed(0f))
+        assertEquals(null, LocalSttModels.formatStoredSpeed(-2f))
+        // Resource-formatting path (stt_speed_measured, locale string).
+        assertEquals(2.0, LocalSttModels.storedSpeedFactor(2.0f)!!, 1e-9)
+        assertEquals(null, LocalSttModels.storedSpeedFactor(null))
+        assertEquals(null, LocalSttModels.storedSpeedFactor(Float.NaN))
+        assertEquals(null, LocalSttModels.storedSpeedFactor(0f))
+        assertEquals(null, LocalSttModels.storedSpeedFactor(-1f))
+        // Pref keys are stable and unique per model.
+        val keys = LocalSttModels.MODELS.map { LocalSttModels.speedPrefKey(it.id) }
+        assertEquals(keys.size, keys.toSet().size)
+        assertTrue(keys.all { it.startsWith("local_stt_speed_") })
+    }
+
+    @Test
+    fun ramGate_flagsMediumOnly() {
+        val medium = LocalSttModels.findById(LocalSttModels.WHISPER_MEDIUM_ID)
+        // Note10+-class device (12GB) passes; 4GB phone does not.
+        assertTrue(LocalSttModels.passesRamGate(12_000, medium))
+        assertTrue(LocalSttModels.passesRamGate(6_000, medium))
+        assertFalse(LocalSttModels.passesRamGate(4_000, medium))
+        // Unreadable RAM fails closed on gated entries.
+        assertFalse(LocalSttModels.passesRamGate(0, medium))
+        assertFalse(LocalSttModels.passesRamGate(-1, medium))
+        // Ungated entries always pass (small kept as-is: RAM note, no gate).
+        for (m in LocalSttModels.MODELS) {
+            if (m.id == LocalSttModels.WHISPER_MEDIUM_ID) continue
+            assertEquals(m.id, 0L, m.minTotalRamMb)
+            assertTrue(m.id, LocalSttModels.passesRamGate(0, m))
+            assertTrue(m.id, LocalSttModels.passesRamGate(512, m))
+        }
     }
 
     @Test

@@ -2,7 +2,7 @@
   "pack": "sherpa-onnx-whisper-small",
   "source": "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-small",
   "dir": "models/sherpa-whisper-small-int8",
-  "note": "Opt-in: best quality, SLOW on phone CPU, needs ~1GB free RAM. Flagship phones only. Moonshine tiny-en stays the default fast pick.",
+  "note": "Larger multilingual model. Needs ~1GB free RAM; speed varies by phone — measured x-realtime shows after the first on-device run. Moonshine tiny-en stays the default.",
   "files": {
     "small-encoder.int8.onnx": {
       "sha256": "4cbe7b22fa9026b843b60a68640c747de05bafb1a11b57edc0e66c232d9f33a9",

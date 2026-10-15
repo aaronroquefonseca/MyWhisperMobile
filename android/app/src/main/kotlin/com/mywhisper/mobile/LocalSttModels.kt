@@ -3,14 +3,29 @@ package com.mywhisper.mobile
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.Locale
 
 /**
  * On-device STT model catalog (phone mirror of desktop `stt.rs`
  * `WHISPER_MODELS` / `model_languages` / `capabilities`, trimmed to
  * phone-sane sherpa-onnx 1.13.8 offline entries).
  *
+ * Copy honesty rules (owner phone-tested: absolute speed claims are
+ * wrong — Note10+ runs whisper-small fast):
+ * - no "(opt-in)" anywhere: ALL local models are opt-in by design
+ *   (Local entry off by default, verified pack required), the label
+ *   is noise.
+ * - no absolute speed adjectives ("SLOW", "fastest", "slower"):
+ *   pre-first-run copy stays neutral ("speed varies by phone"); after
+ *   the first on-device run the row shows the measured
+ *   "<x>× realtime on this phone" from the persisted last-decode
+ *   speed factor ([speedPrefKey] / [speedFactor] /
+ *   [formatSpeedUs]).
+ * - cost guidance is RAM-only ("needs ~N free RAM", "requires
+ *   flagship"), never speed.
+ *
  * Seed rules (verified on HF, never invented):
- * - moonshine tiny-en: kept as the English fast option and default
+ * - moonshine tiny-en: kept as the English option and default
  *   (existing pack + SHAs under `core/models`, reused here,
  *   never redefined).
  * - whisper tiny/base multilingual int8 (`csukuangfj` sherpa ports):
@@ -19,9 +34,19 @@ import java.net.URL
  * - whisper small multilingual int8 (`csukuangfj/sherpa-onnx-whisper-small`):
  *   existence + `onnx.quantize` magic + full-download SHA-256 verified
  *   (encoder 112442483B, decoder 262226114B, shared tokens 816730B;
- *   ~358MB total, ≤500MB cap). OPT-IN ONLY: slow on phone CPU and
- *   needs ~1GB free RAM — the registry carries a strong cost warning
- *   and a flagship-only phone tier; moonshine stays the default.
+ *   ~358MB total, ≤500MB cap). Needs ~1GB free RAM — the registry
+ *   carries a RAM cost note; moonshine stays the default.
+ * - whisper medium multilingual int8
+ *   (`csukuangfj/sherpa-onnx-whisper-medium`, flagship tier):
+ *   existence + `onnx.quantize` magic (both files open with the ONNX
+ *   protobuf header containing "quantize") + full-download SHA-256
+ *   verified 2026-10-15 (encoder 374196283B sha
+ *   `1c54582b…d193e`, decoder 571059257B sha `595d00a3…412747`,
+ *   shared multilingual tokens 816730B sha `b34b360d…a126` — same
+ *   vocab pin as tiny/base/small; ~902MB total). Over the 500MB
+ *   phone-sane cap by design: flagship-only tier gated by device
+ *   total RAM ([WHISPER_MEDIUM_ID.minTotalRamMb]) with a clear
+ *   requires-flagship note; moonshine stays the default.
  *
  * Drops (with reason, no download path):
  * - sense-voice int8: no Spanish (zh/en/ja/ko/yue only).
@@ -61,8 +86,14 @@ object LocalSttModels {
         /** Word-bias support flag (desktop capabilities parity + post-process). */
         val dictionary: Boolean,
         val runtimeNote: String,
-        /** Recommended phone tier (cost/quality guidance, shown in reviews/tests). */
+        /** Recommended phone tier (RAM-cost guidance, shown in reviews/tests). */
         val phoneTier: String,
+        /**
+         * Minimum device TOTAL RAM in MB for the flagship gate (0 = no
+         * gate). Compared against ActivityManager totalMem by callers;
+         * see [passesRamGate]. Only the medium flagship tier sets this.
+         */
+        val minTotalRamMb: Long = 0,
         /** Relative dir under filesDir (moonshine keeps its legacy path). */
         val dirRel: String,
         val files: List<ModelFile>,
@@ -83,11 +114,84 @@ object LocalSttModels {
     const val WHISPER_TINY_ID = "whisper-tiny-multilingual-int8"
     const val WHISPER_BASE_ID = "whisper-base-multilingual-int8"
     const val WHISPER_SMALL_ID = "whisper-small-multilingual-int8"
+    const val WHISPER_MEDIUM_ID = "whisper-medium-multilingual-int8"
 
-    /** Default selected model (legacy behavior: English fast pack). */
+    /** Default selected model (legacy behavior: English pack). */
     const val DEFAULT_ID = MOONSHINE_ID
 
     const val PREF_SELECTED_MODEL = "local_stt_model"
+
+    /**
+     * Per-model last-decode speed store: SharedPreferences float key
+     * per model id holding audio-seconds per decode-second
+     * ("× realtime", see [speedFactor]). Written by the decode path
+     * after each on-device run, read by the model rows; absent (or
+     * invalid) means "not measured on this phone yet".
+     */
+    fun speedPrefKey(modelId: String): String = "local_stt_speed_$modelId"
+
+    /** Flagship gate: device needs this much TOTAL RAM (MB) for medium. */
+    const val MEDIUM_MIN_TOTAL_RAM_MB = 6_000L
+
+    /**
+     * Speed factor from one decode: audio seconds per decode second
+     * (2.0 = "2.0× realtime"). Null on non-positive inputs
+     * (fail-closed: never show a computed claim from bad timings).
+     * Pure for unit tests.
+     */
+    @JvmStatic
+    fun speedFactor(audioSecs: Double, decodeMs: Long): Double? {
+        if (!audioSecs.isFinite() || audioSecs <= 0.0) return null
+        if (decodeMs <= 0) return null
+        val f = (audioSecs * 1000.0) / decodeMs.toDouble()
+        if (!f.isFinite() || f <= 0.0) return null
+        return f
+    }
+
+    /**
+     * Measured-speed row label, en-US reference ("2.3× realtime on this
+     * phone"). Null when never measured / invalid (caller shows the
+     * neutral "speed varies by phone" copy instead). Keep in sync with
+     * `stt_speed_measured` in values/strings.xml by hand.
+     * Pure for unit tests.
+     */
+    @JvmStatic
+    fun formatSpeedUs(speedFactor: Double?): String? {
+        if (speedFactor == null || !speedFactor.isFinite() || speedFactor <= 0.0) return null
+        return String.format(Locale.US, "%.1f× realtime on this phone", speedFactor)
+    }
+
+    /**
+     * Stored-float (SharedPreferences) variant of [formatSpeedUs]:
+     * NaN / missing / non-positive reads as "not measured yet".
+     * Pure for unit tests.
+     */
+    @JvmStatic
+    fun formatStoredSpeed(stored: Float?): String? = formatSpeedUs(storedSpeedFactor(stored))
+
+    /**
+     * Stored-float (SharedPreferences) to factor for resource
+     * formatting (`stt_speed_measured`): null when never measured /
+     * invalid. Pure for unit tests.
+     */
+    @JvmStatic
+    fun storedSpeedFactor(stored: Float?): Double? {
+        if (stored == null || !stored.isFinite() || stored <= 0f) return null
+        return stored.toDouble()
+    }
+
+    /**
+     * Flagship RAM gate for [entry] against device total RAM in MB.
+     * Entries without a gate always pass; unreadable RAM (<=0) fails
+     * a gated entry closed (warn rather than claim it fits).
+     * Pure for unit tests.
+     */
+    @JvmStatic
+    fun passesRamGate(totalRamMb: Long, entry: Entry): Boolean {
+        if (entry.minTotalRamMb <= 0) return true
+        if (totalRamMb <= 0) return false
+        return totalRamMb >= entry.minTotalRamMb
+    }
 
     val MODELS: List<Entry> = listOf(
         Entry(
@@ -98,8 +202,8 @@ object LocalSttModels {
             langMode = LangMode.MANUAL,
             languages = listOf("en"),
             dictionary = true,
-            runtimeNote = "English-only · fastest on-device option",
-            phoneTier = "any phone · default fast pick",
+            runtimeNote = "English-only · speed varies by phone",
+            phoneTier = "any phone · default",
             dirRel = "models/sherpa-moonshine-v2-tiny.en",
             files = listOf(
                 ModelFile(
@@ -130,7 +234,7 @@ object LocalSttModels {
             langMode = LangMode.AUTO,
             languages = WHISPER_LANGS,
             dictionary = true,
-            runtimeNote = "99 languages incl. Spanish · auto-detect · int8",
+            runtimeNote = "99 languages incl. Spanish · auto-detect · int8 · speed varies by phone",
             phoneTier = "low-RAM phones OK",
             dirRel = "models/sherpa-whisper-tiny-int8",
             files = listOf(
@@ -162,7 +266,7 @@ object LocalSttModels {
             langMode = LangMode.AUTO,
             languages = WHISPER_LANGS,
             dictionary = true,
-            runtimeNote = "99 languages incl. Spanish · better quality, slower · int8",
+            runtimeNote = "99 languages incl. Spanish · auto-detect · int8 · speed varies by phone",
             phoneTier = "mid-tier phones and up",
             dirRel = "models/sherpa-whisper-base-int8",
             files = listOf(
@@ -188,14 +292,14 @@ object LocalSttModels {
         ),
         Entry(
             id = WHISPER_SMALL_ID,
-            name = "Whisper Small Multilingual (opt-in)",
+            name = "Whisper Small Multilingual",
             sizeLabel = "~358MB",
             engine = Engine.WHISPER,
             langMode = LangMode.AUTO,
             languages = WHISPER_LANGS,
             dictionary = true,
-            runtimeNote = "Best quality · opt-in · SLOW on phone CPU · needs ~1GB free RAM",
-            phoneTier = "flagship phones only · slow on phone CPU",
+            runtimeNote = "99 languages incl. Spanish · needs ~1GB free RAM · speed varies by phone",
+            phoneTier = "flagship RAM recommended · needs ~1GB free RAM",
             dirRel = "models/sherpa-whisper-small-int8",
             files = listOf(
                 ModelFile(
@@ -213,6 +317,39 @@ object LocalSttModels {
                 ModelFile(
                     "small-tokens.txt",
                     "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-small/resolve/main/small-tokens.txt",
+                    "b34b360dbb493e781e479794586d661700670d65564001f23024971d1f2fa126",
+                    816730,
+                ),
+            ),
+        ),
+        Entry(
+            id = WHISPER_MEDIUM_ID,
+            name = "Whisper Medium Multilingual",
+            sizeLabel = "~902MB",
+            engine = Engine.WHISPER,
+            langMode = LangMode.AUTO,
+            languages = WHISPER_LANGS,
+            dictionary = true,
+            runtimeNote = "99 languages incl. Spanish · requires flagship · needs ~2GB free RAM · speed varies by phone",
+            phoneTier = "requires flagship · 6GB+ total RAM",
+            minTotalRamMb = MEDIUM_MIN_TOTAL_RAM_MB,
+            dirRel = "models/sherpa-whisper-medium-int8",
+            files = listOf(
+                ModelFile(
+                    "medium-encoder.int8.onnx",
+                    "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-medium/resolve/main/medium-encoder.int8.onnx",
+                    "1c54582b4d829de0089f6cb63bbbdb3bf7555398bacaf855fbecf1a84dfd193e",
+                    374196283,
+                ),
+                ModelFile(
+                    "medium-decoder.int8.onnx",
+                    "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-medium/resolve/main/medium-decoder.int8.onnx",
+                    "595d00a338a365a7bfa0ca7f296cabc639583bef770ab6130df90f49a6412747",
+                    571059257,
+                ),
+                ModelFile(
+                    "medium-tokens.txt",
+                    "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-medium/resolve/main/medium-tokens.txt",
                     "b34b360dbb493e781e479794586d661700670d65564001f23024971d1f2fa126",
                     816730,
                 ),
