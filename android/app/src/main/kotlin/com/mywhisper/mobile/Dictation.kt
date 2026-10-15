@@ -53,11 +53,14 @@ class Dictation(
     /**
      * Local-hit dictionary post-process (default
      * `LocalStt.postProcessLocal`: same snippet expansion the server
-     * path gets in Rust `finish_inner`). Injected so JVM unit tests can
-     * supply pairs without the native lib. Applied to LOCAL hits only,
-     * exactly once — server text is already expanded in Rust. Any throw
-     * falls back to the server chain (applied inside the guarded local
-     * block in [finish]).
+     * path gets in Rust `finish_inner`, plus the WORD word-boost —
+     * sherpa-onnx 1.13.8 exposes no decoder bias channel for
+     * moonshine/whisper, so WORDS ship as post-process near-miss
+     * repair; see `LocalStt.postProcessLocal`). Injected so JVM unit
+     * tests can supply pairs without the native lib. Applied to LOCAL
+     * hits only, exactly once — server text is already expanded in
+     * Rust. Any throw falls back to the server chain (applied inside
+     * the guarded local block in [finish]).
      */
     private val localPostProcess: (String) -> String = { LocalStt.postProcessLocal(it) },
     /**
@@ -340,8 +343,9 @@ class Dictation(
                 } else {
                     try {
                         // Local hits get the server's dictionary treatment
-                        // (snippet expansion via [localPostProcess]) — raw
-                        // on-device decode bypasses Rust `finish_inner`.
+                        // (snippet expansion + WORD word-boost via
+                        // [localPostProcess]) — raw on-device decode
+                        // bypasses Rust `finish_inner`.
                         // Throw → server fallback (same guard as decode).
                         localTranscribe(pcm)?.first?.let(localPostProcess)
                     } catch (_: Throwable) {
