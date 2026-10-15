@@ -51,6 +51,16 @@ class Dictation(
      */
     private val localTranscribe: ((ShortArray) -> Pair<String, String>?) = { null },
     /**
+     * Local-hit dictionary post-process (default
+     * `LocalStt.postProcessLocal`: same snippet expansion the server
+     * path gets in Rust `finish_inner`). Injected so JVM unit tests can
+     * supply pairs without the native lib. Applied to LOCAL hits only,
+     * exactly once — server text is already expanded in Rust. Any throw
+     * falls back to the server chain (applied inside the guarded local
+     * block in [finish]).
+     */
+    private val localPostProcess: (String) -> String = { LocalStt.postProcessLocal(it) },
+    /**
      * Shutdown hook releasing the on-device recognizer
      * (`LocalStt.unload`). Injected (default no-op) so JVM unit tests
      * never touch the sherpa AAR, which is absent off-device.
@@ -329,7 +339,11 @@ class Dictation(
                     null
                 } else {
                     try {
-                        localTranscribe(pcm)?.first
+                        // Local hits get the server's dictionary treatment
+                        // (snippet expansion via [localPostProcess]) — raw
+                        // on-device decode bypasses Rust `finish_inner`.
+                        // Throw → server fallback (same guard as decode).
+                        localTranscribe(pcm)?.first?.let(localPostProcess)
                     } catch (_: Throwable) {
                         // Local hook miss on ANY throw (incl. OOM Error)
                         // → server fallback. Only the local hook is
