@@ -1,0 +1,90 @@
+name: release
+
+# Tag push (v*) produces a changelogged APK release. Manual re-run via
+# workflow_dispatch with an existing tag. Signing secrets out of scope:
+# :app:assembleRelease builds UNSIGNED; wiring signing comes later.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to release (e.g. v0.1.0)
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  contents: write # create GitHub Releases + upload APK only
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify tag matches gradle versionName + CHANGELOG section
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          GRADLE_VERSION="$(grep '^mywhisper\.versionName=' android/gradle.properties | cut -d= -f2 | tr -d ' ')"
+          test -n "$GRADLE_VERSION"
+          if [[ "$GRADLE_VERSION" != "$VERSION" ]]; then
+            echo "tag $TAG != gradle versionName $GRADLE_VERSION" >&2; exit 1
+          fi
+          if ! grep -q "^## \\[$VERSION\\]" CHANGELOG.md; then
+            echo "CHANGELOG.md lacks a [${VERSION}] section (only Unreleased?)" >&2; exit 1
+          fi
+          echo "TAG=$TAG VERSION=$VERSION OK"
+      - uses: actions/setup-java@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+        with:
+          api-level: 36
+          build-tools: 36.0.0
+          ndk: 28.2.13676358
+          cmake: 3.22.1
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable action
+        with:
+          toolchain: 1.99.0
+          targets: aarch64-linux-android, x86_64-linux-android
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: core
+      - name: Install cargo-ndk
+        working-directory: core
+        run: cargo install --locked cargo-ndk --version 4.1.2
+      - uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d # v4
+      - name: Assemble unsigned release APK
+        # No signingConfig wired: produces app-release-unsigned.apk-style
+        # unsigned artifact. Release signing via secrets is out of scope.
+        run: ./gradlew :app:assembleRelease
+      - name: Create GitHub Release with changelog notes + APK
+        working-directory: ${{ github.workspace }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          awk -v ver="$VERSION" 'index($0, "## [" ver "]") == 1 {flag=1; next} /^## / {flag=0} flag' CHANGELOG.md | sed -e '/^[[:space:]]*$/d' > notes.md
+          test -s notes.md || { echo "empty notes for $TAG" >&2; exit 1; }
+          APK=android/app/build/outputs/apk/release/app-release.apk
+          META=android/app/build/outputs/apk/release/output-metadata.json
+          test -f "$APK" || { echo "missing $APK" >&2; exit 1; }
+          ARGS=(--title "$TAG" --notes-file notes.md)
+          [[ "$TAG" == *-* ]] && ARGS+=(--prerelease)
+          [[ -f "$META" ]] && ARGS+=("$META")
+          gh release create "$TAG" "$APK" "${ARGS[@]}" --repo "$GH_REPO"
