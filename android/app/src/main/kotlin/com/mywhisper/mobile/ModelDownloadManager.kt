@@ -71,12 +71,12 @@ object ModelDownloadManager {
         }
     }
 
-    /** Enqueue an LLM `.task` download (fail-closed on placeholder SHA). */
+    /** Enqueue an LLM `.litertlm` download (fail-closed on placeholder SHA). */
     @JvmStatic
     fun enqueueLlmAsset(ctx: Context, asset: LocalLlmManager.ModelAsset) {
         if (MainActivity.isPlaceholderSha(asset.sha256)) return
         try {
-            if (!MainActivity.llmRunnerSupported()) return
+            if (!MainActivity.llmPackSupported()) return
         } catch (_: Exception) {
             return
         }

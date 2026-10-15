@@ -7,19 +7,25 @@ import java.net.URL
 import java.security.MessageDigest
 
 /**
- * On-device LLM cleanup (text polish only — never STT).
+ * On-device LLM pack plumbing (text polish only — never STT).
  *
  * Chosen provider: LiteRT-LM `.litertlm`
- * (`com.google.ai.edge.litertlm:litertlm-android`, GPU backend with
- * CPU fallback). Inference itself is loaded lazily via reflection so
- * plain JVM unit tests never touch the native runner; all logic
- * here (manifest, SHA-256, status, prompt packing) is pure JVM.
+ * (`com.google.ai.edge.litertlm:litertlm-android`, Gemma-4-first
+ * lineup). This object owns the reachable pieces only — manifest,
+ * SHA-256, status, prompt packing, download, delete — all pure JVM,
+ * all unit-tested on the host.
+ *
+ * No inference runner: the cleanup chain runs inside the Rust core
+ * and there is no Rust→Kotlin bridge yet, so a verified pack does
+ * NOT execute on-device today — `Local` entries fall through to
+ * Ollama/cloud (default order unchanged). The download/status UI and
+ * the full-flavor AAR stay so a future JVM bridge can land without
+ * re-plumbing; until then nothing here claims to generate.
  *
  * Model files live under `<filesDir>/models` (file
  * `cleanup.litertlm`), downloaded by [downloadModel] with SHA-256
  * verification against `scripts/local-llm-models.json`. Binaries are
- * NEVER committed. When no model is ready the engine's cleanup chain
- * falls through to Ollama/cloud (default order unchanged).
+ * NEVER committed.
  *
  * Migration note: the legacy MediaPipe `.task` slot (`cleanup.task`)
  * does NOT load under LiteRT-LM (different bundle format). Fresh
@@ -153,15 +159,18 @@ object LocalLlmManager {
     }
 
     /**
-     * Local-path-only self-test: fixed prompt through [generate]
-     * (default = on-device [generate], never Ollama/cloud). Measures
-     * wall-clock latency and maps via [mapSelfTestResult].
+     * Local-path-only self-test: fixed prompt through [generateFn]
+     * (default = fail-closed — no JVM inference bridge exists yet,
+     * never Ollama/cloud). Measures wall-clock latency and maps via
+     * [mapSelfTestResult].
      */
     fun runSelfTest(
         taskFile: File,
         systemPrompt: String,
         timeoutMs: Long = SELFTEST_TIMEOUT_MS,
-        generateFn: (File, String) -> String = { f, p -> generate(f, p) },
+        generateFn: (File, String) -> String = { _, _ ->
+            throw IllegalStateException("local-llm has no JVM inference bridge")
+        },
     ): SelfTestResult {
         val start = System.nanoTime()
         return try {
@@ -312,199 +321,16 @@ object LocalLlmManager {
     }
 
     /**
-     * Synchronous single-turn generation via the LiteRT-LM runner.
-     * Loaded by reflection (`com.google.ai.edge.litertlm.Engine`)
-     * so the litertlm AAR is optional at unit-test time.
-     * Throws when the model file is missing or the runner is unavailable —
-     * callers fall back to the next cleanup entry.
+     * LiteRT-LM AAR on the classpath (full flavor) — gates download
+     * offers in Settings. Never throws. NOT an inference signal: no
+     * JVM bridge exists yet (see class docs), so this only answers
+     * "can this build pack-gate", never "can this build generate".
      */
-    fun generate(modelFile: File, prompt: String, maxTokens: Int = 512): String {
-        require(modelFile.isFile) { "local llm model not ready at ${modelFile.absolutePath}" }
-        return LiteRtLmRunner.generate(modelFile.absolutePath, prompt, maxTokens)
-    }
-
-    /** Reflection bridge to LiteRT-LM `Engine` (GPU, CPU fallback; temp defaults). */
-    internal object LiteRtLmRunner {
-        private const val PKG = "com.google.ai.edge.litertlm"
-
-        /** True when the LiteRT-LM runner is on the classpath. Never throws. */
-        fun isSupported(): Boolean =
-            try {
-                Class.forName("$PKG.Engine")
-                true
-            } catch (_: Throwable) {
-                false
-            }
-
-        fun generate(modelPath: String, prompt: String, maxTokens: Int): String {
-            // GPU first; ANY GPU-attempt failure (missing delegate,
-            // init error) retries once on CPU. A CPU-attempt failure
-            // throws — callers fall back to the server chain.
-            // A missing runner (CNFE) fails both attempts fail-closed.
-            val gpuError = try {
-                return tryBackend(modelPath, prompt, maxTokens, gpuFirst = true)
-            } catch (e: Throwable) {
-                e
-            }
-            try {
-                return tryBackend(modelPath, prompt, maxTokens, gpuFirst = false)
-            } catch (cpuError: Throwable) {
-                throw IllegalStateException(
-                    "local-llm unavailable (gpu: ${gpuError.message}; cpu: ${cpuError.message})",
-                    cpuError,
-                )
-            }
+    fun isPackSupported(): Boolean =
+        try {
+            Class.forName("com.google.ai.edge.litertlm.Engine")
+            true
+        } catch (_: Throwable) {
+            false
         }
-
-        private fun tryBackend(
-            modelPath: String,
-            prompt: String,
-            maxTokens: Int,
-            gpuFirst: Boolean,
-        ): String {
-            val engineClass: Class<*>
-            val configClass: Class<*>
-            val backendClass: Class<*>
-            try {
-                engineClass = Class.forName("$PKG.Engine")
-                configClass = Class.forName("$PKG.EngineConfig")
-                backendClass = Class.forName("$PKG.Backend")
-            } catch (e: ClassNotFoundException) {
-                throw IllegalStateException("local-llm runner unavailable (litertlm missing)", e)
-            }
-            val backend = newBackend(backendClass, gpuFirst)
-            val engine = try {
-                val config = newEngineConfig(configClass, modelPath, backend)
-                val ctor = engineClass.constructors.firstOrNull {
-                    it.parameterTypes.size == 1 &&
-                        it.parameterTypes[0].isAssignableFrom(configClass)
-                } ?: throw IllegalStateException("local-llm Engine(EngineConfig) missing")
-                ctor.newInstance(config)
-            } catch (e: IllegalStateException) {
-                throw e
-            } catch (e: Throwable) {
-                throw IllegalStateException("local-llm engine create failed", e)
-            }
-            try {
-                invoke(engine, "initialize")
-                val conversation = newConversation(engine, engineClass)
-                try {
-                    return sendPrompt(conversation, prompt, maxTokens)
-                } finally {
-                    closeQuietly(conversation)
-                }
-            } finally {
-                closeQuietly(engine)
-            }
-        }
-
-        /**
-         * Smallest constructor whose leading params match [prefix]
-         * (types assignable), remaining slots filled with null. The
-         * LiteRT-LM config data classes keep every param past the
-         * required prefix nullable, and @JvmOverloads coverage varies
-         * by SDK version — so prefer the short overload, else the full
-         * ctor with null defaults.
-         */
-        private fun newWithNullPrefix(clazz: Class<*>, prefix: Array<out Any?>): Any {
-            val ctor = clazz.constructors
-                .filter { c ->
-                    val p = c.parameterTypes
-                    p.size >= prefix.size && prefix.indices.all { i ->
-                        prefix[i] == null || p[i].isInstance(prefix[i])
-                    }
-                }
-                .minByOrNull { it.parameterTypes.size }
-                ?: throw IllegalStateException("local-llm ${clazz.simpleName} ctor missing")
-            val args = arrayOfNulls<Any>(ctor.parameterTypes.size)
-            prefix.copyInto(args)
-            try {
-                return ctor.newInstance(*args)
-            } catch (e: IllegalStateException) {
-                throw e
-            } catch (e: Throwable) {
-                throw IllegalStateException("local-llm ${clazz.simpleName} create failed", e)
-            }
-        }
-
-        private fun newEngineConfig(configClass: Class<*>, modelPath: String, backend: Any): Any =
-            newWithNullPrefix(configClass, arrayOf(modelPath, backend))
-
-        private fun newBackend(backendClass: Class<*>, gpu: Boolean): Any {
-            val nested = backendClass.classes
-            if (gpu) {
-                val gpuClass = nested.firstOrNull { it.simpleName == "GPU" }
-                if (gpuClass != null) {
-                    try {
-                        return gpuClass.getDeclaredConstructor().newInstance()
-                    } catch (_: Throwable) {
-                        // Fall through to CPU.
-                    }
-                }
-            }
-            val cpuClass = nested.firstOrNull { it.simpleName == "CPU" }
-                ?: throw IllegalStateException("local-llm Backend.CPU missing")
-            // CPU data-class params are all nullable; arity varies by
-            // SDK (@JvmOverloads not guaranteed) — nulls for all.
-            return newWithNullPrefix(cpuClass, emptyArray())
-        }
-
-        private fun newConversation(engine: Any, engineClass: Class<*>): Any {
-            val configClass = Class.forName("$PKG.ConversationConfig")
-            val emptyConfig = newWithNullPrefix(configClass, emptyArray())
-            val create = engineClass.methods.firstOrNull {
-                it.name == "createConversation" && it.parameterTypes.size == 1 &&
-                    it.parameterTypes[0].isAssignableFrom(configClass)
-            } ?: throw IllegalStateException("local-llm createConversation missing")
-            try {
-                return create.invoke(engine, emptyConfig)
-                    ?: throw IllegalStateException("local-llm createConversation null")
-            } catch (e: IllegalStateException) {
-                throw e
-            } catch (e: Throwable) {
-                throw IllegalStateException("local-llm createConversation failed", e)
-            }
-        }
-
-        private fun sendPrompt(conversation: Any, prompt: String, maxTokens: Int): String {
-            val full = try {
-                val m = conversation.javaClass.methods.firstOrNull {
-                    it.name == "sendMessage" && it.parameterTypes.size == 8 &&
-                        it.parameterTypes[0] == String::class.java &&
-                        it.parameterTypes[5] == Integer::class.java
-                } ?: throw NoSuchMethodException("8-arg sendMessage")
-                val args = arrayOfNulls<Any>(8)
-                args[0] = prompt
-                // Non-null: reflection bypasses Kotlin defaults, and the
-                // SDK dereferences extraContext (nullable configs stay null).
-                args[1] = emptyMap<String, Any>()
-                args[5] = Integer.valueOf(maxTokens)
-                m.invoke(conversation, *args)
-            } catch (_: NoSuchMethodException) {
-                // Older SDK without the maxOutputToken overload.
-                invoke(conversation, "sendMessage", prompt)
-            } catch (e: Throwable) {
-                throw IllegalStateException("local-llm sendMessage failed", e)
-            }
-            return (full?.toString() ?: throw IllegalStateException("local-llm empty response"))
-        }
-
-        private fun invoke(target: Any, name: String, vararg args: Any?): Any? {
-            val m = target.javaClass.methods.firstOrNull {
-                it.name == name && it.parameterTypes.size == args.size
-            } ?: throw NoSuchMethodException("$name/${args.size}")
-            try {
-                return m.invoke(target, *args)
-            } catch (e: Throwable) {
-                throw IllegalStateException("local-llm $name failed", e)
-            }
-        }
-
-        private fun closeQuietly(target: Any) {
-            try {
-                target.javaClass.getMethod("close").invoke(target)
-            } catch (_: Throwable) {
-            }
-        }
-    }
 }

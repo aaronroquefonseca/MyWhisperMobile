@@ -27,10 +27,9 @@
         android:supportsRtl="true"
         android:localeConfig="@xml/locales">
 
-        <!-- LiteRT-LM GPU backend (LiteRtLmRunner tries GPU, falls back
-            to CPU): request the vendor OpenCL libs per the LiteRT-LM
-            Android docs; required=false so devices without them install
-            and run on CPU. -->
+        <!-- Reserved for the future LiteRT-LM inference bridge
+            (GPU backend needs these vendor libs): required=false so
+            devices without them install and run regardless. -->
         <uses-native-library android:name="libvndksupport.so" android:required="false"/>
         <uses-native-library android:name="libOpenCL.so" android:required="false"/>
 

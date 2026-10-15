@@ -1,18 +1,20 @@
 //! On-device LLM cleanup (text polish only — never STT).
 //!
 //! Chosen provider: LiteRT-LM `.litertlm` family (Google AI Edge).
-//! The actual inference lives in Kotlin (`LocalLlmManager.kt`,
-//! LiteRT-LM `Engine`, GPU backend with CPU fallback); this module
-//! owns the portable pieces the engine needs: prompt packing,
-//! model-asset manifest + SHA-256 verification, sidecar/bridge
-//! backend plumbing, and the cleanup-path hook.
+//! Pack plumbing (manifest, SHA-256, status) lives here and in Kotlin
+//! (`LocalLlmManager.kt`); there is NO inference runner yet — the
+//! cleanup chain runs in-process and has no Rust→Kotlin bridge, so a
+//! verified pack does NOT execute on-device today: `Local` entries
+//! fall through to Ollama/cloud. The retained plumbing (prompt
+//! packing, manifest + SHA-256 verification, sidecar/bridge backends)
+//! is what a future JVM bridge will build on.
 //!
 //! ## Spike comparison (literature numbers, see PR body)
 //!
 //! | Provider | Pack / model size | Decode (1-2B, flagship) | APK delta | RAM (1B) | License | Android API |
 //! |---|---|---|---|---|---|---|
 //! | llama.cpp via JNI (Llama-3.2-1B Q4_0 GGUF ~0.77 GB, Q8 ~1.3 GB) | GGUF download, not bundled | ~8-15 tok/s CPU (ARM NEON); ExecuTorch XNNPACK proxy 1B q4 decode ~46-50 tok/s, TTFT ~0.3 s / 64-prompt (OnePlus 12) | ~1-2 MB `.so` + OpenMP | ~1.5-2 GB | MIT | hand-rolled JNI, no official SDK |
-//! | **LiteRT-LM `.litertlm` (CHOSEN)** (Gemma-4 E2B ~2.6 GB, E4B ~3.7 GB) | single `.litertlm` download, not bundled | GPU backend, CPU fallback (decode rates TBD on-device via `scripts/bench-local-llm.sh`) | `litertlm-android` AAR | ~4-6 GB+ | Apache-2.0 (models: Gemma license) | official Kotlin `Engine.sendMessage`, GPU backend with CPU fallback; Gemma-4-first lineup |
+//! | **LiteRT-LM `.litertlm` (CHOSEN)** (Gemma-4 E2B ~2.6 GB, E4B ~3.7 GB) | single `.litertlm` download, not bundled | GPU backend, CPU fallback (decode rates TBD on-device via `scripts/bench-local-llm.sh`; NO JVM bridge yet — packs verify, inference falls through) | `litertlm-android` AAR | ~4-6 GB+ | Apache-2.0 (models: Gemma license) | Gemma-4-first lineup; bridge design: Rust→Kotlin upcall to `Engine.sendMessage` (unbuilt) |
 //! | MLC (Qwen2.5-1.5B q4f16 ~1.2 GB assets, Llama-3.2-3B q4f16 ~2 GB) | TVM-compiled lib + weights download; >1 GB if bundled | ~11 tok/s measured (TinyBench S24 Ultra: 312 tok, prefill 2341 ms, decode 28.2 s) | runtime + per-model lib (tens of MB) + assets | ~3-4.2 GB est. VRAM | Apache-2.0 | OpenAI-compatible, heaviest toolchain (TVM compile/model, 5-15 min build, NDK 27) |
 //!
 //! Pick rationale: cleanup prompts are short (one utterance +
@@ -22,7 +24,11 @@
 //! unmeasured until the owner runs `scripts/bench-local-llm.sh`
 //! on-device. Caveat (Google docs): the API targets high-end
 //! devices (Pixel 8 / S23+) and does not reliably support
-//! emulators — hence unit tests first, numbers later.
+//! emulators — hence unit tests first, numbers later. Wiring the
+//! `Engine` in requires a Rust→Kotlin upcall that does not exist
+//! yet (unvalidatable without a device + 2.6 GB pack); until it
+//! lands, packs verify and `Local` entries fall through — nothing
+//! here claims to generate.
 //!
 //! Fallback: the engine tries `Local` entries through
 //! [`try_local_cleanup`]; when no model is ready it returns `Err`
@@ -236,9 +242,9 @@ fn hex_encode(bytes: &[u8]) -> String {
 
 // -- backends ------------------------------------------------------------
 
-/// Generation backend. Production Android injects the LiteRT-LM
-/// runner from Kotlin (via sidecar/JNI bridge); hosts and tests use
-/// [`FnBackend`] or [`SidecarBackend`].
+/// Generation backend. No production runner exists yet (no
+/// Rust→Kotlin bridge — see [`try_local_cleanup`]); hosts and tests
+/// use [`FnBackend`] or [`SidecarBackend`].
 pub trait LocalBackend {
     fn generate(&self, prompt: &str) -> Result<String, String>;
 }
@@ -323,8 +329,8 @@ pub fn cleanup_with(
 /// Cleanup-path entry point used by the engine (`LlmKind::Local`
 /// arm only). Resolution order:
 /// 1. `http(s)` `model_dir` → sidecar POST (bridge/tests);
-/// 2. otherwise → `Err` (model runs in Kotlin; Rust has no
-///    in-process runner) so the chain falls through to
+/// 2. otherwise → `Err` (a verified pack does NOT execute: no JVM
+///    bridge exists yet) so the chain falls through to
 ///    Ollama/cloud. Never panics, never touches the STT path.
 pub fn try_local_cleanup(
     entry: &LlmEntry,
@@ -346,11 +352,10 @@ pub fn try_local_cleanup(
             cfg.model_path
         ));
     }
-    // Model file present but inference lives in Kotlin: signal the
-    // bridge rather than failing silently. Kotlin drives generation
-    // through LocalLlmManager and never calls this path with a
-    // ready model (it short-circuits above via sidecar in tests).
-    Err("local llm runs in-process on Android (LiteRT-LM); no Rust runner".to_string())
+    // Model file present but there is no JVM bridge to run it:
+    // report fall-through rather than failing silently. A future
+    // Rust→Kotlin upcall (Engine.sendMessage) will replace this Err.
+    Err("local llm pack ready but no JVM bridge yet (LiteRT-LM); falling through".to_string())
 }
 
 /// Status snapshot for the Settings UI / JNI.
@@ -423,6 +428,34 @@ mod tests {
         let out = cleanup_with(&emoji, "S", "r", 2).unwrap();
         assert_eq!(out, "a");
         assert!(out.len() <= 2);
+    }
+
+    #[test]
+    fn ready_model_falls_through_without_bridge() {
+        // A VERIFIED-present pack still falls through: no JVM bridge
+        // exists yet, so `Local` entries never execute on-device. This
+        // pins the honest behavior — a future bridge must flip this
+        // test to expect success.
+        let dir = std::env::temp_dir().join(format!("llm-ready-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let f = dir.join("cleanup.litertlm");
+        std::fs::write(&f, b"pack").unwrap();
+        let e = LlmEntry {
+            id: "lm-local".into(),
+            name: "Local".into(),
+            kind: crate::settings::LlmKind::Local,
+            enabled: true,
+            url: String::new(),
+            model: f.to_string_lossy().into_owned(),
+            provider: crate::settings::CloudLlm::OpenAI,
+            api_key: String::new(),
+            keep_alive: String::new(),
+            num_ctx: None,
+            thinking: None,
+        };
+        let err = try_local_cleanup(&e, "S", "r", Path::new("/nonexistent")).unwrap_err();
+        assert!(err.contains("no JVM bridge"), "got: {err}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

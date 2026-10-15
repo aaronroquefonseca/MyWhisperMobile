@@ -153,7 +153,7 @@ class MainActivity : ComponentActivity() {
 
     /**
      * Lite-gated row state for the Local STT/LLM download rows.
-     * NEED_FULL_FLAVOR = runner absent (lite flavor): the full-APK
+     * NEED_FULL_FLAVOR = on-device stack absent (lite flavor): the full-APK
      * pointer shows instead of Download; the rest mirror the
      * verified-pack row machine ([LocalModelDownload.RowState]).
      * Pure for unit tests.
@@ -526,13 +526,13 @@ class MainActivity : ComponentActivity() {
 
         /**
          * Lite-flavor gate for the Local STT/LLM rows: lite builds ship
-         * no on-device runners (sherpa / LiteRT-LM are
+         * no on-device stack (sherpa runner / LiteRT-LM packs are
          * fullImplementation-only), so downloads offered there could
-         * never run. False (= runner absent) forces the NEED_FULL_FLAVOR
+         * never run. False (= stack absent) forces the NEED_FULL_FLAVOR
          * row, which shows the full-APK pointer instead of Download.
          * True (= full flavor) defers to the verified-pack row machine.
          * Fail-closed: NEED_FULL_FLAVOR never enables the toggle.
-         * Pure for unit tests (runner presence injected).
+         * Pure for unit tests (pack support injected).
          */
         @JvmStatic
         internal fun gatedRowState(
@@ -557,7 +557,7 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        /** True when the Local toggle may go live under runner gating. */
+        /** True when the Local toggle may go live under pack gating. */
         @JvmStatic
         internal fun gatedToggleAllowed(state: GatedRowState): Boolean =
             state == GatedRowState.PRESENT
@@ -573,11 +573,17 @@ class MainActivity : ComponentActivity() {
                 false
             }
 
-        /** LiteRT-LM runner present (false on lite builds / JVM tests). Never throws. */
+        /**
+         * LLM pack downloads supported on this build (LiteRT-LM AAR on
+         * the classpath: full flavor; false on lite builds / JVM
+         * tests). Gates download offers only — NOT an inference
+         * signal (no JVM bridge exists yet; `Local` entries fall
+         * through to server). Never throws.
+         */
         @JvmStatic
-        internal fun llmRunnerSupported(): Boolean =
+        internal fun llmPackSupported(): Boolean =
             try {
-                LocalLlmManager.LiteRtLmRunner.isSupported()
+                LocalLlmManager.isPackSupported()
             } catch (_: Exception) {
                 false
             } catch (_: LinkageError) {
@@ -3158,11 +3164,11 @@ class MainActivity : ComponentActivity() {
             }
             return LocalLlmManager.defaultModelFile(filesDir)
         }
-        // Lite flavor ships no LiteRT-LM runner: no Download offered.
-        val llmRunner = remember { llmRunnerSupported() }
+        // Lite flavor ships no LiteRT-LM AAR: no Download offered.
+        val llmPack = remember { llmPackSupported() }
         fun startLlmDownload(a: LocalLlmManager.ModelAsset) {
             // Lite flavor: downloads could never run — refuse fail-closed.
-            if (!llmRunner) {
+            if (!llmPack) {
                 toast(getString(R.string.local_need_full))
                 return
             }
@@ -3199,7 +3205,7 @@ class MainActivity : ComponentActivity() {
             // Fail-closed: verified pack + runner only; local path
             // only, never Ollama/cloud (no fallback masking). United
             // with every other row via [ProviderTest.fromSelfTest].
-            if (!llmSelfTestAllowed(llmRunner, llmSelPack)) return
+            if (!llmSelfTestAllowed(llmPack, llmSelPack)) return
             val target = llmSelected ?: return
             if (llmTestBusy) return
             llmTestBusy = true
@@ -3417,7 +3423,7 @@ class MainActivity : ComponentActivity() {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                if (!llmRunner) {
+                if (!llmPack) {
                     Text(
                         stringResource(R.string.local_need_full),
                         style = MaterialTheme.typography.bodySmall,
@@ -3441,7 +3447,7 @@ class MainActivity : ComponentActivity() {
                         // live in the collapsible on-device section
                         // below, never in the row. Lite flavor (no
                         // runner): full-APK pointer instead of status.
-                        val llmStatus = if (!llmRunner) {
+                        val llmStatus = if (!llmPack) {
                             getString(R.string.local_need_full)
                         } else {
                             when (llmSelPack) {
@@ -3462,13 +3468,13 @@ class MainActivity : ComponentActivity() {
                             e = e,
                             summary = getString(R.string.cleanup_local_summary),
                             statusText = llmStatus,
-                            statusOk = llmRunner && llmSelPack == LocalPackState.PRESENT,
+                            statusOk = llmPack && llmSelPack == LocalPackState.PRESENT,
                             usingModelText = getString(
                                 R.string.stt_using_model,
                                 llmSelId ?: "",
                             ),
                             onToggle = {
-                                onLocalToggle(e, it, llmSelPack, { version++ }, llmRunner)
+                                onLocalToggle(e, it, llmSelPack, { version++ }, llmPack)
                             },
                             onWhy = { localInfo = true },
                             onDelete = {
@@ -3490,7 +3496,7 @@ class MainActivity : ComponentActivity() {
                         // on-device bridge the test cannot pass, so it is
                         // not offered at all — the honest reason shows
                         // instead of a button that only ever FAILs.
-                        if (!llmSelfTestOffered(llmRunner)) {
+                        if (!llmSelfTestOffered(llmPack)) {
                             Text(
                                 stringResource(R.string.llm_selftest_unavailable),
                                 style = MaterialTheme.typography.bodySmall,
@@ -3500,10 +3506,10 @@ class MainActivity : ComponentActivity() {
                             ProviderTestRow(
                                 busy = llmTestBusy,
                                 result = llmTestResult,
-                                enabled = llmSelfTestAllowed(llmRunner, llmSelPack),
+                                enabled = llmSelfTestAllowed(llmPack, llmSelPack),
                                 onTest = { startLlmSelfTest() },
                                 disabledReason = localTestDisabledReason(
-                                    llmRunner,
+                                    llmPack,
                                     llmSelPack == LocalPackState.PRESENT,
                                 ),
                             )
@@ -3621,7 +3627,7 @@ class MainActivity : ComponentActivity() {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                if (!llmRunner) {
+                if (!llmPack) {
                     Text(
                         stringResource(R.string.local_need_full),
                         style = MaterialTheme.typography.bodySmall,
@@ -3688,7 +3694,7 @@ class MainActivity : ComponentActivity() {
                                     )
                                 }
                             }
-                            if (llmRunner) {
+                            if (llmPack) {
                                 Text(
                                     when (row) {
                                         LocalModelDownload.RowState.PRESENT ->
@@ -3773,7 +3779,7 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                if (!llmRunner) {
+                                if (!llmPack) {
                                     // Lite flavor: no Download offered (could never
                                     // run) — full-APK pointer instead.
                                     Text(
@@ -3936,7 +3942,7 @@ class MainActivity : ComponentActivity() {
                     Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                         Text(stringResource(R.string.cleanup_local_body))
                         Spacer(Modifier.height(4.dp))
-                        if (!llmRunner) {
+                        if (!llmPack) {
                             Text(
                                 stringResource(R.string.local_need_full),
                                 style = MaterialTheme.typography.bodySmall,

@@ -7,19 +7,19 @@ import org.junit.Test
 
 /**
  * Lite-flavor gate for the Local STT/LLM rows (see MainActivity
- * SttScreen/CleanupScreen): lite builds ship no on-device runners
+ * SttScreen/CleanupScreen): lite builds ship no on-device packs
  * (sherpa / LiteRT-LM are fullImplementation-only), so the rows must
  * offer no download that could never run — NEED_FULL_FLAVOR with the
- * full-APK pointer instead. Full flavor (runner present) defers to the
- * verified-pack row machine. Fail-closed in both flavors: only PRESENT
- * enables the toggle.
+ * full-APK pointer instead. Full flavor (pack support present)
+ * defers to the verified-pack row machine. Fail-closed in both
+ * flavors: only PRESENT enables the toggle.
  */
 class LocalLiteGateTest {
 
     @Test
-    fun absentRunner_alwaysNeedFullFlavor() {
+    fun absentPackSupport_alwaysNeedFullFlavor() {
         // Every pack/download combination gates to NEED_FULL_FLAVOR
-        // when the runner is absent (lite flavor) — no Download offered.
+        // when pack support is absent (lite flavor) — no Download offered.
         val combos = listOf(
             Triple(false, false, false),
             Triple(true, false, false),
@@ -39,8 +39,8 @@ class LocalLiteGateTest {
     }
 
     @Test
-    fun presentRunner_defersToPackRowMachine() {
-        // Full flavor (runner present): same outcomes as the underlying
+    fun presentPackSupport_defersToPackRowMachine() {
+        // Full flavor (pack support present): same outcomes as the underlying
         // verified-pack resolver.
         assertEquals(
             MainActivity.GatedRowState.MISSING,
@@ -102,6 +102,6 @@ class LocalLiteGateTest {
         // classpath, same as lite builds) must degrade to false, never
         // throw — callers keep the server fallback.
         MainActivity.sttRunnerSupported()
-        MainActivity.llmRunnerSupported()
+        MainActivity.llmPackSupported()
     }
 }

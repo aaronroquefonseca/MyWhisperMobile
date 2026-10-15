@@ -13,8 +13,8 @@ import kotlin.math.sqrt
  *
  * The AAR is full-flavor-only and NEVER on the lite classpath: every
  * `com.k2fsa.sherpa.onnx` touch goes through the [SherpaRunner]
- * reflection bridge (mirroring
- * `LocalLlmManager.LiteRtLmRunner`), so this file compiles and runs
+ * reflection bridge (same fail-closed pattern as the Local LLM
+ * pack gating), so this file compiles and runs
  * with no sherpa classes present — misses degrade to null and callers
  * keep the server fallback.
  *
@@ -621,8 +621,8 @@ object LocalStt {
     }
 
     /**
-     * Reflection bridge to `com.k2fsa.sherpa.onnx` (mirrors
-     * `LocalLlmManager.LiteRtLmRunner`): the sherpa AAR is
+     * Reflection bridge to `com.k2fsa.sherpa.onnx` (same fail-closed
+     * pattern as the Local LLM pack gating): the sherpa AAR is
      * full-flavor-only, so no direct references may appear here —
      * everything resolves via `Class.forName` at call time. Missing
      * classes / native lib → null (callers keep the server fallback).

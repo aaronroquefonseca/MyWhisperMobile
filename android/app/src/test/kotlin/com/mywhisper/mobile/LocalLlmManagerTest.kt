@@ -7,10 +7,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Pure JVM rules for the on-device LLM manager (see LocalLlmManager):
- * manifest parsing, prompt packing (core byte-stable), status and
- * SHA-256 verification. No LiteRT-LM runner, no JNI — safe on the
- * host (the API targets physical GPUs, not emulators).
+ * Pure JVM rules for the on-device LLM pack plumbing (see
+ * LocalLlmManager): manifest parsing, prompt packing (core
+ * byte-stable), status and SHA-256 verification. No inference runner,
+ * no JNI — safe on the host.
  */
 class LocalLlmManagerTest {
 
@@ -110,30 +110,11 @@ class LocalLlmManagerTest {
         }
     }
 
-    @Test(expected = RuntimeException::class)
-    fun generate_throwsWhenModelMissing() {
-        LocalLlmManager.generate(File("/nonexistent/cleanup.litertlm"), "prompt")
-    }
-
-    @Test(expected = RuntimeException::class)
-    fun generate_throwsWhenRunnerAbsent() {
-        // Fail-closed: a present-but-unrunnable file (no LiteRT-LM on
-        // the lite/JVM test classpath; a garbage file under full flavor)
-        // must throw so callers fall back to the server chain — never a
-        // silent empty.
-        val f = File.createTempFile("llm-norunner", ".litertlm")
-        try {
-            f.writeBytes("abc".toByteArray())
-            LocalLlmManager.generate(f, "prompt")
-        } finally {
-            f.delete()
-        }
-    }
-
     @Test
-    fun runnerProbe_neverThrows() {
-        // Classpath probe must never throw — callers keep the server
-        // fallback. Value is flavor-dependent (false on lite/JVM).
-        LocalLlmManager.LiteRtLmRunner.isSupported()
+    fun packProbe_neverThrows() {
+        // Classpath probe (LiteRT-LM AAR absent on the JVM test
+        // classpath, same as lite builds) must never throw — it gates
+        // download offers only, never inference.
+        LocalLlmManager.isPackSupported()
     }
 }

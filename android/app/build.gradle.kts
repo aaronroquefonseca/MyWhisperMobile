@@ -49,12 +49,12 @@ android {
     }
 
     // APK SLIM: lite = server chain only (no on-device AARs on the
-    // classpath at all); full = lite + sherpa STT + LiteRT-LM.
+    // classpath at all); full = lite + sherpa STT + LiteRT-LM packs.
     // fullImplementation keeps the ~50MB sherpa AAR and litertlm
     // (incl. its native libs) out of lite APKs. Lite
-    // compiles and runs without them: LocalStt/SherpaRunner and
-    // LocalLlmManager/LiteRtLmRunner load those classes by reflection
-    // and return null/throw-caught (server fallback) when absent.
+    // compiles and runs without them: LocalStt/SherpaRunner loads
+    // sherpa classes by reflection (null → server fallback) and the
+    // LLM side pack-gates on AAR presence (server fallback) when absent.
     buildFeatures {
         compose = true
     }
@@ -92,10 +92,11 @@ dependencies {
     // the unmetered/battery-not-low constraints, and exponential-backoff
     // retry + app-kill resume (see ModelDownloadSchedule for rationale).
     implementation("androidx.work:work-runtime-ktx:2.9.0")
-    // On-device LLM cleanup (LiteRT-LM .litertlm, GPU backend with
-    // CPU fallback). Loaded lazily via reflection in
-    // LocalLlmManager so lite builds and JVM unit tests run without the
-    // native runner.
+    // On-device LLM packs (LiteRT-LM .litertlm, Gemma-4-first
+    // lineup). fullImplementation-only: the AAR's presence gates
+    // pack downloads (LocalLlmManager.isPackSupported); no inference
+    // runs yet (no JVM bridge), so lite builds and JVM unit tests
+    // simply pack-gate to NEED_FULL_FLAVOR / server fallback.
     add("fullImplementation", "com.google.ai.edge.litertlm:litertlm-android:0.16.1")
     // Pin note: 0.16.1 is the newest litertlm built with Kotlin 2.2
     // (0.17+ ships Kotlin 2.4 metadata the project's 2.2.0 compiler

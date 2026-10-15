@@ -216,11 +216,11 @@ class LocalMultiPackTest {
         val sha = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         val dir = Files.createTempDirectory("llm-legacy").toFile()
         try {
-            val legacy = LocalLlmManager.defaultTaskFile(dir)
+            val legacy = LocalLlmManager.defaultModelFile(dir)
             legacy.parentFile?.mkdirs()
             legacy.writeBytes("abc".toByteArray())
             val asset = LocalLlmManager.ModelAsset("a", "https://example/a.task", sha, 3)
-            // Existing cleanup.task download stays live without re-download.
+            // Existing cleanup.litertlm download stays live without re-download.
             assertEquals(
                 MainActivity.LocalPackState.PRESENT,
                 MainActivity.llmStateFor(dir, asset),
