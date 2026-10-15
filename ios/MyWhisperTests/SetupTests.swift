@@ -141,6 +141,10 @@ final class SetupTests: XCTestCase {
         XCTAssertEqual(SetupStrings.spanish.setupTheme, "Tema")
         XCTAssertEqual(SetupStrings.english.setupPrefs, "Preferences")
         XCTAssertEqual(SetupStrings.spanish.setupPrefs, "Preferencias")
+        // Checklist server row pins setup_speech_configured (PR #54 renamed
+        // the hardcoded "Speech server configured" copy).
+        XCTAssertEqual(SetupStrings.english.doneServer, "Speech configured")
+        XCTAssertEqual(SetupStrings.spanish.doneServer, "Voz configurada")
     }
 
     func testSetupStringsDocumentNoIme() {
