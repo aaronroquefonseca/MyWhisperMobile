@@ -14,7 +14,8 @@ import SwiftUI
 /// Concurrency: Swift 5.0 mode (no async/await) — core rounds run on
 /// a worker queue and all state commits hop to main, mirroring
 /// Android `workers.execute` + `runOnUiThread` and the
-/// `Transcription.swift` deliver-on-main pattern.
+/// `Transcription.swift` deliver-on-main pattern. This is a struct,
+/// so closures capture it by value: no capture lists, no cycles.
 struct DevicesView: View {
     var core: SyncCore = UnavailableSyncCore()
     @StateObject private var store = DiscoveryStore()
@@ -185,49 +186,45 @@ struct DevicesView: View {
     private func startTapped() {
         busy = true
         banner = nil
-        workers.async { [weak self] in
-            guard let strong = self else { return }
+        workers.async {
             do {
-                _ = try strong.core.startSync()
+                _ = try self.core.startSync()
             } catch {
-                strong.mainFail(error)
+                self.mainFail(error)
                 return
             }
-            strong.mainPull()
+            self.mainPull()
         }
     }
 
     private func stopTapped() {
         busy = true
         banner = nil
-        workers.async { [weak self] in
-            guard let strong = self else { return }
-            strong.core.stopSync()
-            strong.mainPull()
+        workers.async {
+            self.core.stopSync()
+            self.mainPull()
         }
     }
 
     private func syncAllTapped() {
         busy = true
         banner = nil
-        workers.async { [weak self] in
-            guard let strong = self else { return }
+        workers.async {
             let note: String
             do {
-                let lines = try strong.core.syncAllNow()
+                let lines = try self.core.syncAllNow()
                 if lines.isEmpty {
                     note = "done"
                 } else {
                     note = lines.joined(separator: "\n")
                 }
             } catch {
-                strong.mainFail(error)
+                self.mainFail(error)
                 return
             }
-            let final = note
-            DispatchQueue.main.async { [weak self] in
-                self?.banner = final
-                self?.pullState()
+            DispatchQueue.main.async {
+                self.banner = note
+                self.pullState()
             }
         }
     }
@@ -235,18 +232,16 @@ struct DevicesView: View {
     private func syncOneTapped(_ peer: SyncPeer) {
         busy = true
         banner = nil
-        workers.async { [weak self] in
-            guard let strong = self else { return }
+        workers.async {
             let note: String
             do {
-                note = try strong.core.syncNow(nodeId: peer.nodeId)
+                note = try self.core.syncNow(nodeId: peer.nodeId)
             } catch {
-                note = "sync failed: \(strong.userNote(for: error))"
+                note = "sync failed: \(self.userNote(for: error))"
             }
-            let final = note
-            DispatchQueue.main.async { [weak self] in
-                self?.notes[peer.nodeId] = final
-                self?.pullState()
+            DispatchQueue.main.async {
+                self.notes[peer.nodeId] = note
+                self.pullState()
             }
         }
     }
@@ -254,15 +249,14 @@ struct DevicesView: View {
     private func removeTapped(_ peer: SyncPeer) {
         busy = true
         banner = nil
-        workers.async { [weak self] in
-            guard let strong = self else { return }
+        workers.async {
             do {
-                _ = try strong.core.setTrust(nodeId: peer.nodeId, accept: false)
+                _ = try self.core.setTrust(nodeId: peer.nodeId, accept: false)
             } catch {
-                strong.mainFail(error)
+                self.mainFail(error)
                 return
             }
-            strong.mainPull()
+            self.mainPull()
         }
     }
 
@@ -273,25 +267,23 @@ struct DevicesView: View {
     private func acceptTapped(_ peer: SyncPeer) {
         busy = true
         banner = nil
-        workers.async { [weak self] in
-            guard let strong = self else { return }
+        workers.async {
             let trustMessage: String
             do {
-                trustMessage = try strong.core.setTrust(nodeId: peer.nodeId, accept: true)
+                trustMessage = try self.core.setTrust(nodeId: peer.nodeId, accept: true)
             } catch {
-                strong.mainFail(error)
+                self.mainFail(error)
                 return
             }
             let note: String
             do {
-                note = try strong.core.syncNow(nodeId: peer.nodeId)
+                note = try self.core.syncNow(nodeId: peer.nodeId)
             } catch {
-                note = trustMessage + "; " + strong.waitingNote(for: error, peer: peer)
+                note = trustMessage + "; " + self.waitingNote(for: error, peer: peer)
             }
-            let final = note
-            DispatchQueue.main.async { [weak self] in
-                self?.notes[peer.nodeId] = final
-                self?.pullState()
+            DispatchQueue.main.async {
+                self.notes[peer.nodeId] = note
+                self.pullState()
             }
         }
     }
@@ -319,14 +311,13 @@ struct DevicesView: View {
     private func requestPeer(nodeId: String, address: String, name: String, key: String) {
         busy = true
         banner = nil
-        workers.async { [weak self] in
-            guard let strong = self else { return }
+        workers.async {
             let note: String
             do {
-                let message = try strong.core.addPeer(nodeId: nodeId, address: address, name: name)
+                let message = try self.core.addPeer(nodeId: nodeId, address: address, name: name)
                 if message.hasPrefix("synced") {
                     do {
-                        note = try strong.core.setTrust(nodeId: nodeId, accept: true)
+                        note = try self.core.setTrust(nodeId: nodeId, accept: true)
                     } catch {
                         note = message
                     }
@@ -334,12 +325,11 @@ struct DevicesView: View {
                     note = message
                 }
             } catch {
-                note = strong.userNote(for: error)
+                note = self.userNote(for: error)
             }
-            let final = note
-            DispatchQueue.main.async { [weak self] in
-                self?.notes[key] = final
-                self?.pullState()
+            DispatchQueue.main.async {
+                self.notes[key] = note
+                self.pullState()
             }
         }
     }
@@ -350,31 +340,26 @@ struct DevicesView: View {
     /// self-observations are filtered.
     private func pullState() {
         busy = true
-        workers.async { [weak self] in
-            guard let strong = self else { return }
+        workers.async {
             var nextStatus: SyncStatus?
             var nextPeers: [SyncPeer] = []
             var deviceName = ""
             do {
-                nextStatus = try strong.core.syncStatus()
+                nextStatus = try self.core.syncStatus()
             } catch {
                 nextStatus = nil
             }
             do {
-                nextPeers = try strong.core.syncPeers()
+                nextPeers = try self.core.syncPeers()
             } catch {
                 nextPeers = []
             }
-            deviceName = strong.core.displayName()
-            let status = nextStatus
-            let peers = nextPeers
-            let name = deviceName
-            DispatchQueue.main.async { [weak self] in
-                guard let strong = self else { return }
-                strong.status = status
-                strong.peers = peers
-                strong.applyAdvertise(status: status, name: name)
-                strong.busy = false
+            deviceName = self.core.displayName()
+            DispatchQueue.main.async {
+                self.status = nextStatus
+                self.peers = nextPeers
+                self.applyAdvertise(status: nextStatus, name: deviceName)
+                self.busy = false
             }
         }
     }
@@ -390,16 +375,15 @@ struct DevicesView: View {
     }
 
     private func mainFail(_ error: Error) {
-        DispatchQueue.main.async { [weak self] in
-            guard let strong = self else { return }
-            strong.banner = strong.userNote(for: error)
-            strong.busy = false
+        DispatchQueue.main.async {
+            self.banner = self.userNote(for: error)
+            self.busy = false
         }
     }
 
     private func mainPull() {
-        DispatchQueue.main.async { [weak self] in
-            self?.pullState()
+        DispatchQueue.main.async {
+            self.pullState()
         }
     }
 
