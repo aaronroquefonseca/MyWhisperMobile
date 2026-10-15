@@ -462,6 +462,28 @@ object LocalSttModels {
     }
 
     /**
+     * Ids with a verified pack on disk, in catalog order. Packs
+     * coexist (one dir per entry); selecting never deletes others.
+     * java.io only, JVM-testable.
+     */
+    fun installedIds(filesDir: File): List<String> =
+        MODELS.filter { isInstalled(filesDir, it) }.map { it.id }
+
+    /**
+     * Single-active fallback after deleting [deletedId] when
+     * [selectedId] was active: first other installed pack, else
+     * [DEFAULT_ID] (server chain until anything verifies). Never a
+     * dead selection. java.io only, JVM-testable.
+     */
+    fun fallbackSelection(filesDir: File, deletedId: String, selectedId: String): String =
+        LocalModelDownload.fallbackAfterDelete(
+            deletedId,
+            selectedId,
+            installedIds(filesDir),
+            DEFAULT_ID,
+        )
+
+    /**
      * Whisper language for the sherpa config from the Capture picker
      * code. Verified against sherpa-onnx source
      * (`offline-whisper-greedy-search-decoder.cc`): empty string runs
