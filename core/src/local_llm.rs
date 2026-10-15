@@ -310,7 +310,11 @@ pub fn cleanup_with(
         return Err("local llm returned empty".to_string());
     }
     if trimmed.len() > max_chars {
-        Ok(trimmed[..max_chars].trim().to_string())
+        let mut end = max_chars;
+        while !trimmed.is_char_boundary(end) {
+            end -= 1;
+        }
+        Ok(trimmed[..end].trim().to_string())
     } else {
         Ok(trimmed.to_string())
     }
@@ -406,6 +410,19 @@ mod tests {
         let big = FnBackend(|_p| Ok("x".repeat(5000)));
         let out = cleanup_with(&big, "S", "r", 100).unwrap();
         assert!(out.len() <= 100);
+    }
+
+    #[test]
+    fn cleanup_with_cap_floors_to_char_boundary() {
+        // "é" = 2 bytes; cap 5 lands mid-char ("aaaaé" = 6 bytes).
+        let accented = FnBackend(|_p| Ok("aaaaébbbb".to_string()));
+        let out = cleanup_with(&accented, "S", "r", 5).unwrap();
+        assert_eq!(out, "aaaa");
+        // Emoji = 4 bytes; cap inside first emoji must not panic.
+        let emoji = FnBackend(|_p| Ok("a😀bcdef".to_string()));
+        let out = cleanup_with(&emoji, "S", "r", 2).unwrap();
+        assert_eq!(out, "a");
+        assert!(out.len() <= 2);
     }
 
     #[test]
