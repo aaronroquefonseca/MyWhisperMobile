@@ -29,7 +29,24 @@ class MyWhisperAccessibility : AccessibilityService() {
         }
 
         /**
-         * Append [text] to the currently focused editable field.
+         * Pure cursor splice: replace [selStart, selEnd) in [existing]
+         * with [insert]. Stale/invalid selection (negative, reversed,
+         * or past the end — e.g. node recycled between read and
+         * ACTION_SET_TEXT) falls back to appending, never duplicating
+         * [existing].
+         */
+        fun spliceAtCursor(existing: String, selStart: Int, selEnd: Int, insert: String): String {
+            if (insert.isEmpty()) return existing
+            val n = existing.length
+            if (selStart < 0 || selEnd < 0 || selStart > selEnd || selStart > n || selEnd > n) {
+                return existing + insert
+            }
+            return existing.substring(0, selStart) + insert + existing.substring(selEnd)
+        }
+
+        /**
+         * Splice [text] into the currently focused editable field at
+         * the cursor (replacing any selected range).
          * Returns false when there is no service, no focus, or the
          * field is not editable (caller should surface a hint).
          */
@@ -40,10 +57,17 @@ class MyWhisperAccessibility : AccessibilityService() {
                 val node = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
                     ?: return false
                 if (!node.isEditable) return false
+                val existing = node.text?.toString() ?: ""
+                val merged = spliceAtCursor(
+                    existing,
+                    node.textSelectionStart,
+                    node.textSelectionEnd,
+                    text,
+                )
                 val args = Bundle().apply {
                     putCharSequence(
                         AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
-                        (node.text?.toString() ?: "") + text,
+                        merged,
                     )
                 }
                 node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
