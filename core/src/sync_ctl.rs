@@ -382,7 +382,14 @@ pub fn sync_add(
     } else {
         settings.sync.device_name.clone()
     };
-    match net::sync_now(&addrs, &db_path, &creds, &own_name, &node_id) {
+    match net::sync_now(
+        &addrs,
+        &db_path,
+        &creds,
+        &own_name,
+        &node_id,
+        &net::own_listen_addrs(settings.sync.listen_port),
+    ) {
         Ok(r) => Ok(format!("synced {}: {} words in", r.peer_name, r.words_in)),
         Err(e) if e.contains("not trusted") => {
             Ok("pairing request sent — accept it on the other device, then sync".to_string())
@@ -442,8 +449,15 @@ pub fn sync_peer_now(dir: &std::path::Path, node_id: &str) -> Result<String, Str
     } else {
         peer.name.clone()
     };
-    let r = net::sync_now(&addrs, &db_path, &creds, &name, node_id)
-        .map_err(|e| format!("{display}: {e} — is the device online with sync running?"))?;
+    let r = net::sync_now(
+        &addrs,
+        &db_path,
+        &creds,
+        &name,
+        node_id,
+        &net::own_listen_addrs(settings.sync.listen_port),
+    )
+    .map_err(|e| format!("{display}: {e} — is the device online with sync running?"))?;
     Ok(format!(
         "synced {}: {} words, {} snippets, {} history in, {} introduced",
         r.peer_name, r.words_in, r.snippets_in, r.history_in, r.introduced
