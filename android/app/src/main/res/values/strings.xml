@@ -36,7 +36,7 @@
 
     <!-- Setup -->
     <string name="setup_status">Status</string>
-    <string name="setup_server_only">Server-only build: configure a self-hosted or cloud speech service under Transcription. On-device models come later.</string>
+    <string name="setup_server_only">On-device models are experimental and off by default: enable Local under Transcription / Text cleanup only after its model pack verifies — otherwise the server chain is used.</string>
     <string name="setup_step1">1 · Enable the input method</string>
     <string name="setup_enabled_yes">MyWhisper is enabled as an input method.</string>
     <string name="setup_enabled_no">MyWhisper is not enabled yet.</string>
@@ -96,12 +96,25 @@
 
     <!-- Transcription -->
     <string name="stt_chain">Chain (top = first tried)</string>
-    <string name="stt_chain_sub">Entries are tried top-down; the first success wins. On-device (Local) entries are skipped until on-device inference lands.</string>
-    <string name="stt_local_summary">on-device · not available in this build</string>
-    <string name="stt_local_note">Coming later — needs no configuration.</string>
+    <string name="stt_chain_sub">Entries are tried top-down; the first success wins. Local on-device speech is experimental and off by default — without its verified model pack the entry is skipped and the server chain is used.</string>
+    <string name="stt_local_summary">on-device · experimental</string>
+    <string name="stt_local_note">Needs no configuration — needs its model pack.</string>
     <string name="stt_local_why">Why?</string>
     <string name="stt_local_title">On-device speech</string>
-    <string name="stt_local_body">The Local entry uses the live local configuration (models on this phone). On-device inference is not implemented in this build yet, so the entry is skipped. Add a Self-hosted or Cloud entry above it to dictate now — order decides priority.</string>
+    <string name="stt_local_body">The Local entry runs fully on this phone and is experimental and off by default. It needs its verified model pack (see the pack status on its row); without it the entry is skipped and dictation falls back to the server chain. Order decides priority.</string>
+    <string name="stt_add_local">Add on-device</string>
+    <string name="local_pack_present">Pack: present and ready.</string>
+    <string name="local_pack_missing">Pack: missing.</string>
+    <string name="local_pack_mismatch">Pack: present but SHA mismatch — re-download.</string>
+    <string name="stt_pack_sideload">Sideload the pack to:\n%1$s\n(files: encoder_model.ort, decoder_model_merged.ort, tokens.txt — via scripts/fetch-local-stt-pack.sh)</string>
+    <string name="local_enable_blocked">Local stays off: no verified model pack — download or sideload it first.</string>
+    <string name="local_download">Download model</string>
+    <string name="local_downloading">Downloading %1$s…</string>
+    <string name="local_downloaded">Downloaded %1$s — pack verified.</string>
+    <string name="local_download_failed">Download failed: %1$s</string>
+    <string name="llm_model_label">Model</string>
+    <string name="llm_no_pin">No SHA pinned for this model yet — download disabled until a hash is pinned.</string>
+    <string name="llm_pack_dest">Model file:\n%1$s</string>
     <string name="stt_add">Add service</string>
     <string name="stt_selfhosted_compat">Self-hosted means any OpenAI-compatible speech endpoint, including the server bundled with MyWhisper desktop (same transcriptions protocol).</string>
     <string name="stt_capture">Capture</string>
@@ -139,13 +152,13 @@
     <string name="cleanup_dialog_title">Cleanup prompt</string>
     <string name="cleanup_dialog_note">Saved as your custom prompt. Reset returns to the built-in default.</string>
     <string name="cleanup_models">Models (tried in order, first answer wins)</string>
-    <string name="cleanup_models_sub">If the first enabled model fails or returns nothing, the next one is tried. Local entries have no engine yet (same as desktop) and are skipped.</string>
-    <string name="cleanup_local_summary">Local · no engine yet</string>
+    <string name="cleanup_models_sub">If the first enabled model fails or returns nothing, the next one is tried. Local on-device cleanup is experimental and off by default — without its verified model file the entry is skipped.</string>
+    <string name="cleanup_local_summary">Local · experimental</string>
     <string name="cleanup_local_title">Local language model</string>
-    <string name="cleanup_local_body">Local LLM cleanup has no engine on desktop either — the entry is skipped and the chain moves on. Point at an Ollama server or a cloud model instead.</string>
+    <string name="cleanup_local_body">Local cleanup runs fully on this phone and is experimental and off by default. It needs its verified model file (see the status on its row); without it the entry is skipped and the chain moves on to Ollama / cloud.</string>
     <string name="cleanup_add">Add model</string>
     <string name="llm_kind">Kind</string>
-    <string name="llm_local_note">Local has no engine yet (same as desktop) — the entry will be skipped.</string>
+    <string name="llm_local_note">Local is experimental and starts off — enable it from the list once its model file verifies.</string>
     <string name="llm_url">URL</string>
     <string name="llm_url_cloud">URL (blank = vendor default)</string>
     <string name="llm_keepalive">Keep-alive (blank, -1, 0, 5m…)</string>

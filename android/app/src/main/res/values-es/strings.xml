@@ -36,7 +36,7 @@
 
     <!-- Setup -->
     <string name="setup_status">Estado</string>
-    <string name="setup_server_only">Versión solo-servidor: configura un servicio de voz autohospedado o en la nube en Transcripción. Los modelos locales llegarán después.</string>
+    <string name="setup_server_only">Los modelos locales son experimentales y están apagados por defecto: activa Local en Transcripción / Edición solo cuando su pack verifique — si no, se usa la cadena del servidor.</string>
     <string name="setup_step1">1 · Activa el método de entrada</string>
     <string name="setup_enabled_yes">MyWhisper está activado como método de entrada.</string>
     <string name="setup_enabled_no">MyWhisper aún no está activado.</string>
@@ -96,12 +96,25 @@
 
     <!-- Transcription -->
     <string name="stt_chain">Cadena (arriba = se prueba primero)</string>
-    <string name="stt_chain_sub">Las entradas se prueban de arriba abajo; gana la primera que funciona. Las entradas locales se omiten hasta que llegue la inferencia local.</string>
-    <string name="stt_local_summary">local · no disponible en esta versión</string>
-    <string name="stt_local_note">Llegará después — no necesita configuración.</string>
+    <string name="stt_chain_sub">Las entradas se prueban de arriba abajo; gana la primera que funciona. La voz local es experimental y está apagada por defecto — sin su pack verificado la entrada se omite y se usa la cadena del servidor.</string>
+    <string name="stt_local_summary">local · experimental</string>
+    <string name="stt_local_note">No necesita configuración — necesita su pack de modelos.</string>
     <string name="stt_local_why">¿Por qué?</string>
     <string name="stt_local_title">Voz local</string>
-    <string name="stt_local_body">La entrada Local usa la configuración local en vivo (modelos de este teléfono). La inferencia local aún no está disponible en esta versión, así que se omite. Añade una entrada autohospedada o en la nube encima para dictar ahora — el orden decide la prioridad.</string>
+    <string name="stt_local_body">La entrada Local funciona solo en este teléfono; es experimental y está apagada por defecto. Necesita su pack verificado (ver estado en su fila); sin él se omite y el dictado usa la cadena del servidor. El orden decide la prioridad.</string>
+    <string name="stt_add_local">Añadir local</string>
+    <string name="local_pack_present">Pack: presente y listo.</string>
+    <string name="local_pack_missing">Pack: ausente.</string>
+    <string name="local_pack_mismatch">Pack: presente pero SHA no coincide — descárgalo de nuevo.</string>
+    <string name="stt_pack_sideload">Copia el pack a:\n%1$s\n(archivos: encoder_model.ort, decoder_model_merged.ort, tokens.txt — con scripts/fetch-local-stt-pack.sh)</string>
+    <string name="local_enable_blocked">Local sigue apagado: no hay pack verificado — descárgalo o cópialo primero.</string>
+    <string name="local_download">Descargar modelo</string>
+    <string name="local_downloading">Descargando %1$s…</string>
+    <string name="local_downloaded">%1$s descargado — pack verificado.</string>
+    <string name="local_download_failed">Falló la descarga: %1$s</string>
+    <string name="llm_model_label">Modelo</string>
+    <string name="llm_no_pin">Aún no hay SHA fijado para este modelo — descarga desactivada hasta fijar un hash.</string>
+    <string name="llm_pack_dest">Archivo del modelo:\n%1$s</string>
     <string name="stt_add">Añadir servicio</string>
     <string name="stt_selfhosted_compat">Autohospedado significa cualquier endpoint de voz compatible con OpenAI, incluido el servidor incluido con MyWhisper de escritorio (mismo protocolo de transcripción).</string>
     <string name="stt_capture">Captura</string>
@@ -139,13 +152,13 @@
     <string name="cleanup_dialog_title">Prompt de limpieza</string>
     <string name="cleanup_dialog_note">Se guarda como tu prompt personalizado. Restablecer vuelve al integrado.</string>
     <string name="cleanup_models">Modelos (se prueban en orden, gana la primera respuesta)</string>
-    <string name="cleanup_models_sub">Si el primer modelo activado falla o no responde, se prueba el siguiente. Las entradas locales aún no tienen motor (igual que en escritorio) y se omiten.</string>
-    <string name="cleanup_local_summary">Local · aún sin motor</string>
+    <string name="cleanup_models_sub">Si el primer modelo activado falla o no responde, se prueba el siguiente. La limpieza local es experimental y está apagada por defecto — sin su archivo verificado la entrada se omite.</string>
+    <string name="cleanup_local_summary">Local · experimental</string>
     <string name="cleanup_local_title">Modelo de lenguaje local</string>
-    <string name="cleanup_local_body">La limpieza local tampoco tiene motor en escritorio — la entrada se omite y la cadena continúa. Apunta a un servidor Ollama o a un modelo en la nube.</string>
+    <string name="cleanup_local_body">La limpieza local funciona solo en este teléfono; es experimental y está apagada por defecto. Necesita su archivo verificado (ver estado en su fila); sin él la entrada se omite y la cadena sigue con Ollama / nube.</string>
     <string name="cleanup_add">Añadir modelo</string>
     <string name="llm_kind">Tipo</string>
-    <string name="llm_local_note">Local aún no tiene motor (igual que en escritorio) — la entrada se omitirá.</string>
+    <string name="llm_local_note">Local es experimental y empieza apagado — actívalo en la lista cuando su archivo verifique.</string>
     <string name="llm_url">URL</string>
     <string name="llm_url_cloud">URL (vacío = valor del proveedor)</string>
     <string name="llm_keepalive">Keep-alive (vacío, -1, 0, 5m…)</string>
