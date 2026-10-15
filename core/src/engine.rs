@@ -610,8 +610,8 @@ impl Engine {
         Ok(self.finalize_delivery(&raw, &text, &engine, duration_secs))
     }
 
-    /// Shared delivery tail (local + server parity): retention first,
-    /// then store only when history is on (mirrors desktop deliver).
+    /// Shared delivery tail: retention first, then store only when
+    /// history is on (mirrors desktop deliver).
     /// Leased-work join before finalization (desktop #22 shutdown
     /// parity at utterance scope): the history write completes before
     /// `checkpoint` finalizes the database — never checkpoint first

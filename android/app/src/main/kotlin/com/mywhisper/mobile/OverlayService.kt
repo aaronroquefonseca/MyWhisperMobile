@@ -163,6 +163,9 @@ class OverlayService : Service(), Dictation.Listener {
             // On-device first (moonshine-v2 pack, VAD-chunked); miss or
             // throw → server chain. Pack-gated: null without the pack.
             localTranscribe = { pcm -> LocalStt.transcribeIfEnabled(this, pcm) },
+            // Shutdown releases the native recognizer (no resident ORT
+            // session across service restarts in one process).
+            releaseLocal = { try { LocalStt.unload() } catch (_: Throwable) {} },
         )
         dictation.listener = this
         // Live peaks feed the bottom-center visualizer pill (capture

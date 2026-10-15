@@ -117,6 +117,9 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
             // On-device first (moonshine-v2 pack, VAD-chunked); miss or
             // throw → server chain. Pack-gated: null without the pack.
             localTranscribe = { pcm -> LocalStt.transcribeIfEnabled(this, pcm) },
+            // IME destroy releases the native recognizer (no resident
+            // ORT session across enable/disable cycles in one process).
+            releaseLocal = { try { LocalStt.unload() } catch (_: Throwable) {} },
         )
         dictation.listener = this
         dictation.onLevel = { peak ->

@@ -4,6 +4,9 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 
+/** Local-hook PCM cap: 60s @ 16 kHz mono (utterance copy only). */
+internal const val MAX_LOCAL_PCM_SAMPLES = 16_000 * 60
+
 /**
  * Mic-button controller: hold-to-talk / toggle / smart, mirroring the
  * desktop activation modes. Mode comes from settings
@@ -35,12 +38,25 @@ class Dictation(
     private val finishTranscription: () -> Pair<String, String> = { CoreBridge.finishUtterance() },
     private val cancelTranscription: () -> Unit = { CoreBridge.cancelUtterance() },
     /**
+     * Forwards capture PCM to the core recorder. Injected (default
+     * `CoreBridge.pushPcm`) so JVM unit tests can fire the capture
+     * path without the native lib.
+     */
+    private val pushPcm: (ShortArray, Int) -> Unit = { buf, n -> CoreBridge.pushPcm(buf, n) },
+    /**
      * Local-first hook (sherpa-onnx moonshine-v2 via LocalStt): receives
      * the utterance PCM (16 kHz i16) and returns (text, engine) on hit,
      * null on miss. Default null = server chain only. Any throw =
      * server fallback.
      */
     private val localTranscribe: ((ShortArray) -> Pair<String, String>?) = { null },
+    /**
+     * Shutdown hook releasing the on-device recognizer
+     * (`LocalStt.unload`). Injected (default no-op) so JVM unit tests
+     * never touch the sherpa AAR, which is absent off-device.
+     * Production wires `LocalStt.unload` at every construction site.
+     */
+    private val releaseLocal: () -> Unit = {},
     private val log: (String) -> Unit = { msg -> android.util.Log.i("MwDict", msg) },
     private val workers: ExecutorService = Executors.newSingleThreadExecutor(),
 ) {
@@ -62,10 +78,23 @@ class Dictation(
     var onLevel: ((Float) -> Unit)? = null
     private var maxPeak = 0f
     /**
-     * Utterance PCM copy for the local-first hook (cap ~60s @16kHz =
-     * ~2MB). Cleared on every pressDown.
+     * Utterance PCM copy for the local-first hook: primitive buffer,
+     * no boxing (was `ArrayList<Short>`: one object per sample plus a
+     * second copy on snapshot). Grown by doubling, hard-capped at
+     * [MAX_LOCAL_PCM_SAMPLES]. Guarded by [pcmLock]; the buffer itself
+     * is retained across utterances to avoid realloc churn.
      */
-    private val localPcm = ArrayList<Short>(16_000 * 10)
+    private val pcmLock = Any()
+    private var pcmBuf = ShortArray(16_000 * 10)
+    private var pcmSize = 0
+    /**
+     * True once the utterance outgrew [MAX_LOCAL_PCM_SAMPLES]. The
+     * overflow is never silently truncated: the local hook is skipped
+     * for the utterance (its PCM would be incomplete) and the full
+     * audio falls back to the server chain, with a log line. Volatile;
+     * set under [pcmLock], read on the finish worker.
+     */
+    @Volatile private var pcmOverflowed = false
 
     private var state = State.IDLE
     private var toggled = false
@@ -75,10 +104,12 @@ class Dictation(
     /**
      * Session token: bumped on every new recording ([pressDown]),
      * every [cancel], and [shutdown]. The [finish] worker snapshots it
-     * and rechecks after the tail sleep AND after the blocking
-     * [finishTranscription] return — a stale token means cancel won, so
-     * drop without committing. Nullness of [capture] alone is racy
-     * (TOCTOU: snapshot-then-cancel still transcribes).
+     * and rechecks after the tail sleep, after a local miss BEFORE the
+     * server upload, AND after the blocking [finishTranscription]
+     * return — a stale token means cancel won, so drop without
+     * committing and without uploading dead audio. Nullness of
+     * [capture] alone is racy (TOCTOU: snapshot-then-cancel still
+     * transcribes).
      *
      * Cancelled/reset recordings never reach a fallback upload by
      * construction: the stale worker returns before [finishTranscription]
@@ -119,13 +150,25 @@ class Dictation(
             { buf, n ->
                 // Copy: the buffer is reused by the read loop.
                 val copy = buf.copyOf(n)
-                synchronized(localPcm) {
-                    if (localPcm.size < 16_000 * 60) {
-                        for (i in 0 until n) localPcm.add(copy[i])
+                synchronized(pcmLock) {
+                    val take = minOf(n, MAX_LOCAL_PCM_SAMPLES - pcmSize).coerceAtLeast(0)
+                    if (pcmSize + take > pcmBuf.size) {
+                        pcmBuf = pcmBuf.copyOf(
+                            maxOf(pcmBuf.size * 2, pcmSize + take)
+                                .coerceAtMost(MAX_LOCAL_PCM_SAMPLES),
+                        )
+                    }
+                    if (take > 0) {
+                        System.arraycopy(copy, 0, pcmBuf, pcmSize, take)
+                        pcmSize += take
+                    }
+                    if (take < n && !pcmOverflowed) {
+                        pcmOverflowed = true
+                        log("local PCM capped at 60s, overflow falls back to server")
                     }
                 }
                 try {
-                    CoreBridge.pushPcm(copy, n)
+                    pushPcm(copy, n)
                 } catch (_: Exception) {
                 }
             },
@@ -141,7 +184,10 @@ class Dictation(
         toggled = false
         downAt = System.currentTimeMillis()
         maxPeak = 0f
-        synchronized(localPcm) { localPcm.clear() }
+        synchronized(pcmLock) {
+            pcmSize = 0
+            pcmOverflowed = false
+        }
         set(State.RECORDING)
     }
 
@@ -200,6 +246,13 @@ class Dictation(
         } catch (_: Exception) {
         }
         capture = null
+        // Release the on-device recognizer: without this the native ORT
+        // session stays resident across IME enable/disable cycles in a
+        // surviving process. Never throws (hook is guarded).
+        try {
+            releaseLocal()
+        } catch (_: Throwable) {
+        }
         workers.shutdownNow()
     }
 
@@ -255,15 +308,31 @@ class Dictation(
                 // must reach the outer catch (session-gated drop) so
                 // cancel/shutdown during a blocked transcribe still
                 // wins instead of retrying into a dead worker.
-                val pcm: ShortArray = synchronized(localPcm) { localPcm.toShortArray() }
-                val local: String? = try {
-                    localTranscribe(pcm)?.first
-                } catch (_: Throwable) {
-                    // Local hook miss on ANY throw (incl. OOM Error) →
-                    // server fallback. Only the local hook is guarded:
-                    // a server throw must reach the outer catch below.
-                    null
+                //
+                // An overflowed PCM copy is incomplete by construction,
+                // so the local hook is skipped outright (server owns the
+                // full audio) — truncation never commits silently.
+                val (pcm, overflow) = synchronized(pcmLock) {
+                    pcmBuf.copyOf(pcmSize) to pcmOverflowed
                 }
+                val local: String? = if (overflow) {
+                    log("local PCM overflowed 60s cap, server fallback")
+                    null
+                } else {
+                    try {
+                        localTranscribe(pcm)?.first
+                    } catch (_: Throwable) {
+                        // Local hook miss on ANY throw (incl. OOM Error)
+                        // → server fallback. Only the local hook is
+                        // guarded: a server throw must reach the outer
+                        // catch below.
+                        null
+                    }
+                }
+                // Cancelled during the (blocking) local decode: the
+                // result below already drops post-call, but the server
+                // upload itself must not happen for a dead utterance.
+                if (local == null && gen != session.get()) return@execute
                 text = local ?: finishTranscription().first
             } catch (e: Exception) {
                 if (gen == session.get()) {
