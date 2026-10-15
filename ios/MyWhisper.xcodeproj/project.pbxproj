@@ -17,6 +17,10 @@
 		2D3275124A5A3FCA7E1F8CAD /* CoreBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC75167B1E2B32413C59E564 /* CoreBridgeTests.swift */; };
 		85252389B093CE46404738B4 /* SettingsJobsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F563518FFFD727440F23503 /* SettingsJobsTests.swift */; };
 		CE1EAA900000000000000002 /* CleanupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE1EAA900000000000000001 /* CleanupTests.swift */; };
+		AA0100AA0100AA01000002 /* AudioCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0100AA0100AA01000001 /* AudioCapture.swift */; };
+		AA0100AA0100AA02000002 /* Dictation.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0100AA0100AA02000001 /* Dictation.swift */; };
+		AA0100AA0100AA03000002 /* RecordView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0100AA0100AA03000001 /* RecordView.swift */; };
+		AA0100AA0100AA04000002 /* DictationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0100AA0100AA04000001 /* DictationTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -43,6 +47,10 @@
 		EC75167B1E2B32413C59E564 /* CoreBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreBridgeTests.swift; sourceTree = "<group>"; };
 		1F563518FFFD727440F23503 /* SettingsJobsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsJobsTests.swift; sourceTree = "<group>"; };
 		CE1EAA900000000000000001 /* CleanupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CleanupTests.swift; sourceTree = "<group>"; };
+		AA0100AA0100AA01000001 /* AudioCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioCapture.swift; sourceTree = "<group>"; };
+		AA0100AA0100AA02000001 /* Dictation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Dictation.swift; sourceTree = "<group>"; };
+		AA0100AA0100AA03000001 /* RecordView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordView.swift; sourceTree = "<group>"; };
+		AA0100AA0100AA04000001 /* DictationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationTests.swift; sourceTree = "<group>"; };
 		602A6F78559E7FAC27690B4A /* Tests Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		D82908387D374745193668C2 /* MyWhisper.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MyWhisper.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		8965188E778D2EEAECC16395 /* MyWhisperTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MyWhisperTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -85,6 +93,9 @@
 				FAF7AA9058417D529285795E /* CoreBridge.swift */,
 				C1EAAC110000000000000001 /* Cleanup.swift */,
 				D1C710A90000000000000001 /* DictionaryStore.swift */,
+				AA0100AA0100AA01000001 /* AudioCapture.swift */,
+				AA0100AA0100AA02000001 /* Dictation.swift */,
+				AA0100AA0100AA03000001 /* RecordView.swift */,
 				7EB0EE73123791A0202B4796 /* MyWhisper.entitlements */,
 				658CB18E2E567D501D0E64F8 /* Info.plist */,
 				F32B3BDBD273F3BCD8875B1B /* PrivacyInfo.xcprivacy */,
@@ -98,6 +109,7 @@
 				EC75167B1E2B32413C59E564 /* CoreBridgeTests.swift */,
 				1F563518FFFD727440F23503 /* SettingsJobsTests.swift */,
 				CE1EAA900000000000000001 /* CleanupTests.swift */,
+				AA0100AA0100AA04000001 /* DictationTests.swift */,
 				602A6F78559E7FAC27690B4A /* Tests Info.plist */,
 			);
 			path = MyWhisperTests;
@@ -215,6 +227,9 @@
 				480131A0731D72ABA1949877 /* CoreBridge.swift in Sources */,
 				C1EAAC110000000000000002 /* Cleanup.swift in Sources */,
 				D1C710A90000000000000002 /* DictionaryStore.swift in Sources */,
+				AA0100AA0100AA01000002 /* AudioCapture.swift in Sources */,
+				AA0100AA0100AA02000002 /* Dictation.swift in Sources */,
+				AA0100AA0100AA03000002 /* RecordView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -225,6 +240,7 @@
 				2D3275124A5A3FCA7E1F8CAD /* CoreBridgeTests.swift in Sources */,
 				85252389B093CE46404738B4 /* SettingsJobsTests.swift in Sources */,
 				CE1EAA900000000000000002 /* CleanupTests.swift in Sources */,
+				AA0100AA0100AA04000002 /* DictationTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
