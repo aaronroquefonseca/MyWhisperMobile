@@ -32,12 +32,9 @@ class DictationCancelTest {
         tailMs: Long = 0L,
         val transcribeBlock: CountDownLatch? = null,
         transcribeText: String = "hello world",
-        val localBlock: CountDownLatch? = null,
-        localText: String? = null,
     ) {
         val executor = Executors.newSingleThreadExecutor()
         val enteredTranscribe = CountDownLatch(1)
-        val enteredLocal = CountDownLatch(1)
         val transcribed = AtomicBoolean(false)
         val results: MutableList<String> = Collections.synchronizedList(mutableListOf())
         val errors: MutableList<String> = Collections.synchronizedList(mutableListOf())
@@ -47,13 +44,6 @@ class DictationCancelTest {
             mode = { "Push" },
             releaseDelayMs = { tailMs },
             startCapture = { _, _, _ -> FakeCapture() },
-            tryLocalDecode = {
-                enteredLocal.countDown()
-                localBlock?.let {
-                    assertTrue("local decode release timeout", it.await(10, TimeUnit.SECONDS))
-                }
-                localText
-            },
             finishTranscription = {
                 transcribed.set(true)
                 enteredTranscribe.countDown()
@@ -250,71 +240,6 @@ class DictationCancelTest {
                 "WORKING must never reappear after cancel (saw ${h.states})",
                 h.states.contains(Dictation.State.WORKING),
             )
-            assertEquals(Dictation.State.IDLE, h.dictation.current)
-        } finally {
-            h.shutdown()
-        }
-    }
-
-    @Test
-    fun cancelDuringLocalDecode_noUploadAttempt() {
-        // Slow local decode: cancel lands mid-decode, local misses.
-        // The dead session must neither upload (server chain untouched)
-        // nor commit/report.
-        val h = Harness(localBlock = CountDownLatch(1), localText = null)
-        try {
-            h.dictation.pressDown()
-            h.dictation.pressUp() // WORKING, worker enters local decode
-            assertEquals(Dictation.State.WORKING, h.dictation.current)
-            assertTrue(h.enteredLocal.await(10, TimeUnit.SECONDS))
-
-            h.dictation.cancel() // invalidate mid-decode
-            assertEquals(Dictation.State.IDLE, h.dictation.current)
-            h.localBlock!!.countDown() // decode returns a miss
-            h.settleWorker()
-
-            assertFalse("cancelled session must not upload", h.transcribed.get())
-            assertTrue("cancelled session must not commit", h.results.isEmpty())
-            assertTrue("cancelled session must not report either", h.errors.isEmpty())
-            assertEquals(Dictation.State.IDLE, h.dictation.current)
-        } finally {
-            h.shutdown()
-        }
-    }
-
-    @Test
-    fun localHit_commitsWithoutUpload() {
-        // Local hit: commits directly, server chain never consulted.
-        val h = Harness(localText = "hello local")
-        try {
-            h.dictation.pressDown()
-            h.dictation.pressUp()
-            h.settleWorker()
-
-            assertEquals(listOf("hello local"), h.results)
-            assertFalse("local hit must not upload", h.transcribed.get())
-            assertEquals(Dictation.State.IDLE, h.dictation.current)
-        } finally {
-            h.shutdown()
-        }
-    }
-
-    @Test
-    fun cancelDuringLocalDecode_hitStillDrops() {
-        // Cancel lands mid-decode and local HITS: drop before commit.
-        val h = Harness(localBlock = CountDownLatch(1), localText = "hello local")
-        try {
-            h.dictation.pressDown()
-            h.dictation.pressUp()
-            assertTrue(h.enteredLocal.await(10, TimeUnit.SECONDS))
-
-            h.dictation.cancel()
-            h.localBlock!!.countDown() // decode returns a hit, too late
-            h.settleWorker()
-
-            assertTrue("stale local hit must not commit", h.results.isEmpty())
-            assertTrue("stale local hit must not report either", h.errors.isEmpty())
-            assertFalse("cancelled session must not upload", h.transcribed.get())
             assertEquals(Dictation.State.IDLE, h.dictation.current)
         } finally {
             h.shutdown()

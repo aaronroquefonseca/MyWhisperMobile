@@ -33,14 +33,6 @@ class Dictation(
         }
     },
     private val finishTranscription: () -> Pair<String, String> = { CoreBridge.finishUtterance() },
-    /**
-     * On-device decode attempt, run before any server upload. Returns
-     * text on a local hit, null on a local miss (fall through to the
-     * server chain). Default misses: stock builds have no local
-     * engine, so every utterance takes the server path — with the
-     * same session re-check below before uploading.
-     */
-    private val tryLocalDecode: () -> String? = { null },
     private val cancelTranscription: () -> Unit = { CoreBridge.cancelUtterance() },
     private val log: (String) -> Unit = { msg -> android.util.Log.i("MwDict", msg) },
     private val workers: ExecutorService = Executors.newSingleThreadExecutor(),
@@ -246,52 +238,26 @@ class Dictation(
             } catch (_: Exception) {
             }
             capture = null
-            // On-device attempt first: a local hit never uploads.
-            // A local decode failure is a miss (fall through to the
-            // server chain), never a user-facing error.
-            val local: String? = try {
-                tryLocalDecode()
-            } catch (_: Exception) {
-                null
-            }
             val text: String
-            if (local != null) {
-                // Local hit — still honor a cancel that landed
-                // mid-decode: drop before committing.
-                if (gen != session.get()) {
-                    log("finish drop stale-local gen=$gen session=${session.get()}")
-                    return@execute
+            try {
+                text = finishTranscription().first
+            } catch (e: Exception) {
+                if (gen == session.get()) {
+                    listener?.onError(e.message ?: "transcription failed")
+                    set(State.IDLE)
+                } else {
+                    log("finish drop stale-error gen=$gen session=${session.get()}")
                 }
-                log("utterance local hit len=${local.length}")
-                text = local
-            } else {
-                // Local miss: recheck BEFORE the server upload. A
-                // cancel that landed mid-decode must neither upload
-                // dead audio (waste + privacy) nor commit.
-                if (gen != session.get()) {
-                    log("finish drop stale-before-upload gen=$gen session=${session.get()}")
-                    return@execute
-                }
-                try {
-                    text = finishTranscription().first
-                } catch (e: Exception) {
-                    if (gen == session.get()) {
-                        listener?.onError(e.message ?: "transcription failed")
-                        set(State.IDLE)
-                    } else {
-                        log("finish drop stale-error gen=$gen session=${session.get()}")
-                    }
-                    return@execute
-                }
-                // Cancelled while blocked in transcription: the call above
-                // returned after cancel() — drop, never commit to the IME.
-                if (gen != session.get()) {
-                    log("finish drop stale-result gen=$gen session=${session.get()}")
-                    return@execute
-                }
-                log("utterance max peak=%.2f".format(maxPeak))
-                log("utterance text len=${text.length} hasListener=${listener != null}")
+                return@execute
             }
+            // Cancelled while blocked in transcription: the call above
+            // returned after cancel() — drop, never commit to the IME.
+            if (gen != session.get()) {
+                log("finish drop stale-result gen=$gen session=${session.get()}")
+                return@execute
+            }
+            log("utterance max peak=%.2f".format(maxPeak))
+            log("utterance text len=${text.length} hasListener=${listener != null}")
             if (text.isBlank()) {
                 // Silence is never committed and never surfaced: the
                 // "silence" tag maps to the empty state on every
