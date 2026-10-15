@@ -124,7 +124,9 @@ class FloatBubbleTest {
 
     @Test
     fun stopAction_matrix() {
-        assertEquals(FloatState.StopAction.FINISH, FloatState.stopAction(Dictation.State.RECORDING))
+        // Owner pill round-2: the X is pure cancel — RECORDING
+        // discards (never finish/commit), WORKING discards, IDLE no-ops.
+        assertEquals(FloatState.StopAction.CANCEL, FloatState.stopAction(Dictation.State.RECORDING))
         assertEquals(FloatState.StopAction.CANCEL, FloatState.stopAction(Dictation.State.WORKING))
         assertEquals(FloatState.StopAction.NONE, FloatState.stopAction(Dictation.State.IDLE))
     }
@@ -171,26 +173,16 @@ class FloatBubbleTest {
         assertEquals(48, expanded.height)
     }
 
-    // -- Stop-tap commit/discard per mode ----------------------------
+    // -- Stop-tap cancel/discard per mode ----------------------------
 
     /**
-     * Mirrors OverlayService.onStopTap without Android: FINISH =
-     * pressDown+pressUp, repeated once while still RECORDING (a Tap
-     * first-hold only toggles); CANCEL = cancel. Every mic mode must
-     * leave RECORDING and commit exactly once.
+     * Mirrors OverlayService.onStopTap without Android: any active
+     * state cancels (never finish/commit). Every mic mode must leave
+     * RECORDING with no result committed.
      */
     private fun stopTap(d: Dictation) {
-        when (FloatState.stopAction(d.current)) {
-            FloatState.StopAction.FINISH -> {
-                d.pressDown()
-                d.pressUp()
-                if (d.current == Dictation.State.RECORDING) {
-                    d.pressDown()
-                    d.pressUp()
-                }
-            }
-            FloatState.StopAction.CANCEL -> d.cancel()
-            FloatState.StopAction.NONE -> Unit
+        if (FloatState.stopAction(d.current) != FloatState.StopAction.NONE) {
+            d.cancel()
         }
     }
 
@@ -216,26 +208,26 @@ class FloatBubbleTest {
     }
 
     @Test
-    fun stopTap_finishesRecording_everyMode() {
+    fun stopTap_discardsRecording_everyMode() {
         for (mode in listOf("Push", "Tap", "Smart")) {
             val (d, results, ex) = dictationForStopTap(mode)
             try {
                 d.pressDown()
                 assertEquals(Dictation.State.RECORDING, d.current)
                 if (mode == "Push") {
-                    // Hold still down: explicit stop finishes mid-hold.
+                    // Hold still down: explicit cancel discards mid-hold.
                     stopTap(d)
                 } else {
                     d.pressUp() // Tap/Smart-quick toggles (still RECORDING)
                     assertEquals(Dictation.State.RECORDING, d.current)
-                    stopTap(d) // explicit stop affordance
+                    stopTap(d) // explicit cancel affordance
                 }
-                assertTrue(
-                    "stop must leave RECORDING in $mode",
-                    d.current != Dictation.State.RECORDING,
+                assertEquals(
+                    "cancel must return to IDLE in $mode",
+                    Dictation.State.IDLE, d.current,
                 )
                 ex.submit {}.get(10, TimeUnit.SECONDS)
-                assertEquals("stop must commit once in $mode", listOf("hello world"), results)
+                assertTrue("cancel must never commit in $mode", results.isEmpty())
                 assertEquals(Dictation.State.IDLE, d.current)
             } finally {
                 ex.shutdownNow()
@@ -257,6 +249,84 @@ class FloatBubbleTest {
         } finally {
             ex.shutdownNow()
         }
+    }
+
+    // -- Branded mic chrome (pill round-2 identity) ------------------
+
+    @Test
+    fun micChrome_neverGenericDot() {
+        for (s in Dictation.State.entries) {
+            val c = FloatState.micChrome(s)
+            assertTrue(
+                "brand bg must differ from the legacy generic fill in $s",
+                c.bgColor != FloatState.LEGACY_GENERIC_MIC_FILL,
+            )
+            assertTrue(
+                "brand gradient must differ from the legacy generic fill in $s",
+                c.bgEndColor != FloatState.LEGACY_GENERIC_MIC_FILL,
+            )
+        }
+    }
+
+    @Test
+    fun micChrome_recordingVsProcessingVsIdle() {
+        val rec = FloatState.micChrome(Dictation.State.RECORDING)
+        assertEquals(1f, rec.alpha, 0f)
+        val work = FloatState.micChrome(Dictation.State.WORKING)
+        assertEquals(0.6f, work.alpha, 0f)
+        assertTrue("processing dims vs recording", work.alpha < rec.alpha)
+        val idle = FloatState.micChrome(Dictation.State.IDLE)
+        assertEquals(1f, idle.alpha, 0f)
+        assertTrue("recording reads red-brand", rec.bgColor != idle.bgColor)
+        assertTrue("processing reads deep-brand", work.bgColor != idle.bgColor)
+    }
+
+    // -- Grip drag-down + drop-on-X cancel ---------------------------
+
+    @Test
+    fun gripDragDown_cancelsOnlyPastThresholdWhileActive() {
+        assertTrue(FloatState.shouldCancelOnGripDragDown(48f, 48f, active = true))
+        assertTrue(FloatState.shouldCancelOnGripDragDown(200f, 48f, active = true))
+        assertFalse(FloatState.shouldCancelOnGripDragDown(47f, 48f, active = true))
+        // Up / sideways drags are plain moves, never cancel.
+        assertFalse(FloatState.shouldCancelOnGripDragDown(-60f, 48f, active = true))
+        assertFalse(FloatState.shouldCancelOnGripDragDown(0f, 48f, active = true))
+        // Idle grip drags never cancel (nothing to discard).
+        assertFalse(FloatState.shouldCancelOnGripDragDown(200f, 48f, active = false))
+    }
+
+    @Test
+    fun dropOnCancel_hitRect() {
+        val stop = FloatState.HitRectF(100f, 200f, 148f, 248f)
+        assertTrue(FloatState.isDropOnCancel(124f, 224f, stop))
+        assertTrue(FloatState.isDropOnCancel(100f, 200f, stop))
+        assertFalse(FloatState.isDropOnCancel(99f, 224f, stop))
+        assertFalse(FloatState.isDropOnCancel(124f, 199f, stop))
+        assertFalse(FloatState.isDropOnCancel(0f, 0f, stop))
+    }
+
+    @Test
+    fun gripCancelTravel_pinned() {
+        assertEquals(48, GRIP_CANCEL_DY_DP)
+    }
+
+    // -- Visualizer pill geometry ------------------------------------
+
+    @Test
+    fun vizPill_sitsAboveImeElseNavBarPlusMargin() {
+        // Keyboard up: above the IME.
+        assertEquals(516, FloatState.vizPillYOffset(imeBottomPx = 500, navBottomPx = 48, marginPx = 16))
+        // Keyboard down: above the nav bar.
+        assertEquals(64, FloatState.vizPillYOffset(imeBottomPx = 0, navBottomPx = 48, marginPx = 16))
+        // Gesture nav (no bar, no IME): margin above the edge.
+        assertEquals(16, FloatState.vizPillYOffset(imeBottomPx = 0, navBottomPx = 0, marginPx = 16))
+    }
+
+    @Test
+    fun vizPill_sizePinned() {
+        assertEquals(108, VIZ_W_DP)
+        assertEquals(36, VIZ_H_DP)
+        assertEquals(16, VIZ_MARGIN_DP)
     }
 
     // -- Overlay-denial latch --------------------------------------

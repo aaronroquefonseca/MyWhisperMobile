@@ -136,24 +136,89 @@ object FloatState {
     fun isProcessing(state: Dictation.State): Boolean =
         state == Dictation.State.WORKING
 
-    /** Recording treatment (red mic, no spinner) while RECORDING. */
+    /** Recording treatment (branded mic + glow, no spinner) while RECORDING. */
     fun isRecording(state: Dictation.State): Boolean =
         state == Dictation.State.RECORDING
 
     /**
-     * Stop-tap decision matrix: RECORDING stops with commit (finish),
-     * WORKING stops with discard (cancel), IDLE is a no-op. The tap
-     * itself is mode-agnostic — per-mode commit semantics live in
-     * [Dictation] (tap/hold/smart finish paths).
+     * Branded mic chrome per state (owner pill round-2: distinctive
+     * MyWhisper identity, never a generic purple dot). RECORDING reads
+     * full-brand + glow, WORKING reads deep-brand dimmed + spinner
+     * (calm processing, static — no pulse ever), IDLE reads brand.
+     * Pure so tests pin the identity (bg never the old generic fill).
      */
-    enum class StopAction { FINISH, CANCEL, NONE }
+    data class MicChrome(val bgColor: Int, val bgEndColor: Int, val strokeColor: Int, val glowColor: Int, val alpha: Float)
+
+    fun micChrome(state: Dictation.State): MicChrome =
+        when (state) {
+            Dictation.State.RECORDING ->
+                MicChrome(
+                    bgColor = 0xFFB3261E.toInt(), bgEndColor = 0xFF7A1A14.toInt(),
+                    strokeColor = 0xFFFFDAD6.toInt(), glowColor = 0x59B3261E.toInt(), alpha = 1f,
+                )
+            Dictation.State.WORKING ->
+                MicChrome(
+                    bgColor = 0xFF2E1A57.toInt(), bgEndColor = 0xFF1D1038.toInt(),
+                    strokeColor = 0xFF9C8DC4.toInt(), glowColor = 0x402E1A57.toInt(), alpha = 0.6f,
+                )
+            Dictation.State.IDLE ->
+                MicChrome(
+                    bgColor = 0xFF4A2B8A.toInt(), bgEndColor = 0xFF2E1A57.toInt(),
+                    strokeColor = 0xFFD6C6F5.toInt(), glowColor = 0x4D4A2B8A.toInt(), alpha = 1f,
+                )
+        }
+
+    /** The old generic dot fill — brand chrome must never regress to it. */
+    val LEGACY_GENERIC_MIC_FILL: Int = 0xFF6750A4.toInt()
+
+    /**
+     * Stop-tap decision matrix (owner pill round-2: CANCEL MUST NOT
+     * TRANSCRIBE): the X button is pure cancel in every active mode —
+     * RECORDING discards (never finish/commit, never a WORKING spinner,
+     * never an empty-text commit), WORKING discards, IDLE no-ops.
+     * Committing from the bubble happens only via the mic release
+     * (pressUp → finish). Per-mode commit semantics live in [Dictation].
+     */
+    enum class StopAction { CANCEL, NONE }
 
     fun stopAction(state: Dictation.State): StopAction =
         when (state) {
-            Dictation.State.RECORDING -> StopAction.FINISH
+            Dictation.State.RECORDING -> StopAction.CANCEL
             Dictation.State.WORKING -> StopAction.CANCEL
             Dictation.State.IDLE -> StopAction.NONE
         }
+
+    /**
+     * Grip drag-down cancel (mirrors the IME slide-down-cancel): a
+     * downward grip drag past threshold while active discards the
+     * utterance. Pure so tests pin the gesture (down = cancel, up /
+     * sideways = plain move, idle = never).
+     */
+    fun shouldCancelOnGripDragDown(
+        dyPx: Float,
+        thresholdPx: Float,
+        active: Boolean,
+    ): Boolean =
+        active && dyPx >= thresholdPx
+
+    /**
+     * Drop-on-X cancel (drag the mic onto the stop button): the release
+     * point inside the stop hit-rect discards instead of finishing.
+     */
+    fun isDropOnCancel(x: Float, y: Float, stop: HitRectF): Boolean =
+        x >= stop.left && x <= stop.right && y >= stop.top && y <= stop.bottom
+
+    /** Float rect (raw screen px) for drop-on-X hit testing. */
+    data class HitRectF(val left: Float, val top: Float, val right: Float, val bottom: Float)
+
+    /**
+     * Bottom-center visualizer-pill offset: sits [marginPx] above the
+     * taller of the IME and the nav bar, else above the screen bottom.
+     * IME insets read 0 when the overlay cannot see them — the max()
+     * degrades gracefully to the nav-bar fallback.
+     */
+    fun vizPillYOffset(imeBottomPx: Int, navBottomPx: Int, marginPx: Int): Int =
+        maxOf(imeBottomPx, navBottomPx) + marginPx
 
     /**
      * First-run move hint: shown once until the user has moved the

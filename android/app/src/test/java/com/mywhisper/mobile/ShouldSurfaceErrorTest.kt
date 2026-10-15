@@ -19,6 +19,10 @@ class ShouldSurfaceErrorTest {
         assertFalse(shouldSurfaceError("silence, nothing captured"))
     }
 
+    @Test fun silencesEmptyTranscriptCancelRace() {
+        assertFalse(shouldSurfaceError("empty transcript"))
+    }
+
     @Test fun emptyMessageSurfaces() {
         assertTrue(shouldSurfaceError(""))
     }

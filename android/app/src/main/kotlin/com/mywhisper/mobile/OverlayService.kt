@@ -74,18 +74,25 @@ class OverlayService : Service(), Dictation.Listener {
      */
     @Volatile private var foregrounded = false
     private var wm: WindowManager? = null
-    private var holder: FrameLayout? = null
+    private var holder: ViewGroup? = null
+    private var haloView: View? = null
     private var micBtn: ImageButton? = null
     private var dragHandle: View? = null
     private var stopBtn: ImageButton? = null
     private var spinner: View? = null
     private var params: WindowManager.LayoutParams? = null
+    // Bottom-center level visualizer pill (RECORDING only).
+    private var vizHolder: FrameLayout? = null
+    private var vizBars: BarsView? = null
+    private var vizParams: WindowManager.LayoutParams? = null
 
     private var downRawX = 0f
     private var downRawY = 0f
     private var baseX = 0
     private var baseY = 0
     private var moved = false
+    /** Grip drag-down already cancelled this gesture (fire once). */
+    private var gripCancelled = false
 
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
@@ -155,6 +162,14 @@ class OverlayService : Service(), Dictation.Listener {
             releaseDelayMs = { readLong("stt", "release_delay_ms", 0L) },
         )
         dictation.listener = this
+        // Live peaks feed the bottom-center visualizer pill (capture
+        // thread → posted to the bars view; no-op when hidden).
+        dictation.onLevel = { peak ->
+            try {
+                vizBars?.post { vizBars?.pushLevel(peak) }
+            } catch (_: Exception) {
+            }
+        }
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
     }
 
@@ -474,13 +489,17 @@ class OverlayService : Service(), Dictation.Listener {
     }
 
     /**
-     * Bubble chrome: the mic button talks, the grip moves, the stop
-     * button stops. Split controls (owner UX): the grip is the ONLY
-     * move affordance — always visible, 48dp touch target, first-run
-     * hint. Touching the mic never moves the bubble and never cancels:
-     * tap / long-press / drag on the mic is pure Dictation input. The
-     * persisted position is clamped into the live window on show, so a
-     * rotation or fold never strands the bubble off-screen.
+     * Bubble chrome (owner pill round-2): one vertical column — grip
+     * TOP, mic middle, stop BELOW — every row centered, so the bubble
+     * docks flush and symmetric on both screen edges with no border gap
+     * waste (single column width, no sidecar). The mic is branded
+     * MyWhisper (plum gradient + lavender ring + static halo glow,
+     * never the old generic dot); processing stays calm (dim + small
+     * spinner, no pulse ever). The grip is the move affordance (pull
+     * DOWN past threshold to cancel, mirrors the IME slide-cancel);
+     * the mic talks (drop onto the X cancels); the X below stops with
+     * discard. The persisted position is clamped into the live window
+     * on show, so a rotation or fold never strands the bubble.
      */
     @SuppressLint("ClickableViewAccessibility")
     private fun showBubble() {
@@ -491,10 +510,14 @@ class OverlayService : Service(), Dictation.Listener {
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
 
         val size = dp(60)
+        val haloPad = dp(8)
+        val cellW = size + haloPad * 2
         val gripTouch = dp(48)
         val stopSize = dp(STOP_VISUAL_DP)
-        val rootW = size + stopSize + dp(8)
-        val rootH = size + gripTouch / 2 + dp(8)
+        val stopCell = dp(40)
+        val gripCell = dp(32)
+        val rootW = cellW
+        val rootH = gripCell + cellW + stopCell + dp(8)
         val lp = WindowManager.LayoutParams(
             rootW, rootH,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
@@ -512,22 +535,68 @@ class OverlayService : Service(), Dictation.Listener {
         }
         params = lp
 
-        val root = FrameLayout(this)
+        val root = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+        }
+        // Grip TOP: the move affordance. Opaque rounded tab + white
+        // pill, 48dp touch target, centered in its cell.
+        val grip = FrameLayout(this).apply {
+            contentDescription = getString(R.string.float_drag_handle)
+            elevation = dp(7).toFloat()
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dp(12).toFloat()
+                setColor(0xCC1D1B20.toInt())
+            }
+            layoutParams = android.widget.LinearLayout.LayoutParams(gripTouch, dp(24)).apply {
+                gravity = Gravity.CENTER_HORIZONTAL
+                topMargin = dp(4)
+            }
+            setOnTouchListener { _, ev -> onHandleTouch(ev) }
+        }
+        val pill = View(this).apply {
+            isClickable = false
+            isFocusable = false
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dp(3).toFloat()
+                setColor(0xFFFFFFFF.toInt())
+            }
+            layoutParams = FrameLayout.LayoutParams(dp(24), dp(5), Gravity.CENTER)
+        }
+        grip.addView(pill)
+        dragHandle = grip
+        root.addView(grip)
+        // Mic cell: static halo glow behind the branded mic button.
+        val micCell = FrameLayout(this).apply {
+            layoutParams = android.widget.LinearLayout.LayoutParams(cellW, cellW).apply {
+                gravity = Gravity.CENTER_HORIZONTAL
+                topMargin = dp(4)
+            }
+        }
+        val halo = View(this).apply {
+            isClickable = false
+            isFocusable = false
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(FloatState.micChrome(Dictation.State.IDLE).glowColor)
+            }
+            layoutParams = FrameLayout.LayoutParams(cellW, cellW, Gravity.CENTER)
+        }
+        haloView = halo
+        micCell.addView(halo)
         val mic = ImageButton(this).apply {
             setImageResource(R.drawable.ic_mic)
             contentDescription = getString(R.string.ime_mic)
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(0xFF6750A4.toInt())
-            }
             // Big mark: padding trimmed so the glyph fills the button.
             setPadding(dp(7), dp(7), dp(7), dp(7))
             elevation = dp(BUBBLE_MIC_ELEVATION_DP).toFloat()
-            layoutParams = FrameLayout.LayoutParams(size, size, Gravity.TOP or Gravity.START)
+            layoutParams = FrameLayout.LayoutParams(size, size, Gravity.CENTER)
             setOnTouchListener { _, ev -> onMicTouch(ev) }
         }
         micBtn = mic
-        root.addView(mic)
+        micCell.addView(mic)
         // Calm processing indicator: small indeterminate spinner
         // centered on the mic, visible only while WORKING. Static —
         // no scale/alpha pulsing on the mic itself.
@@ -538,18 +607,15 @@ class OverlayService : Service(), Dictation.Listener {
             isFocusable = false
             // Z-order: drawn above the mic glyph (mic sits at 6dp).
             elevation = dp(BUBBLE_SPINNER_ELEVATION_DP).toFloat()
-            layoutParams = FrameLayout.LayoutParams(dp(28), dp(28), Gravity.TOP or Gravity.START).apply {
-                // Center over the mic glyph.
-                leftMargin = (size - dp(28)) / 2
-                topMargin = (size - dp(28)) / 2
-            }
+            layoutParams = FrameLayout.LayoutParams(dp(28), dp(28), Gravity.CENTER)
             visibility = View.GONE
         }
         spinner = spin
-        root.addView(spin)
-        // Explicit stop affordance: always visible while RECORDING or
-        // WORKING, hidden while IDLE. Tap stops (finish/commit from
-        // RECORDING, cancel/discard from WORKING).
+        micCell.addView(spin)
+        root.addView(micCell)
+        // Stop BELOW the mic: same column, centered (symmetric on both
+        // edges). Always visible while RECORDING or WORKING, hidden
+        // while IDLE. Tap discards (never commits — owner pill round-2).
         val stop = ImageButton(this).apply {
             setImageResource(android.R.drawable.ic_menu_close_clear_cancel)
             contentDescription = getString(R.string.float_stop)
@@ -559,7 +625,10 @@ class OverlayService : Service(), Dictation.Listener {
             }
             setPadding(dp(4), dp(4), dp(4), dp(4))
             elevation = dp(7).toFloat()
-            layoutParams = FrameLayout.LayoutParams(stopSize, stopSize, Gravity.TOP or Gravity.END)
+            layoutParams = android.widget.LinearLayout.LayoutParams(stopSize, stopSize).apply {
+                gravity = Gravity.CENTER_HORIZONTAL
+                topMargin = dp(4)
+            }
             visibility = View.GONE
             setOnClickListener { onStopTap() }
         }
@@ -578,32 +647,6 @@ class OverlayService : Service(), Dictation.Listener {
             } catch (_: Exception) {
             }
         }
-        // Grip: the ONLY move affordance. Always visible (opaque
-        // rounded tab + white pill), 48dp touch target, bottom-end.
-        val grip = FrameLayout(this).apply {
-            contentDescription = getString(R.string.float_drag_handle)
-            elevation = dp(7).toFloat()
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = dp(12).toFloat()
-                setColor(0xCC1D1B20.toInt())
-            }
-            layoutParams = FrameLayout.LayoutParams(gripTouch, dp(24), Gravity.BOTTOM or Gravity.END)
-            setOnTouchListener { _, ev -> onHandleTouch(ev) }
-        }
-        val pill = View(this).apply {
-            isClickable = false
-            isFocusable = false
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = dp(3).toFloat()
-                setColor(0xFFFFFFFF.toInt())
-            }
-            layoutParams = FrameLayout.LayoutParams(dp(24), dp(5), Gravity.CENTER)
-        }
-        grip.addView(pill)
-        dragHandle = grip
-        root.addView(grip)
         holder = root
         try {
             wm?.addView(root, lp)
@@ -694,10 +737,11 @@ class OverlayService : Service(), Dictation.Listener {
     }
 
     /**
-     * Mic touch: talk only. Movement is ignored — it neither moves the
-     * bubble nor cancels the utterance. The grip is the only way to
-     * move; the stop button is the only explicit stop. A tap therefore
-     * never destroys a recording (owner UX).
+     * Mic touch: talk, with one escape hatch — releasing ON the X
+     * below discards instead of finishing (drag-to-X cancel, owner
+     * pill round-2: cancel must never transcribe). Movement otherwise
+     * neither moves the bubble nor cancels: the grip moves, the X
+     * cancels, the mic talks.
      */
     private fun onMicTouch(ev: MotionEvent): Boolean {
         when (ev.actionMasked) {
@@ -716,8 +760,15 @@ class OverlayService : Service(), Dictation.Listener {
             }
             MotionEvent.ACTION_UP -> {
                 moved = false
-                tick()
-                dictation.pressUp()
+                if (droppedOnStop(ev.rawX, ev.rawY)) {
+                    // Drag-to-X: discard; the session token invalidates
+                    // any in-flight finish so no WORKING follows.
+                    tick(40L)
+                    dictation.cancel()
+                } else {
+                    tick()
+                    dictation.pressUp()
+                }
                 return true
             }
             MotionEvent.ACTION_CANCEL -> {
@@ -729,10 +780,33 @@ class OverlayService : Service(), Dictation.Listener {
         return false
     }
 
+    /** True when the release point lands on the stop button (drop-on-X). */
+    private fun droppedOnStop(rawX: Float, rawY: Float): Boolean {
+        val stop = stopBtn ?: return false
+        if (stop.visibility != View.VISIBLE) return false
+        return try {
+            val loc = IntArray(2)
+            stop.getLocationOnScreen(loc)
+            val pad = (dp(STOP_TARGET_DP) - dp(STOP_VISUAL_DP)) / 2
+            FloatState.isDropOnCancel(
+                rawX, rawY,
+                FloatState.HitRectF(
+                    (loc[0] - pad).toFloat(), (loc[1] - pad).toFloat(),
+                    (loc[0] + stop.width + pad).toFloat(), (loc[1] + stop.height + pad).toFloat(),
+                ),
+            )
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     /**
-     * Grip touch: move only, never Dictation. A drag here can neither
-     * start nor cancel a recording; release docks to the edge and marks
-     * the first-run hint seen.
+     * Grip touch: move, plus drag-DOWN cancel (mirrors the IME
+     * slide-down-cancel): pulling the grip down past threshold while
+     * active discards the utterance — same invalidate path as the X,
+     * so no WORKING spinner and no commit follow. Sideways/up drags
+     * still move; release docks to the edge and marks the first-run
+     * hint seen. Never Dictation input.
      */
     private fun onHandleTouch(ev: MotionEvent): Boolean {
         when (ev.actionMasked) {
@@ -741,10 +815,22 @@ class OverlayService : Service(), Dictation.Listener {
                 downRawY = ev.rawY
                 params?.let { baseX = it.x; baseY = it.y }
                 moved = false
+                gripCancelled = false
                 tick()
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
+                if (!gripCancelled && FloatState.shouldCancelOnGripDragDown(
+                        ev.rawY - downRawY, dp(GRIP_CANCEL_DY_DP).toFloat(),
+                        active = dictation.current != Dictation.State.IDLE,
+                    )
+                ) {
+                    gripCancelled = true
+                    tick(40L)
+                    dictation.cancel()
+                    return true
+                }
+                if (gripCancelled) return true
                 val dist = kotlin.math.hypot(
                     (ev.rawX - downRawX).toDouble(),
                     (ev.rawY - downRawY).toDouble(),
@@ -761,10 +847,12 @@ class OverlayService : Service(), Dictation.Listener {
                     moved = false
                     markMoveHintSeen()
                 }
+                gripCancelled = false
                 return true
             }
             MotionEvent.ACTION_CANCEL -> {
                 moved = false
+                gripCancelled = false
                 return true
             }
         }
@@ -780,42 +868,35 @@ class OverlayService : Service(), Dictation.Listener {
     }
 
     /**
-     * Explicit stop tap (owner UX): visible while RECORDING or
-     * WORKING. RECORDING finishes (commit — two press pairs so a Tap
-     * first-hold that only toggled still stops; the second pair
-     * no-ops once WORKING/IDLE). WORKING cancels (discard). IDLE is
-     * unreachable (button hidden) and no-ops.
+     * Explicit cancel tap (owner pill round-2: CANCEL MUST NOT
+     * TRANSCRIBE): the X below the mic discards in every active mode —
+     * RECORDING cancels (never finish/commit, never a WORKING
+     * spinner, never an empty-text commit), WORKING cancels
+     * (discard). Committing from the bubble happens only via the mic
+     * release. IDLE is unreachable (button hidden) and no-ops.
      */
     private fun onStopTap() {
         tick()
-        when (FloatState.stopAction(dictation.current)) {
-            FloatState.StopAction.FINISH -> {
-                dictation.pressDown()
-                dictation.pressUp()
-                // Tap-mode first-hold only toggled above: still
-                // RECORDING, so the second press finishes for real.
-                if (dictation.current == Dictation.State.RECORDING) {
-                    dictation.pressDown()
-                    dictation.pressUp()
-                }
-            }
-            FloatState.StopAction.CANCEL -> dictation.cancel()
-            FloatState.StopAction.NONE -> Unit
+        if (FloatState.stopAction(dictation.current) != FloatState.StopAction.NONE) {
+            dictation.cancel()
         }
     }
 
     private fun removeBubble() {
         // Any hide drops the utterance (focus lost mid-press included).
         moved = false
+        gripCancelled = false
         try {
             dictation.cancel()
         } catch (_: Exception) {
         }
+        hideVizPill()
         try {
             holder?.let { wm?.removeView(it) }
         } catch (_: Exception) {
         }
         holder = null
+        haloView = null
         micBtn = null
         dragHandle = null
         stopBtn = null
@@ -823,33 +904,126 @@ class OverlayService : Service(), Dictation.Listener {
     }
 
     /**
-     * Bubble chrome per state (owner UX): RECORDING reads red-mic +
-     * stop, WORKING reads dimmed mic + small spinner + stop (calm
-     * processing, no pulsing), IDLE reads purple mic with stop and
-     * spinner hidden. Recording vs processing differ at a glance.
+     * Bubble chrome per state (owner pill round-2 identity): branded
+     * plum-gradient mic + lavender ring + static halo glow. RECORDING
+     * reads red-brand + glow + stop, WORKING reads deep-brand dimmed +
+     * small spinner + stop (calm processing, no pulsing), IDLE reads
+     * brand with stop and spinner hidden. Recording vs processing
+     * differ at a glance.
      */
     private fun refreshChrome(state: Dictation.State) {
-        val recording = FloatState.isRecording(state)
+        val chrome = FloatState.micChrome(state)
         val processing = FloatState.isProcessing(state)
         micBtn?.apply {
-            setBackground(
-                GradientDrawable().apply {
-                    shape = GradientDrawable.OVAL
-                    setColor(
-                        when {
-                            recording -> 0xFFB3261E.toInt()
-                            processing -> 0xFF4F378B.toInt()
-                            else -> 0xFF6750A4.toInt()
-                        },
-                    )
-                },
-            )
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                orientation = GradientDrawable.Orientation.TOP_BOTTOM
+                colors = intArrayOf(chrome.bgColor, chrome.bgEndColor)
+                setStroke(dp(2), chrome.strokeColor)
+            }
             // Static dim while processing — no animation, no pulse.
-            alpha = if (processing) 0.6f else 1f
+            alpha = chrome.alpha
+        }
+        haloView?.apply {
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(chrome.glowColor)
+            }
         }
         spinner?.visibility = if (processing) View.VISIBLE else View.GONE
         stopBtn?.visibility =
             if (FloatState.isStopVisible(state)) View.VISIBLE else View.GONE
+    }
+
+    /**
+     * Bottom-center level visualizer pill (owner item 7): a small
+     * non-touchable BarsView pill, RECORDING only, bottom-center with
+     * margin. Anchored above the IME when the keyboard is up
+     * (WindowInsets IME bottom), else above the nav bar / screen
+     * bottom — best-effort: overlays without input focus may never see
+     * IME insets, in which case the inset reads 0 and the max()
+     * degrades to the nav-bar fallback. Never focusable, never
+     * touchable, Decorative to accessibility.
+     */
+    @SuppressLint("ClickableViewAccessibility")
+    private fun ensureVizPill() {
+        if (vizHolder != null) {
+            vizHolder?.visibility = View.VISIBLE
+            return
+        }
+        val margin = dp(VIZ_MARGIN_DP)
+        val lp = WindowManager.LayoutParams(
+            dp(VIZ_W_DP), dp(VIZ_H_DP),
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+            PixelFormat.TRANSLUCENT,
+        ).also {
+            it.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+            it.y = margin
+        }
+        vizParams = lp
+        val pill = FrameLayout(this).apply {
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dp(18).toFloat()
+                setColor(0xCC1D1B20.toInt())
+            }
+        }
+        val bars = BarsView(this).apply {
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT,
+            ).apply {
+                setMargins(dp(12), dp(6), dp(12), dp(6))
+            }
+        }
+        vizBars = bars
+        pill.addView(bars)
+        // IME-aware anchor: re-seat above the keyboard when visible.
+        if (Build.VERSION.SDK_INT >= 30) {
+            try {
+                pill.setOnApplyWindowInsetsListener { _, insets ->
+                    val ime = insets.getInsets(
+                        android.view.WindowInsets.Type.ime(),
+                    ).bottom
+                    val nav = insets.getInsets(
+                        android.view.WindowInsets.Type.systemBars(),
+                    ).bottom
+                    vizParams?.let { p ->
+                        p.y = FloatState.vizPillYOffset(ime, nav, margin)
+                        try {
+                            wm?.updateViewLayout(vizHolder, p)
+                        } catch (_: Exception) {
+                        }
+                    }
+                    insets
+                }
+            } catch (_: Exception) {
+            }
+        }
+        vizHolder = pill
+        try {
+            wm?.addView(pill, lp)
+        } catch (_: Exception) {
+            vizHolder = null
+            vizBars = null
+        }
+    }
+
+    private fun hideVizPill() {
+        try {
+            vizBars?.clear()
+        } catch (_: Exception) {
+        }
+        try {
+            vizHolder?.let { wm?.removeView(it) }
+        } catch (_: Exception) {
+        }
+        vizHolder = null
+        vizBars = null
     }
 
     // -- Dictation.Listener ----------------------------------------------
@@ -857,6 +1031,16 @@ class OverlayService : Service(), Dictation.Listener {
     override fun onState(s: Dictation.State, toggled: Boolean) {
         micBtn?.post {
             refreshChrome(s)
+        }
+        // Visualizer pill lives exactly while RECORDING (with the
+        // bubble up); every other state hides it.
+        if (s == Dictation.State.RECORDING && holder != null) {
+            try {
+                micBtn?.post { ensureVizPill() }
+            } catch (_: Exception) {
+            }
+        } else {
+            micBtn?.post { hideVizPill() }
         }
         refreshNotif(s)
     }
@@ -924,10 +1108,12 @@ class OverlayService : Service(), Dictation.Listener {
 
 /**
  * Pure toast filter (unit-testable): only failures that matter
- * surface as a toast; routine drops stay silent.
+ * surface as a toast; routine drops stay silent — including the
+ * cancel-race "empty transcript" (user discarded, nothing to say).
  */
 internal fun shouldSurfaceError(msg: String): Boolean =
-    !msg.contains("too short") && !msg.contains("silence")
+    !msg.contains("too short") && !msg.contains("silence") &&
+        !msg.contains("empty transcript")
 
 /** Mic glyph elevation (dp): the spinner must sit above this. */
 internal const val BUBBLE_MIC_ELEVATION_DP = 6
@@ -940,6 +1126,18 @@ internal const val STOP_VISUAL_DP = 32
 
 /** Stop button minimum touch target (dp): a11y parity with the grip. */
 internal const val STOP_TARGET_DP = 48
+
+/** Grip drag-down cancel travel (dp): mirrors the IME slide-cancel. */
+internal const val GRIP_CANCEL_DY_DP = 48
+
+/** Visualizer pill size (dp): 11 bars + side padding. */
+internal const val VIZ_W_DP = 108
+
+/** Visualizer pill height (dp). */
+internal const val VIZ_H_DP = 36
+
+/** Visualizer pill bottom margin (dp): above IME / nav bar / edge. */
+internal const val VIZ_MARGIN_DP = 16
 
 /**
  * Pure hit-rect (framework-free so JVM tests pin it): TouchDelegate

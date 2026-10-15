@@ -74,12 +74,12 @@
     <string name="unified_notif_channel">Estado de MyWhisper</string>
     <string name="float_notif_title">Burbuja MyWhisper</string>
     <string name="float_notif_text">Dictado flotante activo</string>
-    <string name="float_notif_rec_text">Grabando… toca Detener para terminar</string>
+    <string name="float_notif_rec_text">Grabando… toca ✕ para cancelar</string>
     <string name="float_need_overlay">Permite mostrar sobre otras apps primero</string>
     <string name="float_overlay_recovery">El permiso de superposición fue revocado — reactiva «Mostrar sobre otras apps» para recuperar la burbuja</string>
-    <string name="float_drag_handle">Asa de arrastre — mover la burbuja</string>
-    <string name="float_move_hint">Arrastra el asa bajo el micrófono para mover la burbuja</string>
-    <string name="float_stop">Detener — terminar el dictado</string>
+    <string name="float_drag_handle">Asa de arrastre — mover la burbuja, tirar hacia abajo para cancelar</string>
+    <string name="float_move_hint">Arrastra el asa para mover • tírala hacia abajo para cancelar • suelta el micrófono sobre ✕ para cancelar</string>
+    <string name="float_stop">Cancelar — descartar el dictado</string>
     <string name="float_processing">Transcribiendo…</string>
     <string name="float_no_field">Ningún campo editable activo — abre uno y dicta de nuevo</string>
     <string name="a11y_desc">Inserta los dictados de la burbuja flotante en el campo de texto activo.</string>
