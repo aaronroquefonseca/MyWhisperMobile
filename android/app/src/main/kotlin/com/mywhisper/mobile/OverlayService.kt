@@ -24,7 +24,7 @@ import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
-
+import androidx.core.content.edit
 /**
  * Floating dictation bubble: an alternative to switching input
  * methods. Draggable, collapses to an edge tab, reuses the mic
@@ -85,6 +85,10 @@ class OverlayService : Service(), Dictation.Listener {
     private var vizHolder: FrameLayout? = null
     private var vizBars: BarsView? = null
     private var vizParams: WindowManager.LayoutParams? = null
+    // One-shot move-hint coachmark (first bubble show ever).
+    private var hintView: View? = null
+    private var hintParams: WindowManager.LayoutParams? = null
+    private val hintHide = Runnable { hideMoveHint() }
 
     private var downRawX = 0f
     private var downRawY = 0f
@@ -667,13 +671,9 @@ class OverlayService : Service(), Dictation.Listener {
             stopSelf()
             return
         }
-        // First-run move hint: once, until the user drags the grip.
-        try {
-            if (FloatState.shouldShowMoveHint(prefs.getBoolean(KEY_MOVE_HINT, false))) {
-                Toast.makeText(this, getString(R.string.float_move_hint), Toast.LENGTH_LONG).show()
-            }
-        } catch (_: Exception) {
-        }
+        // First-run move-hint coachmark: once ever (seen-flag
+        // persists at show time, so it can never replay).
+        maybeShowMoveHint()
         refreshChrome(Dictation.State.IDLE)
     }
 
@@ -851,7 +851,6 @@ class OverlayService : Service(), Dictation.Listener {
                 if (moved) {
                     snapAndPersist()
                     moved = false
-                    markMoveHintSeen()
                 }
                 gripCancelled = false
                 return true
@@ -863,14 +862,6 @@ class OverlayService : Service(), Dictation.Listener {
             }
         }
         return false
-    }
-
-    private fun markMoveHintSeen() {
-        try {
-            getSharedPreferences(PREFS, MODE_PRIVATE).edit()
-                .putBoolean(KEY_MOVE_HINT, true).apply()
-        } catch (_: Exception) {
-        }
     }
 
     /**
@@ -897,6 +888,7 @@ class OverlayService : Service(), Dictation.Listener {
         } catch (_: Exception) {
         }
         hideVizPill()
+        hideMoveHint()
         try {
             holder?.let { wm?.removeView(it) }
         } catch (_: Exception) {
@@ -966,6 +958,10 @@ class OverlayService : Service(), Dictation.Listener {
             PixelFormat.TRANSLUCENT,
         ).also {
             it.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+            // Screen-center anchor: x = 0 always, independent of the
+            // bubble dock edge (see vizWindowXForDock). Never inherit an
+            // edge-side offset here.
+            it.x = 0
             it.y = margin
         }
         vizParams = lp
@@ -979,12 +975,17 @@ class OverlayService : Service(), Dictation.Listener {
         }
         val bars = BarsView(this).apply {
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            // Exact strip width, centered: BarsView draws its bar strip
+            // left-aligned from x = 0, so a MATCH_PARENT view leaves the
+            // trailing (stripW..viewW) dead space on the right and the
+            // pill reads off-center with more margin right. Sizing the
+            // view to the strip content and centering it in the pill
+            // gives equal margins on both edges.
             layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT,
-            ).apply {
-                setMargins(dp(12), dp(6), dp(12), dp(6))
-            }
+                dp(vizBarsContentWidthDp()),
+                dp(VIZ_BARS_H_DP),
+                Gravity.CENTER,
+            )
         }
         vizBars = bars
         pill.addView(bars)
@@ -1030,6 +1031,117 @@ class OverlayService : Service(), Dictation.Listener {
         }
         vizHolder = null
         vizBars = null
+    }
+
+    /**
+     * One-shot move-hint coachmark (replaces the old repeating Toast —
+     * on API 31+ the platform renders service-context Toasts as a
+     * floating icon pill, reading as a system bubble tooltip that
+     * replayed on every bubble re-show). This is our own overlay pill
+     * anchored to the bubble: shown once ever (the seen-flag persists
+     * BEFORE addView, so a failed show, an early teardown, or a missed
+     * tap can never replay it), tap or outside-tap dismisses, a timeout
+     * dismisses, and hiding the bubble dismisses.
+     */
+    @SuppressLint("ClickableViewAccessibility")
+    private fun maybeShowMoveHint() {
+        if (hintView != null) return
+        val prefs = try {
+            getSharedPreferences(PREFS, MODE_PRIVATE)
+        } catch (_: Exception) {
+            return
+        }
+        if (!FloatState.shouldShowMoveHint(prefs.getBoolean(KEY_MOVE_HINT, false))) return
+        // Once-ever: persist first, show second. Never replays.
+        try {
+            prefs.edit { putBoolean(KEY_MOVE_HINT, true) }
+        } catch (_: Exception) {
+        }
+        try {
+            val lp = params ?: return
+            val padH = dp(HINT_PAD_H_DP)
+            val padV = dp(HINT_PAD_V_DP)
+            val tv = android.widget.TextView(this).apply {
+                text = getString(R.string.float_move_hint)
+                setTextColor(0xFFFFFFFF.toInt())
+                textSize = 14f
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.RECTANGLE
+                    cornerRadius = dp(18).toFloat()
+                    setColor(0xE61D1B20.toInt())
+                }
+                setPadding(padH, padV, padH, padV)
+                isClickable = true
+                isFocusable = false
+                setOnClickListener { hideMoveHint() }
+                setOnTouchListener { _, ev ->
+                    if (ev.actionMasked == MotionEvent.ACTION_OUTSIDE) {
+                        hideMoveHint()
+                        true
+                    } else {
+                        false
+                    }
+                }
+            }
+            // Screen bounds for anchoring (fold/rotate-safe query).
+            val (scrW, scrH) = screenSize()
+            tv.measure(
+                View.MeasureSpec.makeMeasureSpec(scrW - dp(HINT_MARGIN_DP) * 2, View.MeasureSpec.AT_MOST),
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+            )
+            val w = tv.measuredWidth.coerceAtLeast(1)
+            val h = tv.measuredHeight.coerceAtLeast(1)
+            val margin = dp(HINT_MARGIN_DP)
+            val hp = WindowManager.LayoutParams(
+                w, h,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
+                PixelFormat.TRANSLUCENT,
+            ).also {
+                it.gravity = Gravity.TOP or Gravity.START
+                it.x = moveHintX(lp.x + lp.width / 2, w, 0, scrW)
+                it.y = moveHintY(lp.y, lp.height, h, margin, scrH)
+            }
+            hintParams = hp
+            hintView = tv
+            wm?.addView(tv, hp)
+            mainHandler.removeCallbacks(hintHide)
+            mainHandler.postDelayed(hintHide, HINT_TIMEOUT_MS)
+        } catch (_: Exception) {
+            hideMoveHint()
+        }
+    }
+
+    /** Dismiss the move-hint coachmark (tap / outside / timeout / bubble hide). */
+    private fun hideMoveHint() {
+        try {
+            mainHandler.removeCallbacks(hintHide)
+        } catch (_: Exception) {
+        }
+        try {
+            hintView?.let { wm?.removeView(it) }
+        } catch (_: Exception) {
+        }
+        hintView = null
+        hintParams = null
+    }
+
+    /** Live screen size in px (coachmark anchoring; fold/rotate-safe). */
+    private fun screenSize(): Pair<Int, Int> {
+        val w = wm ?: return Pair(0, 0)
+        return try {
+            if (Build.VERSION.SDK_INT >= 30) {
+                val b = w.currentWindowMetrics.bounds
+                Pair(b.width(), b.height())
+            } else {
+                @Suppress("DEPRECATION")
+                val dm = resources.displayMetrics
+                Pair(dm.widthPixels, dm.heightPixels)
+            }
+        } catch (_: Exception) {
+            Pair(0, 0)
+        }
     }
 
     // -- Dictation.Listener ----------------------------------------------
@@ -1144,6 +1256,92 @@ internal const val VIZ_H_DP = 36
 
 /** Visualizer pill bottom margin (dp): above IME / nav bar / edge. */
 internal const val VIZ_MARGIN_DP = 16
+
+/** Move-hint coachmark auto-dismiss (ms): tap / outside / timeout / bubble-hide dismiss. */
+internal const val HINT_TIMEOUT_MS = 6000L
+
+/** Move-hint coachmark screen-edge margin (dp). */
+internal const val HINT_MARGIN_DP = 16
+
+/** Move-hint coachmark horizontal text padding (dp). */
+internal const val HINT_PAD_H_DP = 14
+
+/** Move-hint coachmark vertical text padding (dp). */
+internal const val HINT_PAD_V_DP = 10
+
+/**
+ * Coachmark X (px, view origin): centered on the bubble center, clamped
+ * into [minX, maxX - hintW]. Degenerate ranges collapse onto min so the
+ * pill never lands off-screen.
+ */
+internal fun moveHintX(bubbleCxPx: Int, hintWPx: Int, minXPx: Int, maxXPx: Int): Int {
+    val lo = minXPx.coerceAtMost(maxXPx)
+    val hi = (maxXPx - hintWPx).coerceAtLeast(lo)
+    return (bubbleCxPx - hintWPx / 2).coerceIn(lo, hi)
+}
+
+/**
+ * Coachmark Y (px, view origin): below the bubble when the pill fits
+ * on-screen, else above it (never negative).
+ */
+internal fun moveHintY(
+    bubbleYPx: Int,
+    bubbleHPx: Int,
+    hintHPx: Int,
+    marginPx: Int,
+    screenHPx: Int,
+): Int {
+    val below = bubbleYPx + bubbleHPx + marginPx
+    return if (below + hintHPx <= screenHPx) below else (bubbleYPx - hintHPx - marginPx).coerceAtLeast(0)
+}
+
+/** Visualizer bar-strip bar count (mirrors BarsView: 11 bars). */
+internal const val VIZ_BAR_COUNT = 11
+
+/** Visualizer bar-strip bar width (dp, mirrors BarsView). */
+internal const val VIZ_BAR_W_DP = 3
+
+/** Visualizer bar-strip gap (dp, mirrors BarsView). */
+internal const val VIZ_BAR_GAP_DP = 3
+
+/**
+ * Visualizer bar-strip view height (dp): pill height minus the former
+ * 6dp top/bottom padding (36 - 12 = 24). Width is exact content (see
+ * [vizBarsContentWidthDp]), height keeps the old vertical inset.
+ */
+internal const val VIZ_BARS_H_DP = 24
+
+/**
+ * Exact bar-strip content width (dp): bars plus inner gaps, no
+ * trailing gap (mirrors BarsView.onDraw: last bar ends at
+ * count * (w + gap) - gap).
+ */
+internal fun vizBarsContentWidthDp(
+    count: Int = VIZ_BAR_COUNT,
+    barDp: Int = VIZ_BAR_W_DP,
+    gapDp: Int = VIZ_BAR_GAP_DP,
+): Int =
+    if (count <= 0) 0 else count * barDp + (count - 1) * gapDp
+
+/**
+ * Per-edge side margin (dp) centering a [contentDp]-wide strip inside
+ * a [pillDp]-wide pill: left and right margins are equal by
+ * construction. The pill centers the exact-width strip view via
+ * Gravity.CENTER, so this is the margin each edge gets.
+ */
+internal fun vizBarsSideMarginDp(
+    pillDp: Int = VIZ_W_DP,
+    contentDp: Int = vizBarsContentWidthDp(),
+): Float = (pillDp - contentDp) / 2f
+
+/**
+ * Viz window horizontal offset (px): always screen-center (0),
+ * independent of which edge the bubble is docked to. The viz pill is
+ * its own window — it must never inherit an edge-side offset from the
+ * bubble position.
+ */
+@Suppress("UNUSED_PARAMETER")
+internal fun vizWindowXForDock(dockedLeft: Boolean): Int = 0
 
 /**
  * Pure hit-rect (framework-free so JVM tests pin it): TouchDelegate

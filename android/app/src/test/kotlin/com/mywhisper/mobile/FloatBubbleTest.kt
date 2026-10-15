@@ -137,6 +137,48 @@ class FloatBubbleTest {
         assertFalse(FloatState.shouldShowMoveHint(hasSeenHint = true))
     }
 
+    // -- Move-hint one-shot coachmark -------------------------------
+
+    @Test
+    fun moveHint_showOnceEver_neverReplays() {
+        // Round-trip: unseen -> show; the service persists the seen
+        // flag BEFORE addView, so every later gate read stays shut —
+        // even if showing, tapping, or teardown fails mid-flight.
+        var seenHint = false
+        assertTrue(FloatState.shouldShowMoveHint(seenHint))
+        seenHint = true // persisted at show time
+        assertFalse(FloatState.shouldShowMoveHint(seenHint))
+        assertFalse(FloatState.shouldShowMoveHint(seenHint))
+    }
+
+    @Test
+    fun moveHint_belowBubbleWhenFits_elseAbove() {
+        // Fits below: bubble bottom + margin.
+        assertEquals(476, moveHintY(400, 60, 48, 16, 1000))
+        // No room below: above the bubble.
+        assertEquals(836, moveHintY(900, 60, 48, 16, 1000))
+        // No room either side: clamped to the top edge, never negative.
+        assertEquals(0, moveHintY(10, 200, 300, 16, 400))
+    }
+
+    @Test
+    fun moveHint_xCenteredOnBubble_clampedToScreen() {
+        // Centered: bubble center minus half the pill width.
+        assertEquals(69, moveHintX(100, 62, 0, 200))
+        // Past the left edge: clamped to min.
+        assertEquals(0, moveHintX(10, 62, 0, 200))
+        // Past the right edge: clamped so the pill stays on-screen.
+        assertEquals(138, moveHintX(190, 62, 0, 200))
+        // Degenerate (pill wider than the range): collapse onto min.
+        assertEquals(0, moveHintX(500, 62, 0, 40))
+    }
+
+    @Test
+    fun moveHint_timeoutPinned() {
+        assertEquals(6000L, HINT_TIMEOUT_MS)
+        assertEquals(16, HINT_MARGIN_DP)
+    }
+
     // -- Bubble chrome geometry (review round 2) ---------------------
 
     @Test
@@ -327,6 +369,40 @@ class FloatBubbleTest {
         assertEquals(108, VIZ_W_DP)
         assertEquals(36, VIZ_H_DP)
         assertEquals(16, VIZ_MARGIN_DP)
+    }
+
+    // -- Visualizer pill symmetry (floating-bubble pill) --------------
+
+    @Test
+    fun vizStrip_contentWidthPinned() {
+        // 11 bars x 3dp + 10 inner gaps x 3dp = 63dp, no trailing gap
+        // (mirrors BarsView.onDraw: last bar ends at count*(w+gap)-gap).
+        assertEquals(11, VIZ_BAR_COUNT)
+        assertEquals(3, VIZ_BAR_W_DP)
+        assertEquals(3, VIZ_BAR_GAP_DP)
+        assertEquals(63, vizBarsContentWidthDp())
+        assertEquals(24, VIZ_BARS_H_DP)
+    }
+
+    @Test
+    fun vizStrip_centeredEqualMarginsBothEdges() {
+        // (108 - 63) / 2 = 22.5dp per edge: left margin == right
+        // margin, so the strip reads centered with no margin-right bias.
+        val margin = vizBarsSideMarginDp()
+        assertEquals(22.5f, margin, 0.001f)
+        val content = vizBarsContentWidthDp()
+        val left = (VIZ_W_DP - content) / 2f
+        val right = VIZ_W_DP - content - left
+        assertEquals(left, right, 0.001f)
+        assertEquals(margin, left, 0.001f)
+    }
+
+    @Test
+    fun vizWindow_dockEdgeIndependent() {
+        // The viz pill is its own centered window: x = 0 whether the
+        // bubble docks left or right — never an edge-side offset.
+        assertEquals(0, vizWindowXForDock(dockedLeft = true))
+        assertEquals(0, vizWindowXForDock(dockedLeft = false))
     }
 
     // -- Overlay-denial latch --------------------------------------
