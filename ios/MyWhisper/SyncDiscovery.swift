@@ -119,16 +119,21 @@ func normalizeNodeId(_ raw: String) -> String {
 /// UI can show it verbatim.
 func isValidNodeId(_ raw: String) -> Bool {
     let id = normalizeNodeId(raw)
-    return id.count == 64 && id.allSatisfy(\.isHexDigit)
+    return id.count == 64 && id.allSatisfy { $0.isHexDigit }
 }
 
 let nodeIdHint = "enter the other device's full 64-character hexadecimal ID"
 
 // MARK: - Verdict mapping (mirrors net.rs responder verdicts)
 
-/// User-facing reading of a core sync error. The `"not trusted"`
-/// verdict IS the delivered pairing request (the remote recorded us
-/// as pending) — the UI must say so, not report a failure.
+/// User-facing reading of a core sync error.
+///
+/// The remote `"not trusted: request recorded, …"` verdict IS the
+/// delivered pairing request (the responder recorded us as pending
+/// before refusing — `net.rs` send path). The *local* pre-dial
+/// `"peer is not trusted"` (`sync_ctl.rs` gate) sent nothing and must
+/// NOT read as a delivered request — it stays `.rejected`. Only the
+/// `"request recorded"` marker proves delivery.
 enum SyncVerdict: Equatable {
     /// Pairing request delivered; they accept on the other device.
     case pairingRequestSent
@@ -142,7 +147,7 @@ enum SyncVerdict: Equatable {
     case ok(String)
 
     static func classify(error: String) -> SyncVerdict {
-        if error.contains("not trusted") { return .pairingRequestSent }
+        if error.contains("request recorded") { return .pairingRequestSent }
         if error.contains("revoked") { return .revoked }
         if error.contains("sync is disabled") { return .syncDisabled }
         if error.contains("sync is not running") { return .syncNotRunning }
@@ -208,6 +213,8 @@ protocol SyncCore {
     func syncAllNow() throws -> [String]
     func startSync() throws -> String
     func stopSync()
+    /// Device display name (Android `displayName` parity: "" on failure).
+    func displayName() -> String
 }
 
 /// Placeholder while the iOS bridge has no sync FFI. Every mutating
@@ -243,6 +250,10 @@ final class UnavailableSyncCore: SyncCore {
     }
 
     func stopSync() {}
+
+    func displayName() -> String {
+        return ""
+    }
 }
 
 // MARK: - LAN discovery (foreground only)
@@ -265,12 +276,18 @@ struct DiscoveredPeer: Equatable {
 /// through `SyncCore` and merges with `mergedRows`.
 final class SyncDiscovery: NSObject {
     private(set) var discovered: [String: DiscoveredPeer] = [:]
+    /// Last advertise failure, if any. Surfaced so the UI can report it.
+    private(set) var publishError: String?
+    /// Own node id: resolved self-observations are dropped, mirroring
+    /// the core (`net.rs` skips its own id in browse results).
+    var ownNodeId: String = ""
     var onChange: (() -> Void)?
 
     private var browser: NetServiceBrowser?
     private var resolving: [NetService] = []
     private var serviceNodes: [String: String] = [:]
     private var ownService: NetService?
+    private var published: (nodeId: String, port: Int32)?
     private var browsing = false
 
     /// Merge store peers with live LAN observations. Discovered-but-
@@ -316,16 +333,31 @@ final class SyncDiscovery: NSObject {
         browsing = false
         browser?.stop()
         browser = nil
+        for service in resolving {
+            service.stop()
+        }
         resolving.removeAll()
+        discovered.removeAll()
+        serviceNodes.removeAll()
         unpublish()
     }
 
-    /// Advertise this device while in the foreground (mirrors core
-    /// `advertise` flag; core does this itself once the bridge lands —
-    /// until then the UI advertises so two phones see each other).
+    /// Advertise this device while in the foreground (mirrors the core
+    /// `advertise` flag; the core owns this itself once the bridge
+    /// lands — until then the UI advertises so two phones see each
+    /// other). Idempotent for the same id/port: repeat calls from
+    /// state refreshes must not flap mDNS. The instance name is the
+    /// 8-char short id exactly like `net::start_mdns` (a full 64-char
+    /// node id would blow the 63-byte mDNS label limit).
     func publish(nodeId: String, name: String, port: Int32) {
+        if let current = published, current.nodeId == nodeId, current.port == port {
+            return
+        }
         unpublish()
-        let service = NetService(domain: "", type: syncServiceType, name: nodeId, port: port)
+        publishError = nil
+        ownNodeId = nodeId
+        let instance = String(nodeId.prefix(8))
+        let service = NetService(domain: "", type: syncServiceType, name: instance, port: port)
         service.delegate = self
         ownService = service
         let txt: [String: Data] = [
@@ -334,11 +366,23 @@ final class SyncDiscovery: NSObject {
         ]
         service.setTXTRecord(NetService.data(fromTXTRecord: txt))
         service.publish()
+        published = (nodeId: nodeId, port: port)
     }
 
     func unpublish() {
         ownService?.stop()
         ownService = nil
+        published = nil
+    }
+
+    /// NetService delegate callbacks can arrive off the main queue;
+    /// all state below is read on main, so hop first.
+    private func onMain(_ body: @escaping () -> Void) {
+        if Thread.isMainThread {
+            body()
+        } else {
+            DispatchQueue.main.async(execute: body)
+        }
     }
 
     private func note(_ peer: DiscoveredPeer, serviceName: String) {
@@ -354,10 +398,15 @@ extension SyncDiscovery: NetServiceBrowserDelegate {
         didFind service: NetService,
         moreComing: Bool
     ) {
-        service.delegate = self
-        resolving.append(service)
-        service.resolve(withTimeout: 5)
-        if !moreComing { onChange?() }
+        onMain { [weak self] in
+            guard let strong = self else { return }
+            service.delegate = strong
+            strong.resolving.append(service)
+            service.resolve(withTimeout: 5)
+            if !moreComing {
+                strong.onChange?()
+            }
+        }
     }
 
     func netServiceBrowser(
@@ -365,37 +414,62 @@ extension SyncDiscovery: NetServiceBrowserDelegate {
         didRemove service: NetService,
         moreComing: Bool
     ) {
-        resolving.removeAll { $0 === service }
-        if let nodeId = serviceNodes.removeValue(forKey: service.name) {
-            discovered.removeValue(forKey: nodeId)
+        onMain { [weak self] in
+            guard let strong = self else { return }
+            strong.resolving.removeAll(where: { $0 === service })
+            if let nodeId = strong.serviceNodes.removeValue(forKey: service.name) {
+                strong.discovered.removeValue(forKey: nodeId)
+            }
+            if !moreComing {
+                strong.onChange?()
+            }
         }
-        if !moreComing { onChange?() }
     }
 }
 
 extension SyncDiscovery: NetServiceDelegate {
     func netServiceDidResolveAddress(_ sender: NetService) {
-        resolving.removeAll { $0 === sender }
-        guard let txt = sender.txtRecordData(),
-              let record = NetService.dictionary(fromTXTRecord: txt) else { return }
-        guard let nodeData = record[syncTxtNodeKey],
-              let nodeId = String(data: nodeData, encoding: .utf8),
-              !nodeId.isEmpty else { return }
-        let name = record[syncTxtNameKey].flatMap { String(data: $0, encoding: .utf8) } ?? ""
-        var addresses: [String] = []
-        if let addrs = sender.addresses {
-            for addr in addrs {
-                if let target = SyncDiscovery.sockAddrDescription(addr, port: sender.port), !target.isEmpty {
-                    addresses.append(target)
+        onMain { [weak self] in
+            guard let strong = self else { return }
+            strong.resolving.removeAll(where: { $0 === sender })
+            guard let txt = sender.txtRecordData(),
+                let record = NetService.dictionary(fromTXTRecord: txt) else { return }
+            guard let nodeData = record[syncTxtNodeKey],
+                let nodeId = String(data: nodeData, encoding: .utf8),
+                !nodeId.isEmpty,
+                nodeId != strong.ownNodeId else { return }
+            let name = record[syncTxtNameKey].flatMap { String(data: $0, encoding: .utf8) } ?? ""
+            var addresses: [String] = []
+            if let addrs = sender.addresses {
+                for addr in addrs {
+                    if let target = SyncDiscovery.sockAddrDescription(addr, port: sender.port), !target.isEmpty {
+                        addresses.append(target)
+                    }
                 }
             }
+            if addresses.isEmpty { return }
+            strong.note(DiscoveredPeer(nodeId: nodeId, name: name, addresses: addresses), serviceName: sender.name)
         }
-        if addresses.isEmpty { return }
-        note(DiscoveredPeer(nodeId: nodeId, name: name, addresses: addresses), serviceName: sender.name)
     }
 
     func netService(_ sender: NetService, didNotResolve _: [String: NSNumber]) {
-        resolving.removeAll { $0 === sender }
+        onMain { [weak self] in
+            guard let strong = self else { return }
+            strong.resolving.removeAll(where: { $0 === sender })
+        }
+    }
+
+    func netService(_ sender: NetService, didNotPublish errorDict: [String: NSNumber]) {
+        onMain { [weak self] in
+            guard let strong = self else { return }
+            let code = errorDict["NSNetServicesErrorCode"]
+            if let code = code {
+                strong.publishError = "advertise failed (code \(code.intValue))"
+            } else {
+                strong.publishError = "advertise failed"
+            }
+            strong.onChange?()
+        }
     }
 
     /// `ip:port` from a resolved sockaddr (v4/v6). Returns nil for

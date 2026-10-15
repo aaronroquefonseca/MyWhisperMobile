@@ -16,14 +16,15 @@ final class SyncTests: XCTestCase {
 
     /// Replays core gates: disabled sync refuses, revoked/untrusted
     /// peers refuse, unknown manual IDs refuse (mirrors
-    /// `require_dial_authorized` + `sync_add`).
+    /// `require_dial_authorized` + `sync_add`). `addPeer` mirrors the
+    /// real `Ok` shapes — a delivered pairing request and the parked
+    /// no-address row are successes, never throws.
     final class FakeSyncCore: SyncCore {
         var syncEnabled = true
         var running = true
         var revoked: Set<String> = []
         var trusted: Set<String> = []
         var pending: Set<String> = []
-        var log: [String] = []
 
         func syncStatus() throws -> SyncStatus {
             SyncStatus(dict: [
@@ -47,7 +48,6 @@ final class SyncTests: XCTestCase {
         }
 
         func setTrust(nodeId: String, accept: Bool) throws -> String {
-            log.append("trust \(nodeId) \(accept)")
             if accept {
                 pending.remove(nodeId)
                 trusted.insert(nodeId)
@@ -58,20 +58,21 @@ final class SyncTests: XCTestCase {
             return "rejected"
         }
 
-        func addPeer(nodeId: String, address _: String, name _: String) throws -> String {
-            log.append("add \(nodeId)")
+        func addPeer(nodeId: String, address: String, name: String) throws -> String {
             guard isValidNodeId(nodeId) else { throw SyncError.coreError(nodeIdHint) }
-            let id = normalizeNodeId(nodeId)
-            if revoked.contains(id) { throw SyncError.coreError("peer revoked") }
-            if trusted.contains(id) { return "synced peer: 0 words in" }
-            pending.insert(id)
-            // Mirrors sync_add: the expected outcome is the remote's
-            // "not trusted" verdict — the request itself was delivered.
-            throw SyncError.coreError("not trusted: request recorded, ask them to accept")
+            let nid = normalizeNodeId(nodeId)
+            if revoked.contains(nid) { throw SyncError.coreError("peer revoked") }
+            if trusted.contains(nid) {
+                return "synced \(name): 1 words in"
+            }
+            pending.insert(nid)
+            if address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return "saved — syncs automatically once the device is discovered on the LAN"
+            }
+            return "pairing request sent — accept it on the other device, then sync"
         }
 
         func syncNow(nodeId: String) throws -> String {
-            log.append("now \(nodeId)")
             guard syncEnabled else { throw SyncError.coreError("sync is disabled in settings") }
             guard running else { throw SyncError.coreError("sync is not running") }
             if revoked.contains(nodeId) { throw SyncError.coreError("peer revoked") }
@@ -91,6 +92,10 @@ final class SyncTests: XCTestCase {
 
         func stopSync() {
             running = false
+        }
+
+        func displayName() -> String {
+            return "test-phone"
         }
     }
 
@@ -127,9 +132,9 @@ final class SyncTests: XCTestCase {
             SyncPeer(dict: ["nodeId": "s", "trusted": false, "pending": false, "discovered": false])
         ]
         let sections = SyncSections.split(peers)
-        XCTAssertEqual(sections.trusted.map(\.nodeId), ["t"])
-        XCTAssertEqual(sections.requests.map(\.nodeId), ["r"])
-        XCTAssertEqual(sections.nearby.map(\.nodeId), ["n"])
+        XCTAssertEqual(sections.trusted.map { $0.nodeId }, ["t"])
+        XCTAssertEqual(sections.requests.map { $0.nodeId }, ["r"])
+        XCTAssertEqual(sections.nearby.map { $0.nodeId }, ["n"])
     }
 
     func testDialTargetPrefersDiscovered() {
@@ -146,9 +151,20 @@ final class SyncTests: XCTestCase {
     // MARK: - Verdict mapping (mirrors net.rs responder verdicts)
 
     func testVerdictMapping() {
+        // Remote verdict: the responder recorded us before refusing —
+        // the request WAS delivered.
         XCTAssertEqual(
             SyncVerdict.classify(error: "not trusted: request recorded, ask them to accept"),
             .pairingRequestSent
+        )
+        // Local pre-dial gate: nothing was sent — stays rejected.
+        XCTAssertEqual(
+            SyncVerdict.classify(error: "peer is not trusted"),
+            .rejected("peer is not trusted")
+        )
+        XCTAssertEqual(
+            SyncVerdict.classify(error: "peer not trusted"),
+            .rejected("peer not trusted")
         )
         XCTAssertEqual(SyncVerdict.classify(error: "peer revoked"), .revoked)
         XCTAssertEqual(SyncVerdict.classify(error: "sync is disabled in settings"), .syncDisabled)
@@ -165,69 +181,78 @@ final class SyncTests: XCTestCase {
 
     func testPairTrustSyncFlow() throws {
         let core = FakeSyncCore()
-        let id = String(repeating: "b", count: 64)
+        let nid = String(repeating: "b", count: 64)
 
-        // Manual add delivers the pairing request (remote "not trusted").
-        do {
-            _ = try core.addPeer(nodeId: id, address: "192.168.1.9:17499", name: "phone")
-            XCTFail("add of an untrusted peer must surface the pairing verdict")
-        } catch let error as SyncError {
-            XCTAssertEqual(SyncVerdict.classify(error: verdictText(error)).note.contains("other device"), true)
-        }
-        XCTAssertTrue(core.pending.contains(id))
+        // Manual add delivers the pairing request: an Ok carrying the
+        // remote's verdict (mirrors sync_add — never a throw).
+        let sent = try core.addPeer(nodeId: nid, address: "192.168.1.9:17499", name: "phone")
+        XCTAssertEqual(sent, "pairing request sent — accept it on the other device, then sync")
+        XCTAssertTrue(core.pending.contains(nid))
 
         // They accept on the other side; our trust promotes the row.
-        XCTAssertEqual(try core.setTrust(nodeId: id, accept: true), "trusted; syncing now")
+        XCTAssertEqual(try core.setTrust(nodeId: nid, accept: true), "trusted; syncing now")
         let sections = SyncSections.split(try core.syncPeers())
-        XCTAssertEqual(sections.trusted.map(\.nodeId), [id])
+        XCTAssertEqual(sections.trusted.map { $0.nodeId }, [nid])
         XCTAssertTrue(sections.requests.isEmpty)
 
         // Trusted round syncs words/snippets/history.
-        let report = try core.syncNow(nodeId: id)
+        let report = try core.syncNow(nodeId: nid)
         XCTAssertTrue(report.contains("words"))
         XCTAssertTrue(report.contains("history"))
         XCTAssertTrue(try core.syncAllNow().first?.contains("ok") ?? false)
     }
 
+    func testAddWithoutAddressParksRow() throws {
+        let core = FakeSyncCore()
+        let nid = String(repeating: "b", count: 64)
+        let saved = try core.addPeer(nodeId: nid, address: "  ", name: "phone")
+        XCTAssertEqual(saved, "saved — syncs automatically once the device is discovered on the LAN")
+        XCTAssertTrue(core.pending.contains(nid))
+        let sections = SyncSections.split(try core.syncPeers())
+        XCTAssertEqual(sections.requests.map { $0.nodeId }, [nid])
+    }
+
     func testRevokedPeerRefused() throws {
         let core = FakeSyncCore()
-        let id = String(repeating: "c", count: 64)
-        core.revoked.insert(id)
+        let nid = String(repeating: "c", count: 64)
+        core.revoked.insert(nid)
 
         // Pre-dial gate: refused before any payload moves.
         do {
-            _ = try core.addPeer(nodeId: id, address: "192.168.1.9:17499", name: "old")
+            _ = try core.addPeer(nodeId: nid, address: "192.168.1.9:17499", name: "old")
             XCTFail("revoked peer must be refused")
         } catch let error as SyncError {
             XCTAssertEqual(SyncVerdict.classify(error: verdictText(error)), .revoked)
         }
         do {
-            _ = try core.syncNow(nodeId: id)
+            _ = try core.syncNow(nodeId: nid)
             XCTFail("revoked peer must be refused")
         } catch let error as SyncError {
             XCTAssertEqual(SyncVerdict.classify(error: verdictText(error)), .revoked)
         }
-        XCTAssertTrue(core.log.allSatisfy { !$0.contains("payload") })
+        XCTAssertTrue(core.pending.isEmpty)
+        XCTAssertTrue(core.trusted.isEmpty)
     }
 
-    func testUntrustedSyncRefused() throws {
+    func testUntrustedSyncRefusedLocally() throws {
         let core = FakeSyncCore()
-        let id = String(repeating: "d", count: 64)
+        let nid = String(repeating: "d", count: 64)
         do {
-            _ = try core.syncNow(nodeId: id)
+            _ = try core.syncNow(nodeId: nid)
             XCTFail("untrusted peer must be refused")
         } catch let error as SyncError {
-            XCTAssertEqual(SyncVerdict.classify(error: verdictText(error)), .pairingRequestSent)
+            // Local gate sent nothing: rejected, NOT pairingRequestSent.
+            XCTAssertEqual(SyncVerdict.classify(error: verdictText(error)), .rejected("peer is not trusted"))
         }
     }
 
     func testDisabledSyncRefusesFast() throws {
         let core = FakeSyncCore()
         core.syncEnabled = false
-        let id = String(repeating: "e", count: 64)
-        core.trusted.insert(id)
+        let nid = String(repeating: "e", count: 64)
+        core.trusted.insert(nid)
         do {
-            _ = try core.syncNow(nodeId: id)
+            _ = try core.syncNow(nodeId: nid)
             XCTFail("disabled sync must refuse")
         } catch let error as SyncError {
             XCTAssertEqual(SyncVerdict.classify(error: verdictText(error)), .syncDisabled)
@@ -267,7 +292,7 @@ final class SyncTests: XCTestCase {
         return ""
     }
 
-    private func assertUnavailable(_ work: () throws -> Void, symbol: String, file: StaticString = #filePath, line: UInt = #line) {
+    private func assertUnavailable(_ work: () throws -> Void, symbol: String, file: StaticString = #file, line: UInt = #line) {
         do {
             try work()
             XCTFail("expected unavailable(\(symbol))", file: file, line: line)

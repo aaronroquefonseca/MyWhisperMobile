@@ -10,13 +10,14 @@ import SwiftUI
 /// instead of failing silently. LAN browsing runs only while this
 /// view is visible (`onAppear`/`onDisappear`); no background sync —
 /// T10 owns `BGTask`.
+///
+/// Concurrency: Swift 5.0 mode (no async/await) — core rounds run on
+/// a worker queue and all state commits hop to main, mirroring
+/// Android `workers.execute` + `runOnUiThread` and the
+/// `Transcription.swift` deliver-on-main pattern.
 struct DevicesView: View {
     var core: SyncCore = UnavailableSyncCore()
     @StateObject private var store = DiscoveryStore()
-
-    init(core: SyncCore = UnavailableSyncCore()) {
-        self.core = core
-    }
 
     @State private var status: SyncStatus?
     @State private var peers: [SyncPeer] = []
@@ -27,6 +28,12 @@ struct DevicesView: View {
     @State private var addAddress = ""
     @State private var addName = ""
 
+    private let workers = DispatchQueue(label: "devices-sync", qos: .userInitiated)
+
+    init(core: SyncCore = UnavailableSyncCore()) {
+        self.core = core
+    }
+
     private var rows: [SyncPeer] {
         SyncDiscovery.mergedRows(storePeers: peers, discovered: store.discovery.discovered)
     }
@@ -36,27 +43,20 @@ struct DevicesView: View {
             Section("Status") {
                 statusRow
                 HStack {
-                    Button("Start") {
-                        run {
-                            _ = try core.startSync()
-                            await refresh()
-                        }
-                    }
-                    .disabled(busy || (status?.running ?? false))
-                    Button("Stop") {
-                        run {
-                            core.stopSync()
-                            await refresh()
-                        }
-                    }
-                    .disabled(busy || !(status?.running ?? false))
+                    Button("Start", action: startTapped)
+                        .disabled(busy || (status?.running ?? false))
+                    Button("Stop", action: stopTapped)
+                        .disabled(busy || !(status?.running ?? false))
                     Spacer()
-                    Button(busy ? "Syncing…" : "Sync now") { run { try await syncAll() } }
+                    Button(busy ? "Syncing…" : "Sync now", action: syncAllTapped)
                         .disabled(busy || !(status?.running ?? false))
                 }
                 if let reports = status?.reports, !reports.isEmpty {
                     Text(reports.joined(separator: "\n"))
                         .font(.system(.caption, design: .monospaced))
+                }
+                if let advertiseError = store.discovery.publishError {
+                    Text(advertiseError).font(.footnote)
                 }
             }
             trustedSection
@@ -70,7 +70,7 @@ struct DevicesView: View {
         .navigationTitle("Devices")
         .onAppear {
             store.discovery.startBrowsing()
-            run { await refresh() }
+            pullState()
         }
         .onDisappear {
             store.discovery.stopBrowsing()
@@ -108,14 +108,8 @@ struct DevicesView: View {
                         Text(note).font(.footnote)
                     }
                     HStack {
-                        Button("Sync") { run { try await syncOne(peer) } }.disabled(busy)
-                        Button("Remove") {
-                            run {
-                                _ = try core.setTrust(nodeId: peer.nodeId, accept: false)
-                                await refresh()
-                            }
-                        }
-                        .disabled(busy)
+                        Button("Sync") { syncOneTapped(peer) }.disabled(busy)
+                        Button("Remove") { removeTapped(peer) }.disabled(busy)
                     }
                 }
             }
@@ -136,14 +130,8 @@ struct DevicesView: View {
                         Text(note).font(.footnote)
                     }
                     HStack {
-                        Button("Accept") { run { try await accept(peer) } }.disabled(busy)
-                        Button("Reject") {
-                            run {
-                                _ = try core.setTrust(nodeId: peer.nodeId, accept: false)
-                                await refresh()
-                            }
-                        }
-                        .disabled(busy)
+                        Button("Accept") { acceptTapped(peer) }.disabled(busy)
+                        Button("Reject") { removeTapped(peer) }.disabled(busy)
                     }
                 }
             }
@@ -153,7 +141,7 @@ struct DevicesView: View {
     private var nearbySection: some View {
         let nearby = SyncSections.split(rows).nearby
         return Section("Nearby (\(nearby.count))") {
-            Text("Discovered on the LAN. Accept to trust and sync (works with desktops and other phones).")
+            Text("Discovered on the LAN. Request pairing, then accept on the other device (works with desktops and other phones).")
                 .font(.footnote)
             if nearby.isEmpty {
                 Text("Nobody nearby.").font(.footnote)
@@ -165,13 +153,10 @@ struct DevicesView: View {
                     if let note = notes[peer.nodeId] {
                         Text(note).font(.footnote)
                     }
-                    HStack {
-                        Button("Accept") { run { try await accept(peer) } }.disabled(busy)
-                        Button("Request") { run { try await request(peer) } }.disabled(busy)
-                    }
+                    Button("Request") { requestTapped(peer) }.disabled(busy)
                 }
             }
-            Button("Refresh") { run { await refresh() } }.disabled(busy)
+            Button("Refresh", action: pullState).disabled(busy)
         }
     }
 
@@ -188,98 +173,252 @@ struct DevicesView: View {
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
             TextField("Name (optional)", text: $addName)
-            Button("Send pairing request") { run { try await addManual() } }.disabled(busy)
+            Button("Send pairing request", action: addTapped).disabled(busy)
             if let note = notes["__add"] {
                 Text(note).font(.footnote)
             }
         }
     }
 
-    // MARK: - Actions (main-actor; implementations must not block — see SyncCore)
+    // MARK: - Actions (worker rounds, main commits)
 
-    private func run(_ work: @escaping () async throws -> Void) {
+    private func startTapped() {
         busy = true
         banner = nil
-        Task { @MainActor in
+        workers.async { [weak self] in
+            guard let strong = self else { return }
             do {
-                try await work()
-            } catch let error as SyncError {
-                banner = userNote(for: error)
+                _ = try strong.core.startSync()
             } catch {
-                banner = error.localizedDescription
+                strong.mainFail(error)
+                return
             }
-            busy = false
+            strong.mainPull()
         }
     }
 
-    private func refresh() async {
-        do {
-            status = try core.syncStatus()
-        } catch {
-            status = nil
-        }
-        do {
-            peers = try core.syncPeers()
-        } catch {
-            peers = []
+    private func stopTapped() {
+        busy = true
+        banner = nil
+        workers.async { [weak self] in
+            guard let strong = self else { return }
+            strong.core.stopSync()
+            strong.mainPull()
         }
     }
 
-    private func syncOne(_ peer: SyncPeer) async throws {
-        do {
-            notes[peer.nodeId] = try core.syncNow(nodeId: peer.nodeId)
-        } catch {
-            notes[peer.nodeId] = "sync failed: \(userNote(for: error))"
-        }
-        await refresh()
-    }
-
-    private func syncAll() async throws {
-        let lines = try core.syncAllNow()
-        banner = lines.first ?? "done"
-        await refresh()
-    }
-
-    private func accept(_ peer: SyncPeer) async throws {
-        notes[peer.nodeId] = try core.setTrust(nodeId: peer.nodeId, accept: true)
-        await refresh()
-    }
-
-    private func request(_ peer: SyncPeer) async throws {
-        do {
-            let message = try core.addPeer(nodeId: peer.nodeId, address: peer.dialTarget, name: peer.displayName)
-            // Mutual round: both sides already consented → promote.
-            if message.hasPrefix("synced") {
-                notes[peer.nodeId] = try core.setTrust(nodeId: peer.nodeId, accept: true)
-            } else {
-                notes[peer.nodeId] = message
+    private func syncAllTapped() {
+        busy = true
+        banner = nil
+        workers.async { [weak self] in
+            guard let strong = self else { return }
+            let note: String
+            do {
+                let lines = try strong.core.syncAllNow()
+                if lines.isEmpty {
+                    note = "done"
+                } else {
+                    note = lines.joined(separator: "\n")
+                }
+            } catch {
+                strong.mainFail(error)
+                return
             }
-        } catch {
-            notes[peer.nodeId] = userNote(for: error)
+            let final = note
+            DispatchQueue.main.async { [weak self] in
+                self?.banner = final
+                self?.pullState()
+            }
         }
-        await refresh()
     }
 
-    private func addManual() async throws {
+    private func syncOneTapped(_ peer: SyncPeer) {
+        busy = true
+        banner = nil
+        workers.async { [weak self] in
+            guard let strong = self else { return }
+            let note: String
+            do {
+                note = try strong.core.syncNow(nodeId: peer.nodeId)
+            } catch {
+                note = "sync failed: \(strong.userNote(for: error))"
+            }
+            let final = note
+            DispatchQueue.main.async { [weak self] in
+                self?.notes[peer.nodeId] = final
+                self?.pullState()
+            }
+        }
+    }
+
+    private func removeTapped(_ peer: SyncPeer) {
+        busy = true
+        banner = nil
+        workers.async { [weak self] in
+            guard let strong = self else { return }
+            do {
+                _ = try strong.core.setTrust(nodeId: peer.nodeId, accept: false)
+            } catch {
+                strong.mainFail(error)
+                return
+            }
+            strong.mainPull()
+        }
+    }
+
+    /// Android `acceptPeer` parity: trust, then an immediate round so
+    /// both sides converge without a second tap. A post-trust dial
+    /// failure is the usual "they haven't accepted us yet" case, so
+    /// it reads as waiting — not as an error.
+    private func acceptTapped(_ peer: SyncPeer) {
+        busy = true
+        banner = nil
+        workers.async { [weak self] in
+            guard let strong = self else { return }
+            let trustMessage: String
+            do {
+                trustMessage = try strong.core.setTrust(nodeId: peer.nodeId, accept: true)
+            } catch {
+                strong.mainFail(error)
+                return
+            }
+            let note: String
+            do {
+                note = try strong.core.syncNow(nodeId: peer.nodeId)
+            } catch {
+                note = trustMessage + "; " + strong.waitingNote(for: error, peer: peer)
+            }
+            let final = note
+            DispatchQueue.main.async { [weak self] in
+                self?.notes[peer.nodeId] = final
+                self?.pullState()
+            }
+        }
+    }
+
+    private func requestTapped(_ peer: SyncPeer) {
+        requestPeer(nodeId: peer.nodeId, address: peer.dialTarget, name: peer.displayName, key: peer.nodeId)
+    }
+
+    private func addTapped() {
         guard isValidNodeId(addNodeId) else {
             notes["__add"] = nodeIdHint
             return
         }
-        do {
-            notes["__add"] = try core.addPeer(
-                nodeId: normalizeNodeId(addNodeId),
-                address: addAddress.trimmingCharacters(in: .whitespacesAndNewlines),
-                name: addName.trimmingCharacters(in: .whitespacesAndNewlines)
-            )
-        } catch {
-            notes["__add"] = userNote(for: error)
+        requestPeer(
+            nodeId: normalizeNodeId(addNodeId),
+            address: addAddress.trimmingCharacters(in: .whitespacesAndNewlines),
+            name: addName.trimmingCharacters(in: .whitespacesAndNewlines),
+            key: "__add"
+        )
+    }
+
+    /// Manual pairing (`sync_add` parity): park the row and dial once.
+    /// A mutual round means both sides already consented, so promote
+    /// to trusted like Android does on the `"synced"` prefix.
+    private func requestPeer(nodeId: String, address: String, name: String, key: String) {
+        busy = true
+        banner = nil
+        workers.async { [weak self] in
+            guard let strong = self else { return }
+            let note: String
+            do {
+                let message = try strong.core.addPeer(nodeId: nodeId, address: address, name: name)
+                if message.hasPrefix("synced") {
+                    do {
+                        note = try strong.core.setTrust(nodeId: nodeId, accept: true)
+                    } catch {
+                        note = message
+                    }
+                } else {
+                    note = message
+                }
+            } catch {
+                note = strong.userNote(for: error)
+            }
+            let final = note
+            DispatchQueue.main.async { [weak self] in
+                self?.notes[key] = final
+                self?.pullState()
+            }
         }
-        await refresh()
+    }
+
+    /// Fetch status + peers on the worker, commit on main. Also drives
+    /// foreground advertising from the reported id/port (no-op until
+    /// the bridge exposes status) and always records the own id so
+    /// self-observations are filtered.
+    private func pullState() {
+        busy = true
+        workers.async { [weak self] in
+            guard let strong = self else { return }
+            var nextStatus: SyncStatus?
+            var nextPeers: [SyncPeer] = []
+            var deviceName = ""
+            do {
+                nextStatus = try strong.core.syncStatus()
+            } catch {
+                nextStatus = nil
+            }
+            do {
+                nextPeers = try strong.core.syncPeers()
+            } catch {
+                nextPeers = []
+            }
+            deviceName = strong.core.displayName()
+            let status = nextStatus
+            let peers = nextPeers
+            let name = deviceName
+            DispatchQueue.main.async { [weak self] in
+                guard let strong = self else { return }
+                strong.status = status
+                strong.peers = peers
+                strong.applyAdvertise(status: status, name: name)
+                strong.busy = false
+            }
+        }
+    }
+
+    private func applyAdvertise(status: SyncStatus?, name: String) {
+        guard let status = status, status.running, status.port > 0, !status.nodeId.isEmpty else {
+            store.discovery.unpublish()
+            store.discovery.ownNodeId = ""
+            return
+        }
+        store.discovery.ownNodeId = status.nodeId
+        store.discovery.publish(nodeId: status.nodeId, name: name, port: Int32(status.port))
+    }
+
+    private func mainFail(_ error: Error) {
+        DispatchQueue.main.async { [weak self] in
+            guard let strong = self else { return }
+            strong.banner = strong.userNote(for: error)
+            strong.busy = false
+        }
+    }
+
+    private func mainPull() {
+        DispatchQueue.main.async { [weak self] in
+            self?.pullState()
+        }
+    }
+
+    private func waitingNote(for error: Error, peer: SyncPeer) -> String {
+        if let sync = error as? SyncError {
+            if case .coreError(let message) = sync {
+                let verdict = SyncVerdict.classify(error: message)
+                if verdict == .pairingRequestSent {
+                    return "waiting for \(peer.displayName) — accept on that device"
+                }
+                return verdict.note
+            }
+        }
+        return userNote(for: error)
     }
 
     private func userNote(for error: Error) -> String {
-        if let syncError = error as? SyncError {
-            switch syncError {
+        if let sync = error as? SyncError {
+            switch sync {
             case .unavailable(let symbol):
                 return "sync unavailable on iOS yet (missing bridge: \(symbol))"
             case .coreError(let message):

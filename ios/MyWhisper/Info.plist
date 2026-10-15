@@ -28,5 +28,9 @@
 	<string>MyWhisper needs the microphone to transcribe your dictation.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>MyWhisper discovers sync peers and self-hosted speech servers on your local network.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_mywhisper._tcp.</string>
+	</array>
 </dict>
 </plist>
