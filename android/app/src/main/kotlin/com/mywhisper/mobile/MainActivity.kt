@@ -322,33 +322,68 @@ class MainActivity : ComponentActivity() {
          * `.part` lingers (interrupted download — resumable, never
          * "SHA mismatch"); MISSING otherwise (placeholder pins
          * included — never enable). Legacy-slot adoption keeps
-         * existing downloads live without a re-download. Pure for
-         * unit tests (java.io only).
+         * existing downloads live without a re-download. Single-pass
+         * via [llmInspect]. Pure for unit tests (java.io only).
          */
         @JvmStatic
         internal fun llmStateFor(
             dir: File,
             asset: LocalLlmManager.ModelAsset,
-        ): LocalPackState {
-            if (isPlaceholderSha(asset.sha256)) return LocalPackState.MISSING
+        ): LocalPackState = llmInspect(dir, asset).state
+
+        /** Single-pass LLM read: install state + verified on-disk bytes. */
+        internal data class LlmInspect(
+            val state: LocalPackState,
+            val verifiedBytes: Long,
+        )
+
+        /**
+         * LLM install state + verified bytes in ONE pass: the slot and
+         * the legacy slot are each SHA-verified at most once (length
+         * checks in [hasLlmTrace]/[hasCompleteLlmFile] hash nothing).
+         * [verify] is injected so unit tests can count calls. Pure for
+         * unit tests (java.io only).
+         */
+        @JvmStatic
+        internal fun llmInspectWithVerifier(
+            dir: File,
+            asset: LocalLlmManager.ModelAsset,
+            verify: (File, String) -> Boolean,
+        ): LlmInspect {
+            if (isPlaceholderSha(asset.sha256)) {
+                return LlmInspect(LocalPackState.MISSING, 0L)
+            }
             val slot = llmTaskFileFor(dir, asset.id)
-            if (LocalLlmManager.verifySha256(slot, asset.sha256)) {
-                return LocalPackState.PRESENT
-            }
-            try {
-                val legacy = LocalLlmManager.defaultTaskFile(dir)
-                if (legacy != slot && LocalLlmManager.verifySha256(legacy, asset.sha256)) {
-                    return LocalPackState.PRESENT
-                }
+            val slotOk = verify(slot, asset.sha256)
+            // Legacy slot is only probed when the per-asset slot
+            // misses (adoption path) — a verified slot short-circuits.
+            val legacy: File? = try {
+                LocalLlmManager.defaultTaskFile(dir).takeIf { it != slot }
             } catch (_: Exception) {
+                null
             }
-            if (!hasLlmTrace(dir, asset)) return LocalPackState.MISSING
-            return if (hasCompleteLlmFile(dir, asset)) {
-                LocalPackState.MISMATCH
-            } else {
-                LocalPackState.INCOMPLETE
+            val legacyOk = !slotOk && legacy != null && verify(legacy, asset.sha256)
+            val state = when {
+                slotOk || legacyOk -> LocalPackState.PRESENT
+                !hasLlmTrace(dir, asset) -> LocalPackState.MISSING
+                hasCompleteLlmFile(dir, asset) -> LocalPackState.MISMATCH
+                else -> LocalPackState.INCOMPLETE
             }
+            val bytes = when {
+                slotOk -> slot.length()
+                legacyOk -> legacy?.length() ?: 0L
+                else -> 0L
+            }
+            return LlmInspect(state, bytes)
         }
+
+        /** Single-pass LLM inspect with the real SHA verifier. Pure. */
+        @JvmStatic
+        internal fun llmInspect(
+            dir: File,
+            asset: LocalLlmManager.ModelAsset,
+        ): LlmInspect =
+            llmInspectWithVerifier(dir, asset, LocalLlmManager::verifySha256)
 
         /**
          * True when any trace of [asset] lingers on disk: the slot, the
@@ -395,24 +430,12 @@ class MainActivity : ComponentActivity() {
 
         /**
          * Verified bytes already on disk for [asset] (INCOMPLETE
-         * progress numerator; 0 when nothing usable lingers). Pure.
+         * progress numerator; 0 when nothing usable lingers).
+         * Single-pass via [llmInspect]. Pure.
          */
         @JvmStatic
-        internal fun llmPresentBytes(dir: File, asset: LocalLlmManager.ModelAsset): Long {
-            if (isPlaceholderSha(asset.sha256)) return 0L
-            val slot = llmTaskFileFor(dir, asset.id)
-            if (LocalLlmManager.verifySha256(slot, asset.sha256)) return slot.length()
-            return try {
-                val legacy = LocalLlmManager.defaultTaskFile(dir)
-                if (legacy != slot && LocalLlmManager.verifySha256(legacy, asset.sha256)) {
-                    legacy.length()
-                } else {
-                    0L
-                }
-            } catch (_: Exception) {
-                0L
-            }
-        }
+        internal fun llmPresentBytes(dir: File, asset: LocalLlmManager.ModelAsset): Long =
+            llmInspect(dir, asset).verifiedBytes
 
         /**
          * Ids with a verified LLM pack on disk, in manifest order.
@@ -589,6 +612,17 @@ class MainActivity : ComponentActivity() {
         @JvmStatic
         internal fun deepLinkTargetTab(pendingTab: Int?, currentTab: Int): Int =
             pendingTab ?: currentTab
+
+        /**
+         * One-shot deep-link seeding for [onCreate]: a fresh start
+         * routes to the notification's target; a recreation (rotation,
+         * config change, process-death restore) seeds null so the
+         * `rememberSaveable` tab restores instead of being yanked back
+         * to the tap target on every recreation. Pure for unit tests.
+         */
+        @JvmStatic
+        internal fun seedDeepLinkTab(hasSavedState: Boolean, target: String?): Int? =
+            if (hasSavedState) null else target?.let(::tabForDownloadTarget)
 
         /**
          * Persisted expansion flags for the on-device model sections.
@@ -816,8 +850,12 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         micDeniedBefore = getSharedPreferences("mw_state", MODE_PRIVATE)
             .getBoolean("mic_denied_before", false)
-        deepLinkTab.value = intent?.getStringExtra(EXTRA_DL_TARGET)
-            ?.let(::tabForDownloadTarget)
+        // One-shot: recreations restore the saved tab (seed null),
+        // only a fresh start routes to the notification target.
+        deepLinkTab.value = seedDeepLinkTab(
+            savedInstanceState != null,
+            intent?.getStringExtra(EXTRA_DL_TARGET),
+        )
         refreshPermStates()
         reload()
         setContent { Root() }
@@ -1961,15 +1999,19 @@ class MainActivity : ComponentActivity() {
             emptyList()
         }
 
-    /** Pack state for one catalog model (SHA-verified). */
+    /** Row state to chain-row pack state (1:1; DOWNLOADING/FAILED never persist here). */
+    private fun packStateForRow(row: LocalModelDownload.RowState): LocalPackState =
+        when (row) {
+            LocalModelDownload.RowState.PRESENT -> LocalPackState.PRESENT
+            LocalModelDownload.RowState.MISMATCH -> LocalPackState.MISMATCH
+            LocalModelDownload.RowState.INCOMPLETE -> LocalPackState.INCOMPLETE
+            else -> LocalPackState.MISSING
+        }
+
+    /** Pack state for one catalog model (SHA-verified, single-pass). */
     private fun sttModelPackState(model: LocalSttModels.Entry): LocalPackState =
         try {
-            when (LocalSttModels.stateFor(filesDir, model)) {
-                LocalModelDownload.RowState.PRESENT -> LocalPackState.PRESENT
-                LocalModelDownload.RowState.MISMATCH -> LocalPackState.MISMATCH
-                LocalModelDownload.RowState.INCOMPLETE -> LocalPackState.INCOMPLETE
-                else -> LocalPackState.MISSING
-            }
+            packStateForRow(LocalSttModels.stateFor(filesDir, model))
         } catch (_: Exception) {
             LocalPackState.MISSING
         }
@@ -2019,23 +2061,21 @@ class MainActivity : ComponentActivity() {
         // save-generation (not per row or keystroke); enabling Local
         // without a verified selected model fails closed.
         val selectedModel = remember(version) { LocalStt.selectedEntry(statePrefs) }
-        val modelPacks = remember(version) {
-            LocalSttModels.MODELS.associate { m -> m.id to sttModelPackState(m) }
-        }
-        // Verified bytes already on disk per model (INCOMPLETE
-        // progress numerator; computed once per save-generation like
-        // the pack states above, not per recomposition).
-        val modelBytes = remember(version) {
+        // One inspect per model per save-generation (state + verified
+        // bytes from a single SHA pass — never two full hash sweeps).
+        val modelInspects = remember(version) {
             LocalSttModels.MODELS.associate { m ->
                 m.id to try {
-                    LocalSttModels.presentBytes(filesDir, m)
+                    LocalSttModels.inspect(filesDir, m)
                 } catch (_: Exception) {
-                    0L
+                    LocalSttModels.PackInspect(LocalModelDownload.RowState.MISSING, 0L)
                 }
             }
         }
         fun packOf(id: String): LocalPackState =
-            modelPacks[id] ?: LocalPackState.MISSING
+            modelInspects[id]?.let { packStateForRow(it.state) } ?: LocalPackState.MISSING
+        fun bytesOf(id: String): Long =
+            modelInspects[id]?.verifiedBytes ?: 0L
         val selPack = packOf(selectedModel.id)
         // Lite flavor ships no sherpa runner: the chain toggle and all
         // Download buttons gate on this (fail-closed, no download offered).
@@ -2512,7 +2552,7 @@ class MainActivity : ComponentActivity() {
                                         val received = if (row == LocalModelDownload.RowState.DOWNLOADING) {
                                             prog?.first ?: 0L
                                         } else {
-                                            modelBytes[m.id] ?: 0L
+                                            bytesOf(m.id)
                                         }
                                         if (total > 0) {
                                             stringResource(
@@ -2559,7 +2599,7 @@ class MainActivity : ComponentActivity() {
                                     )
                                 } else {
                                     LocalModelDownload.progressFraction(
-                                        modelBytes[m.id] ?: 0L,
+                                        bytesOf(m.id),
                                         LocalSttModels.totalBytes(m).takeIf { it > 0 },
                                     )
                                 }
@@ -3074,28 +3114,19 @@ class MainActivity : ComponentActivity() {
         val llmSelected = remember(version) {
             llmSelectedAsset(assets, statePrefs.getString(PREF_SELECTED_LLM, null))
         }
-        val llmPacks = remember(version) {
+        val llmInspects = remember(version) {
             assets.associate { a ->
                 a.id to try {
-                    llmStateFor(filesDir, a)
+                    llmInspect(filesDir, a)
                 } catch (_: Exception) {
-                    LocalPackState.MISSING
-                }
-            }
-        }
-        // Verified bytes already on disk per asset (INCOMPLETE
-        // progress numerator; once per save-generation).
-        val llmBytes = remember(version) {
-            assets.associate { a ->
-                a.id to try {
-                    llmPresentBytes(filesDir, a)
-                } catch (_: Exception) {
-                    0L
+                    LlmInspect(LocalPackState.MISSING, 0L)
                 }
             }
         }
         fun llmPackOf(id: String): LocalPackState =
-            llmPacks[id] ?: LocalPackState.MISSING
+            llmInspects[id]?.state ?: LocalPackState.MISSING
+        fun llmBytesOf(id: String): Long =
+            llmInspects[id]?.verifiedBytes ?: 0L
         val llmSelId = llmSelected?.id
         val llmSelPack = if (llmSelId != null) llmPackOf(llmSelId) else LocalPackState.MISSING
         // Per-asset in-row download state (desktop fill_stt_models
@@ -3679,7 +3710,7 @@ class MainActivity : ComponentActivity() {
                                             val received = if (row == LocalModelDownload.RowState.DOWNLOADING) {
                                                 prog?.first ?: 0L
                                             } else {
-                                                llmBytes[a.id] ?: 0L
+                                                llmBytesOf(a.id)
                                             }
                                             if (total != null && total > 0) {
                                                 stringResource(
@@ -3729,7 +3760,7 @@ class MainActivity : ComponentActivity() {
                                     )
                                 } else {
                                     LocalModelDownload.progressFraction(
-                                        llmBytes[a.id] ?: 0L,
+                                        llmBytesOf(a.id),
                                         a.sizeBytes.takeIf { it > 0 },
                                     )
                                 }

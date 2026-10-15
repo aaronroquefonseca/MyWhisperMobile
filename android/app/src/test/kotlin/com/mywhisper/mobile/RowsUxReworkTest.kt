@@ -308,6 +308,150 @@ class RowsUxReworkTest {
         assertEquals(2, MainActivity.deepLinkTargetTab(null, 2))
     }
 
+    @Test
+    fun seedDeepLinkTab_freshRoutes_recreateRestores() {
+        // Fresh start honors the notification target; a recreation
+        // (rotation / process-death restore, saved state present) seeds
+        // null so rememberSaveable restores the user's tab instead of
+        // yanking it back to the tap target.
+        assertEquals(2, MainActivity.seedDeepLinkTab(false, "llm"))
+        assertEquals(1, MainActivity.seedDeepLinkTab(false, "stt"))
+        assertEquals(null, MainActivity.seedDeepLinkTab(false, null))
+        assertEquals(null, MainActivity.seedDeepLinkTab(true, "llm"))
+        assertEquals(null, MainActivity.seedDeepLinkTab(true, "stt"))
+    }
+
+    // -- Single-pass inspect: one SHA verify per file ------------------
+
+    @Test
+    fun stt_inspect_verifiesEachFileAtMostOnce() {
+        val dir = Files.createTempDirectory("stt-inspect").toFile()
+        try {
+            val m = LocalSttModels.findById(LocalSttModels.MOONSHINE_ID)
+            val pack = LocalSttModels.dirFor(dir, m)
+            pack.mkdirs()
+            // Full-size sparse files (instant), stub verifies all.
+            for (f in m.files) {
+                val file = File(pack, f.name)
+                java.io.RandomAccessFile(file, "rw").use { it.setLength(f.sizeBytes) }
+                file.appendBytes("x".toByteArray())
+            }
+            val calls = mutableListOf<String>()
+            val r = LocalSttModels.inspectWithVerifier(dir, m) { f, sha ->
+                calls.add(f.name)
+                LocalLlmManager.verifySha256(f, sha)
+            }
+            assertEquals(LocalModelDownload.RowState.MISMATCH, r.state)
+            // One verify per file — never two passes.
+            assertEquals(m.files.map { it.name }.sorted(), calls.sorted())
+            assertEquals(0L, r.verifiedBytes)
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun stt_inspect_skipsHashOnTruncated_subsetHashesPresentOnly() {
+        val dir = Files.createTempDirectory("stt-inspect2").toFile()
+        try {
+            val m = LocalSttModels.findById(LocalSttModels.MOONSHINE_ID)
+            val pack = LocalSttModels.dirFor(dir, m)
+            pack.mkdirs()
+            // All files truncated to 1 byte: no hash may run at all.
+            for (f in m.files) {
+                File(pack, f.name).writeBytes("x".toByteArray())
+            }
+            var calls = 0
+            val r = LocalSttModels.inspectWithVerifier(dir, m) { _, _ ->
+                calls++
+                false
+            }
+            assertEquals(LocalModelDownload.RowState.INCOMPLETE, r.state)
+            assertEquals(0, calls)
+            assertEquals(0L, r.verifiedBytes)
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun stt_inspect_verifiedBytesSumsVerifiedOnly() {
+        val dir = Files.createTempDirectory("stt-inspect3").toFile()
+        try {
+            val m = LocalSttModels.findById(LocalSttModels.MOONSHINE_ID)
+            val pack = LocalSttModels.dirFor(dir, m)
+            pack.mkdirs()
+            for (f in m.files) {
+                val file = File(pack, f.name)
+                java.io.RandomAccessFile(file, "rw").use { it.setLength(f.sizeBytes) }
+                file.appendBytes("x".toByteArray())
+            }
+            // Only the first file verifies: MISMATCH overall, bytes =
+            // that file alone, each file still hashed exactly once.
+            val calls = mutableListOf<String>()
+            val first = m.files.first().name
+            val r = LocalSttModels.inspectWithVerifier(dir, m) { f, _ ->
+                calls.add(f.name)
+                f.name == first
+            }
+            assertEquals(LocalModelDownload.RowState.MISMATCH, r.state)
+            assertEquals(m.files.map { it.name }.sorted(), calls.sorted())
+            assertEquals(m.files.first().sizeBytes + 1, r.verifiedBytes)
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun llm_inspect_verifiesSlotAndLegacyAtMostOnce() {
+        val sha = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        val dir = Files.createTempDirectory("llm-inspect").toFile()
+        try {
+            val asset = LocalLlmManager.ModelAsset("a", "https://example/a.task", sha, 3)
+            val slot = MainActivity.llmTaskFileFor(dir, asset.id)
+            slot.parentFile?.mkdirs()
+            slot.writeBytes("abc".toByteArray())
+            val calls = mutableListOf<String>()
+            val r = MainActivity.llmInspectWithVerifier(dir, asset) { f, s ->
+                calls.add(f.name)
+                LocalLlmManager.verifySha256(f, s)
+            }
+            assertEquals(MainActivity.LocalPackState.PRESENT, r.state)
+            assertEquals(3L, r.verifiedBytes)
+            // Slot verifies: legacy short-circuits, slot hashed once.
+            assertEquals(listOf(slot.name), calls)
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun llm_inspect_shortFileIncomplete_legacyStillCountedOnce() {
+        val dir = Files.createTempDirectory("llm-inspect2").toFile()
+        try {
+            val asset = LocalLlmManager.ModelAsset(
+                "a", "https://example/a.task", "d".repeat(64), 100,
+            )
+            val slot = MainActivity.llmTaskFileFor(dir, asset.id)
+            slot.parentFile?.mkdirs()
+            slot.writeBytes("abc".toByteArray())
+            val calls = mutableListOf<String>()
+            val r = MainActivity.llmInspectWithVerifier(dir, asset) { f, s ->
+                calls.add(f.name)
+                LocalLlmManager.verifySha256(f, s)
+            }
+            assertEquals(MainActivity.LocalPackState.INCOMPLETE, r.state)
+            assertEquals(0L, r.verifiedBytes)
+            // Slot once + legacy probe once — never a second sweep.
+            assertEquals(
+                listOf(slot.name, LocalLlmManager.DEFAULT_TASK_NAME).sorted(),
+                calls.sorted(),
+            )
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
     // -- New copy in en + es -------------------------------------------
 
     private fun stringMap(resFile: File): Map<String, String> {
