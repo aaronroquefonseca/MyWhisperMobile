@@ -1703,6 +1703,8 @@ class MainActivity : ComponentActivity() {
                 val captureLang = stt.optString("language", "auto").ifBlank { "auto" }
                 val captureLabel = langs.firstOrNull { it.first == captureLang }?.second
                     ?: captureLang
+                // Device total RAM for the flagship gate note (display only).
+                val deviceRamMb = remember { totalRamMb() }
                 for (m in LocalSttModels.MODELS) {
                     val row = rowOf(m)
                     val isSelected = m.id == selectedModel.id
@@ -1771,6 +1773,52 @@ class MainActivity : ComponentActivity() {
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
+                            // Measured speed: last-decode ×realtime on
+                            // THIS phone (per-model float in mw_state),
+                            // else the neutral pre-first-run copy. No
+                            // absolute speed adjectives anywhere
+                            // (owner phone-tested). Display only.
+                            run {
+                                val stored = try {
+                                    val key = LocalSttModels.speedPrefKey(m.id)
+                                    if (statePrefs.contains(key)) {
+                                        statePrefs.getFloat(key, Float.NaN)
+                                    } else {
+                                        Float.NaN
+                                    }
+                                } catch (_: Exception) {
+                                    Float.NaN
+                                }
+                                Text(
+                                    LocalSttModels.storedSpeedFactor(stored)?.let { factor ->
+                                        getString(R.string.stt_speed_measured, factor)
+                                    } ?: stringResource(R.string.stt_speed_unmeasured),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            // Flagship RAM gate note (medium tier only):
+                            // requires-flagship copy with this phone's
+                            // total RAM. Display only; enablement stays
+                            // fail-closed on the verified pack.
+                            if (m.minTotalRamMb > 0) {
+                                Text(
+                                    if (deviceRamMb > 0) {
+                                        getString(
+                                            R.string.stt_ram_gate,
+                                            m.minTotalRamMb,
+                                            deviceRamMb,
+                                        )
+                                    } else {
+                                        getString(
+                                            R.string.stt_ram_gate_unknown,
+                                            m.minTotalRamMb,
+                                        )
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                             Text(
                                 when (m.langMode) {
                                     LocalSttModels.LangMode.AUTO ->

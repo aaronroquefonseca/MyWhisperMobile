@@ -113,7 +113,11 @@
     <string name="stt_langs_auto">%1$d languages · auto-detect</string>
     <string name="stt_lang_single">%1$s only</string>
     <string name="stt_dict_badge">✓ Dictionary</string>
-    <string name="stt_small_cost_warn">Opt-in: best quality but SLOW on phone CPU — needs ~1GB free RAM and a weak mic will still limit results. Flagship phones only; Moonshine Tiny stays the fast default.</string>
+    <string name="stt_small_cost_warn">Needs ~1GB free RAM; speed varies by phone — measured speed appears after the first run. Moonshine Tiny stays the default.</string>
+    <string name="stt_speed_measured">%1$.1f× realtime on this phone</string>
+    <string name="stt_speed_unmeasured">Speed varies by phone — measured after the first run</string>
+    <string name="stt_ram_gate">Requires flagship: %1$d MB+ total RAM (this phone: %2$d MB)</string>
+    <string name="stt_ram_gate_unknown">Requires flagship: %1$d MB+ total RAM (this phone: unknown)</string>
     <string name="stt_lang_follows">Follows Capture language (%1$s)</string>
     <string name="stt_lang_fixed">Fixed language: %1$s</string>
     <string name="llm_ram_need">Needs %1$d MB RAM</string>
