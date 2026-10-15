@@ -1,5 +1,16 @@
 import Foundation
 
+/// DEPRECATED PIPELINE (v1 wires `Dictation`, not this): `Transcriber`,
+/// `TranscriptionState`, `TranscriptionEngine`, `CoreTranscriptionEngine`,
+/// and `TranscriptionListener` have zero production references — pairing
+/// `Transcriber` with `AudioCapture` double-opens the core utterance
+/// (`startUtterance` in both paths; see `AppFlow`). Kept (not deleted)
+/// because `SttPipelineTests` still pins the session-token/cancel safety
+/// semantics that `Dictation` re-implements; unifying the two controllers
+/// is convergence debt. Everything else in this file (`SttFailure`,
+/// `SttStrings`, `mapSttError`, copies) is live and used by `AppFlow` /
+/// `ResultView`.
+///
 /// Utterance finish pipeline: PCM streaming during record, then the core
 /// `server_stt` chain via `CoreBridge.finishUtterance` on a background queue.
 ///
@@ -19,6 +30,7 @@ import Foundation
 /// to the main queue asynchronously: callbacks issued from different caller
 /// threads can arrive out of call order, so `currentState` (synchronous) is
 /// the source of truth, not callback order.
+@available(*, deprecated, message: "Dead pipeline: v1 wires Dictation + AudioCapture (see AppFlow).")
 enum TranscriptionState: Equatable {
     case idle
     case recording
@@ -169,6 +181,7 @@ func shouldSurfaceSttMessage(_ message: String) -> Bool {
 
 /// Transport for the core utterance calls. Default is the real bridge;
 /// tests inject a fake (no FFI, no network).
+@available(*, deprecated, message: "Dead pipeline: v1 wires Dictation + AudioCapture (see AppFlow).")
 protocol TranscriptionEngine {
     func startUtterance(sampleRate: UInt32) throws
     func pushPcm(_ samples: [Int16]) throws
@@ -177,6 +190,7 @@ protocol TranscriptionEngine {
 }
 
 /// Live engine: thin wrapper over the frozen `CoreBridge` API.
+@available(*, deprecated, message: "Dead pipeline: v1 wires Dictation + AudioCapture (see AppFlow).")
 struct CoreTranscriptionEngine: TranscriptionEngine {
     func startUtterance(sampleRate: UInt32) throws {
         try CoreBridge.startUtterance(sampleRate: sampleRate)
@@ -196,6 +210,7 @@ struct CoreTranscriptionEngine: TranscriptionEngine {
 }
 
 /// Listener: all calls arrive on the main queue.
+@available(*, deprecated, message: "Dead pipeline: v1 wires Dictation + AudioCapture (see AppFlow).")
 protocol TranscriptionListener: AnyObject {
     func transcriptionStateChanged(_ state: TranscriptionState)
     func transcriptionDidFinish(text: String, engine: String)
@@ -216,6 +231,7 @@ protocol TranscriptionListener: AnyObject {
 /// acceptance is gated on `pushGen` (the session still being recorded),
 /// cleared by the worker immediately before the blocking
 /// `finishUtterance()` handoff, not on the state flip.
+@available(*, deprecated, message: "Dead pipeline: v1 wires Dictation + AudioCapture (see AppFlow).")
 final class Transcriber {
     weak var listener: TranscriptionListener?
 
