@@ -10,15 +10,20 @@ import java.net.URL
  * phone-sane sherpa-onnx 1.13.8 offline entries).
  *
  * Seed rules (verified on HF, never invented):
- * - moonshine tiny-en: kept as the English fast option (existing
- *   pack + SHAs under `core/models`, reused here, never redefined).
+ * - moonshine tiny-en: kept as the English fast option and default
+ *   (existing pack + SHAs under `core/models`, reused here,
+ *   never redefined).
  * - whisper tiny/base multilingual int8 (`csukuangfj` sherpa ports):
  *   existence + int8 ONNX magic + full-download SHA-256 verified,
  *   ≤500MB each, Spanish + 98 more via the shared multilingual vocab.
+ * - whisper small multilingual int8 (`csukuangfj/sherpa-onnx-whisper-small`):
+ *   existence + `onnx.quantize` magic + full-download SHA-256 verified
+ *   (encoder 112442483B, decoder 262226114B, shared tokens 816730B;
+ *   ~358MB total, ≤500MB cap). OPT-IN ONLY: slow on phone CPU and
+ *   needs ~1GB free RAM — the registry carries a strong cost warning
+ *   and a flagship-only phone tier; moonshine stays the default.
  *
  * Drops (with reason, no download path):
- * - whisper small int8 (~358MB): under the cap but ~3.6x tiny —
- *   too heavy for phone CPU.
  * - sense-voice int8: no Spanish (zh/en/ja/ko/yue only).
  * - whistle: own non-sherpa engine absent on phone (+ URL
  *   TO-VERIFY upstream).
@@ -56,6 +61,8 @@ object LocalSttModels {
         /** Word-bias support flag (desktop capabilities parity + post-process). */
         val dictionary: Boolean,
         val runtimeNote: String,
+        /** Recommended phone tier (cost/quality guidance, shown in reviews/tests). */
+        val phoneTier: String,
         /** Relative dir under filesDir (moonshine keeps its legacy path). */
         val dirRel: String,
         val files: List<ModelFile>,
@@ -75,6 +82,7 @@ object LocalSttModels {
     const val MOONSHINE_ID = "moonshine-tiny-en"
     const val WHISPER_TINY_ID = "whisper-tiny-multilingual-int8"
     const val WHISPER_BASE_ID = "whisper-base-multilingual-int8"
+    const val WHISPER_SMALL_ID = "whisper-small-multilingual-int8"
 
     /** Default selected model (legacy behavior: English fast pack). */
     const val DEFAULT_ID = MOONSHINE_ID
@@ -91,6 +99,7 @@ object LocalSttModels {
             languages = listOf("en"),
             dictionary = true,
             runtimeNote = "English-only · fastest on-device option",
+            phoneTier = "any phone · default fast pick",
             dirRel = "models/sherpa-moonshine-v2-tiny.en",
             files = listOf(
                 ModelFile(
@@ -122,6 +131,7 @@ object LocalSttModels {
             languages = WHISPER_LANGS,
             dictionary = true,
             runtimeNote = "99 languages incl. Spanish · auto-detect · int8",
+            phoneTier = "low-RAM phones OK",
             dirRel = "models/sherpa-whisper-tiny-int8",
             files = listOf(
                 ModelFile(
@@ -153,6 +163,7 @@ object LocalSttModels {
             languages = WHISPER_LANGS,
             dictionary = true,
             runtimeNote = "99 languages incl. Spanish · better quality, slower · int8",
+            phoneTier = "mid-tier phones and up",
             dirRel = "models/sherpa-whisper-base-int8",
             files = listOf(
                 ModelFile(
@@ -170,6 +181,38 @@ object LocalSttModels {
                 ModelFile(
                     "base-tokens.txt",
                     "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-base/resolve/main/base-tokens.txt",
+                    "b34b360dbb493e781e479794586d661700670d65564001f23024971d1f2fa126",
+                    816730,
+                ),
+            ),
+        ),
+        Entry(
+            id = WHISPER_SMALL_ID,
+            name = "Whisper Small Multilingual (opt-in)",
+            sizeLabel = "~358MB",
+            engine = Engine.WHISPER,
+            langMode = LangMode.AUTO,
+            languages = WHISPER_LANGS,
+            dictionary = true,
+            runtimeNote = "Best quality · opt-in · SLOW on phone CPU · needs ~1GB free RAM",
+            phoneTier = "flagship phones only · slow on phone CPU",
+            dirRel = "models/sherpa-whisper-small-int8",
+            files = listOf(
+                ModelFile(
+                    "small-encoder.int8.onnx",
+                    "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-small/resolve/main/small-encoder.int8.onnx",
+                    "4cbe7b22fa9026b843b60a68640c747de05bafb1a11b57edc0e66c232d9f33a9",
+                    112442483,
+                ),
+                ModelFile(
+                    "small-decoder.int8.onnx",
+                    "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-small/resolve/main/small-decoder.int8.onnx",
+                    "acad50b5c782696e91b55914cc5ab4f756f1532f76e22aa6fc615f39fb69a8ee",
+                    262226114,
+                ),
+                ModelFile(
+                    "small-tokens.txt",
+                    "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-small/resolve/main/small-tokens.txt",
                     "b34b360dbb493e781e479794586d661700670d65564001f23024971d1f2fa126",
                     816730,
                 ),
