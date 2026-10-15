@@ -96,6 +96,9 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
 import androidx.core.app.ActivityCompat
+import androidx.lifecycle.Observer
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import org.json.JSONArray
@@ -134,6 +137,8 @@ class MainActivity : ComponentActivity() {
     private var micDeniedBefore = false
     private val workers = Executors.newSingleThreadExecutor()
     private var multicastLock: WifiManager.MulticastLock? = null
+    /** Active background-download WorkInfo observers, keyed by unique work name. */
+    private val dlWorkObservers = mutableMapOf<String, Observer<List<WorkInfo>>>()
 
     /** On-device pack state for the STT/LLM Local rows. Pure for unit tests. */
     internal enum class LocalPackState { PRESENT, MISSING, MISMATCH }
@@ -831,6 +836,61 @@ class MainActivity : ComponentActivity() {
     private fun toast(msg: String) = notify(msg)
 
     private fun bgToast(msg: String) = notify(msg)
+
+    /**
+     * Track one background pack download in a model row. The
+     * Download/Retry buttons enqueue via [ModelDownloadManager] (bytes
+     * move in WorkManager, app-open not required); this observer feeds
+     * the row's in-place progress + terminal states back from the
+     * unique work's LiveData. State → action mapping is
+     * [ModelDownloadSchedule.actionForWorkState] (unit-tested):
+     * waiting/running paints progress, SUCCEEDED refreshes the
+     * SHA-verified pack derivation, FAILED pins the worker's detail,
+     * CANCELLED clears without pinning. One observer per work name;
+     * terminal states self-remove. Never throws.
+     */
+    private fun observeDownloadWork(
+        kind: String,
+        id: String,
+        onProgress: (receivedBytes: Long, totalBytes: Long?) -> Unit,
+        onDone: () -> Unit,
+        onError: (detail: String) -> Unit,
+    ) {
+        val workName = ModelDownloadSchedule.workNameFor(kind, id)
+        if (dlWorkObservers.containsKey(workName)) return
+        try {
+            val live = WorkManager.getInstance(this)
+                .getWorkInfosForUniqueWorkLiveData(workName)
+            val obs = Observer<List<WorkInfo>> { infos ->
+                val info = infos.firstOrNull() ?: return@Observer
+                when (ModelDownloadSchedule.actionForWorkState(info.state.name)) {
+                    ModelDownloadSchedule.WorkRowAction.TRACK -> {
+                        val r = info.progress.getLong(ModelDownloadSchedule.PROG_RECEIVED, -1L)
+                        if (r >= 0) {
+                            val t = info.progress.getLong(ModelDownloadSchedule.PROG_TOTAL, -1L)
+                            onProgress(r, t.takeIf { it >= 0 })
+                        }
+                    }
+                    ModelDownloadSchedule.WorkRowAction.DONE,
+                    ModelDownloadSchedule.WorkRowAction.CLEARED,
+                    -> {
+                        dlWorkObservers.remove(workName)?.let { live.removeObserver(it) }
+                        onDone()
+                    }
+                    ModelDownloadSchedule.WorkRowAction.FAILED -> {
+                        dlWorkObservers.remove(workName)?.let { live.removeObserver(it) }
+                        val detail = info.outputData
+                            .getString(ModelDownloadSchedule.OUTPUT_ERROR)
+                            .takeUnless { it.isNullOrEmpty() } ?: "failed"
+                        onError(detail)
+                    }
+                }
+            }
+            dlWorkObservers[workName] = obs
+            live.observe(this, obs)
+        } catch (_: Exception) {
+        }
+    }
 
     /**
      * Push local mutations out immediately (desktop sync_after_change
@@ -1754,20 +1814,23 @@ class MainActivity : ComponentActivity() {
             dlBusy = dlBusy + m.id
             dlErr = dlErr - m.id
             dlProg = dlProg + (m.id to (0L to LocalSttModels.totalBytes(m)))
-            workers.execute {
-                try {
-                    LocalSttModels.download(filesDir, m) { r, t ->
-                        runOnUiThread { dlProg = dlProg + (m.id to (r to t)) }
-                    }
-                    runOnUiThread { dlBusy = dlBusy - m.id; version++ }
-                } catch (ex: Exception) {
-                    runOnUiThread {
-                        dlBusy = dlBusy - m.id
-                        dlErr = dlErr + (m.id to (ex.message ?: "failed"))
-                        version++
-                    }
-                }
-            }
+            // Background path: bytes move in WorkManager (app-open not
+            // required, own progress notification + Cancel); the row
+            // tracks the unique work below for in-place progress.
+            ModelDownloadManager.enqueueSttModel(this@MainActivity, m.id)
+            observeDownloadWork(
+                kind = ModelDownloadSchedule.KIND_STT,
+                id = m.id,
+                onProgress = { r, t ->
+                    dlProg = dlProg + (m.id to (r to (t ?: LocalSttModels.totalBytes(m))))
+                },
+                onDone = { dlBusy = dlBusy - m.id; version++ },
+                onError = { msg ->
+                    dlBusy = dlBusy - m.id
+                    dlErr = dlErr + (m.id to msg)
+                    version++
+                },
+            )
         }
         // Provider tests: ONE pattern on every chain row (same
         // button + latency/excerpt inline). Per-entry state keyed by
@@ -2765,20 +2828,21 @@ class MainActivity : ComponentActivity() {
             llmDlBusy = llmDlBusy + a.id
             llmDlErr = llmDlErr - a.id
             llmDlProg = llmDlProg + (a.id to (0L to a.sizeBytes.takeIf { it > 0 }))
-            workers.execute {
-                try {
-                    LocalLlmManager.downloadModel(a, llmTaskFileFor(filesDir, a.id)) { r, t ->
-                        runOnUiThread { llmDlProg = llmDlProg + (a.id to (r to t)) }
-                    }
-                    runOnUiThread { llmDlBusy = llmDlBusy - a.id; version++ }
-                } catch (ex: Exception) {
-                    runOnUiThread {
-                        llmDlBusy = llmDlBusy - a.id
-                        llmDlErr = llmDlErr + (a.id to (ex.message ?: "failed"))
-                        version++
-                    }
-                }
-            }
+            // Background path: bytes move in WorkManager (app-open not
+            // required, own progress notification + Cancel); the row
+            // tracks the unique work below for in-place progress.
+            ModelDownloadManager.enqueueLlmAsset(this@MainActivity, a)
+            observeDownloadWork(
+                kind = ModelDownloadSchedule.KIND_LLM,
+                id = a.id,
+                onProgress = { r, t -> llmDlProg = llmDlProg + (a.id to (r to t)) },
+                onDone = { llmDlBusy = llmDlBusy - a.id; version++ },
+                onError = { msg ->
+                    llmDlBusy = llmDlBusy - a.id
+                    llmDlErr = llmDlErr + (a.id to msg)
+                    version++
+                },
+            )
         }
         fun selectLlm(a: LocalLlmManager.ModelAsset) {
             statePrefs.edit() { putString(PREF_SELECTED_LLM, a.id) }
