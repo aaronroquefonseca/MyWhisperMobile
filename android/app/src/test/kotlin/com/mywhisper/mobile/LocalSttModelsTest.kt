@@ -15,12 +15,13 @@ import org.junit.Test
 class LocalSttModelsTest {
 
     @Test
-    fun catalog_hasThreePhoneSaneEntries() {
+    fun catalog_hasFourPhoneSaneEntries() {
         assertEquals(
             listOf(
                 LocalSttModels.MOONSHINE_ID,
                 LocalSttModels.WHISPER_TINY_ID,
                 LocalSttModels.WHISPER_BASE_ID,
+                LocalSttModels.WHISPER_SMALL_ID,
             ),
             LocalSttModels.MODELS.map { it.id },
         )
@@ -34,6 +35,7 @@ class LocalSttModelsTest {
             assertTrue(m.name.isNotBlank())
             assertTrue(m.sizeLabel.isNotBlank())
             assertTrue(m.runtimeNote.isNotBlank())
+            assertTrue(m.phoneTier.isNotBlank())
             assertTrue(m.dirRel.isNotBlank())
             assertTrue(m.languages.isNotEmpty())
             assertTrue(m.files.isNotEmpty())
@@ -60,7 +62,11 @@ class LocalSttModelsTest {
 
     @Test
     fun whisperEntries_coverSpanishAnd99Langs() {
-        for (id in listOf(LocalSttModels.WHISPER_TINY_ID, LocalSttModels.WHISPER_BASE_ID)) {
+        for (id in listOf(
+            LocalSttModels.WHISPER_TINY_ID,
+            LocalSttModels.WHISPER_BASE_ID,
+            LocalSttModels.WHISPER_SMALL_ID,
+        )) {
             val m = LocalSttModels.findById(id)
             assertEquals(LocalSttModels.Engine.WHISPER, m.engine)
             assertEquals(LocalSttModels.LangMode.AUTO, m.langMode)
@@ -80,12 +86,32 @@ class LocalSttModelsTest {
             val total = LocalSttModels.totalBytes(m)
             assertTrue(total in 1..500_000_000)
         }
-        // Base costs more than tiny; moonshine stays the smallest.
+        // Base costs more than tiny; small costs most; moonshine stays smallest.
         val tiny = LocalSttModels.totalBytes(LocalSttModels.findById(LocalSttModels.WHISPER_TINY_ID))
         val base = LocalSttModels.totalBytes(LocalSttModels.findById(LocalSttModels.WHISPER_BASE_ID))
+        val small = LocalSttModels.totalBytes(LocalSttModels.findById(LocalSttModels.WHISPER_SMALL_ID))
         val moon = LocalSttModels.totalBytes(LocalSttModels.findById(LocalSttModels.MOONSHINE_ID))
         assertTrue(moon < tiny)
         assertTrue(tiny < base)
+        assertTrue(base < small)
+    }
+
+    @Test
+    fun smallEntry_isOptInWithCostWarning() {
+        val small = LocalSttModels.findById(LocalSttModels.WHISPER_SMALL_ID)
+        // Opt-in: never the default; unknown ids still fail closed to moonshine.
+        assertFalse(small.id == LocalSttModels.DEFAULT_ID)
+        assertEquals(LocalSttModels.MOONSHINE_ID, LocalSttModels.DEFAULT_ID)
+        // Verified download size pins (HF full-download, never invented).
+        assertEquals(375485327L, LocalSttModels.totalBytes(small))
+        assertEquals("~358MB", small.sizeLabel)
+        // Strong cost warning: slow on phone CPU + RAM note.
+        val note = small.runtimeNote.lowercase()
+        assertTrue(note.contains("slow"))
+        assertTrue(note.contains("cpu"))
+        assertTrue(note.contains("ram"))
+        val tier = small.phoneTier.lowercase()
+        assertTrue(tier.contains("flagship"))
     }
 
     @Test
