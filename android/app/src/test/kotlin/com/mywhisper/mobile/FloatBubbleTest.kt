@@ -137,6 +137,48 @@ class FloatBubbleTest {
         assertFalse(FloatState.shouldShowMoveHint(hasSeenHint = true))
     }
 
+    // -- Move-hint one-shot coachmark -------------------------------
+
+    @Test
+    fun moveHint_showOnceEver_neverReplays() {
+        // Round-trip: unseen -> show; the service persists the seen
+        // flag BEFORE addView, so every later gate read stays shut —
+        // even if showing, tapping, or teardown fails mid-flight.
+        var seenHint = false
+        assertTrue(FloatState.shouldShowMoveHint(seenHint))
+        seenHint = true // persisted at show time
+        assertFalse(FloatState.shouldShowMoveHint(seenHint))
+        assertFalse(FloatState.shouldShowMoveHint(seenHint))
+    }
+
+    @Test
+    fun moveHint_belowBubbleWhenFits_elseAbove() {
+        // Fits below: bubble bottom + margin.
+        assertEquals(476, moveHintY(400, 60, 48, 16, 1000))
+        // No room below: above the bubble.
+        assertEquals(836, moveHintY(900, 60, 48, 16, 1000))
+        // No room either side: clamped to the top edge, never negative.
+        assertEquals(0, moveHintY(10, 200, 300, 16, 400))
+    }
+
+    @Test
+    fun moveHint_xCenteredOnBubble_clampedToScreen() {
+        // Centered: bubble center minus half the pill width.
+        assertEquals(69, moveHintX(100, 62, 0, 200))
+        // Past the left edge: clamped to min.
+        assertEquals(0, moveHintX(10, 62, 0, 200))
+        // Past the right edge: clamped so the pill stays on-screen.
+        assertEquals(138, moveHintX(190, 62, 0, 200))
+        // Degenerate (pill wider than the range): collapse onto min.
+        assertEquals(0, moveHintX(500, 62, 0, 40))
+    }
+
+    @Test
+    fun moveHint_timeoutPinned() {
+        assertEquals(6000L, HINT_TIMEOUT_MS)
+        assertEquals(16, HINT_MARGIN_DP)
+    }
+
     // -- Bubble chrome geometry (review round 2) ---------------------
 
     @Test
