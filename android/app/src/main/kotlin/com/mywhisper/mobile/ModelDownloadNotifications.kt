@@ -103,7 +103,7 @@ object ModelDownloadNotifications {
 
     fun buildFailed(ctx: Context, label: String, detail: String): Notification =
         NotificationCompat.Builder(ctx, CHANNEL)
-            .setContentTitle(ctx.getString(R.string.download_complete_title))
+            .setContentTitle(ctx.getString(R.string.download_failed_title))
             .setContentText(ctx.getString(R.string.local_download_failed, detail.ifBlank { label }))
             .setSmallIcon(R.drawable.ic_stat_sync)
             .setContentIntent(openIntent(ctx))

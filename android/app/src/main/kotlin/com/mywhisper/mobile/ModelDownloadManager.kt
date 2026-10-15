@@ -14,19 +14,21 @@ import java.util.concurrent.TimeUnit
  * Enqueue/cancel entry points for background pack downloads.
  *
  * - One unique work per model ([ModelDownloadSchedule.workNameFor],
- *   `ExistingWorkPolicy.KEEP`): tapping Download twice never forks
- *   two writers over the same `.part` files.
+ *   `ExistingWorkPolicy.REPLACE`): at most one writer ever touches a
+ *   pack's `.part` files, and Retry/re-download after a terminal
+ *   state actually re-runs (KEEP would keep the finished work and
+ *   silently ignore the new request). Double-taps from the row
+ *   cannot fork writers: the row guards with its busy flag.
  * - Constraints: unmetered + battery-not-low + storage-not-low —
  *   packs are 44MB–2.5GB; metered mobile data must never be burned
  *   silently. Retry rides WorkManager exponential backoff from
  *   [ModelDownloadSchedule.BACKOFF_MS].
- * - Rows observe progress without touching the Activity now: the
- *   existing `LocalModelDownload` row machine + SHA-verified
- *   pack derivation pick up completion/deletion on the next
- *   recomposition/resume; live bars can observe
+ * - Rows drive the Download/Retry buttons straight into [enqueueSttModel]/
+ *   [enqueueLlmAsset] and track progress via
  *   `WorkManager.getWorkInfosForUniqueWorkLiveData(workName)` plus
- *   the `mw_dl_received/mw_dl_total` progress keys as the follow-up
- *   one-line hook.
+ *   the `mw_dl_received/mw_dl_total` keys (see
+ *   `MainActivity.observeDownloadWork`); completion/deletion still
+ *   flow through the SHA-verified pack derivation.
  */
 object ModelDownloadManager {
     private fun baseConstraints(): Constraints =
@@ -36,7 +38,7 @@ object ModelDownloadManager {
             .setRequiresStorageNotLow(true)
             .build()
 
-    /** Enqueue an STT catalog-model download (no-op when already running). */
+    /** Enqueue an STT catalog-model download (replaces any prior work). */
     @JvmStatic
     fun enqueueSttModel(ctx: Context, modelId: String) {
         val entry = LocalSttModels.MODELS.firstOrNull { it.id == modelId } ?: return
@@ -64,7 +66,7 @@ object ModelDownloadManager {
             .build()
         try {
             WorkManager.getInstance(ctx.applicationContext)
-                .enqueueUniqueWork(workName, ExistingWorkPolicy.KEEP, req)
+                .enqueueUniqueWork(workName, ExistingWorkPolicy.REPLACE, req)
         } catch (_: Exception) {
         }
     }
@@ -99,7 +101,7 @@ object ModelDownloadManager {
             .build()
         try {
             WorkManager.getInstance(ctx.applicationContext)
-                .enqueueUniqueWork(workName, ExistingWorkPolicy.KEEP, req)
+                .enqueueUniqueWork(workName, ExistingWorkPolicy.REPLACE, req)
         } catch (_: Exception) {
         }
     }

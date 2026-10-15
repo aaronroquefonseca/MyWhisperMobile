@@ -362,4 +362,5 @@
     <string name="download_title">Downloading %1$s</string>
     <string name="download_cancel">Cancel download</string>
     <string name="download_complete_title">Download complete</string>
+    <string name="download_failed_title">Download failed</string>
 </resources>

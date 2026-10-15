@@ -106,6 +106,23 @@ object ModelDownloadSchedule {
     fun shouldGiveUp(runAttempt: Int): Boolean = runAttempt >= MAX_ATTEMPTS - 1
 
     /**
+     * Foreground-promotion failure policy: ALWAYS degrade to
+     * notification-only progress, never fail the download.
+     *
+     * `setForeground` throws on API 31+ when the work starts while
+     * the app is backgrounded (`ForegroundServiceStartNotAllowed…`);
+     * an uncaught throw escapes `doWork` and WorkManager silently
+     * retries a healthy download in a loop with no notification.
+     * Degrading keeps the bytes moving (progress still paints via
+     * `NotificationManager` + the `mw_dl_received/mw_dl_total` keys)
+     * and preserves the kill-resume must-hold: the download fns are
+     * interruption-safe regardless of foreground state.
+     * Pure for unit tests (decision only, no Android calls).
+     */
+    @JvmStatic
+    fun degradeToNotificationOnly(@Suppress("UNUSED_PARAMETER") e: Throwable): Boolean = true
+
+    /**
      * Restart policy after an app-kill: ALWAYS clean-restart.
      * The worker deletes `.part` files on start and re-downloads;
      * verified finals are skipped by the existing download fns.
@@ -122,6 +139,22 @@ object ModelDownloadSchedule {
     @JvmStatic
     fun llmPartName(destName: String, assetId: String): String =
         "$destName.part.$assetId"
+
+    /** Prefix shared by every asset partial for one LLM dest file. */
+    @JvmStatic
+    fun llmPartPrefix(destName: String): String =
+        "$destName.part."
+
+    /**
+     * True when [fileName] is THIS asset's partial. Scoped exact
+     * match (blank asset id falls back to the dest prefix for legacy
+     * cleanup) so a sweep for one asset can never wipe a
+     * concurrently-downloading sibling. Pure for unit tests.
+     */
+    @JvmStatic
+    fun isOwnLlmPart(fileName: String, destName: String, assetId: String): Boolean =
+        if (assetId.isEmpty()) fileName.startsWith(llmPartPrefix(destName))
+        else fileName == llmPartName(destName, assetId)
 
     /** True for temp partials (never promoted to PRESENT). */
     @JvmStatic
@@ -148,4 +181,27 @@ object ModelDownloadSchedule {
         packMismatch: Boolean,
     ): LocalModelDownload.RowState =
         LocalModelDownload.resolve(packPresent, packMismatch, true, null)
+
+    /** Terminal-failure detail carried in `Result.failure` output data. */
+    const val OUTPUT_ERROR = "mw_dl_error"
+
+    /** Row action the Activity wiring takes per WorkManager state. */
+    enum class WorkRowAction { TRACK, DONE, FAILED, CLEARED }
+
+    /**
+     * Map a `WorkInfo.State` name to the row action. Matched by name
+     * (not the Android enum) so the wiring logic is unit-tested on
+     * plain JVM: waiting/running states keep tracking progress,
+     * SUCCEEDED refreshes the pack derivation, FAILED pins the
+     * error, and CANCELLED (or anything unknown) clears back to the
+     * pack derivation without pinning — cancel must never read as
+     * FAILED. Pure for unit tests.
+     */
+    @JvmStatic
+    fun actionForWorkState(stateName: String): WorkRowAction = when (stateName) {
+        "ENQUEUED", "BLOCKED", "RUNNING" -> WorkRowAction.TRACK
+        "SUCCEEDED" -> WorkRowAction.DONE
+        "FAILED" -> WorkRowAction.FAILED
+        else -> WorkRowAction.CLEARED
+    }
 }

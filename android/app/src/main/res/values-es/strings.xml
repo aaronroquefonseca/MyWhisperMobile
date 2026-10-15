@@ -362,4 +362,5 @@
     <string name="download_title">Descargando %1$s</string>
     <string name="download_cancel">Cancelar descarga</string>
     <string name="download_complete_title">Descarga completa</string>
+    <string name="download_failed_title">Descarga fallida</string>
 </resources>

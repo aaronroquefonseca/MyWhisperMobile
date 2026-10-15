@@ -50,7 +50,17 @@ class ModelDownloadWorker(
             deletePartials(kind, modelId)
         } catch (_: Exception) {
         }
-        setForegroundAsync(foregroundInfo(label.ifBlank { modelId.orEmpty() }, 0L, null, workName, notifId)).get()
+        // Foreground promotion can throw on API 31+ when the work
+        // starts while the app is backgrounded
+        // (ForegroundServiceStartNotAllowedException). That must
+        // degrade to notification-only progress — never escape
+        // doWork into a silent retry loop (see
+        // ModelDownloadSchedule.degradeToNotificationOnly).
+        try {
+            setForegroundAsync(foregroundInfo(label.ifBlank { modelId.orEmpty() }, 0L, null, workName, notifId)).get()
+        } catch (e: Exception) {
+            if (!ModelDownloadSchedule.degradeToNotificationOnly(e)) throw e
+        }
         try {
             when (kind) {
                 ModelDownloadSchedule.KIND_STT -> downloadStt(modelId, label, workName, notifId)
@@ -92,15 +102,18 @@ class ModelDownloadWorker(
                     deletePartials(kind, modelId)
                 } catch (_: Exception) {
                 }
+                val detail = e.message.orEmpty()
                 ModelDownloadNotifications.notify(
                     applicationContext, notifId,
                     ModelDownloadNotifications.buildFailed(
                         applicationContext,
                         label.ifBlank { modelId.orEmpty() },
-                        e.message.orEmpty(),
+                        detail,
                     ),
                 )
-                return@withContext Result.failure()
+                return@withContext Result.failure(
+                    workDataOf(ModelDownloadSchedule.OUTPUT_ERROR to detail),
+                )
             }
             return@withContext Result.retry()
         }
@@ -135,7 +148,10 @@ class ModelDownloadWorker(
             throw IllegalStateException("no sha pinned for $assetId")
         }
         val asset = LocalLlmManager.ModelAsset(assetId, url, sha, size)
-        val dest = LocalLlmManager.defaultTaskFile(applicationContext.filesDir)
+        // Per-asset slot (multi-pack coexist): same dest the row
+        // downloads to and verifies (`MainActivity.llmTaskFileFor`),
+        // so completion flips the row to PRESENT.
+        val dest = MainActivity.llmTaskFileFor(applicationContext.filesDir, assetId)
         LocalLlmManager.downloadModel(asset, dest) { r, t ->
             if (isStopped) throw CancellationException("cancelled")
             reportProgress(label.ifBlank { assetId }, r, t, workName, notifId)
@@ -188,15 +204,15 @@ class ModelDownloadWorker(
                     ?.forEach { try { it.delete() } catch (_: Exception) {} }
             }
             ModelDownloadSchedule.KIND_LLM -> {
-                val dest = LocalLlmManager.defaultTaskFile(filesDir)
+                // Per-asset slot (multi-pack coexist): sweep THIS
+                // asset's partial only — a dir-wide sweep would wipe a
+                // concurrently-downloading sibling's `.part.<other-id>`.
                 val assetId = modelId.orEmpty()
+                val dest = MainActivity.llmTaskFileFor(filesDir, assetId)
                 try {
-                    LocalLlmManager.partFileFor(dest, assetId).delete()
-                } catch (_: Exception) {
-                }
-                try {
-                    File(dest.parent ?: return).listFiles { f ->
-                        ModelDownloadSchedule.isPartialName(f.name)
+                    val dir = File(dest.parent ?: return)
+                    dir.listFiles { f ->
+                        ModelDownloadSchedule.isOwnLlmPart(f.name, dest.name, assetId)
                     }?.forEach { try { it.delete() } catch (_: Exception) {} }
                 } catch (_: Exception) {
                 }
