@@ -5,7 +5,7 @@ edition = "2024"
 
 [lib]
 name = "mywhisper_core"
-crate-type = ["cdylib", "rlib"]
+crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
 jni = "0.21"
@@ -24,9 +24,17 @@ ed25519-dalek = { version = "3.0.0", features = ["rand_core"] }
 # ship, so Android builds use plaintext `bundled` for now (app sandbox
 # still isolates the file; the Keystore key is kept for the cipher
 # switch — see core/README.md). Host keeps bundled-sqlcipher.
-[target.'cfg(target_os = "android")'.dependencies]
+# IOS PORT: same constraint on iOS (Xcode ships no OpenSSL headers),
+# so Apple targets use plaintext `bundled` too (app sandbox still
+# isolates the file; the Keychain key is reserved for the cipher
+# switch). Host (non-Android, non-iOS) keeps bundled-sqlcipher.
+[target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
 rusqlite = { version = "0.40", features = ["bundled"] }
 
-[target.'cfg(not(target_os = "android"))'.dependencies]
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 rusqlite = { version = "0.40", features = ["bundled", "bundled-sqlcipher"] }
+
+# IOS PORT: keyring stays available on iOS (used only when
+# MYWHISPER_DB_KEY is unset; Swift always passes the Keychain key).
+[target.'cfg(not(target_os = "android"))'.dependencies]
 keyring = "4.2.0"

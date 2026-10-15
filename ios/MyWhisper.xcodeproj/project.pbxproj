@@ -1,0 +1,371 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		5F1C0CC30E5D70202DCA2EE4 /* MyWhisperApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21DD60AF35D373E1C54DA8A7 /* MyWhisperApp.swift */; };
+		E52CBAC9A1DF1CFF99131633 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AB7341CB99DDAA5CA52EC23 /* ContentView.swift */; };
+		480131A0731D72ABA1949877 /* CoreBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAF7AA9058417D529285795E /* CoreBridge.swift */; };
+		B4BA9F4546BCCF39C98E2918 /* libmywhisper_core.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = ADFAB3C47FDCEBDD8A00F72E /* libmywhisper_core.xcframework */; };
+		4D2DCE83303D7ED85DCD61B5 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = F32B3BDBD273F3BCD8875B1B /* PrivacyInfo.xcprivacy */; };
+		2D3275124A5A3FCA7E1F8CAD /* CoreBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC75167B1E2B32413C59E564 /* CoreBridgeTests.swift */; };
+		85252389B093CE46404738B4 /* SettingsJobsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F563518FFFD727440F23503 /* SettingsJobsTests.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		8DCCA0E2D1DC0FE1F5BA8369 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 9E54FEBF9200AEA4F8A3F04A /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 82372756D9743AB52A3AF44F;
+			remoteInfo = MyWhisper;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		21DD60AF35D373E1C54DA8A7 /* MyWhisperApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyWhisperApp.swift; sourceTree = "<group>"; };
+		9AB7341CB99DDAA5CA52EC23 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		FAF7AA9058417D529285795E /* CoreBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreBridge.swift; sourceTree = "<group>"; };
+		7EB0EE73123791A0202B4796 /* MyWhisper.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = MyWhisper.entitlements; sourceTree = "<group>"; };
+		658CB18E2E567D501D0E64F8 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		F32B3BDBD273F3BCD8875B1B /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		5A58D92DE956EEA35F378973 /* mywhisper_core.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = mywhisper_core.h; sourceTree = "<group>"; };
+		ADFAB3C47FDCEBDD8A00F72E /* libmywhisper_core.xcframework */ = {isa = PBXFileReference; explicitFileType = wrapper.xcframework; path = libmywhisper_core.xcframework; sourceTree = "<group>"; };
+		EC75167B1E2B32413C59E564 /* CoreBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreBridgeTests.swift; sourceTree = "<group>"; };
+		1F563518FFFD727440F23503 /* SettingsJobsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsJobsTests.swift; sourceTree = "<group>"; };
+		602A6F78559E7FAC27690B4A /* Tests Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		D82908387D374745193668C2 /* MyWhisper.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MyWhisper.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		8965188E778D2EEAECC16395 /* MyWhisperTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MyWhisperTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		0C909331FAA822E6377952A7 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B4BA9F4546BCCF39C98E2918 /* libmywhisper_core.xcframework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		46F8BF07BA88DDEA52A0F103 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		1BE13767E67D70533CA84B12 = {
+			isa = PBXGroup;
+			children = (
+				631820A24D0CAC3FCAC2C8BC /* MyWhisper */,
+				4625E7473F669A17F3F9CA47 /* MyWhisperTests */,
+				186885C9452190BC9E1949AF /* Libs */,
+				33F9C1A9DA6731C8C06E8090 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		631820A24D0CAC3FCAC2C8BC /* MyWhisper */ = {
+			isa = PBXGroup;
+			children = (
+				21DD60AF35D373E1C54DA8A7 /* MyWhisperApp.swift */,
+				9AB7341CB99DDAA5CA52EC23 /* ContentView.swift */,
+				FAF7AA9058417D529285795E /* CoreBridge.swift */,
+				7EB0EE73123791A0202B4796 /* MyWhisper.entitlements */,
+				658CB18E2E567D501D0E64F8 /* Info.plist */,
+				F32B3BDBD273F3BCD8875B1B /* PrivacyInfo.xcprivacy */,
+			);
+			path = MyWhisper;
+			sourceTree = "<group>";
+		};
+		4625E7473F669A17F3F9CA47 /* MyWhisperTests */ = {
+			isa = PBXGroup;
+			children = (
+				EC75167B1E2B32413C59E564 /* CoreBridgeTests.swift */,
+				1F563518FFFD727440F23503 /* SettingsJobsTests.swift */,
+				602A6F78559E7FAC27690B4A /* Tests Info.plist */,
+			);
+			path = MyWhisperTests;
+			sourceTree = "<group>";
+		};
+		186885C9452190BC9E1949AF /* Libs */ = {
+			isa = PBXGroup;
+			children = (
+				5A58D92DE956EEA35F378973 /* mywhisper_core.h */,
+				ADFAB3C47FDCEBDD8A00F72E /* libmywhisper_core.xcframework */,
+			);
+			path = Libs;
+			sourceTree = "<group>";
+		};
+		33F9C1A9DA6731C8C06E8090 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				D82908387D374745193668C2 /* MyWhisper.app */,
+				8965188E778D2EEAECC16395 /* MyWhisperTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		82372756D9743AB52A3AF44F /* MyWhisper */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 509C5B95DB464DEDA1AC10CC /* Build configuration list for PBXNativeTarget "MyWhisper" */;
+			buildPhases = (
+				84B0EE461E4A38913734693C /* Sources */,
+				0C909331FAA822E6377952A7 /* Frameworks */,
+				234F4E7CACFAA508BC9FF148 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = MyWhisper;
+			productName = MyWhisper;
+			productReference = D82908387D374745193668C2 /* MyWhisper.app */;
+			productType = "com.apple.product-type.application";
+		};
+		78DA65A2C7786A54A5976B57 /* MyWhisperTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 32889B18A03AD5F6476841F7 /* Build configuration list for PBXNativeTarget "MyWhisperTests" */;
+			buildPhases = (
+				D9C79732A6D8F08A153912AB /* Sources */,
+				46F8BF07BA88DDEA52A0F103 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				7917B6F1DC0FEEABBE126BF7 /* PBXTargetDependency */,
+			);
+			name = MyWhisperTests;
+			productName = MyWhisperTests;
+			productReference = 8965188E778D2EEAECC16395 /* MyWhisperTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		9E54FEBF9200AEA4F8A3F04A /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				LastSwiftUpdateCheck = 1600;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					82372756D9743AB52A3AF44F = {
+						CreatedOnToolsVersion = 16.0;
+					};
+					78DA65A2C7786A54A5976B57 = {
+						CreatedOnToolsVersion = 16.0;
+						TestTargetID = 82372756D9743AB52A3AF44F;
+					};
+				};
+			};
+			buildConfigurationList = AA190AA5C254809DF0CC6E47 /* Build configuration list for PBXProject "MyWhisper" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+			);
+			mainGroup = 1BE13767E67D70533CA84B12;
+			productRefGroup = 33F9C1A9DA6731C8C06E8090 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				82372756D9743AB52A3AF44F /* MyWhisper */,
+				78DA65A2C7786A54A5976B57 /* MyWhisperTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		234F4E7CACFAA508BC9FF148 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4D2DCE83303D7ED85DCD61B5 /* PrivacyInfo.xcprivacy in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		84B0EE461E4A38913734693C /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5F1C0CC30E5D70202DCA2EE4 /* MyWhisperApp.swift in Sources */,
+				E52CBAC9A1DF1CFF99131633 /* ContentView.swift in Sources */,
+				480131A0731D72ABA1949877 /* CoreBridge.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D9C79732A6D8F08A153912AB /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				2D3275124A5A3FCA7E1F8CAD /* CoreBridgeTests.swift in Sources */,
+				85252389B093CE46404738B4 /* SettingsJobsTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		7917B6F1DC0FEEABBE126BF7 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 82372756D9743AB52A3AF44F /* MyWhisper */;
+			targetProxy = 8DCCA0E2D1DC0FE1F5BA8369 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		A7C887E9DA81A62A558B473E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				MARKETING_VERSION = 0.1.0;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		FD887BAA76E250511B9CCED1 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				MARKETING_VERSION = 0.1.0;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		DC77B2482CB5BC00ADF1F4BC /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = MyWhisper/MyWhisper.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Libs",
+				);
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = MyWhisper/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.mywhisper.mobile;
+				PRODUCT_NAME = MyWhisper;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		DEDA658B833B862DC30C3BB0 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = MyWhisper/MyWhisper.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Libs",
+				);
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = MyWhisper/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.mywhisper.mobile;
+				PRODUCT_NAME = MyWhisper;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		31D75645CDB0EA7DE45E82BF /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = MyWhisperTests/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.mywhisper.mobile.tests;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/MyWhisper.app/MyWhisper";
+			};
+			name = Debug;
+		};
+		84A6C565C248E9891B4F1DE5 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = MyWhisperTests/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.mywhisper.mobile.tests;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/MyWhisper.app/MyWhisper";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		AA190AA5C254809DF0CC6E47 /* Build configuration list for PBXProject "MyWhisper" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A7C887E9DA81A62A558B473E /* Debug */,
+				FD887BAA76E250511B9CCED1 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		509C5B95DB464DEDA1AC10CC /* Build configuration list for PBXNativeTarget "MyWhisper" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DC77B2482CB5BC00ADF1F4BC /* Debug */,
+				DEDA658B833B862DC30C3BB0 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		32889B18A03AD5F6476841F7 /* Build configuration list for PBXNativeTarget "MyWhisperTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				31D75645CDB0EA7DE45E82BF /* Debug */,
+				84A6C565C248E9891B4F1DE5 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 9E54FEBF9200AEA4F8A3F04A /* Project object */;
+}
