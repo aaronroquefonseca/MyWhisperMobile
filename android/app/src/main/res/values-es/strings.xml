@@ -342,4 +342,16 @@
     <string name="llm_selftest_running">Probando modelo local…</string>
     <string name="llm_selftest_pass">OK · %1$d ms · %2$s</string>
     <string name="llm_selftest_fail">FALLO · %1$d ms · %2$s</string>
+    <!-- Provider tests: ONE pattern for every chain row (STT + LLM, local + remote) -->
+    <string name="provider_test_run">Probar</string>
+    <string name="provider_test_testing">Probando…</string>
+    <string name="provider_test_pass">OK · %1$d ms · %2$s</string>
+    <string name="provider_test_fail">FALLO · %1$d ms · %2$s</string>
+    <string name="provider_test_need_url">Introduce primero la URL del servidor.</string>
+    <string name="provider_test_need_model">Introduce primero el modelo.</string>
+    <string name="provider_test_bad_url">La URL debe empezar por http(s):// o ws(s)://.</string>
+    <string name="provider_test_bad_base">La URL base debe empezar por http(s)://.</string>
+    <string name="provider_test_looks_good">Correcto — guarda y dicta para verificar contra el servidor.</string>
+    <string name="provider_test_server_url_required">La URL del servidor es obligatoria.</string>
+    <string name="provider_test_model_required">El modelo es obligatorio.</string>
 </resources>

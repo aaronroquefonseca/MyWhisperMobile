@@ -342,4 +342,16 @@
     <string name="llm_selftest_running">Testing local model…</string>
     <string name="llm_selftest_pass">PASS · %1$d ms · %2$s</string>
     <string name="llm_selftest_fail">FAIL · %1$d ms · %2$s</string>
+    <!-- Provider tests: ONE pattern for every chain row (STT + LLM, local + remote) -->
+    <string name="provider_test_run">Test</string>
+    <string name="provider_test_testing">Testing…</string>
+    <string name="provider_test_pass">PASS · %1$d ms · %2$s</string>
+    <string name="provider_test_fail">FAIL · %1$d ms · %2$s</string>
+    <string name="provider_test_need_url">Enter a server URL first.</string>
+    <string name="provider_test_need_model">Enter a model first.</string>
+    <string name="provider_test_bad_url">URL must start with http(s):// or ws(s)://.</string>
+    <string name="provider_test_bad_base">Base URL must start with http(s)://.</string>
+    <string name="provider_test_looks_good">Looks good — save, then dictate to verify against the server.</string>
+    <string name="provider_test_server_url_required">Server URL is required.</string>
+    <string name="provider_test_model_required">Model is required.</string>
 </resources>
