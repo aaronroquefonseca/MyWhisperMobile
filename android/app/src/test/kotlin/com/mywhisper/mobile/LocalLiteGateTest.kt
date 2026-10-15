@@ -1,0 +1,107 @@
+package com.mywhisper.mobile
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/**
+ * Lite-flavor gate for the Local STT/LLM rows (see MainActivity
+ * SttScreen/CleanupScreen): lite builds ship no on-device runners
+ * (sherpa / MediaPipe are fullImplementation-only), so the rows must
+ * offer no download that could never run — NEED_FULL_FLAVOR with the
+ * full-APK pointer instead. Full flavor (runner present) defers to the
+ * verified-pack row machine. Fail-closed in both flavors: only PRESENT
+ * enables the toggle.
+ */
+class LocalLiteGateTest {
+
+    @Test
+    fun absentRunner_alwaysNeedFullFlavor() {
+        // Every pack/download combination gates to NEED_FULL_FLAVOR
+        // when the runner is absent (lite flavor) — no Download offered.
+        val combos = listOf(
+            Triple(false, false, false),
+            Triple(true, false, false),
+            Triple(false, true, false),
+            Triple(false, false, true),
+            Triple(true, true, true),
+        )
+        for ((present, mismatch, downloading) in combos) {
+            for (error in listOf(null, "", "boom")) {
+                assertEquals(
+                    "present=$present mismatch=$mismatch downloading=$downloading error=$error",
+                    MainActivity.GatedRowState.NEED_FULL_FLAVOR,
+                    MainActivity.gatedRowState(present, mismatch, downloading, error, false),
+                )
+            }
+        }
+    }
+
+    @Test
+    fun presentRunner_defersToPackRowMachine() {
+        // Full flavor (runner present): same outcomes as the underlying
+        // verified-pack resolver.
+        assertEquals(
+            MainActivity.GatedRowState.MISSING,
+            MainActivity.gatedRowState(false, false, false, null, true),
+        )
+        assertEquals(
+            MainActivity.GatedRowState.DOWNLOADING,
+            MainActivity.gatedRowState(false, false, true, null, true),
+        )
+        assertEquals(
+            MainActivity.GatedRowState.PRESENT,
+            MainActivity.gatedRowState(true, false, false, null, true),
+        )
+        assertEquals(
+            MainActivity.GatedRowState.MISMATCH,
+            MainActivity.gatedRowState(false, true, false, null, true),
+        )
+        assertEquals(
+            MainActivity.GatedRowState.FAILED,
+            MainActivity.gatedRowState(false, false, false, "boom", true),
+        )
+    }
+
+    @Test
+    fun toggle_liveOnlyWhenPresent() {
+        // Fail-closed in both flavors: NEED_FULL_FLAVOR never enables.
+        assertFalse(
+            MainActivity.gatedToggleAllowed(MainActivity.GatedRowState.NEED_FULL_FLAVOR),
+        )
+        assertTrue(
+            MainActivity.gatedToggleAllowed(MainActivity.GatedRowState.PRESENT),
+        )
+        assertFalse(MainActivity.gatedToggleAllowed(MainActivity.GatedRowState.MISSING))
+        assertFalse(MainActivity.gatedToggleAllowed(MainActivity.GatedRowState.DOWNLOADING))
+        assertFalse(MainActivity.gatedToggleAllowed(MainActivity.GatedRowState.MISMATCH))
+        assertFalse(MainActivity.gatedToggleAllowed(MainActivity.GatedRowState.FAILED))
+    }
+
+    @Test
+    fun gatedToggle_agreesWithLegacyPackGate() {
+        // PRESENT is the only live state under both gates.
+        assertEquals(
+            MainActivity.localToggleAllowed(MainActivity.LocalPackState.PRESENT),
+            MainActivity.gatedToggleAllowed(MainActivity.GatedRowState.PRESENT),
+        )
+        assertEquals(
+            MainActivity.localToggleAllowed(MainActivity.LocalPackState.MISSING),
+            MainActivity.gatedToggleAllowed(MainActivity.GatedRowState.MISSING),
+        )
+        assertEquals(
+            MainActivity.localToggleAllowed(MainActivity.LocalPackState.MISMATCH),
+            MainActivity.gatedToggleAllowed(MainActivity.GatedRowState.MISMATCH),
+        )
+    }
+
+    @Test
+    fun runnerProbes_neverThrow() {
+        // Classpath probes (no sherpa/MediaPipe on the JVM test
+        // classpath, same as lite builds) must degrade to false, never
+        // throw — callers keep the server fallback.
+        MainActivity.sttRunnerSupported()
+        MainActivity.llmRunnerSupported()
+    }
+}
