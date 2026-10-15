@@ -101,6 +101,27 @@ class LocalWordBoostTest {
     }
 
     @Test
+    fun phrase_withDottedCapitalI_neverThrows() {
+        // 'İ'.lowercase() expands to 2 chars ("i\u0307"): the old
+        // lowercase-then-index phrase pass desynced offsets and threw
+        // StringIndexOutOfBoundsException (this fn never throws), killing
+        // the local hit. regionMatches scans original offsets: no desync.
+        assertEquals(
+            "İ New York",
+            LocalStt.applyWordBoost("İ new york", listOf("New York")),
+        )
+        // Already canonical + no phrase present: passthrough, no throw.
+        assertEquals(
+            "İ New York",
+            LocalStt.applyWordBoost("İ New York", listOf("New York")),
+        )
+        assertEquals(
+            "İSTANBUL morgen",
+            LocalStt.applyWordBoost("İSTANBUL morgen", listOf("New York")),
+        )
+    }
+
+    @Test
     fun punctuationBoundaries_preserved() {
         assertEquals(
             "hi Kubernetes, welcome!",
