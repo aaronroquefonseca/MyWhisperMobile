@@ -631,6 +631,7 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeSyncAll
 /// Reads the stored `Local` entry (first enabled) or reports not-ready.
 /// # Safety
 /// Called from the JVM with valid JNI handles (`env` attached, object args valid local refs).
+#[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeLocalLlmStatus(
     mut env: JNIEnv,
@@ -665,6 +666,7 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeLocalLl
 /// Byte-stable cleanup prompt packing (mirrors Kotlin so both sides agree).
 /// # Safety
 /// Called from the JVM with valid JNI handles (`env` attached, object args valid local refs).
+#[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeLocalLlmPrompt(
     mut env: JNIEnv,

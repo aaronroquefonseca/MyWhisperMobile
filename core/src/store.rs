@@ -174,14 +174,18 @@ fn db_key() -> Result<[u8; 32], String> {
     }
     #[cfg(target_os = "android")]
     return Err("MYWHISPER_DB_KEY not set (nativeOpen must provide the Keystore key)".to_string());
-    #[cfg(not(target_os = "android"))]
+    // IOS PORT: iOS never falls back to the desktop keyring (keyring
+    // does not compile for iOS); Swift always passes the Keychain key.
+    #[cfg(target_os = "ios")]
+    return Err("MYWHISPER_DB_KEY not set (engine_open must provide the Keychain key)".to_string());
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
         db_key_desktop()
     }
 }
 
 /// Desktop-only: Secret Service keyring lookup/creation.
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn db_key_desktop() -> Result<[u8; 32], String> {
     let entry = keyring::Entry::new("mywhisper", "state-db")
         .map_err(|e| format!("keyring unavailable: {e} (is a Secret Service running?)"))?;

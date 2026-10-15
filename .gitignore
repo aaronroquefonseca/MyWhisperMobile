@@ -15,3 +15,7 @@ android/app/libs/*.jar
 **/models/*.ort
 **/models/*.txt
 !**/models/*.manifest.json
+# iOS build artifact (produced by scripts/build-core-ios.sh, never committed).
+ios/Libs/*.xcframework
+# Xcode per-user state (shared schemes live in xcshareddata and ARE committed).
+xcuserdata/

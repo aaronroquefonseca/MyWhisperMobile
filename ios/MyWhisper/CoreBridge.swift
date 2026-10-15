@@ -59,7 +59,7 @@ enum CoreBridge {
 
     /// Take ownership of a core-returned C string (frees via the core).
     private static func take(_ ptr: UnsafeMutablePointer<CChar>?) throws -> String {
-        guard let ptr else { throw CoreError.nullReply }
+        guard let ptr = ptr else { throw CoreError.nullReply }
         defer { ffiFree(ptr) }
         return String(cString: ptr)
     }
@@ -220,21 +220,20 @@ enum CoreBridge {
 
     // MARK: - Key (Keychain-backed, shared via App Group Keychain sharing)
 
-    /// 64-hex-char DB key, created once in the Keychain and shared with
-    /// future extensions via the Keychain access group. Same ciphertext
-    /// format as desktop/Android — a `state.db` moved between devices
-    /// opens with the same key.
+    /// 64-hex-char DB key, created once in the app Keychain. Same
+    /// ciphertext format as desktop/Android — a `state.db` moved
+    /// between devices opens with the same key. (No access-group
+    /// override: single-app v1 uses the default group, which is what
+    /// the Keychain-sharing entitlement grants; extensions re-share
+    /// it later.)
     static func dbKeyHex() throws -> String {
         let account = "mywhisper-db-key"
-        var query: [String: Any] = [
+        let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrAccount as String: account,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
-        #if !targetEnvironment(simulator)
-        query[kSecAttrAccessGroup as String] = "group.com.mywhisper.mobile"
-        #endif
         var item: CFTypeRef?
         if SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
            let data = item as? Data,
