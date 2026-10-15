@@ -101,6 +101,8 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
@@ -284,6 +286,32 @@ class MainActivity : ComponentActivity() {
             runnerSupported: Boolean,
             packState: LocalPackState,
         ): Boolean = runnerSupported && packState == LocalPackState.PRESENT
+
+        // -- Provider tests: ONE pattern for every chain row ---------
+
+        /**
+         * Local STT test gate: same rule as the LLM self-test
+         * (verified pack on a runner build). Delegates to
+         * [ProviderTest.localTestAllowed]. Pure for unit tests.
+         */
+        @JvmStatic
+        internal fun sttLocalTestAllowed(
+            runnerSupported: Boolean,
+            packState: LocalPackState,
+        ): Boolean = ProviderTest.localTestAllowed(
+            runnerSupported,
+            packState == LocalPackState.PRESENT,
+        )
+
+        /** Server STT row test goes live when the config validates. Pure. */
+        @JvmStatic
+        internal fun sttServerTestAllowed(kind: String, url: String, model: String): Boolean =
+            ProviderTest.sttServerTestAllowed(kind, url, model)
+
+        /** Remote LLM row test goes live when the config validates. Pure. */
+        @JvmStatic
+        internal fun llmRemoteTestAllowed(kind: String, url: String, model: String): Boolean =
+            ProviderTest.llmRemoteTestAllowed(kind, url, model)
 
         /**
          * Lite-flavor gate for the Local STT/LLM rows: lite builds ship
@@ -936,6 +964,102 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * THE provider-test affordance: one button, same placement
+     * under every chain row (STT + LLM, local + remote), same
+     * inline reporting (`latency + excerpt/status`). Disabled
+     * fail-closed via [enabled]; busy shows the testing copy.
+     */
+    @Composable
+    private fun ProviderTestRow(
+        busy: Boolean,
+        result: ProviderTest.Result?,
+        enabled: Boolean,
+        onTest: () -> Unit,
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedButton(
+                enabled = enabled && !busy,
+                onClick = onTest,
+            ) {
+                Text(
+                    if (busy) stringResource(R.string.provider_test_testing)
+                    else stringResource(R.string.provider_test_run),
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            if (busy && result == null) {
+                Text(
+                    stringResource(R.string.provider_test_testing),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else if (result != null) {
+                Text(
+                    if (result.passed) {
+                        stringResource(
+                            R.string.provider_test_pass,
+                            result.latencyMs,
+                            result.excerpt,
+                        )
+                    } else {
+                        stringResource(
+                            R.string.provider_test_fail,
+                            result.latencyMs,
+                            result.excerpt.ifBlank { result.error ?: "failed" },
+                        )
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (result.passed) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.error
+                    },
+                )
+            }
+        }
+    }
+
+    /**
+     * Lightweight endpoint check (no heavy transcribe/generate):
+     * any HTTP response = reachable (even 404/405 on POST-only
+     * endpoints); only network throws read as FAIL. Short timeouts.
+     * Never touches engines/runners/services.
+     */
+    private fun httpGetCode(urlStr: String, timeoutMs: Int = 8000): Int {
+        val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
+            connectTimeout = timeoutMs
+            readTimeout = timeoutMs
+            instanceFollowRedirects = true
+            requestMethod = "GET"
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            conn.connect()
+            return conn.responseCode
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    /** GET body snippet for model-list checks (Ollama `/api/tags`). */
+    private fun httpGetBody(urlStr: String, timeoutMs: Int = 8000, maxChars: Int = 4096): String {
+        val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
+            connectTimeout = timeoutMs
+            readTimeout = timeoutMs
+            instanceFollowRedirects = true
+            requestMethod = "GET"
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            val code = conn.responseCode
+            if (code !in 200..299) throw IllegalStateException("http $code")
+            return conn.inputStream.bufferedReader().use { it.readText().take(maxChars) }
+        } finally {
+            conn.disconnect()
+        }
+    }
+
     @Composable
     private fun NotifToggle(
         title: String,
@@ -1546,6 +1670,81 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+        // Provider tests: ONE pattern on every chain row (same
+        // button + latency/excerpt inline). Per-entry state keyed by
+        // row id so reorder keeps results with their row.
+        var sttLocalBusy by remember { mutableStateOf(false) }
+        var sttLocalResult by remember { mutableStateOf<ProviderTest.Result?>(null) }
+        var sttBusy by remember { mutableStateOf(setOf<String>()) }
+        var sttResults by remember { mutableStateOf(mapOf<String, ProviderTest.Result>()) }
+        fun probeSttServer(kind: String, url: String, model: String): ProviderTest.Result {
+            val u = url.trim()
+            val m = model.trim()
+            // No HTTP surface: blank vendor-default URL or ws(s)
+            // sherpa protocol — config validation only, no transcribe.
+            if (u.isEmpty() || u.startsWith("ws", ignoreCase = true)) {
+                return ProviderTest.runProbe(ProviderTest.SERVER_TIMEOUT_MS) {
+                    "config ok · $m"
+                }
+            }
+            return ProviderTest.runProbe(ProviderTest.SERVER_TIMEOUT_MS) {
+                val code = httpGetCode(u)
+                "HTTP $code · $m"
+            }
+        }
+        fun startSttServerTest(e: JSONObject) {
+            val id = e.optString("id")
+            if (id.isBlank() || sttBusy.contains(id)) return
+            val kind = e.optString("kind")
+            val url = e.optString("url")
+            val model = e.optString("model")
+            if (!sttServerTestAllowed(kind, url, model)) return
+            sttBusy = sttBusy + id
+            sttResults = sttResults - id
+            workers.execute {
+                val result = try {
+                    probeSttServer(kind, url, model)
+                } catch (ex: Exception) {
+                    ProviderTest.mapServerSttResult(
+                        null, 0L, ProviderTest.SERVER_TIMEOUT_MS,
+                        ex.message ?: "failed",
+                    )
+                }
+                runOnUiThread {
+                    sttBusy = sttBusy - id
+                    sttResults = sttResults + (id to result)
+                }
+            }
+        }
+        fun startSttLocalTest() {
+            // Fail-closed: verified pack on a runner build only.
+            if (!sttLocalTestAllowed(sttRunner, selPack)) return
+            if (sttLocalBusy) return
+            sttLocalBusy = true
+            sttLocalResult = null
+            workers.execute {
+                val result = try {
+                    ProviderTest.runProbe(ProviderTest.LOCAL_TIMEOUT_MS) {
+                        val r = LocalStt.transcribe(
+                            this, ProviderTest.samplePcm16(), 16000,
+                            stt.optString("language", "auto").ifBlank { "auto" },
+                        ) ?: throw IllegalStateException("decode skipped — engine unavailable")
+                        val text = r.text.trim()
+                        if (text.isNotBlank()) text
+                        else "pack ok · ${r.chunks} chunks · ${r.decodeMs}ms"
+                    }
+                } catch (ex: Exception) {
+                    ProviderTest.mapLocalSttResult(
+                        null, 0L, ProviderTest.LOCAL_TIMEOUT_MS,
+                        ex.message ?: "failed",
+                    )
+                }
+                runOnUiThread {
+                    sttLocalResult = result
+                    sttLocalBusy = false
+                }
+            }
+        }
         @Suppress("UNUSED_EXPRESSION") version
         // Singleton rename-migrate (STT): stored Local-kind rows with a
         // custom name are renamed to "Local" once per save-generation.
@@ -1627,7 +1826,16 @@ class MainActivity : ComponentActivity() {
                             },
                             handle = handle,
                         )
+                        // Local STT test (decode sample), same ONE
+                        // row pattern as every provider row.
+                        ProviderTestRow(
+                            busy = sttLocalBusy,
+                            result = sttLocalResult,
+                            enabled = sttLocalTestAllowed(sttRunner, selPack),
+                            onTest = { startSttLocalTest() },
+                        )
                     } else {
+                    Column(modifier = Modifier.fillMaxWidth()) {
                     Card(
                         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
                     ) {
@@ -1661,6 +1869,20 @@ class MainActivity : ComponentActivity() {
                                 Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.action_delete))
                             }
                         }
+                    }
+                        // Server STT test (lightweight endpoint
+                        // check, no transcribe), same ONE pattern.
+                        val sttId = e.optString("id")
+                        ProviderTestRow(
+                            busy = sttBusy.contains(sttId),
+                            result = sttResults[sttId],
+                            enabled = sttServerTestAllowed(
+                                e.optString("kind"),
+                                e.optString("url"),
+                                e.optString("model"),
+                            ),
+                            onTest = { startSttServerTest(e) },
+                        )
                     }
                     }
                 }
@@ -2154,22 +2376,14 @@ class MainActivity : ComponentActivity() {
         val modelBlank = model.isBlank() && !isLocalKind
         val canSave = !urlBlank && !modelBlank && !singletonBlocked
         fun testConnection(): String {
-            val u = url.trim()
-            val m = model.trim()
-            if (urlRequired && u.isEmpty()) return "Enter a server URL first."
-            if (m.isEmpty()) return "Enter a model first."
-            if (u.isNotEmpty()) {
-                val scheme = u.substringBefore("://", "")
-                val ok = u.contains("://") && when (kind) {
-                    "SelfHosted" -> scheme in setOf("http", "https", "ws", "wss")
-                    else -> scheme in setOf("http", "https")
-                }
-                if (!ok) {
-                    return if (kind == "SelfHosted") "URL must start with http(s):// or ws(s)://."
-                    else "Base URL must start with http(s)://."
-                }
+            // ONE validation rule shared with the row test gates.
+            return when (ProviderTest.validateStt(kind, url, model)) {
+                ProviderTest.SttError.NONE -> getString(R.string.provider_test_looks_good)
+                ProviderTest.SttError.NEED_URL -> getString(R.string.provider_test_need_url)
+                ProviderTest.SttError.NEED_MODEL -> getString(R.string.provider_test_need_model)
+                ProviderTest.SttError.BAD_URL -> getString(R.string.provider_test_bad_url)
+                ProviderTest.SttError.BAD_BASE -> getString(R.string.provider_test_bad_base)
             }
-            return "Looks good — save, then dictate to verify against the server."
         }
         AlertDialog(
             onDismissRequest = onClose,
@@ -2217,7 +2431,7 @@ class MainActivity : ComponentActivity() {
                         }
                         if (provider == "Gemini") {
                             Text(
-                                "Gemini speech is not implemented in this build yet.",
+                                stringResource(R.string.stt_gemini_note),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.error,
                             )
@@ -2233,7 +2447,7 @@ class MainActivity : ComponentActivity() {
                             },
                             isError = urlBlank,
                             supportingText = {
-                                if (urlBlank) Text("Server URL is required.")
+                                if (urlBlank) Text(stringResource(R.string.provider_test_server_url_required))
                             },
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                             modifier = Modifier.fillMaxWidth())
@@ -2249,7 +2463,7 @@ class MainActivity : ComponentActivity() {
                             label = { Text(stringResource(R.string.stt_model)) },
                             isError = modelBlank,
                             supportingText = {
-                                if (modelBlank) Text("Model is required.")
+                                if (modelBlank) Text(stringResource(R.string.provider_test_model_required))
                             },
                             modifier = Modifier.fillMaxWidth())
                     }
@@ -2261,7 +2475,10 @@ class MainActivity : ComponentActivity() {
                             else PasswordVisualTransformation(),
                             trailingIcon = {
                                 TextButton(onClick = { showKey = !showKey }) {
-                                    Text(if (showKey) "hide" else "show")
+                                    Text(
+                                        if (showKey) stringResource(R.string.stt_apikey_hide)
+                                        else stringResource(R.string.stt_apikey_show),
+                                    )
                                 }
                             },
                             modifier = Modifier.fillMaxWidth(),
@@ -2269,7 +2486,7 @@ class MainActivity : ComponentActivity() {
                     }
                     if (kind == "SelfHosted") {
                         Text(
-                            "Bearer token for reverse-proxy setups. Empty means no token.",
+                            stringResource(R.string.stt_apikey_note),
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
@@ -2279,7 +2496,7 @@ class MainActivity : ComponentActivity() {
                             Switch(checked = streaming, onCheckedChange = { streaming = it })
                         }
                         Text(
-                            "http(s) URLs always use request/response; ws(s) URLs use the sherpa protocol.",
+                            stringResource(R.string.stt_streaming_note),
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
@@ -2290,15 +2507,16 @@ class MainActivity : ComponentActivity() {
                     if (!isLocalKind) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             OutlinedButton(onClick = { testStatus = testConnection() }) {
-                                Text("Test connection")
+                                Text(stringResource(R.string.provider_test_run))
                             }
                         }
                     }
                     testStatus?.let {
+                        val looksGood = getString(R.string.provider_test_looks_good)
                         Text(
                             it,
                             style = MaterialTheme.typography.bodySmall,
-                            color = if (it.startsWith("Looks good")) MaterialTheme.colorScheme.primary
+                            color = if (it == looksGood) MaterialTheme.colorScheme.primary
                             else MaterialTheme.colorScheme.error,
                         )
                     }
@@ -2340,10 +2558,14 @@ class MainActivity : ComponentActivity() {
         var llmDlTotal by remember { mutableStateOf<Long?>(null) }
         var llmDlError by remember { mutableStateOf<String?>(null) }
         var llmDeleteConfirm by remember { mutableStateOf(false) }
-        // Local-only self-test ("Run test" in the Local row): fixed
-        // prompt + fixed transcript through the Local path only.
+        // Local LLM test (existing self-test harness, now through
+        // the ONE [ProviderTest.Result] pattern) + remote LLM probes
+        // (minimal ping, no heavy generate). Per-entry remote state
+        // keyed by row id.
         var llmTestBusy by remember { mutableStateOf(false) }
-        var llmTestResult by remember { mutableStateOf<LocalLlmManager.SelfTestResult?>(null) }
+        var llmTestResult by remember { mutableStateOf<ProviderTest.Result?>(null) }
+        var llmBusy by remember { mutableStateOf(setOf<String>()) }
+        var llmResults by remember { mutableStateOf(mapOf<String, ProviderTest.Result>()) }
         var version by remember { mutableIntStateOf(0) }
         // Pack check (SHA over a hundreds-of-MB file) runs once per
         // save-generation, not per row or keystroke; enabling Local
@@ -2389,7 +2611,8 @@ class MainActivity : ComponentActivity() {
         }
         fun startLlmSelfTest() {
             // Fail-closed: verified pack + runner only; local path
-            // only, never Ollama/cloud (no fallback masking).
+            // only, never Ollama/cloud (no fallback masking). United
+            // with every other row via [ProviderTest.fromSelfTest].
             if (!llmSelfTestAllowed(llmRunner, llmState)) return
             if (llmTestBusy) return
             llmTestBusy = true
@@ -2397,21 +2620,74 @@ class MainActivity : ComponentActivity() {
             workers.execute {
                 val result = try {
                     val system = CoreBridge.defaultCleanupPrompt().getOrThrow()
-                    LocalLlmManager.runSelfTest(
-                        LocalLlmManager.defaultTaskFile(filesDir),
-                        system,
+                    ProviderTest.fromSelfTest(
+                        LocalLlmManager.runSelfTest(
+                            LocalLlmManager.defaultTaskFile(filesDir),
+                            system,
+                        ),
                     )
                 } catch (ex: Exception) {
-                    LocalLlmManager.mapSelfTestResult(
-                        null,
-                        0L,
-                        LocalLlmManager.SELFTEST_TIMEOUT_MS,
-                        ex.message ?: "failed",
+                    ProviderTest.fromSelfTest(
+                        LocalLlmManager.mapSelfTestResult(
+                            null,
+                            0L,
+                            LocalLlmManager.SELFTEST_TIMEOUT_MS,
+                            ex.message ?: "failed",
+                        ),
                     )
                 }
                 runOnUiThread {
                     llmTestResult = result
                     llmTestBusy = false
+                }
+            }
+        }
+        fun probeLlmRemote(kind: String, url: String, model: String): ProviderTest.Result {
+            val u = url.trim()
+            val m = model.trim()
+            // Blank vendor-default URL: config validation only.
+            if (u.isEmpty()) {
+                return ProviderTest.runProbe(ProviderTest.SERVER_TIMEOUT_MS) {
+                    "config ok · $m"
+                }
+            }
+            // Ollama: model reachability where cheap (GET /api/tags).
+            if (kind == "Ollama") {
+                return ProviderTest.runProbe(ProviderTest.SERVER_TIMEOUT_MS) {
+                    val base = u.trimEnd('/')
+                    val body = httpGetBody("$base/api/tags")
+                    if (!body.contains(m, ignoreCase = true)) {
+                        throw IllegalStateException("reachable · model not listed")
+                    }
+                    "model ok · $m"
+                }
+            }
+            return ProviderTest.runProbe(ProviderTest.SERVER_TIMEOUT_MS) {
+                val code = httpGetCode(u)
+                "HTTP $code · $m"
+            }
+        }
+        fun startLlmRemoteTest(e: JSONObject) {
+            val id = e.optString("id")
+            if (id.isBlank() || llmBusy.contains(id)) return
+            val kind = e.optString("kind")
+            val url = e.optString("url")
+            val model = e.optString("model")
+            if (!llmRemoteTestAllowed(kind, url, model)) return
+            llmBusy = llmBusy + id
+            llmResults = llmResults - id
+            workers.execute {
+                val result = try {
+                    probeLlmRemote(kind, url, model)
+                } catch (ex: Exception) {
+                    ProviderTest.mapRemoteLlmResult(
+                        null, 0L, ProviderTest.SERVER_TIMEOUT_MS,
+                        ex.message ?: "failed",
+                    )
+                }
+                runOnUiThread {
+                    llmBusy = llmBusy - id
+                    llmResults = llmResults + (id to result)
                 }
             }
         }
@@ -2637,55 +2913,18 @@ class MainActivity : ComponentActivity() {
                             },
                             handle = handle,
                         )
-                        // Local-only self-test, inline in the Local row:
-                        // fixed prompt + "this is a test" via generate(),
-                        // never Ollama/cloud. Reports latency + excerpt +
-                        // PASS/FAIL. Disabled unless the pack verifies.
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            OutlinedButton(
-                                enabled = llmSelfTestAllowed(llmRunner, llmState) && !llmTestBusy,
-                                onClick = { startLlmSelfTest() },
-                            ) {
-                                Text(
-                                    if (llmTestBusy) stringResource(R.string.llm_selftest_running)
-                                    else stringResource(R.string.llm_selftest_run),
-                                )
-                            }
-                            Spacer(Modifier.width(8.dp))
-                            val selfResult = llmTestResult
-                            if (llmTestBusy && selfResult == null) {
-                                Text(
-                                    stringResource(R.string.llm_selftest_running),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            } else if (selfResult != null) {
-                                Text(
-                                    if (selfResult.passed) {
-                                        stringResource(
-                                            R.string.llm_selftest_pass,
-                                            selfResult.latencyMs,
-                                            selfResult.excerpt,
-                                        )
-                                    } else {
-                                        stringResource(
-                                            R.string.llm_selftest_fail,
-                                            selfResult.latencyMs,
-                                            selfResult.excerpt.ifBlank {
-                                                selfResult.error ?: "failed"
-                                            },
-                                        )
-                                    },
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = if (selfResult.passed) {
-                                        MaterialTheme.colorScheme.primary
-                                    } else {
-                                        MaterialTheme.colorScheme.error
-                                    },
-                                )
-                            }
-                        }
+                        // Local LLM test (existing self-test: fixed prompt
+                        // + "this is a test" via generate(), never
+                        // Ollama/cloud), same ONE row pattern as every
+                        // provider row. Disabled unless the pack verifies.
+                        ProviderTestRow(
+                            busy = llmTestBusy,
+                            result = llmTestResult,
+                            enabled = llmSelfTestAllowed(llmRunner, llmState),
+                            onTest = { startLlmSelfTest() },
+                        )
                     } else {
+                    Column(modifier = Modifier.fillMaxWidth()) {
                     Card(
                         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
                     ) {
@@ -2722,6 +2961,20 @@ class MainActivity : ComponentActivity() {
                                 Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.action_delete))
                             }
                         }
+                    }
+                        // Remote LLM test (minimal ping, no heavy
+                        // generate), same ONE pattern.
+                        val llmId = e.optString("id")
+                        ProviderTestRow(
+                            busy = llmBusy.contains(llmId),
+                            result = llmResults[llmId],
+                            enabled = llmRemoteTestAllowed(
+                                e.optString("kind"),
+                                e.optString("url"),
+                                e.optString("model"),
+                            ),
+                            onTest = { startLlmRemoteTest(e) },
+                        )
                     }
                     }
                 }
@@ -3128,7 +3381,7 @@ class MainActivity : ComponentActivity() {
                             visualTransformation = PasswordVisualTransformation(),
                             modifier = Modifier.fillMaxWidth())
                         Text(
-                            "Bearer token for reverse-proxy setups. Empty means no token.",
+                            stringResource(R.string.stt_apikey_note),
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
