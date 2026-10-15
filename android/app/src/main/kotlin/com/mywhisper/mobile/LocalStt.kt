@@ -419,11 +419,26 @@ object LocalStt {
         }
         var boosted = out.toString()
         // Phrase pass: exact case-insensitive whole-phrase repair.
+        // NOTE: never lowercase-then-index — 'İ'.lowercase() expands to
+        // 2 chars ("i\u0307"), desyncing lowered offsets from the original
+        // and throwing StringIndexOutOfBoundsException (this fn never
+        // throws). regionMatches scans original offsets directly, so no
+        // fold expansion can desync; the end guard is belt-and-braces.
         for (p in phrases.sortedByDescending { it.length }) {
-            val idx = boosted.lowercase().indexOf(p.lowercase())
+            if (p.length > boosted.length) continue
+            var idx = -1
+            var s = 0
+            while (s + p.length <= boosted.length) {
+                if (boosted.regionMatches(s, p, 0, p.length, ignoreCase = true)) {
+                    idx = s
+                    break
+                }
+                s++
+            }
             if (idx < 0) continue
             val beforeOk = idx == 0 || !isWordChar(boosted[idx - 1])
             val end = idx + p.length
+            if (end > boosted.length) continue
             val afterOk = end == boosted.length || !isWordChar(boosted[end])
             if (beforeOk && afterOk && boosted.substring(idx, end) != p) {
                 boosted = boosted.substring(0, idx) + p + boosted.substring(end)
