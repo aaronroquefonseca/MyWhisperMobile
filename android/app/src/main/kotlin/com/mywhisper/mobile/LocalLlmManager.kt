@@ -30,6 +30,8 @@ object LocalLlmManager {
         val url: String,
         val sha256: String,
         val sizeBytes: Long,
+        /** Minimum device RAM (MB) for the selector warning; 0 = unknown. */
+        val minRamMb: Long = 0,
     )
 
     data class Status(
@@ -66,11 +68,14 @@ object LocalLlmManager {
             fun longField(name: String): Long =
                 Regex("\"$name\"\\s*:\\s*(\\d+)").find(entry)?.groupValues?.get(1)?.toLong()
                     ?: throw IllegalArgumentException("manifest entry lacks $name")
+            fun optLongField(name: String): Long =
+                Regex("\"$name\"\\s*:\\s*(\\d+)").find(entry)?.groupValues?.get(1)?.toLong() ?: 0
             ModelAsset(
                 id = strField("id"),
                 url = strField("url"),
                 sha256 = strField("sha256"),
                 sizeBytes = longField("size_bytes"),
+                minRamMb = optLongField("min_ram_mb"),
             )
         }
     }
@@ -119,7 +124,21 @@ object LocalLlmManager {
      * Returns the file on success, throws otherwise. Skips the
      * download when [dest] already verifies.
      */
-    fun downloadModel(asset: ModelAsset, dest: File): File {
+    fun downloadModel(asset: ModelAsset, dest: File): File =
+        downloadModel(asset, dest) { _, _ -> }
+
+    /**
+     * Progress-reporting overload: [onProgress] gets
+     * (receivedBytes, totalBytes?) per chunk; total is the
+     * response content-length when the server sends one, else the
+     * manifest size. Partial downloads land in [partFileFor] and are
+     * removed on failure; [deleteModel] clears them too.
+     */
+    fun downloadModel(
+        asset: ModelAsset,
+        dest: File,
+        onProgress: (receivedBytes: Long, totalBytes: Long?) -> Unit,
+    ): File {
         dest.parentFile?.mkdirs()
         if (verifySha256(dest, asset.sha256)) return dest
         if (asset.sizeBytes > 0) {
@@ -144,8 +163,21 @@ object LocalLlmManager {
             if (conn.responseCode !in 200..299) {
                 throw IllegalStateException("local-llm download http ${conn.responseCode}")
             }
+            val total = conn.contentLengthLong.takeIf { it > 0 }
+                ?: asset.sizeBytes.takeIf { it > 0 }
+            var received = 0L
+            onProgress(0L, total)
             conn.inputStream.buffered().use { ins ->
-                tmp.outputStream().buffered().use { out -> ins.copyTo(out) }
+                tmp.outputStream().buffered().use { out ->
+                    val buf = ByteArray(65536)
+                    while (true) {
+                        val n = ins.read(buf)
+                        if (n <= 0) break
+                        out.write(buf, 0, n)
+                        received += n
+                        onProgress(received, total)
+                    }
+                }
             }
         } finally {
             conn.disconnect()
@@ -157,6 +189,21 @@ object LocalLlmManager {
         if (dest.exists() && !dest.delete()) throw IllegalStateException("local-llm replace failed")
         if (!tmp.renameTo(dest)) throw IllegalStateException("local-llm rename failed")
         return dest
+    }
+
+    /** Remove the model file + any per-asset partials (delete / retry cleanup). */
+    fun deleteModel(dest: File, assets: List<ModelAsset> = emptyList()) {
+        try { dest.delete() } catch (_: Exception) {}
+        for (a in assets) {
+            try { partFileFor(dest, a.id).delete() } catch (_: Exception) {}
+        }
+        // Legacy/unknown partials with the same prefix.
+        try {
+            dest.parentFile?.listFiles { f ->
+                f.name.startsWith(dest.name + ".part.")
+            }?.forEach { it.delete() }
+        } catch (_: Exception) {
+        }
     }
 
     /**

@@ -50,6 +50,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -260,26 +261,30 @@ class MainActivity : ComponentActivity() {
             state == LocalPackState.PRESENT
 
         /**
-         * Downloadable LLM assets, parsed by [LocalLlmManager]. Kept
-         * byte-identical in parsed content to
-         * `scripts/local-llm-models.json` (see `LocalEnablementTest`
-         * sync guard); binaries are NEVER committed.
-         */
+          * Downloadable LLM assets, parsed by [LocalLlmManager]. Kept
+          * byte-identical in parsed content to
+          * `scripts/local-llm-models.json` (see `LocalEnablementTest`
+          * sync guard); binaries are NEVER committed.
+          */
         internal const val LLM_MANIFEST_JSON = """{
   "provider": "mediapipe",
-  "notes": "Binaries NEVER committed. Download via scripts/fetch-local-llm.sh. Fill in sha256 from the publisher before use (placeholder zeros fail closed).",
+  "notes": "Binaries NEVER committed. Download via the in-app Text cleanup > Local row (SHA-256 verified) or scripts/fetch-local-llm.sh. SHAs below were verified by full download + sha256sum (public repos, no auth).",
   "models": [
     {
-      "id": "smollm2-360m-instruct",
-      "url": "https://huggingface.co/litert-community/SmolLM2-360M-Instruct/resolve/main/SmolLM2-360M-Instruct_multi-prompt-seq_q8.task?download=true",
-      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
-      "size_bytes": 412000000
+      "id": "gemma3-1b-it-int4",
+      "url": "https://huggingface.co/aquhm/gemma3-1b-it-int4-litert/resolve/main/gemma3-1b-it-int4.task",
+      "sha256": "e3d981c01aeaaac69a84ffa0d4be13281b3176731063f1bea1c9fe6887bd9dee",
+      "size_bytes": 554661243,
+      "min_ram_mb": 3072,
+      "note": "Small-phone option: ~0.5GB weights, fits 4-6GB phones (Note9-class)."
     },
     {
-      "id": "gemma3-1b-it-q4",
-      "url": "https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/Gemma3-1B-IT_q4.task?download=true",
-      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
-      "size_bytes": 700000000
+      "id": "gemma2-2b-it-q8",
+      "url": "https://huggingface.co/MiCkSoftware/Gemma2-2B-IT-LiteRT/resolve/main/gemma2_q8_multi-prefill-seq_ekv1280.task",
+      "sha256": "407aaa8f86f5450370d5fc6d274aae2e62f07ae91f9c5e97d1d7b1e05078c752",
+      "size_bytes": 2702868915,
+      "min_ram_mb": 7168,
+      "note": "Capable phones only: ~2.5GB weights, needs 8GB+ RAM (Note9-class: use the 1B)."
     }
   ]
 }"""
@@ -1078,10 +1083,14 @@ class MainActivity : ComponentActivity() {
             emptyList()
         }
 
-    /** STT pack state for this device (existing verify: [LocalStt.isAvailable]). */
-    private fun sttPackState(): LocalPackState =
+    /** Pack state for one catalog model (SHA-verified). */
+    private fun sttModelPackState(model: LocalSttModels.Entry): LocalPackState =
         try {
-            sttLocalPackState(LocalStt.isAvailable(filesDir))
+            when (LocalSttModels.stateFor(filesDir, model)) {
+                LocalModelDownload.RowState.PRESENT -> LocalPackState.PRESENT
+                LocalModelDownload.RowState.MISMATCH -> LocalPackState.MISMATCH
+                else -> LocalPackState.MISSING
+            }
         } catch (_: Exception) {
             LocalPackState.MISSING
         }
@@ -1092,6 +1101,17 @@ class MainActivity : ComponentActivity() {
             llmLocalPackState(LocalLlmManager.defaultTaskFile(filesDir), llmAssets())
         } catch (_: Exception) {
             LocalPackState.MISSING
+        }
+
+    /** Total device RAM in MB (selector warning only; 0 when unreadable). */
+    private fun totalRamMb(): Long =
+        try {
+            val am = getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+            val info = android.app.ActivityManager.MemoryInfo()
+            am.getMemoryInfo(info)
+            info.totalMem / 1_000_000
+        } catch (_: Exception) {
+            0L
         }
 
     /** Fail-closed Local toggle: ON only with a verified pack, else a clear message. */
@@ -1117,9 +1137,50 @@ class MainActivity : ComponentActivity() {
         var dialog by remember { mutableStateOf<JSONObject?>(null) }
         var localInfo by remember { mutableStateOf(false) }
         var version by remember { mutableIntStateOf(0) }
-        // Pack check runs once per save-generation (not per row or
-        // keystroke); enabling Local without a verified pack fails closed.
-        val packState = remember(version) { sttPackState() }
+        val statePrefs = getSharedPreferences("mw_state", MODE_PRIVATE)
+        // Selected catalog model + per-model verify, once per
+        // save-generation (not per row or keystroke); enabling Local
+        // without a verified selected model fails closed.
+        val selectedModel = remember(version) { LocalStt.selectedEntry(statePrefs) }
+        val modelPacks = remember(version) {
+            LocalSttModels.MODELS.associate { m -> m.id to sttModelPackState(m) }
+        }
+        fun packOf(id: String): LocalPackState =
+            modelPacks[id] ?: LocalPackState.MISSING
+        val selPack = packOf(selectedModel.id)
+        // Per-model in-row download state (desktop fill_stt_models
+        // parity: progress updates in place, Retry on failure).
+        var dlBusy by remember { mutableStateOf(setOf<String>()) }
+        var dlProg by remember { mutableStateOf(mapOf<String, Pair<Long, Long>>()) }
+        var dlErr by remember { mutableStateOf(mapOf<String, String>()) }
+        var deleteConfirm by remember { mutableStateOf<String?>(null) }
+        fun rowOf(m: LocalSttModels.Entry): LocalModelDownload.RowState =
+            LocalModelDownload.resolve(
+                packOf(m.id) == LocalPackState.PRESENT,
+                packOf(m.id) == LocalPackState.MISMATCH,
+                dlBusy.contains(m.id),
+                dlErr[m.id],
+            )
+        fun startModelDownload(m: LocalSttModels.Entry) {
+            if (dlBusy.contains(m.id)) return
+            dlBusy = dlBusy + m.id
+            dlErr = dlErr - m.id
+            dlProg = dlProg + (m.id to (0L to LocalSttModels.totalBytes(m)))
+            workers.execute {
+                try {
+                    LocalSttModels.download(filesDir, m) { r, t ->
+                        runOnUiThread { dlProg = dlProg + (m.id to (r to t)) }
+                    }
+                    runOnUiThread { dlBusy = dlBusy - m.id; version++ }
+                } catch (ex: Exception) {
+                    runOnUiThread {
+                        dlBusy = dlBusy - m.id
+                        dlErr = dlErr + (m.id to (ex.message ?: "failed"))
+                        version++
+                    }
+                }
+            }
+        }
         @Suppress("UNUSED_EXPRESSION") version
         Column(
             modifier = Modifier
@@ -1155,8 +1216,12 @@ class MainActivity : ComponentActivity() {
                                 Text(e.optString("name", "entry"))
                                 Text(entrySummary(e), style = MaterialTheme.typography.bodySmall)
                                 if (isLocal) {
+                                    // Chain row follows the selected catalog
+                                    // model (downloads live in On-device
+                                    // models below); the toggle stays
+                                    // fail-closed on its verified pack.
                                     Text(
-                                        when (packState) {
+                                        when (selPack) {
                                             LocalPackState.PRESENT ->
                                                 stringResource(R.string.local_pack_present)
                                             LocalPackState.MISSING ->
@@ -1165,31 +1230,27 @@ class MainActivity : ComponentActivity() {
                                                 stringResource(R.string.local_pack_mismatch)
                                         },
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = if (packState == LocalPackState.PRESENT) {
+                                        color = if (selPack == LocalPackState.PRESENT) {
                                             MaterialTheme.colorScheme.primary
                                         } else {
                                             MaterialTheme.colorScheme.error
                                         },
                                     )
-                                    if (packState != LocalPackState.PRESENT) {
-                                        // No in-app fetch path for the STT pack:
-                                        // sideload note with the exact filesDir path.
-                                        Text(
-                                            stringResource(
-                                                R.string.stt_pack_sideload,
-                                                LocalStt.packDir(filesDir).absolutePath,
-                                            ),
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        )
-                                    }
+                                    Text(
+                                        stringResource(
+                                            R.string.stt_using_model,
+                                            selectedModel.name,
+                                        ),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
                                 }
                             }
                             if (isLocal) {
                                 Switch(
                                     checked = e.optBoolean("enabled", true),
                                     onCheckedChange = {
-                                        onLocalToggle(e, it, packState) { version++ }
+                                        onLocalToggle(e, it, selPack) { version++ }
                                     },
                                 )
                                 TextButton(onClick = { localInfo = true }) { Text(stringResource(R.string.stt_local_why)) }
@@ -1225,24 +1286,188 @@ class MainActivity : ComponentActivity() {
                     Spacer(Modifier.width(4.dp))
                     Text(stringResource(R.string.stt_add))
                 }
-                // A deleted Local row must be re-addable (default-off,
-                // fail-closed on enable like the seeded entry).
-                if (entryList(entries).none { it.optString("kind") == "Local" }) {
-                    OutlinedButton(onClick = {
-                        upsertEntry(
-                            stt,
-                            "entries",
-                            JSONObject()
-                                .put("id", "stt-${UUID.randomUUID()}")
-                                .put("name", "Local")
-                                .put("kind", "Local")
-                                .put("enabled", false),
-                        )
-                        save(); version++
-                    }) {
-                        Icon(Icons.Filled.Add, contentDescription = null)
-                        Spacer(Modifier.width(4.dp))
-                        Text(stringResource(R.string.stt_add_local))
+            }
+            Section(stringResource(R.string.stt_models_title)) {
+                Text(
+                    stringResource(R.string.stt_models_sub),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                val captureLang = stt.optString("language", "auto").ifBlank { "auto" }
+                val captureLabel = langs.firstOrNull { it.first == captureLang }?.second
+                    ?: captureLang
+                for (m in LocalSttModels.MODELS) {
+                    val row = rowOf(m)
+                    val isSelected = m.id == selectedModel.id
+                    val prog = dlProg[m.id]
+                    Card(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        colors = if (isSelected) CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                        ) else CardDefaults.cardColors(),
+                    ) {
+                        Column(modifier = Modifier.fillMaxWidth().padding(10.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(m.name, style = MaterialTheme.typography.titleSmall)
+                                    Text(
+                                        m.sizeLabel,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                if (isSelected) {
+                                    OutlinedButton(onClick = {}, enabled = false) {
+                                        Text(stringResource(R.string.action_using))
+                                    }
+                                } else {
+                                    OutlinedButton(onClick = {
+                                        LocalStt.setSelectedEntry(statePrefs, m.id)
+                                        version++
+                                    }) {
+                                        Text(stringResource(R.string.action_use))
+                                    }
+                                }
+                            }
+                            // Badges: languages + dictionary (prominent) —
+                            // no streaming claims (owner-waived).
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    when (m.langMode) {
+                                        LocalSttModels.LangMode.AUTO ->
+                                            stringResource(
+                                                R.string.stt_langs_auto,
+                                                m.languages.size,
+                                            )
+                                        LocalSttModels.LangMode.MANUAL ->
+                                            stringResource(
+                                                R.string.stt_lang_single,
+                                                langs.firstOrNull {
+                                                    it.first == m.languages.first()
+                                                }?.second ?: m.languages.first(),
+                                            )
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                if (m.dictionary) {
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        stringResource(R.string.stt_dict_badge),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.primary,
+                                    )
+                                }
+                            }
+                            Text(
+                                m.runtimeNote,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Text(
+                                when (m.langMode) {
+                                    LocalSttModels.LangMode.AUTO ->
+                                        stringResource(R.string.stt_lang_follows, captureLabel)
+                                    LocalSttModels.LangMode.MANUAL ->
+                                        stringResource(
+                                            R.string.stt_lang_fixed,
+                                            langs.firstOrNull {
+                                                it.first == m.languages.first()
+                                            }?.second ?: m.languages.first(),
+                                        )
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            Text(
+                                when (row) {
+                                    LocalModelDownload.RowState.PRESENT ->
+                                        stringResource(R.string.local_pack_present)
+                                    LocalModelDownload.RowState.MISMATCH ->
+                                        stringResource(R.string.local_pack_mismatch)
+                                    LocalModelDownload.RowState.DOWNLOADING -> {
+                                        val total = prog?.second ?: 0L
+                                        val received = prog?.first ?: 0L
+                                        if (total > 0) {
+                                            stringResource(
+                                                R.string.local_downloading_mb,
+                                                m.name,
+                                                received / 1_000_000,
+                                                total / 1_000_000,
+                                            )
+                                        } else {
+                                            stringResource(R.string.local_downloading, m.name)
+                                        }
+                                    }
+                                    LocalModelDownload.RowState.FAILED ->
+                                        stringResource(
+                                            R.string.local_download_failed,
+                                            dlErr[m.id] ?: "failed",
+                                        )
+                                    LocalModelDownload.RowState.MISSING ->
+                                        stringResource(R.string.local_pack_missing)
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (row == LocalModelDownload.RowState.PRESENT) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.error
+                                },
+                            )
+                            Text(
+                                stringResource(
+                                    R.string.stt_pack_dest,
+                                    LocalSttModels.dirFor(filesDir, m).absolutePath,
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            if (row == LocalModelDownload.RowState.DOWNLOADING) {
+                                Spacer(Modifier.height(4.dp))
+                                val frac = LocalModelDownload.progressFraction(
+                                    prog?.first ?: 0L,
+                                    prog?.second?.takeIf { it > 0 },
+                                )
+                                if (frac != null) {
+                                    LinearProgressIndicator(
+                                        progress = { frac },
+                                        modifier = Modifier.fillMaxWidth(),
+                                    )
+                                } else {
+                                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                                }
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                when (row) {
+                                    LocalModelDownload.RowState.DOWNLOADING -> {}
+                                    LocalModelDownload.RowState.FAILED -> {
+                                        OutlinedButton(onClick = { startModelDownload(m) }) {
+                                            Text(stringResource(R.string.action_retry))
+                                        }
+                                        Spacer(Modifier.width(8.dp))
+                                        TextButton(onClick = { deleteConfirm = m.id }) {
+                                            Text(stringResource(R.string.action_delete))
+                                        }
+                                    }
+                                    LocalModelDownload.RowState.PRESENT,
+                                    LocalModelDownload.RowState.MISMATCH,
+                                    -> {
+                                        if (row == LocalModelDownload.RowState.MISMATCH) {
+                                            OutlinedButton(onClick = { startModelDownload(m) }) {
+                                                Text(stringResource(R.string.local_download))
+                                            }
+                                            Spacer(Modifier.width(8.dp))
+                                        }
+                                        TextButton(onClick = { deleteConfirm = m.id }) {
+                                            Text(stringResource(R.string.action_delete))
+                                        }
+                                    }
+                                    LocalModelDownload.RowState.MISSING -> {
+                                        OutlinedButton(onClick = { startModelDownload(m) }) {
+                                            Text(stringResource(R.string.local_download))
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1314,7 +1539,7 @@ class MainActivity : ComponentActivity() {
                         Text(stringResource(R.string.stt_local_body))
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            when (packState) {
+                            when (selPack) {
                                 LocalPackState.PRESENT ->
                                     stringResource(R.string.local_pack_present)
                                 LocalPackState.MISSING ->
@@ -1329,6 +1554,33 @@ class MainActivity : ComponentActivity() {
                 confirmButton = { TextButton(onClick = { localInfo = false }) { Text(stringResource(R.string.action_gotit)) } },
             )
         }
+        deleteConfirm?.let { doomedId ->
+            val doomed = LocalSttModels.findById(doomedId)
+            AlertDialog(
+                onDismissRequest = { deleteConfirm = null },
+                title = { Text(stringResource(R.string.local_delete_title)) },
+                text = { Text(stringResource(R.string.local_delete_body, doomed.name)) },
+                confirmButton = {
+                    TextButton(onClick = {
+                        deleteConfirm = null
+                        workers.execute {
+                            try { LocalSttModels.delete(filesDir, doomed) } catch (_: Exception) {}
+                            runOnUiThread {
+                                dlErr = dlErr - doomed.id
+                                dlBusy = dlBusy - doomed.id
+                                version++
+                                toast(getString(R.string.local_deleted))
+                            }
+                        }
+                    }) { Text(stringResource(R.string.action_delete)) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { deleteConfirm = null }) {
+                        Text(stringResource(R.string.action_cancel))
+                    }
+                },
+            )
+        }
         dialog?.let { EntryDialog(getString(R.string.stt_dialog_title), it, onClose = { dialog = null }) { edited ->
             upsertEntry(stt, "entries", edited)
             save(); version++; dialog = null
@@ -1337,7 +1589,7 @@ class MainActivity : ComponentActivity() {
 
     private fun newSttEntry(kind: String): JSONObject = JSONObject()
         .put("id", "stt-${UUID.randomUUID()}")
-        .put("name", if (kind == "Cloud") "Cloud" else "Server")
+        .put("name", when (kind) { "Cloud" -> "Cloud"; "Local" -> "Local"; else -> "Server" })
         .put("kind", kind)
         .put("enabled", true)
         .put("provider", "OpenAI")
@@ -1373,8 +1625,13 @@ class MainActivity : ComponentActivity() {
     ) {
         var name by remember { mutableStateOf(e.optString("name")) }
         var kind by remember {
-            mutableStateOf(e.optString("kind", "SelfHosted").takeIf { it == "Cloud" } ?: "SelfHosted")
+            mutableStateOf(
+                e.optString("kind", "SelfHosted").takeIf {
+                    it == "Cloud" || it == "Local"
+                } ?: "SelfHosted",
+            )
         }
+        val isLocalKind = kind == "Local"
         var url by remember { mutableStateOf(e.optString("url")) }
         var model by remember { mutableStateOf(e.optString("model")) }
         var provider by remember { mutableStateOf(e.optString("provider", "OpenAI")) }
@@ -1385,7 +1642,7 @@ class MainActivity : ComponentActivity() {
         var testStatus by remember { mutableStateOf<String?>(null) }
         val urlRequired = kind == "SelfHosted"
         val urlBlank = url.isBlank() && urlRequired
-        val modelBlank = model.isBlank()
+        val modelBlank = model.isBlank() && !isLocalKind
         val canSave = !urlBlank && !modelBlank
         fun testConnection(): String {
             val u = url.trim()
@@ -1412,8 +1669,15 @@ class MainActivity : ComponentActivity() {
                 Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     OutlinedTextField(value = name, onValueChange = { name = it },
                         label = { Text(stringResource(R.string.stt_name)) }, modifier = Modifier.fillMaxWidth())
-                    DropDown(getString(R.string.llm_kind), kind, listOf("SelfHosted", "Cloud")) {
+                    DropDown(getString(R.string.llm_kind), kind, listOf("SelfHosted", "Cloud", "Local")) {
                         kind = it; testStatus = null
+                    }
+                    if (isLocalKind) {
+                        Text(
+                            stringResource(R.string.stt_local_note),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
                     }
                     if (kind == "Cloud") {
                         DropDown(getString(R.string.stt_provider), provider,
@@ -1428,44 +1692,50 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                     }
-                    OutlinedTextField(value = url, onValueChange = { url = it; testStatus = null },
-                        label = {
-                            Text(
-                                if (kind == "Cloud") stringResource(R.string.stt_url_cloud)
-                                else stringResource(R.string.stt_url_server),
-                            )
-                        },
-                        isError = urlBlank,
-                        supportingText = {
-                            if (urlBlank) Text("Server URL is required.")
-                        },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                        modifier = Modifier.fillMaxWidth())
+                    if (!isLocalKind) {
+                        OutlinedTextField(value = url, onValueChange = { url = it; testStatus = null },
+                            label = {
+                                Text(
+                                    if (kind == "Cloud") stringResource(R.string.stt_url_cloud)
+                                    else stringResource(R.string.stt_url_server),
+                                )
+                            },
+                            isError = urlBlank,
+                            supportingText = {
+                                if (urlBlank) Text("Server URL is required.")
+                            },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                            modifier = Modifier.fillMaxWidth())
+                    }
                     if (kind == "SelfHosted") {
                         Text(
                             stringResource(R.string.stt_selfhosted_compat),
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
-                    OutlinedTextField(value = model, onValueChange = { model = it; testStatus = null },
-                        label = { Text(stringResource(R.string.stt_model)) },
-                        isError = modelBlank,
-                        supportingText = {
-                            if (modelBlank) Text("Model is required.")
-                        },
-                        modifier = Modifier.fillMaxWidth())
-                    OutlinedTextField(
-                        value = key, onValueChange = { key = it },
-                        label = { Text(stringResource(R.string.stt_apikey)) },
-                        visualTransformation = if (showKey) VisualTransformation.None
-                        else PasswordVisualTransformation(),
-                        trailingIcon = {
-                            TextButton(onClick = { showKey = !showKey }) {
-                                Text(if (showKey) "hide" else "show")
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
+                    if (!isLocalKind) {
+                        OutlinedTextField(value = model, onValueChange = { model = it; testStatus = null },
+                            label = { Text(stringResource(R.string.stt_model)) },
+                            isError = modelBlank,
+                            supportingText = {
+                                if (modelBlank) Text("Model is required.")
+                            },
+                            modifier = Modifier.fillMaxWidth())
+                    }
+                    if (!isLocalKind) {
+                        OutlinedTextField(
+                            value = key, onValueChange = { key = it },
+                            label = { Text(stringResource(R.string.stt_apikey)) },
+                            visualTransformation = if (showKey) VisualTransformation.None
+                            else PasswordVisualTransformation(),
+                            trailingIcon = {
+                                TextButton(onClick = { showKey = !showKey }) {
+                                    Text(if (showKey) "hide" else "show")
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
                     if (kind == "SelfHosted") {
                         Text(
                             "Bearer token for reverse-proxy setups. Empty means no token.",
@@ -1486,9 +1756,11 @@ class MainActivity : ComponentActivity() {
                         Text(stringResource(R.string.stt_enabled), modifier = Modifier.weight(1f))
                         Switch(checked = enabled, onCheckedChange = { enabled = it })
                     }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedButton(onClick = { testStatus = testConnection() }) {
-                            Text("Test connection")
+                    if (!isLocalKind) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            OutlinedButton(onClick = { testStatus = testConnection() }) {
+                                Text("Test connection")
+                            }
                         }
                     }
                     testStatus?.let {
@@ -1505,10 +1777,12 @@ class MainActivity : ComponentActivity() {
                 TextButton(
                     enabled = canSave,
                     onClick = {
+                        // New Local entries always start off (default-off):
+                        // the list toggle enables them only with a verified pack.
                         e.put("name", name).put("kind", kind).put("url", url.trim())
                             .put("model", model.trim()).put("provider", provider)
                             .put("api_key", key).put("streaming", streaming)
-                            .put("enabled", enabled)
+                            .put("enabled", enabled && !isLocalKind)
                         onSave(e)
                     },
                 ) { Text(stringResource(R.string.action_save)) }
@@ -1527,14 +1801,49 @@ class MainActivity : ComponentActivity() {
         var dialog by remember { mutableStateOf<JSONObject?>(null) }
         var localInfo by remember { mutableStateOf(false) }
         var llmDlAssetId by remember { mutableStateOf<String?>(null) }
+        // In-row download state (desktop fill_stt_models parity:
+        // progress updates in place, Retry on failure).
         var llmDlBusy by remember { mutableStateOf(false) }
-        var llmDlMsg by remember { mutableStateOf<String?>(null) }
+        var llmDlReceived by remember { mutableStateOf(0L) }
+        var llmDlTotal by remember { mutableStateOf<Long?>(null) }
+        var llmDlError by remember { mutableStateOf<String?>(null) }
+        var llmDeleteConfirm by remember { mutableStateOf(false) }
         var version by remember { mutableIntStateOf(0) }
         // Pack check (SHA over a hundreds-of-MB file) runs once per
         // save-generation, not per row or keystroke; enabling Local
         // without a verified file fails closed.
         val llmState = remember(version) { llmPackState() }
         val assets = remember { llmAssets() }
+        val llmPicked = assets.firstOrNull { it.id == llmDlAssetId } ?: assets.firstOrNull()
+        val llmRow = LocalModelDownload.resolve(
+            llmState == LocalPackState.PRESENT,
+            llmState == LocalPackState.MISMATCH,
+            llmDlBusy,
+            llmDlError,
+        )
+        fun startLlmDownload() {
+            val picked = llmPicked ?: return
+            if (llmDlBusy || isPlaceholderSha(picked.sha256)) return
+            llmDlBusy = true
+            llmDlError = null
+            llmDlReceived = 0L
+            llmDlTotal = picked.sizeBytes.takeIf { it > 0 }
+            workers.execute {
+                try {
+                    val dest = LocalLlmManager.defaultTaskFile(filesDir)
+                    LocalLlmManager.downloadModel(picked, dest) { r, t ->
+                        runOnUiThread { llmDlReceived = r; llmDlTotal = t }
+                    }
+                    runOnUiThread { llmDlBusy = false; version++ }
+                } catch (ex: Exception) {
+                    runOnUiThread {
+                        llmDlBusy = false
+                        llmDlError = ex.message ?: "failed"
+                        version++
+                    }
+                }
+            }
+        }
         @Suppress("UNUSED_EXPRESSION") version
         Column(
             modifier = Modifier
@@ -1705,21 +2014,144 @@ class MainActivity : ComponentActivity() {
                                 )
                                 if (isLocal) {
                                     Text(
-                                        when (llmState) {
-                                            LocalPackState.PRESENT ->
+                                        when (llmRow) {
+                                            LocalModelDownload.RowState.PRESENT ->
                                                 stringResource(R.string.local_pack_present)
-                                            LocalPackState.MISSING ->
-                                                stringResource(R.string.local_pack_missing)
-                                            LocalPackState.MISMATCH ->
+                                            LocalModelDownload.RowState.MISMATCH ->
                                                 stringResource(R.string.local_pack_mismatch)
+                                            LocalModelDownload.RowState.DOWNLOADING -> {
+                                                val total = llmDlTotal
+                                                if (total != null && total > 0) {
+                                                    stringResource(
+                                                        R.string.local_downloading_mb,
+                                                        llmPicked?.id ?: "",
+                                                        llmDlReceived / 1_000_000,
+                                                        total / 1_000_000,
+                                                    )
+                                                } else {
+                                                    stringResource(
+                                                        R.string.local_downloading,
+                                                        llmPicked?.id ?: "",
+                                                    )
+                                                }
+                                            }
+                                            LocalModelDownload.RowState.FAILED ->
+                                                stringResource(
+                                                    R.string.local_download_failed,
+                                                    llmDlError ?: "failed",
+                                                )
+                                            LocalModelDownload.RowState.MISSING ->
+                                                stringResource(R.string.local_pack_missing)
                                         },
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = if (llmState == LocalPackState.PRESENT) {
+                                        color = if (llmRow == LocalModelDownload.RowState.PRESENT) {
                                             MaterialTheme.colorScheme.primary
                                         } else {
                                             MaterialTheme.colorScheme.error
                                         },
                                     )
+                                    // Secondary details line: model path only
+                                    // (download is the primary path now).
+                                    Text(
+                                        stringResource(
+                                            R.string.llm_pack_dest,
+                                            LocalLlmManager.defaultTaskFile(filesDir).absolutePath,
+                                        ),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    if (llmRow == LocalModelDownload.RowState.DOWNLOADING) {
+                                        Spacer(Modifier.height(4.dp))
+                                        val frac = LocalModelDownload.progressFraction(
+                                            llmDlReceived, llmDlTotal,
+                                        )
+                                        if (frac != null) {
+                                            LinearProgressIndicator(
+                                                progress = { frac },
+                                                modifier = Modifier.fillMaxWidth(),
+                                            )
+                                        } else {
+                                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                                        }
+                                    }
+                                    val noPin = llmPicked == null ||
+                                        isPlaceholderSha(llmPicked.sha256)
+                                    if (llmRow != LocalModelDownload.RowState.DOWNLOADING &&
+                                        llmRow != LocalModelDownload.RowState.PRESENT
+                                    ) {
+                                        if (llmPicked != null && assets.size > 1) {
+                                            DropDown(
+                                                getString(R.string.llm_model_label),
+                                                llmPicked.id,
+                                                assets.map { it.id },
+                                            ) { llmDlAssetId = it }
+                                        }
+                                    }
+                                    if (noPin && llmRow != LocalModelDownload.RowState.PRESENT) {
+                                        Text(
+                                            stringResource(R.string.llm_no_pin),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.error,
+                                        )
+                                    }
+                                    val minRam = llmPicked?.minRamMb ?: 0L
+                                    if (minRam > 0) {
+                                        Text(
+                                            stringResource(R.string.llm_ram_need, minRam),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                        val ramMb = remember { totalRamMb() }
+                                        if (ramMb > 0 && ramMb < minRam &&
+                                            llmRow != LocalModelDownload.RowState.PRESENT
+                                        ) {
+                                            Text(
+                                                stringResource(R.string.llm_ram_warn),
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.error,
+                                            )
+                                        }
+                                    }
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        when {
+                                            llmRow == LocalModelDownload.RowState.DOWNLOADING -> {}
+                                            llmRow == LocalModelDownload.RowState.FAILED -> {
+                                                OutlinedButton(
+                                                    enabled = !noPin,
+                                                    onClick = { startLlmDownload() },
+                                                ) {
+                                                    Text(stringResource(R.string.action_retry))
+                                                }
+                                                Spacer(Modifier.width(8.dp))
+                                                TextButton(onClick = { llmDeleteConfirm = true }) {
+                                                    Text(stringResource(R.string.action_delete))
+                                                }
+                                            }
+                                            llmRow == LocalModelDownload.RowState.PRESENT ||
+                                                llmRow == LocalModelDownload.RowState.MISMATCH -> {
+                                                if (llmRow == LocalModelDownload.RowState.MISMATCH) {
+                                                    OutlinedButton(
+                                                        enabled = !noPin,
+                                                        onClick = { startLlmDownload() },
+                                                    ) {
+                                                        Text(stringResource(R.string.local_download))
+                                                    }
+                                                    Spacer(Modifier.width(8.dp))
+                                                }
+                                                TextButton(onClick = { llmDeleteConfirm = true }) {
+                                                    Text(stringResource(R.string.action_delete))
+                                                }
+                                            }
+                                            else -> {
+                                                OutlinedButton(
+                                                    enabled = !noPin,
+                                                    onClick = { startLlmDownload() },
+                                                ) {
+                                                    Text(stringResource(R.string.local_download))
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                             if (isLocal) {
@@ -1773,6 +2205,36 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+        if (llmDeleteConfirm) {
+            AlertDialog(
+                onDismissRequest = { llmDeleteConfirm = false },
+                title = { Text(stringResource(R.string.local_delete_title)) },
+                text = { Text(stringResource(R.string.local_delete_body)) },
+                confirmButton = {
+                    TextButton(onClick = {
+                        llmDeleteConfirm = false
+                        workers.execute {
+                            try {
+                                LocalLlmManager.deleteModel(
+                                    LocalLlmManager.defaultTaskFile(filesDir), assets,
+                                )
+                            } catch (_: Exception) {}
+                            runOnUiThread {
+                                llmDlError = null
+                                llmDlBusy = false
+                                version++
+                                toast(getString(R.string.local_deleted))
+                            }
+                        }
+                    }) { Text(stringResource(R.string.action_delete)) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { llmDeleteConfirm = false }) {
+                        Text(stringResource(R.string.action_cancel))
+                    }
+                },
+            )
+        }
         if (localInfo) {
             AlertDialog(
                 onDismissRequest = { localInfo = false },
@@ -1800,56 +2262,6 @@ class MainActivity : ComponentActivity() {
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                        Spacer(Modifier.height(4.dp))
-                        // Download via the existing fetch path
-                        // (LocalLlmManager.downloadModel, SHA-verified).
-                        val picked = assets.firstOrNull { it.id == llmDlAssetId } ?: assets.firstOrNull()
-                        if (picked != null) {
-                            DropDown(
-                                getString(R.string.llm_model_label),
-                                picked.id,
-                                assets.map { it.id },
-                            ) { llmDlAssetId = it }
-                            if (isPlaceholderSha(picked.sha256)) {
-                                Text(
-                                    stringResource(R.string.llm_no_pin),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.error,
-                                )
-                            } else {
-                                Button(
-                                    enabled = !llmDlBusy,
-                                    onClick = {
-                                        llmDlBusy = true
-                                        llmDlMsg = getString(R.string.local_downloading, picked.id)
-                                        workers.execute {
-                                            try {
-                                                val dest = LocalLlmManager.defaultTaskFile(filesDir)
-                                                LocalLlmManager.downloadModel(picked, dest)
-                                                runOnUiThread {
-                                                    llmDlBusy = false
-                                                    llmDlMsg = getString(R.string.local_downloaded, picked.id)
-                                                    version++
-                                                }
-                                            } catch (ex: Exception) {
-                                                runOnUiThread {
-                                                    llmDlBusy = false
-                                                    llmDlMsg = getString(
-                                                        R.string.local_download_failed,
-                                                        ex.message ?: "failed",
-                                                    )
-                                                    version++
-                                                }
-                                            }
-                                        }
-                                    },
-                                ) { Text(stringResource(R.string.local_download)) }
-                            }
-                        }
-                        llmDlMsg?.let {
-                            Spacer(Modifier.height(4.dp))
-                            Text(it, style = MaterialTheme.typography.bodySmall)
-                        }
                     }
                 },
                 confirmButton = { TextButton(onClick = { localInfo = false }) { Text(stringResource(R.string.action_gotit)) } },
