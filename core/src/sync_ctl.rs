@@ -346,6 +346,13 @@ pub fn sync_add(
     if node_id.len() != 64 || !node_id.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err("enter the other device's full 64-character hexadecimal ID".to_string());
     }
+    // Never pair with self: an outgoing row to our own id is a nonsense
+    // WAITING entry that can never complete.
+    let own = DeviceIdentity::load_or_create(&dir.join("device.key"))
+        .map_err(|e| format!("identity: {e}"))?;
+    if node_id == own.node_id {
+        return Err("that is this device's own ID — pair with a different device".to_string());
+    }
     let db_path = dir.join("state.db");
     let store = Store::open(&db_path).map_err(|e| format!("open db: {e}"))?;
     // Pairing dials an untrusted peer by design (the dial IS the
@@ -361,7 +368,7 @@ pub fn sync_add(
         addrs.push(address.trim().to_string());
     }
     store
-        .record_outgoing(&node_id, name.trim(), &addrs)
+        .record_outgoing(&node_id, name.trim(), &addrs, &own.node_id)
         .map_err(|e| format!("record contact: {e}"))?;
     let settings = store.load_settings();
     let creds = slot()
@@ -451,4 +458,42 @@ pub fn sync_all_now(dir: &std::path::Path) -> Vec<String> {
         None => return vec!["sync is not running".to_string()],
     };
     net::sync_all_trusted(&db_path, &creds)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static N: AtomicU64 = AtomicU64::new(0);
+
+    fn temp_dir() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "mywhisper-syncctl-test-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::SeqCst)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Pairing with our own id is refused before anything parks: no
+    /// nonsense WAITING row, whatever the spelling (case/padding).
+    #[test]
+    fn sync_add_rejects_own_id_without_parking() {
+        crate::store::ensure_test_db_key();
+        let dir = temp_dir();
+        let own = DeviceIdentity::load_or_create(&dir.join("device.key"))
+            .unwrap()
+            .node_id;
+        let err = sync_add(&dir, &own, "", "").unwrap_err();
+        assert!(err.contains("own ID"), "unexpected error: {err}");
+        let spelled = format!("  {}  ", own.to_uppercase());
+        let err = sync_add(&dir, &spelled, "", "").unwrap_err();
+        assert!(err.contains("own ID"), "unexpected error: {err}");
+        let store = crate::store::open_test_db(&dir.join("state.db")).unwrap();
+        assert!(store.get_peer(&own).unwrap().is_none());
+        assert!(store.list_outgoing().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

@@ -131,6 +131,40 @@ fn file_identity_of(path: &Path) -> Option<(u64, u64)> {
     std::fs::metadata(path).ok().map(|m| (m.dev(), m.ino()))
 }
 
+/// Test-only serialization for file-backed database opens.
+///
+/// lib tests run in threads sharing one process env: pinning the db key
+/// (setenv) while another thread opens a database (getenv) corrupts the
+/// read — or worse, mixes keys across the two opens of one database and
+/// fails the second with a wrong-key error. Every file-backed test open
+/// goes through [`open_test_db`], which pins the key exactly once under
+/// this lock, so the suite is deterministic instead of timing luck.
+#[cfg(test)]
+pub(crate) static TEST_DB_IO_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Test-only: pin a deterministic db key exactly once per process.
+/// Call before any file-backed `Store::open` in tests.
+#[cfg(test)]
+pub(crate) fn ensure_test_db_key() {
+    let _guard = TEST_DB_IO_LOCK.lock().unwrap();
+    static KEY_ONCE: std::sync::Once = std::sync::Once::new();
+    KEY_ONCE.call_once(|| {
+        // SAFETY: under the shared test file lock, runs exactly once
+        // per process, and no test ever unsets the key.
+        unsafe {
+            std::env::set_var("MYWHISPER_DB_KEY", "ab".repeat(32));
+        }
+    });
+}
+
+/// Test-only file-backed open with key init serialized on the shared lock.
+#[cfg(test)]
+pub(crate) fn open_test_db(path: &std::path::Path) -> rusqlite::Result<Store> {
+    ensure_test_db_key();
+    let _guard = TEST_DB_IO_LOCK.lock().unwrap();
+    Store::open(path)
+}
+
 pub struct Store {
     conn: Connection,
     file_identity: Option<(u64, u64)>,
@@ -1751,12 +1785,20 @@ impl Store {
     /// keep their trust/pending state and just gain the marker plus
     /// fresh addresses. Already-trusted rows only refresh addresses.
     /// Revoked or malformed identities are refused like `record_seen`.
+    /// Pairing with our own id is refused: a self row could never
+    /// complete and would sit in Waiting forever.
     pub fn record_outgoing(
         &self,
         node_id: &str,
         name: &str,
         addresses: &[String],
+        self_id: &str,
     ) -> rusqlite::Result<bool> {
+        if node_id.to_lowercase() == self_id.to_lowercase() {
+            return Err(rusqlite::Error::ToSqlConversionFailure(
+                "cannot pair with this device itself".into(),
+            ));
+        }
         if !valid_node_id(node_id) || self.is_revoked(node_id)? {
             return Err(rusqlite::Error::ToSqlConversionFailure(
                 "invalid or revoked peer".into(),
@@ -2119,16 +2161,16 @@ mod tests {
             std::process::id(),
             N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
         ));
-        // NOTE: Store::open needs the keyring; the test env has
-        // a session keyring, same as production on this machine.
-        // If the keyring is unavailable here, skip rather than fail:
-        // crypto setup is covered by the app path, not this property.
-        let Ok(a) = Store::open(&dir) else {
+        // NOTE: file-backed opens go through open_test_db (shared key
+        // init under one lock); a bare Store::open here would race the
+        // key pin against parallel file-DB tests and fail with a
+        // wrong-key error.
+        let Ok(a) = open_test_db(&dir) else {
             return;
         };
         let v0 = read_gen(&a);
         {
-            let b = Store::open(&dir).unwrap();
+            let b = open_test_db(&dir).unwrap();
             b.upsert_word("cross-conn", "node-y").unwrap();
         }
         let v1 = read_gen(&a);
@@ -2516,10 +2558,11 @@ mod tests {
     #[test]
     fn outgoing_shows_waiting_not_incoming() {
         let store = Store::open_memory().unwrap();
+        let me = peer_id(0xc4);
         // Our sent request parks as outgoing, never as incoming pending:
         // it must not render with an Accept button.
         let peer = peer_id(0xc5);
-        store.record_outgoing(&peer, "other", &[]).unwrap();
+        store.record_outgoing(&peer, "other", &[], &me).unwrap();
         let row = store.get_peer(&peer).unwrap().unwrap();
         assert!(row.outgoing && !row.pending && !row.trusted);
         assert!(
@@ -2539,11 +2582,30 @@ mod tests {
         assert!(store.list_outgoing().unwrap().is_empty());
         // Cancelling withdraws without revoking: the id stays pairable.
         let cancel = peer_id(0xc7);
-        store.record_outgoing(&cancel, "other2", &[]).unwrap();
+        store.record_outgoing(&cancel, "other2", &[], &me).unwrap();
         store.withdraw_outgoing(&cancel).unwrap();
         assert!(store.get_peer(&cancel).unwrap().is_none());
         assert!(!store.is_revoked(&cancel).unwrap());
-        store.record_outgoing(&cancel, "other2", &[]).unwrap();
+        store.record_outgoing(&cancel, "other2", &[], &me).unwrap();
+        assert_eq!(store.list_outgoing().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn record_outgoing_rejects_self_pairing() {
+        let store = Store::open_memory().unwrap();
+        let me = peer_id(0xca);
+        // Pairing with our own id is refused and parks nothing...
+        assert!(store.record_outgoing(&me, "me", &[], &me).is_err());
+        assert!(
+            store
+                .record_outgoing(&me.to_uppercase(), "me", &[], &me)
+                .is_err()
+        );
+        assert!(store.get_peer(&me).unwrap().is_none());
+        assert!(store.list_outgoing().unwrap().is_empty());
+        // ...while other ids still park fine.
+        let peer = peer_id(0xcb);
+        assert!(store.record_outgoing(&peer, "peer", &[], &me).unwrap());
         assert_eq!(store.list_outgoing().unwrap().len(), 1);
     }
 
@@ -2895,7 +2957,9 @@ mod tests {
         // Known untrusted row latches pending (e.g. our WAITING row when
         // they dial back, or a known stranger redialling).
         let peer = peer_id(0xf6);
-        store.record_outgoing(&peer, "wanted", &[]).unwrap();
+        store
+            .record_outgoing(&peer, "wanted", &[], &peer_id(0xf4))
+            .unwrap();
         assert!(store.mark_incoming_request(&peer).unwrap());
         let row = store.get_peer(&peer).unwrap().unwrap();
         assert!(row.pending && row.outgoing && !row.trusted);
@@ -2914,12 +2978,6 @@ mod tests {
     #[test]
     fn v2_database_migrates_outgoing_column() {
         static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(2000);
-        // Pin the db key so file-backed opens in this process use it.
-        // Fresh temp DBs elsewhere are unaffected: any valid key opens
-        // them, and no test asserts the keyring source.
-        unsafe {
-            std::env::set_var("MYWHISPER_DB_KEY", "ab".repeat(32));
-        }
         let dir = std::env::temp_dir().join(format!(
             "mywhisper-v2migrate-test-{}-{}",
             std::process::id(),
@@ -2958,7 +3016,7 @@ mod tests {
         }
         // Opening migrates (plaintext legacy encrypts in place, then the
         // v2 columns gain `outgoing` defaulting to 0).
-        let store = Store::open(&path).unwrap();
+        let store = open_test_db(&path).unwrap();
         let version: i64 = store
             .conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
@@ -2973,7 +3031,9 @@ mod tests {
         assert!(store.list_outgoing().unwrap().is_empty());
         // ...and the new outgoing path works on the migrated file.
         let fresh = peer_id(0xe7);
-        store.record_outgoing(&fresh, "fresh", &[]).unwrap();
+        store
+            .record_outgoing(&fresh, "fresh", &[], &peer_id(0xe4))
+            .unwrap();
         assert_eq!(store.list_outgoing().unwrap().len(), 1);
         assert_eq!(store.list_pending().unwrap().len(), 1);
         drop(store);

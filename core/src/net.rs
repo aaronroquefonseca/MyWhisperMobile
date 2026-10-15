@@ -898,7 +898,7 @@ pub fn watch_discovered(
 mod tests {
     use super::*;
     use crate::device::DeviceIdentity;
-    use crate::store::Store;
+    use crate::store::open_test_db;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEST_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -918,8 +918,8 @@ mod tests {
         let id_b = DeviceIdentity::ephemeral();
         let db_a = temp_db("a");
         let db_b = temp_db("b");
-        let store_a = Store::open(&db_a).unwrap();
-        let store_b = Store::open(&db_b).unwrap();
+        let store_a = open_test_db(&db_a).unwrap();
+        let store_b = open_test_db(&db_b).unwrap();
 
         // A trusts B; B trusts A.
         store_a
@@ -948,7 +948,7 @@ mod tests {
             let (stream, _) = listener.accept().unwrap();
             let (mut session, hash, _remote) =
                 NoiseStream::handshake(stream, &creds_a.noise_static, false).unwrap();
-            let store = Store::open(&db_a2).unwrap();
+            let store = open_test_db(&db_a2).unwrap();
             exchange(
                 &mut session,
                 &hash,
@@ -991,7 +991,7 @@ mod tests {
         // Untrusted dialer is rejected: fresh node C, trusted nowhere.
         let id_c = DeviceIdentity::ephemeral();
         let db_c = temp_db("c");
-        Store::open(&db_c).unwrap();
+        open_test_db(&db_c).unwrap();
         let listener2 = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port2 = listener2.local_addr().unwrap().port();
         let db_a3 = db_a.clone();
@@ -1000,7 +1000,7 @@ mod tests {
             let (stream, _) = listener2.accept().unwrap();
             let (mut session, hash, _remote) =
                 NoiseStream::handshake(stream, &creds_a2.noise_static, false).unwrap();
-            let store = Store::open(&db_a3).unwrap();
+            let store = open_test_db(&db_a3).unwrap();
             exchange(
                 &mut session,
                 &hash,
@@ -1048,11 +1048,13 @@ mod tests {
         let id_c = DeviceIdentity::ephemeral();
         let db_a = temp_db("ra");
         let db_b = temp_db("rb");
-        let store_a = Store::open(&db_a).unwrap();
-        let store_b = Store::open(&db_b).unwrap();
+        let store_a = open_test_db(&db_a).unwrap();
+        let store_b = open_test_db(&db_b).unwrap();
 
         // A sent B a pairing request: WAITING, never Accepted on A.
-        store_a.record_outgoing(&id_b.node_id, "b", &[]).unwrap();
+        store_a
+            .record_outgoing(&id_b.node_id, "b", &[], &id_a.node_id)
+            .unwrap();
         assert_eq!(store_a.list_pending().unwrap().len(), 0);
         // B accepted there (desktop flow: trusted + introducer) and
         // vouches for C.
@@ -1077,7 +1079,7 @@ mod tests {
             let (stream, _) = listener.accept().unwrap();
             let (mut session, hash, _remote) =
                 NoiseStream::handshake(stream, &creds_a.noise_static, false).unwrap();
-            let store = Store::open(&db_a2).unwrap();
+            let store = open_test_db(&db_a2).unwrap();
             exchange(
                 &mut session,
                 &hash,
@@ -1140,7 +1142,7 @@ mod tests {
         let id_victim = DeviceIdentity::ephemeral();
         let id_attacker = DeviceIdentity::ephemeral();
         let db_v = temp_db("v");
-        let store_v = Store::open(&db_v).unwrap();
+        let store_v = open_test_db(&db_v).unwrap();
         // Victim trusts... nobody relevant; attacker dials claiming
         // to BE the victim's trusted peer would need that peer's key.
         // Here the attacker claims victim's own id to a fresh server
@@ -1159,7 +1161,7 @@ mod tests {
             let (stream, _) = listener.accept().unwrap();
             let (mut session, hash, _remote) =
                 NoiseStream::handshake(stream, &creds_vk.noise_static, false).unwrap();
-            let store = Store::open(&db_v2).unwrap();
+            let store = open_test_db(&db_v2).unwrap();
             exchange(
                 &mut session,
                 &hash,
@@ -1177,7 +1179,7 @@ mod tests {
         // sign with their own key: build the exchange manually with a
         // forged hello over a valid attacker handshake.
         let db_x = temp_db("x");
-        Store::open(&db_x).unwrap();
+        open_test_db(&db_x).unwrap();
         let stream = TcpStream::connect_timeout(
             &format!("127.0.0.1:{port}")
                 .to_socket_addrs()
