@@ -397,6 +397,68 @@ class MainActivity : ComponentActivity() {
         @JvmStatic
         internal fun llmLocalRowBlocks(): List<String> = localChainRowBlocks()
 
+        // -- Local singleton (one Local entry per list, fixed name) ---
+
+        /** Fixed display name for every Local chain entry. Never configurable. */
+        internal const val LOCAL_ENTRY_NAME = "Local"
+
+        /** True when this kind is the on-device Local entry. Pure for unit tests. */
+        @JvmStatic
+        internal fun isLocalKind(kind: String): Boolean = kind == "Local"
+
+        /**
+         * Name field lock: when the kind picker is Local the name is
+         * fixed to [LOCAL_ENTRY_NAME] (disabled, not editable).
+         * Pure for unit tests.
+         */
+        @JvmStatic
+        internal fun localNameLocked(kind: String): Boolean = kind == "Local"
+
+        /**
+         * Canonical name on save: Local-kind rows always persist as
+         * [LOCAL_ENTRY_NAME]; other kinds keep their typed name.
+         * Pure for unit tests.
+         */
+        @JvmStatic
+        internal fun normalizedEntryName(kind: String, name: String): String =
+            if (kind == "Local") LOCAL_ENTRY_NAME else name
+
+        /**
+         * True when a stored Local-kind row needs its rename migration
+         * (existing non-'Local' name -> [LOCAL_ENTRY_NAME] on save/migrate).
+         * Pure for unit tests.
+         */
+        @JvmStatic
+        internal fun needsLocalRename(kind: String, name: String): Boolean =
+            kind == "Local" && name != LOCAL_ENTRY_NAME
+
+        /** True when the list already holds a Local entry. Pure for unit tests. */
+        @JvmStatic
+        internal fun hasLocalEntry(kinds: List<String>): Boolean =
+            kinds.any { it == "Local" }
+
+        /**
+         * Add-flow singleton guard: saving [newKind] is blocked when it
+         * is Local and another Local already exists
+         * ([existingKindsExcludingSelf] = current list kinds minus the
+         * row being edited). Pure for unit tests.
+         */
+        @JvmStatic
+        internal fun localSingletonBlocked(
+            existingKindsExcludingSelf: List<String>,
+            newKind: String,
+        ): Boolean = newKind == "Local" && existingKindsExcludingSelf.contains("Local")
+
+        /**
+         * Edit-dialog kind-picker guard: editing a Local entry hides the
+         * kind picker (no change-away footgun). Same pattern on STT and
+         * LLM screens; [originalKind] is the stored kind when the dialog
+         * opened. Pure for unit tests.
+         */
+        @JvmStatic
+        internal fun localEditHidesKindPicker(originalKind: String): Boolean =
+            originalKind == "Local"
+
         /**
          * Canonical on-device model card block order (STT per-model
          * cards and the LLM on-device card alike): title, size, model
@@ -1473,6 +1535,23 @@ class MainActivity : ComponentActivity() {
             }
         }
         @Suppress("UNUSED_EXPRESSION") version
+        // Singleton rename-migrate (STT): stored Local-kind rows with a
+        // custom name are renamed to "Local" once per save-generation.
+        LaunchedEffect(version) {
+            val arr = entriesOf(stt, "entries")
+            var fixed = false
+            for (i in 0 until arr.length()) {
+                val en = arr.optJSONObject(i) ?: continue
+                if (needsLocalRename(en.optString("kind"), en.optString("name"))) {
+                    en.put("name", LOCAL_ENTRY_NAME)
+                    fixed = true
+                }
+            }
+            if (fixed) {
+                save()
+                version++
+            }
+        }
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -1926,10 +2005,30 @@ class MainActivity : ComponentActivity() {
                 },
             )
         }
-        dialog?.let { EntryDialog(getString(R.string.stt_dialog_title), it, onClose = { dialog = null }) { edited ->
-            upsertEntry(stt, "entries", edited)
-            save(); version++; dialog = null
-        } }
+        dialog?.let {
+            EntryDialog(
+                getString(R.string.stt_dialog_title),
+                it,
+                onClose = { dialog = null },
+                onSave = { edited ->
+                    upsertEntry(stt, "entries", edited)
+                    save(); version++; dialog = null
+                },
+                hasOtherLocal = run {
+                    val arr = entriesOf(stt, "entries")
+                    val id = it.optString("id")
+                    var found = false
+                    for (i in 0 until arr.length()) {
+                        val en = arr.optJSONObject(i) ?: continue
+                        if (en.optString("kind") == "Local" && en.optString("id") != id) {
+                            found = true
+                            break
+                        }
+                    }
+                    found
+                },
+            )
+        }
     }
 
     private fun newSttEntry(kind: String): JSONObject = JSONObject()
@@ -1967,7 +2066,10 @@ class MainActivity : ComponentActivity() {
         e: JSONObject,
         onClose: () -> Unit,
         onSave: (JSONObject) -> Unit,
+        hasOtherLocal: Boolean = false,
     ) {
+        val originalKind = remember { e.optString("kind", "SelfHosted") }
+        val isLocalEdit = remember { localEditHidesKindPicker(originalKind) }
         var name by remember { mutableStateOf(e.optString("name")) }
         var kind by remember {
             mutableStateOf(
@@ -1977,6 +2079,8 @@ class MainActivity : ComponentActivity() {
             )
         }
         val isLocalKind = kind == "Local"
+        val nameLocked = localNameLocked(kind)
+        val singletonBlocked = hasOtherLocal && isLocalKind && !isLocalEdit
         var url by remember { mutableStateOf(e.optString("url")) }
         var model by remember { mutableStateOf(e.optString("model")) }
         var provider by remember { mutableStateOf(e.optString("provider", "OpenAI")) }
@@ -1988,7 +2092,7 @@ class MainActivity : ComponentActivity() {
         val urlRequired = kind == "SelfHosted"
         val urlBlank = url.isBlank() && urlRequired
         val modelBlank = model.isBlank() && !isLocalKind
-        val canSave = !urlBlank && !modelBlank
+        val canSave = !urlBlank && !modelBlank && !singletonBlocked
         fun testConnection(): String {
             val u = url.trim()
             val m = model.trim()
@@ -2012,10 +2116,32 @@ class MainActivity : ComponentActivity() {
             title = { Text("${stringResource(R.string.stt_dialog_title)} · $kind") },
             text = {
                 Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                    OutlinedTextField(value = name, onValueChange = { name = it },
-                        label = { Text(stringResource(R.string.stt_name)) }, modifier = Modifier.fillMaxWidth())
-                    DropDown(getString(R.string.llm_kind), kind, listOf("SelfHosted", "Cloud", "Local")) {
-                        kind = it; testStatus = null
+                    OutlinedTextField(
+                        value = if (nameLocked) LOCAL_ENTRY_NAME else name,
+                        onValueChange = { if (!nameLocked) name = it },
+                        enabled = !nameLocked,
+                        label = { Text(stringResource(R.string.stt_name)) },
+                        supportingText = {
+                            if (nameLocked) Text(stringResource(R.string.local_name_locked))
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    if (!isLocalEdit) {
+                        DropDown(getString(R.string.llm_kind), kind, listOf("SelfHosted", "Cloud", "Local")) {
+                            kind = it
+                            if (it == "Local") name = LOCAL_ENTRY_NAME
+                            testStatus = null
+                        }
+                    }
+                    if (singletonBlocked) {
+                        Text(
+                            stringResource(R.string.local_singleton_blocked),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        OutlinedButton(onClick = onClose) {
+                            Text(stringResource(R.string.local_show_existing))
+                        }
                     }
                     if (isLocalKind) {
                         Text(
@@ -2124,7 +2250,8 @@ class MainActivity : ComponentActivity() {
                     onClick = {
                         // New Local entries always start off (default-off):
                         // the list toggle enables them only with a verified pack.
-                        e.put("name", name).put("kind", kind).put("url", url.trim())
+                        // Local-kind rows always persist as "Local" (rename-migrate).
+                        e.put("name", normalizedEntryName(kind, name)).put("kind", kind).put("url", url.trim())
                             .put("model", model.trim()).put("provider", provider)
                             .put("api_key", key).put("streaming", streaming)
                             .put("enabled", enabled && !isLocalKind)
@@ -2197,6 +2324,22 @@ class MainActivity : ComponentActivity() {
             }
         }
         @Suppress("UNUSED_EXPRESSION") version
+        // Singleton rename-migrate (LLM): same pattern as STT.
+        LaunchedEffect(version) {
+            val arr = entriesOf(lm, "entries")
+            var fixed = false
+            for (i in 0 until arr.length()) {
+                val en = arr.optJSONObject(i) ?: continue
+                if (needsLocalRename(en.optString("kind"), en.optString("name"))) {
+                    en.put("name", LOCAL_ENTRY_NAME)
+                    fixed = true
+                }
+            }
+            if (fixed) {
+                save()
+                version++
+            }
+        }
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -2722,10 +2865,27 @@ class MainActivity : ComponentActivity() {
             )
         }
         dialog?.let { d ->
-            LlmDialog(d, onClose = { dialog = null }) { edited ->
-                upsertEntry(lm, "entries", edited)
-                save(); version++; dialog = null
-            }
+            LlmDialog(
+                d,
+                onClose = { dialog = null },
+                onSave = { edited ->
+                    upsertEntry(lm, "entries", edited)
+                    save(); version++; dialog = null
+                },
+                hasOtherLocal = run {
+                    val arr = entriesOf(lm, "entries")
+                    val id = d.optString("id")
+                    var found = false
+                    for (i in 0 until arr.length()) {
+                        val en = arr.optJSONObject(i) ?: continue
+                        if (en.optString("kind") == "Local" && en.optString("id") != id) {
+                            found = true
+                            break
+                        }
+                    }
+                    found
+                },
+            )
         }
     }
 
@@ -2734,9 +2894,15 @@ class MainActivity : ComponentActivity() {
         e: JSONObject,
         onClose: () -> Unit,
         onSave: (JSONObject) -> Unit,
+        hasOtherLocal: Boolean = false,
     ) {
+        val originalKind = remember { e.optString("kind", "Ollama") }
+        val isLocalEdit = remember { localEditHidesKindPicker(originalKind) }
         var name by remember { mutableStateOf(e.optString("name")) }
         var kind by remember { mutableStateOf(e.optString("kind", "Ollama")) }
+        val isLocalKind = kind == "Local"
+        val nameLocked = localNameLocked(kind)
+        val singletonBlocked = hasOtherLocal && isLocalKind && !isLocalEdit
         var url by remember { mutableStateOf(e.optString("url")) }
         var model by remember { mutableStateOf(e.optString("model")) }
         var provider by remember { mutableStateOf(e.optString("provider", "OpenAI")) }
@@ -2763,10 +2929,31 @@ class MainActivity : ComponentActivity() {
             title = { Text(kind) },
             text = {
                 Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                    OutlinedTextField(value = name, onValueChange = { name = it },
-                        label = { Text(stringResource(R.string.stt_name)) }, modifier = Modifier.fillMaxWidth())
-                    DropDown(getString(R.string.llm_kind), kind, listOf("Ollama", "Local", "Cloud")) {
-                        kind = it
+                    OutlinedTextField(
+                        value = if (nameLocked) LOCAL_ENTRY_NAME else name,
+                        onValueChange = { if (!nameLocked) name = it },
+                        enabled = !nameLocked,
+                        label = { Text(stringResource(R.string.stt_name)) },
+                        supportingText = {
+                            if (nameLocked) Text(stringResource(R.string.local_name_locked))
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    if (!isLocalEdit) {
+                        DropDown(getString(R.string.llm_kind), kind, listOf("Ollama", "Local", "Cloud")) {
+                            kind = it
+                            if (it == "Local") name = LOCAL_ENTRY_NAME
+                        }
+                    }
+                    if (singletonBlocked) {
+                        Text(
+                            stringResource(R.string.local_singleton_blocked),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        OutlinedButton(onClick = onClose) {
+                            Text(stringResource(R.string.local_show_existing))
+                        }
                     }
                     if (kind == "Local") {
                         Text(
@@ -2820,11 +3007,14 @@ class MainActivity : ComponentActivity() {
                 }
             },
             confirmButton = {
-                TextButton(onClick = {
+                TextButton(
+                    enabled = !singletonBlocked,
+                    onClick = {
                     // New Local entries always start off (default-off):
                     // the list toggle enables them only with a verified pack.
+                    // Local-kind rows always persist as "Local" (rename-migrate).
                     val localKind = kind == "Local"
-                    e.put("name", name).put("kind", kind)
+                    e.put("name", normalizedEntryName(kind, name)).put("kind", kind)
                         .put("url", url.trim()).put("model", model.trim())
                         .put("provider", provider).put("api_key", key)
                         .put("keep_alive", keepAlive.trim())
