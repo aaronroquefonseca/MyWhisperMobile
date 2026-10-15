@@ -258,7 +258,10 @@ class Dictation(
                 val pcm: ShortArray = synchronized(localPcm) { localPcm.toShortArray() }
                 val local: String? = try {
                     localTranscribe(pcm)?.first
-                } catch (_: Exception) {
+                } catch (_: Throwable) {
+                    // Local hook miss on ANY throw (incl. OOM Error) →
+                    // server fallback. Only the local hook is guarded:
+                    // a server throw must reach the outer catch below.
                     null
                 }
                 text = local ?: finishTranscription().first

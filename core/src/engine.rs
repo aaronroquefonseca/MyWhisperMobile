@@ -587,14 +587,21 @@ impl Engine {
                 &words,
                 generation_at_entry,
             );
-            let word_count = text.split_whitespace().count() as u32;
-            return Ok(FinishOutcome {
-                words: word_count,
-                text,
-                raw,
-                engine: "local moonshine-v2-tiny.en".to_string(),
+            // Cleanup fetches are blocking: recheck the witness before
+            // the history write so a cancel that landed mid-cleanup
+            // settles instead of storing a phantom row (server-path
+            // parity).
+            #[cfg(test)]
+            crate::server_stt::finish_cleanup_pause_point();
+            if crate::server_stt::server_generation() != generation_at_entry {
+                return Err("superseded (provider switched mid-utterance)".to_string());
+            }
+            return Ok(self.finalize_delivery(
+                &raw,
+                &text,
+                "local moonshine-v2-tiny.en",
                 duration_secs,
-            });
+            ));
         }
         // Witness before the blocking chain: a provider switch or Stop
         // applied mid-transcribe bumps the generation; stale results
@@ -632,10 +639,28 @@ impl Engine {
         // Cleanup fetches are blocking: recheck the witness before the
         // history write so a cancel that landed mid-cleanup settles
         // instead of storing a phantom row.
+        #[cfg(test)]
+        crate::server_stt::finish_cleanup_pause_point();
         if crate::server_stt::server_generation() != generation_at_entry {
             return Err("superseded (provider switched mid-utterance)".to_string());
         }
 
+        Ok(self.finalize_delivery(&raw, &text, &engine, duration_secs))
+    }
+
+    /// Shared delivery tail (local + server parity): retention first,
+    /// then store only when history is on (mirrors desktop deliver).
+    /// Leased-work join before finalization (desktop #22 shutdown
+    /// parity at utterance scope): the history write completes before
+    /// `checkpoint` finalizes the database — never checkpoint first
+    /// and leave the row behind on crash.
+    fn finalize_delivery(
+        &mut self,
+        raw: &str,
+        text: &str,
+        engine: &str,
+        duration_secs: i64,
+    ) -> FinishOutcome {
         // Retention first, then store only when history is on
         // (mirrors desktop deliver). Leased-work join before
         // finalization (desktop #22 shutdown parity at utterance
@@ -651,24 +676,24 @@ impl Engine {
             let node = self.node_id.clone();
             let _ = with_busy_retry(|| {
                 self.store
-                    .add_history(&raw, &text, word_count, duration_secs, &node)
+                    .add_history(raw, text, word_count, duration_secs, &node)
             });
             let _ = with_busy_retry(|| self.store.checkpoint());
-            Ok(FinishOutcome {
-                text,
-                raw,
-                engine,
+            FinishOutcome {
+                text: text.to_string(),
+                raw: raw.to_string(),
+                engine: engine.to_string(),
                 duration_secs,
                 words: word_count,
-            })
+            }
         } else {
-            Ok(FinishOutcome {
+            FinishOutcome {
                 words: text.split_whitespace().count() as u32,
-                text,
-                raw,
-                engine,
+                text: text.to_string(),
+                raw: raw.to_string(),
+                engine: engine.to_string(),
                 duration_secs,
-            })
+            }
         }
     }
 
@@ -839,8 +864,9 @@ mod tests {
     // -- desktop #11 port: status + provider-switch reconcile --------
 
     use crate::server_stt::{
-        clear_finish_guard_pause, clear_poll_snapshot_pause, reset_status_state, server_generation,
-        set_finish_guard_pause, set_poll_snapshot_pause, status_test_lock,
+        clear_finish_cleanup_pause, clear_finish_guard_pause, clear_poll_snapshot_pause,
+        reset_status_state, server_generation, set_finish_cleanup_pause, set_finish_guard_pause,
+        set_poll_snapshot_pause, status_test_lock,
     };
     use crate::settings::{SttChainEntry, SttEntryKind, SttSettings};
     use std::sync::mpsc;
@@ -1221,5 +1247,76 @@ mod tests {
         assert_eq!(out.text, "Hello world.");
         stt_stub.join().unwrap();
         llm_stub.join().unwrap();
+    }
+
+    fn local_only_settings() -> String {
+        // Default settings already carry a single enabled Local entry;
+        // hermetic cleanup-off so no network is touched.
+        let mut s = AppSettings::default();
+        s.language_models.cleanup_enabled = false;
+        serde_json::to_string(&s).unwrap()
+    }
+
+    #[test]
+    fn local_tail_persists_history_before_returning() {
+        // Finding 1: the local early-return skipped retention/history/
+        // checkpoint. The local tail now shares finalize_delivery, so a
+        // local hit stores its row before Ok.
+        let _guard = status_test_lock();
+        reset_status_state();
+        crate::local_stt::clear_test_transcribe();
+        crate::local_stt::set_test_transcribe(Ok("hello local".to_string()));
+        let mut eng = open_engine();
+        eng.put_settings(&local_only_settings()).unwrap();
+        eng.start_utterance(16000);
+        eng.push_pcm(&vec![1000i16; 8000]);
+        let out = eng.finish_utterance().unwrap();
+        crate::local_stt::clear_test_transcribe();
+        assert_eq!(out.text, "hello local");
+        assert_eq!(out.engine, "local moonshine-v2-tiny.en");
+        let history = eng.history_json(10);
+        assert!(
+            history.contains("hello local"),
+            "local hit must persist history before Ok, got: {history}"
+        );
+    }
+
+    #[test]
+    fn local_tail_superseded_during_cleanup_settles() {
+        // Finding 2: no witness recheck after local post_process meant a
+        // cancel landing mid-cleanup still stored a phantom row. Park
+        // between cleanup and the recheck; the stale local result must
+        // settle with no history write.
+        let _guard = status_test_lock();
+        reset_status_state();
+        crate::local_stt::clear_test_transcribe();
+        crate::local_stt::set_test_transcribe(Ok("hello local".to_string()));
+        let mut eng = open_engine();
+        eng.put_settings(&local_only_settings()).unwrap();
+        let (tx_entered, rx_entered) = mpsc::channel();
+        let (tx_proceed, rx_proceed) = mpsc::channel();
+        set_finish_cleanup_pause(tx_entered, rx_proceed);
+        eng.start_utterance(16000);
+        eng.push_pcm(&vec![1000i16; 8000]);
+        let handle = std::thread::spawn(move || {
+            let history_before = eng.history_json(10);
+            let out = eng.finish_utterance();
+            (eng, history_before, out)
+        });
+        rx_entered.recv_timeout(Duration::from_secs(10)).unwrap();
+        crate::server_stt::record_stop("");
+        tx_proceed.send(()).unwrap();
+        let (eng, history_before, out) = handle.join().unwrap();
+        clear_finish_cleanup_pause();
+        crate::local_stt::clear_test_transcribe();
+        match out {
+            Ok(_) => panic!("stale local result must settle, not deliver"),
+            Err(err) => assert!(
+                err.contains("superseded"),
+                "stale local result must settle, got: {err}"
+            ),
+        }
+        assert_eq!(history_before, "[]");
+        assert_eq!(eng.history_json(10), "[]");
     }
 }

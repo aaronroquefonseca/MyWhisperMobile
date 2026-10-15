@@ -82,4 +82,14 @@ class LocalFallbackTest {
         assertEquals(listOf("server text"), h.results)
         assertTrue(h.serverHit.get())
     }
+
+    @Test
+    fun localOom_fallsBackToServer() {
+        // OutOfMemoryError is an Error, not an Exception: the local
+        // hook must still miss to server instead of killing the worker.
+        val h = Harness(local = { throw OutOfMemoryError("fake OOM") })
+        h.finish()
+        assertEquals(listOf("server text"), h.results)
+        assertTrue(h.serverHit.get())
+    }
 }

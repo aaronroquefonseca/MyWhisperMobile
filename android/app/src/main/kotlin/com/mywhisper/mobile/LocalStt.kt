@@ -202,6 +202,12 @@ object LocalStt {
         } catch (e: UnsatisfiedLinkError) {
             Log.w(TAG, "sherpa native missing, fallback to server: ${e.message}")
             return null
+        } catch (e: OutOfMemoryError) {
+            // OOM is an Error, not an Exception: release the cached
+            // recognizer (native + Java heap) and fall back to server.
+            Log.w(TAG, "local transcribe OOM, fallback to server")
+            try { unload() } catch (_: Throwable) {}
+            return null
         } catch (e: Exception) {
             Log.w(TAG, "local transcribe failed, fallback to server: ${e.message}")
             return null
@@ -220,6 +226,10 @@ object LocalStt {
             val r = transcribe(context, pcm16) ?: return null
             if (r.text.isBlank()) return null
             return r.text to ENGINE_NAME
+        } catch (_: OutOfMemoryError) {
+            // OOM is an Error: drop native state and fall back to server.
+            try { unload() } catch (_: Throwable) {}
+            return null
         } catch (_: Exception) {
             return null
         }

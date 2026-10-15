@@ -106,8 +106,36 @@ pub fn verify_pack(files_dir: &Path) -> Result<(), String> {
 /// pack is absent/invalid (caller falls back to the server chain) —
 /// Rust never runs inference here; Kotlin `LocalStt` does.
 pub fn try_transcribe(files_dir: &Path, _pcm16: &[i16]) -> Result<String, String> {
+    #[cfg(test)]
+    if let Some(over) = test_transcribe_override() {
+        return over;
+    }
     verify_pack(files_dir)?;
     Err("local inference lives in LocalStt.kt (sherpa-onnx AAR); rust try_transcribe verifies pack only".to_string())
+}
+
+/// Test-only canned result for `try_transcribe` (production Rust never
+/// runs inference; the override lets engine tests drive the local tail
+/// without a pack or ONNX runtime).
+#[cfg(test)]
+static TEST_TRANSCRIBE_OVERRIDE: std::sync::Mutex<Option<Result<String, String>>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(test)]
+fn test_transcribe_override() -> Option<Result<String, String>> {
+    TEST_TRANSCRIBE_OVERRIDE.lock().ok()?.clone()
+}
+
+/// Install a canned `try_transcribe` result (single-shot per test).
+#[cfg(test)]
+pub(crate) fn set_test_transcribe(result: Result<String, String>) {
+    *TEST_TRANSCRIBE_OVERRIDE.lock().unwrap() = Some(result);
+}
+
+/// Clear a parked override so later tests never observe it.
+#[cfg(test)]
+pub(crate) fn clear_test_transcribe() {
+    TEST_TRANSCRIBE_OVERRIDE.lock().unwrap().take();
 }
 
 /// Split 16 kHz mono PCM into decode chunks, returned as
@@ -281,6 +309,10 @@ mod tests {
 
     #[test]
     fn missing_pack_fails_closed() {
+        // Serialized with the engine local-tail tests: they install a
+        // canned try_transcribe override on the same static.
+        let _guard = crate::server_stt::status_test_lock();
+        clear_test_transcribe();
         let dir = std::env::temp_dir().join(format!("mw-local-missing-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let err = verify_pack(&dir).unwrap_err();
@@ -290,6 +322,9 @@ mod tests {
 
     #[test]
     fn pinned_pack_rejects_wrong_content() {
+        // Serialized with the engine local-tail tests (shared override).
+        let _guard = crate::server_stt::status_test_lock();
+        clear_test_transcribe();
         let dir = std::env::temp_dir().join(format!("mw-local-present-{}", std::process::id()));
         let pack = dir.join(PACK_REL_DIR);
         let _ = std::fs::remove_dir_all(&dir);
