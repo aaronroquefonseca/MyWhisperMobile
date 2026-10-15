@@ -27,6 +27,10 @@
 		AA11BB22CC33DD44EE55FF04 /* SttPipelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB11BB22CC33DD44EE55FF04 /* SttPipelineTests.swift */; };
 		E4C4A10000000000000000A2 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4C4A10000000000000000A1 /* KeychainStore.swift */; };
 		E4C4A10000000000000000B2 /* KeychainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4C4A10000000000000000B1 /* KeychainTests.swift */; };
+		CC0100CC0100CC01000002 /* SetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC0100CC0100CC01000001 /* SetupView.swift */; };
+		CC0100CC0100CC02000002 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC0100CC0100CC02000001 /* Theme.swift */; };
+		CC0100CC0100CC03000002 /* Strings.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC0100CC0100CC03000001 /* Strings.swift */; };
+		CC0100CC0100CC04000002 /* SetupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC0100CC0100CC04000001 /* SetupTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -63,6 +67,10 @@
 		BB11BB22CC33DD44EE55FF04 /* SttPipelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SttPipelineTests.swift; sourceTree = "<group>"; };
 		E4C4A10000000000000000A1 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
 		E4C4A10000000000000000B1 /* KeychainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainTests.swift; sourceTree = "<group>"; };
+		CC0100CC0100CC01000001 /* SetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupView.swift; sourceTree = "<group>"; };
+		CC0100CC0100CC02000001 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		CC0100CC0100CC03000001 /* Strings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Strings.swift; sourceTree = "<group>"; };
+		CC0100CC0100CC04000001 /* SetupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupTests.swift; sourceTree = "<group>"; };
 		602A6F78559E7FAC27690B4A /* Tests Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		D82908387D374745193668C2 /* MyWhisper.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MyWhisper.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		8965188E778D2EEAECC16395 /* MyWhisperTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MyWhisperTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -112,6 +120,9 @@
 				BB11BB22CC33DD44EE55FF02 /* Delivery.swift */,
 				BB11BB22CC33DD44EE55FF03 /* ResultView.swift */,
 				E4C4A10000000000000000A1 /* KeychainStore.swift */,
+				CC0100CC0100CC01000001 /* SetupView.swift */,
+				CC0100CC0100CC02000001 /* Theme.swift */,
+				CC0100CC0100CC03000001 /* Strings.swift */,
 				7EB0EE73123791A0202B4796 /* MyWhisper.entitlements */,
 				658CB18E2E567D501D0E64F8 /* Info.plist */,
 				F32B3BDBD273F3BCD8875B1B /* PrivacyInfo.xcprivacy */,
@@ -128,6 +139,7 @@
 				AA0100AA0100AA04000001 /* DictationTests.swift */,
 				BB11BB22CC33DD44EE55FF04 /* SttPipelineTests.swift */,
 				E4C4A10000000000000000B1 /* KeychainTests.swift */,
+				CC0100CC0100CC04000001 /* SetupTests.swift */,
 				602A6F78559E7FAC27690B4A /* Tests Info.plist */,
 			);
 			path = MyWhisperTests;
@@ -252,6 +264,9 @@
 				AA11BB22CC33DD44EE55FF02 /* Delivery.swift in Sources */,
 				AA11BB22CC33DD44EE55FF03 /* ResultView.swift in Sources */,
 				E4C4A10000000000000000A2 /* KeychainStore.swift in Sources */,
+				CC0100CC0100CC01000002 /* SetupView.swift in Sources */,
+				CC0100CC0100CC02000002 /* Theme.swift in Sources */,
+				CC0100CC0100CC03000002 /* Strings.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -265,6 +280,7 @@
 				AA0100AA0100AA04000002 /* DictationTests.swift in Sources */,
 				AA11BB22CC33DD44EE55FF04 /* SttPipelineTests.swift in Sources */,
 				E4C4A10000000000000000B2 /* KeychainTests.swift in Sources */,
+				CC0100CC0100CC04000002 /* SetupTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
