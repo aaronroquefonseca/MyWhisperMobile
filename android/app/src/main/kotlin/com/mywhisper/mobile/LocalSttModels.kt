@@ -373,26 +373,41 @@ object LocalSttModels {
     }
 
     /**
-     * Per-model install state. MISMATCH needs a COMPLETE set that
-     * fails verify; a subset of files, short files, or stale `.part`
-     * leftovers (interrupted download) read as INCOMPLETE — resumable
-     * via [download] (verified files are skipped), never "SHA
-     * mismatch". Pure java.io.
+     * Per-model install state. MISMATCH needs COMPLETE files that
+     * fail verify (full count at the pinned sizes); a subset of
+     * files, truncated files (short of [ModelFile.sizeBytes] when
+     * known), or stale `.part` leftovers (interrupted download) read
+     * as INCOMPLETE — resumable via [download] (verified files are
+     * skipped), never "SHA mismatch". Pure java.io.
+     */
+    /**
+     * Per-model install state. MISMATCH needs COMPLETE files that
+     * fail verify (full count at the pinned sizes); a subset of
+     * files, truncated files (short of [ModelFile.sizeBytes] when
+     * known), or stale `.part` leftovers (interrupted download) read
+     * as INCOMPLETE — resumable via [download] (verified files are
+     * skipped), never "SHA mismatch". Pure java.io.
      */
     fun stateFor(filesDir: File, entry: Entry): LocalModelDownload.RowState {
         val dir = dirFor(filesDir, entry)
         var present = 0
+        var complete = 0
         for (f in entry.files) {
             val file = File(dir, f.name)
-            if (file.isFile && file.length() > 0) present++
+            if (!file.isFile || file.length() <= 0) continue
+            present++
+            // Unknown size (<= 0) reads as complete (legacy MISMATCH
+            // behavior); otherwise the file must reach its pinned size.
+            if (f.sizeBytes <= 0 || file.length() >= f.sizeBytes) complete++
         }
         if (present == 0 && !hasPartials(dir, entry)) {
             return LocalModelDownload.RowState.MISSING
         }
-        if (present == entry.files.size && isInstalled(filesDir, entry)) {
+        val fullSet = present == entry.files.size && complete == entry.files.size
+        if (fullSet && isInstalled(filesDir, entry)) {
             return LocalModelDownload.RowState.PRESENT
         }
-        if (present == entry.files.size) {
+        if (fullSet) {
             return LocalModelDownload.RowState.MISMATCH
         }
         return LocalModelDownload.RowState.INCOMPLETE

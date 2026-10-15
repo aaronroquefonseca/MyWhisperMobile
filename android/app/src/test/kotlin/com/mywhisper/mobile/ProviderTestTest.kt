@@ -213,6 +213,20 @@ class ProviderTestTest {
         assertFalse(ProviderTest.llmRemoteTestAllowed("Cloud", "", ""))
     }
 
+    // -- Disabled-reason rendering ------------------------------------
+
+    @Test
+    fun showDisabledReason_disabledAndIdleWithReason() {
+        assertTrue(ProviderTest.showDisabledReason(false, false, "need pack"))
+        // A stale result must NOT suppress the reason: the blocker
+        // stays explicit even under old output (callers always pass the
+        // latest result; the reason gate ignores it).
+        assertTrue(ProviderTest.showDisabledReason(false, false, "need url"))
+        assertFalse(ProviderTest.showDisabledReason(true, false, "need url"))
+        assertFalse(ProviderTest.showDisabledReason(false, true, "need url"))
+        assertFalse(ProviderTest.showDisabledReason(false, false, null))
+    }
+
     // -- Activity gates mirror the harness (row disabled states) ----
 
     @Test

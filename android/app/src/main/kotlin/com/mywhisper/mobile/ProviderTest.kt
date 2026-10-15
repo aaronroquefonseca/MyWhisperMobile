@@ -223,6 +223,15 @@ object ProviderTest {
             else -> LocalBlocked.NONE
         }
 
+    /**
+     * Whether the disabled-reason line renders under the test button.
+     * Renders even when a stale result lingers (config edited after a
+     * run): the blocker is explicit, never hidden behind old output.
+     * Pure for unit tests.
+     */
+    fun showDisabledReason(enabled: Boolean, busy: Boolean, reason: String?): Boolean =
+        !enabled && !busy && reason != null
+
     /** Server STT button goes live when the config validates. */
     fun sttServerTestAllowed(kind: String, url: String, model: String): Boolean =
         validateStt(kind, url, model) == SttError.NONE

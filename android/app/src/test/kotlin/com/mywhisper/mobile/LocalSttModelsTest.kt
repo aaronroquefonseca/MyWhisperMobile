@@ -282,18 +282,44 @@ class LocalSttModelsTest {
     }
 
     @Test
-    fun matrix_garbageFilesAreMismatchPerModel() {
+    fun matrix_sparseFullGarbageIsMismatch() {
+        // Full-size-but-corrupt files: MISMATCH only here. Sparse
+        // (instant, no blocks) so the pinned sizes cost nothing.
         val dir = Files.createTempDirectory("stt-matrix").toFile()
+        try {
+            val m = LocalSttModels.findById(LocalSttModels.MOONSHINE_ID)
+            val pack = LocalSttModels.dirFor(dir, m)
+            pack.mkdirs()
+            for (f in m.files) {
+                val file = java.io.File(pack, f.name)
+                java.io.RandomAccessFile(file, "rw").use { it.setLength(f.sizeBytes) }
+                file.appendBytes("x".toByteArray())
+            }
+            assertEquals(
+                LocalModelDownload.RowState.MISMATCH,
+                LocalSttModels.stateFor(dir, m),
+            )
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun matrix_truncatedFullCountIsIncompletePerModel() {
+        // Full file count but truncated (1 byte each, short of the
+        // pinned sizes): INCOMPLETE per the stateFor KDoc, never
+        // MISMATCH. Cheap for every catalog entry.
+        val dir = Files.createTempDirectory("stt-trunc").toFile()
         try {
             for (m in LocalSttModels.MODELS) {
                 val pack = LocalSttModels.dirFor(dir, m)
                 pack.mkdirs()
                 for (f in m.files) {
-                    java.io.File(pack, f.name).writeBytes("garbage".toByteArray())
+                    java.io.File(pack, f.name).writeBytes("x".toByteArray())
                 }
                 assertEquals(
                     m.id,
-                    LocalModelDownload.RowState.MISMATCH,
+                    LocalModelDownload.RowState.INCOMPLETE,
                     LocalSttModels.stateFor(dir, m),
                 )
             }

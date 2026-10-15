@@ -103,14 +103,41 @@ class RowsUxReworkTest {
     }
 
     @Test
+    fun stt_stateFor_truncatedFullCountIsIncomplete() {
+        // Review finding: a full file count that is truncated short of
+        // the pinned sizes must read INCOMPLETE per the stateFor KDoc,
+        // never MISMATCH.
+        val dir = Files.createTempDirectory("stt-trunc").toFile()
+        try {
+            val m = LocalSttModels.findById(LocalSttModels.MOONSHINE_ID)
+            val pack = LocalSttModels.dirFor(dir, m)
+            pack.mkdirs()
+            for (f in m.files) {
+                File(pack, f.name).writeBytes("x".toByteArray())
+            }
+            assertEquals(
+                LocalModelDownload.RowState.INCOMPLETE,
+                LocalSttModels.stateFor(dir, m),
+            )
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
     fun stt_stateFor_completeGarbageIsMismatch() {
         val dir = Files.createTempDirectory("stt-mismatch").toFile()
         try {
-            val m = LocalSttModels.MODELS.first()
+            val m = LocalSttModels.findById(LocalSttModels.MOONSHINE_ID)
             val pack = LocalSttModels.dirFor(dir, m)
             pack.mkdirs()
-            // Full set present but corrupt: MISMATCH only here.
-            for (f in m.files) File(pack, f.name).writeBytes("garbage".toByteArray())
+            // Full-size-but-corrupt set (sparse, instant): MISMATCH
+            // only here.
+            for (f in m.files) {
+                val file = File(pack, f.name)
+                java.io.RandomAccessFile(file, "rw").use { it.setLength(f.sizeBytes) }
+                file.appendBytes("x".toByteArray())
+            }
             assertEquals(
                 LocalModelDownload.RowState.MISMATCH,
                 LocalSttModels.stateFor(dir, m),
@@ -266,6 +293,19 @@ class RowsUxReworkTest {
         assertEquals(1, MainActivity.tabForDownloadTarget("stt"))
         assertEquals(1, MainActivity.tabForDownloadTarget(null))
         assertEquals(1, MainActivity.tabForDownloadTarget("bogus"))
+    }
+
+    @Test
+    fun deepLinkTargetTab_pendingWins_consumedKeepsCurrent() {
+        // A pending tap routes to its tab; a re-tap on the same target
+        // re-routes identically (the caller consumes the pending value
+        // to null after routing so the key change is never swallowed).
+        assertEquals(2, MainActivity.deepLinkTargetTab(2, 0))
+        assertEquals(2, MainActivity.deepLinkTargetTab(2, 2))
+        assertEquals(1, MainActivity.deepLinkTargetTab(1, 2))
+        // No pending tap: the user's current tab stands.
+        assertEquals(0, MainActivity.deepLinkTargetTab(null, 0))
+        assertEquals(2, MainActivity.deepLinkTargetTab(null, 2))
     }
 
     // -- New copy in en + es -------------------------------------------

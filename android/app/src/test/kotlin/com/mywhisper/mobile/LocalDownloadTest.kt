@@ -116,13 +116,17 @@ class LocalDownloadTest {
     }
 
     @Test
-    fun sttPack_garbageFilesAreMismatch() {
+    fun sttPack_sparseFullGarbageIsMismatch() {
+        // Full-size-but-corrupt legacy pack: MISMATCH only here. Sparse
+        // (instant, no blocks) so the pinned sizes cost nothing.
         val dir = Files.createTempDirectory("stt-pack").toFile()
         try {
             val pack = LocalStt.packDir(dir)
             pack.mkdirs()
             for (a in LocalStt.packAssets()) {
-                File(pack, a.fileName).writeBytes("garbage".toByteArray())
+                val file = File(pack, a.fileName)
+                java.io.RandomAccessFile(file, "rw").use { it.setLength(a.sizeBytes) }
+                file.appendBytes("x".toByteArray())
             }
             assertEquals(
                 LocalModelDownload.RowState.MISMATCH,

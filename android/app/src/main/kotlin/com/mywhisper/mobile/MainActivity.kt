@@ -580,6 +580,17 @@ class MainActivity : ComponentActivity() {
             if (target == DL_TARGET_LLM || target == ModelDownloadSchedule.TARGET_LLM) 2 else 1
 
         /**
+         * Tab after a deep-link tap: a pending target wins (repeat taps
+         * on the same target re-route identically); null keeps the
+         * user's current tab. The caller consumes the pending value
+         * (sets it null) right after routing so the next tap is a key
+         * change, never swallowed. Pure for unit tests.
+         */
+        @JvmStatic
+        internal fun deepLinkTargetTab(pendingTab: Int?, currentTab: Int): Int =
+            pendingTab ?: currentTab
+
+        /**
          * Persisted expansion flags for the on-device model sections.
          */
         internal const val PREF_STT_LOCAL_EXPANDED = "local_stt_expanded"
@@ -1059,8 +1070,14 @@ class MainActivity : ComponentActivity() {
         ) {
             var tab by rememberSaveable { mutableIntStateOf(deepLinkTab.value ?: 0) }
             // Notification deep-link: a warm tap re-routes the open app.
+            // Consumed after routing (set null): without this a re-tap
+            // on the same target is a no-op key change and gets ignored.
             LaunchedEffect(deepLinkTab.value) {
-                deepLinkTab.value?.let { tab = it }
+                val pending = deepLinkTab.value
+                if (pending != null) {
+                    tab = deepLinkTargetTab(pending, tab)
+                    deepLinkTab.value = null
+                }
             }
             val snackbarHost = remember { SnackbarHostState() }
             LaunchedEffect(Unit) {
@@ -1256,8 +1273,9 @@ class MainActivity : ComponentActivity() {
      * under every chain row (STT + LLM, local + remote) and under
      * every add/edit dialog form, same inline reporting (`latency +
      * excerpt/status`). Disabled fail-closed via [enabled]; busy shows
-     * the testing copy; a disabled button with no result yet shows
-     * [disabledReason] so the blocker is explicit, never silent.
+     * the testing copy; a disabled button shows [disabledReason] so
+     * the blocker stays explicit even under a stale result
+     * ([ProviderTest.showDisabledReason]).
      */
     @Composable
     private fun ProviderTestRow(
@@ -1309,9 +1327,10 @@ class MainActivity : ComponentActivity() {
                     )
                 }
             }
-            if (!enabled && !busy && result == null && disabledReason != null) {
+            val reason = disabledReason
+            if (reason != null && ProviderTest.showDisabledReason(enabled, busy, reason)) {
                 Text(
-                    disabledReason,
+                    reason,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
