@@ -31,6 +31,11 @@
 		CC0100CC0100CC02000002 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC0100CC0100CC02000001 /* Theme.swift */; };
 		CC0100CC0100CC03000002 /* Strings.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC0100CC0100CC03000001 /* Strings.swift */; };
 		CC0100CC0100CC04000002 /* SetupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC0100CC0100CC04000001 /* SetupTests.swift */; };
+		5E77110000000000000002 /* SttSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E77110000000000000001 /* SttSettingsView.swift */; };
+		5E77120000000000000002 /* CleanupSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E77120000000000000001 /* CleanupSettingsView.swift */; };
+		5E77130000000000000002 /* DictionaryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E77130000000000000001 /* DictionaryView.swift */; };
+		5E77140000000000000002 /* EntryDialogs.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E77140000000000000001 /* EntryDialogs.swift */; };
+		5E77150000000000000002 /* SettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E77150000000000000001 /* SettingsTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -71,6 +76,11 @@
 		CC0100CC0100CC02000001 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		CC0100CC0100CC03000001 /* Strings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Strings.swift; sourceTree = "<group>"; };
 		CC0100CC0100CC04000001 /* SetupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupTests.swift; sourceTree = "<group>"; };
+		5E77110000000000000001 /* SttSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SttSettingsView.swift; sourceTree = "<group>"; };
+		5E77120000000000000001 /* CleanupSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CleanupSettingsView.swift; sourceTree = "<group>"; };
+		5E77130000000000000001 /* DictionaryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictionaryView.swift; sourceTree = "<group>"; };
+		5E77140000000000000001 /* EntryDialogs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EntryDialogs.swift; sourceTree = "<group>"; };
+		5E77150000000000000001 /* SettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsTests.swift; sourceTree = "<group>"; };
 		602A6F78559E7FAC27690B4A /* Tests Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		D82908387D374745193668C2 /* MyWhisper.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MyWhisper.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		8965188E778D2EEAECC16395 /* MyWhisperTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MyWhisperTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -123,6 +133,10 @@
 				CC0100CC0100CC01000001 /* SetupView.swift */,
 				CC0100CC0100CC02000001 /* Theme.swift */,
 				CC0100CC0100CC03000001 /* Strings.swift */,
+				5E77110000000000000001 /* SttSettingsView.swift */,
+				5E77120000000000000001 /* CleanupSettingsView.swift */,
+				5E77130000000000000001 /* DictionaryView.swift */,
+				5E77140000000000000001 /* EntryDialogs.swift */,
 				7EB0EE73123791A0202B4796 /* MyWhisper.entitlements */,
 				658CB18E2E567D501D0E64F8 /* Info.plist */,
 				F32B3BDBD273F3BCD8875B1B /* PrivacyInfo.xcprivacy */,
@@ -140,6 +154,7 @@
 				BB11BB22CC33DD44EE55FF04 /* SttPipelineTests.swift */,
 				E4C4A10000000000000000B1 /* KeychainTests.swift */,
 				CC0100CC0100CC04000001 /* SetupTests.swift */,
+				5E77150000000000000001 /* SettingsTests.swift */,
 				602A6F78559E7FAC27690B4A /* Tests Info.plist */,
 			);
 			path = MyWhisperTests;
@@ -267,6 +282,10 @@
 				CC0100CC0100CC01000002 /* SetupView.swift in Sources */,
 				CC0100CC0100CC02000002 /* Theme.swift in Sources */,
 				CC0100CC0100CC03000002 /* Strings.swift in Sources */,
+				5E77110000000000000002 /* SttSettingsView.swift in Sources */,
+				5E77120000000000000002 /* CleanupSettingsView.swift in Sources */,
+				5E77130000000000000002 /* DictionaryView.swift in Sources */,
+				5E77140000000000000002 /* EntryDialogs.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -281,6 +300,7 @@
 				AA11BB22CC33DD44EE55FF04 /* SttPipelineTests.swift in Sources */,
 				E4C4A10000000000000000B2 /* KeychainTests.swift in Sources */,
 				CC0100CC0100CC04000002 /* SetupTests.swift in Sources */,
+				5E77150000000000000002 /* SettingsTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
