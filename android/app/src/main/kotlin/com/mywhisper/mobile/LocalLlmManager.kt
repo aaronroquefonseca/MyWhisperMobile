@@ -250,6 +250,33 @@ object LocalLlmManager {
         val directScheduler: Scheduler = Scheduler { task -> task() }
 
         /**
+         * Wrap a `java.util.concurrent.Executor` (the Activity
+         * single-thread `workers`) as a [Scheduler]: every verify task
+         * in production flows through [verifyAsync] on this seam, so
+         * the worker-thread guard covers all of them. Pure JVM.
+         */
+        fun fromExecutor(exec: java.util.concurrent.Executor): Scheduler =
+            Scheduler { task -> exec.execute { task() } }
+
+        /**
+         * Latest-wins gate for queued verify tasks: the single-thread
+         * worker runs FIFO, so rapid `version++` bumps queue N
+         * multi-GB sweeps. Each effect launch [claim]s a generation;
+         * a task whose generation is no longer latest exits BEFORE
+         * hashing ([isCurrent]) and its result is dropped on the UI
+         * hop. Pure JVM, thread-safe, unit-tested.
+         */
+        class VerifyGate {
+            private val latest = java.util.concurrent.atomic.AtomicInteger(0)
+
+            /** Claim the next generation (call on scheduling). */
+            fun claim(): Int = latest.incrementAndGet()
+
+            /** True when [gen] is still the latest claim. */
+            fun isCurrent(gen: Int): Boolean = latest.get() == gen
+        }
+
+        /**
          * Run [block] off the main thread via [scheduler], posting the
          * result to [onDone] (caller hops to UI). The guard fires
          * inside the worker, so scheduling from composition is fine

@@ -451,6 +451,24 @@ class MainActivity : ComponentActivity() {
                 cache[key(dir, asset.id)] = Entry(llmSigFor(dir, asset), inspect)
             }
 
+            /**
+             * TOCTOU-safe store (see
+             * [LocalSttModels.SttVerifyCache.storeIfStable]): cache
+             * only when the disk did not move mid-hash.
+             */
+            @Synchronized
+            fun storeIfStable(
+                dir: File,
+                asset: LocalLlmManager.ModelAsset,
+                before: List<LocalLlmManager.PackVerify.FileSig>,
+                inspect: LlmInspect,
+            ): Boolean {
+                val after = llmSigFor(dir, asset)
+                if (after != before) return false
+                cache[key(dir, asset.id)] = Entry(after, inspect)
+                return true
+            }
+
             @Synchronized
             fun clear() {
                 cache.clear()
@@ -495,23 +513,62 @@ class MainActivity : ComponentActivity() {
          * Worker-side full LLM verify (hashes — call only off the main
          * thread). Guards via [LocalLlmManager.PackVerify], stores into
          * [LlmVerifyCache], returns the fresh map for the UI hop.
+         *
+         * Fresh cache hits short-circuit (stat-only); [isCurrent] is
+         * the [LocalLlmManager.PackVerify.VerifyGate] predicate — stale
+         * queued tasks skip remaining sweeps.
          */
         @JvmStatic
         internal fun llmVerifyAllOffThread(
             dir: File,
             assets: List<LocalLlmManager.ModelAsset>,
             verify: (File, String) -> Boolean = LocalLlmManager::verifySha256,
+            isCurrent: () -> Boolean = { true },
         ): Map<String, LlmInspect> {
             LocalLlmManager.PackVerify.requireWorkerThread("llm-verify-all")
-            return assets.associate { a ->
+            val out = mutableMapOf<String, LlmInspect>()
+            for (a in assets) {
+                val hit = LlmVerifyCache.cached(dir, a)
+                if (hit != null) {
+                    out[a.id] = hit
+                    continue
+                }
+                if (!isCurrent()) {
+                    out[a.id] = llmCachedOrPlaceholder(dir, a)
+                    continue
+                }
+                val before = llmSigFor(dir, a)
                 val r = try {
                     llmInspectWithVerifier(dir, a, verify)
                 } catch (_: Exception) {
                     LlmInspect(LocalPackState.MISSING, 0L)
                 }
-                LlmVerifyCache.store(dir, a, r)
-                a.id to r
+                LlmVerifyCache.storeIfStable(dir, a, before, r)
+                out[a.id] = r
             }
+            return out
+        }
+
+        /**
+         * Hoisted app-start warm (called once from `onCreate` on the
+         * worker): verifies every STT model + LLM asset so a fresh
+         * process fills both caches even if the user never opens the
+         * model screens — the Setup onboarding gate reads warmed state
+         * instead of regressing to "not configured". Hashes — worker
+         * only. Screens re-verify on their own `version` bumps; cache
+         * hits make repeats stat-only.
+         */
+        @JvmStatic
+        internal fun warmAllPacksOffThread(
+            filesDir: File,
+            assets: List<LocalLlmManager.ModelAsset>,
+            isCurrent: () -> Boolean = { true },
+            sttVerify: (File, String) -> Boolean = LocalLlmManager::verifySha256,
+            llmVerify: (File, String) -> Boolean = LocalLlmManager::verifySha256,
+        ) {
+            LocalLlmManager.PackVerify.requireWorkerThread("warm-all-packs")
+            LocalSttModels.verifyAllOffThread(filesDir, sttVerify, isCurrent)
+            llmVerifyAllOffThread(filesDir, assets, llmVerify, isCurrent)
         }
 
         /**
@@ -975,6 +1032,14 @@ class MainActivity : ComponentActivity() {
         if (!granted) toast(getString(R.string.setup_notif_denied))
     }
 
+    /** Bumped when the app-start pack warm finishes (Setup gate re-reads). */
+    private val verifyTick = mutableIntStateOf(0)
+
+    /** Verify tasks ride the existing single-thread worker via the seam. */
+    private val verifyScheduler: LocalLlmManager.PackVerify.Scheduler by lazy {
+        LocalLlmManager.PackVerify.fromExecutor(workers)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         micDeniedBefore = getSharedPreferences("mw_state", MODE_PRIVATE)
@@ -987,6 +1052,18 @@ class MainActivity : ComponentActivity() {
         )
         refreshPermStates()
         reload()
+        // Hoisted app-start pack warm (ANR fix): one background sweep
+        // fills the STT + LLM verify caches even if the model screens
+        // never open, so the Setup onboarding gate reads warmed state
+        // on a fresh process instead of regressing. Scheduling (not
+        // hashing) on the main thread is safe — the guard fires inside
+        // the worker.
+        LocalLlmManager.PackVerify.verifyAsync(
+            verifyScheduler,
+            "warm-all-packs",
+            block = { warmAllPacksOffThread(filesDir, llmAssets()) },
+            onDone = { runOnUiThread { verifyTick.intValue++ } },
+        )
         setContent { Root() }
     }
 
@@ -1786,10 +1863,11 @@ class MainActivity : ComponentActivity() {
                 }
                 found
             }
-            val localVerified = remember(s) {
+            val localVerified = remember(s, verifyTick.intValue) {
                 // ANR fix: stat-only cached read (no SHA-256 here — the
-                // full verify runs on the SttScreen worker and fills
-                // SttVerifyCache). Fail-closed: unverified reads false.
+                // app-start warm + screen workers fill SttVerifyCache).
+                // Re-reads when the warm finishes (verifyTick bump).
+                // Fail-closed: unverified reads false.
                 try {
                     LocalSttModels.cachedOrPlaceholder(
                         filesDir,
@@ -2180,11 +2258,16 @@ class MainActivity : ComponentActivity() {
      * StrictMode-style audit (STT/LLM screens, 2026-10-16): main-thread
      * disk/crypto I/O found in composition —
      * - FIXED (this change): SHA-256 over pack files via
-     *   `LocalSttModels.inspect` / `llmInspect` / `verifySha256`
-     *   (multi-GB `MessageDigest.update` in composition = the ANR).
-     *   Now worker-only (`workers.execute` + `PackVerify` guard +
-     *   `SttVerifyCache`/`LlmVerifyCache` with length/mtime sigs);
-     *   composition renders last-known state + `verifying…`.
+     *   `LocalSttModels.inspect` / `llmInspect` / `verifySha256` /
+     *   `isInstalled` (multi-GB `MessageDigest.update` in composition
+     *   = the ANR). Now worker-only: every sweep rides the
+     *   `PackVerify.verifyAsync` seam (`requireWorkerThread` guard) on
+     *   the single-thread `workers` executor, latest-wins
+     *   `VerifyGate` drops stale queued sweeps pre-hash, TOCTOU-safe
+     *   `storeIfStable` (length/mtime before+after) caches only
+     *   unmoved results; composition renders last-known state +
+     *   `verifying…`. One hoisted app-start warm fills both caches so
+     *   the Setup gate reads warmed state on a fresh process.
      * - KEPT (stat-only, no reads/hashing): `File.isFile/length/
      *   lastModified` in `sigFor`/`llmSigFor`/`cachedOrPlaceholder`/
      *   `hasLlmTrace`, `absolutePath` for dest lines. Metadata-only;
@@ -2195,7 +2278,8 @@ class MainActivity : ComponentActivity() {
      * - FOLLOW-UP (not this change): `CoreBridge.defaultCleanupPrompt`
      *   already runs on `workers`; download hashing stays in
      *   WorkManager/`downloadModel`. Decode (`LocalStt.transcribe`,
-     *   `MediaPipeRunner.generate`) untouched per scope.
+     *   `MediaPipeRunner.generate`) untouched per scope — a guard hit
+     *   there degrades to null → server fallback, never a crash.
      */
     @Composable
     private fun SttScreen(s: JSONObject) {
@@ -2209,32 +2293,43 @@ class MainActivity : ComponentActivity() {
         // without a verified selected model fails closed.
         val selectedModel = remember(version) { LocalStt.selectedEntry(statePrefs) }
         // ANR fix: NEVER hash in composition. First paint renders the
-        // last-known cached state (stat-only placeholder, fail-closed);
-        // the worker below runs the single SHA pass per model off the
-        // main thread and posts the fresh map. `sttVerifying` drives
-        // the lightweight `verifying…` marker.
-        var modelInspects by remember(version) {
+        // last-known cached state (stat-only placeholder, fail-closed,
+        // refreshed when the app-start warm lands via verifyTick); the
+        // worker below runs the single SHA pass per model off the main
+        // thread and posts the fresh map. `sttVerifying` drives the
+        // lightweight `verifying…` marker.
+        var modelInspects by remember(version, verifyTick.intValue) {
             mutableStateOf(LocalSttModels.cachedSnapshot(filesDir))
         }
         var sttVerifying by remember(version) { mutableStateOf(true) }
+        // Latest-wins gate: rapid `version++` bumps queue N sweeps on
+        // the single-thread worker; stale tasks exit before hashing and
+        // their results are dropped. All tasks ride the verifyAsync seam.
+        val sttGate = remember { LocalLlmManager.PackVerify.VerifyGate() }
         LaunchedEffect(version) {
-            // Seed from cache synchronously (already done above), then
-            // verify off-thread. The generation check drops stale
-            // results when a newer reload/save bumped `version`.
-            val gen = version
-            workers.execute {
-                val fresh = try {
-                    LocalSttModels.verifyAllOffThread(filesDir)
-                } catch (_: Exception) {
-                    LocalSttModels.cachedSnapshot(filesDir)
-                }
-                runOnUiThread {
-                    if (gen == version) {
-                        modelInspects = fresh
-                        sttVerifying = false
+            val gen = sttGate.claim()
+            LocalLlmManager.PackVerify.verifyAsync(
+                verifyScheduler,
+                "stt-verify",
+                block = {
+                    try {
+                        LocalSttModels.verifyAllOffThread(
+                            filesDir,
+                            LocalLlmManager::verifySha256,
+                        ) { sttGate.isCurrent(gen) }
+                    } catch (_: Exception) {
+                        LocalSttModels.cachedSnapshot(filesDir)
                     }
-                }
-            }
+                },
+                onDone = { fresh ->
+                    runOnUiThread {
+                        if (sttGate.isCurrent(gen)) {
+                            modelInspects = fresh
+                            sttVerifying = false
+                        }
+                    }
+                },
+            )
         }
         fun packOf(id: String): LocalPackState =
             modelInspects[id]?.let { packStateForRow(it.state) } ?: LocalPackState.MISSING
@@ -3288,31 +3383,43 @@ class MainActivity : ComponentActivity() {
             llmSelectedAsset(assets, statePrefs.getString(PREF_SELECTED_LLM, null))
         }
         // ANR fix: NEVER hash in composition. First paint renders the
-        // last-known cached state (stat-only placeholder, fail-closed);
-        // the worker below runs the single SHA pass per asset off the
-        // main thread and posts the fresh map. `llmVerifying` drives
-        // the lightweight `verifying…` marker.
-        var llmInspects by remember(version) {
+        // last-known cached state (stat-only placeholder, fail-closed,
+        // refreshed when the app-start warm lands via verifyTick); the
+        // worker below runs the single SHA pass per asset off the main
+        // thread and posts the fresh map. `llmVerifying` drives the
+        // lightweight `verifying…` marker.
+        var llmInspects by remember(version, verifyTick.intValue) {
             mutableStateOf(llmCachedSnapshot(filesDir, assets))
         }
         var llmVerifying by remember(version) { mutableStateOf(true) }
+        // Latest-wins gate (see SttScreen): stale queued sweeps exit
+        // before hashing; all tasks ride the verifyAsync seam.
+        val llmGate = remember { LocalLlmManager.PackVerify.VerifyGate() }
         LaunchedEffect(version) {
-            val gen = version
-            // Snapshot the dir reference off the composable state read:
-            // filesDir never changes, assets is version-pinned above.
-            workers.execute {
-                val fresh = try {
-                    llmVerifyAllOffThread(filesDir, assets)
-                } catch (_: Exception) {
-                    llmCachedSnapshot(filesDir, assets)
-                }
-                runOnUiThread {
-                    if (gen == version) {
-                        llmInspects = fresh
-                        llmVerifying = false
+            val gen = llmGate.claim()
+            LocalLlmManager.PackVerify.verifyAsync(
+                verifyScheduler,
+                "llm-verify",
+                block = {
+                    try {
+                        llmVerifyAllOffThread(
+                            filesDir,
+                            assets,
+                            LocalLlmManager::verifySha256,
+                        ) { llmGate.isCurrent(gen) }
+                    } catch (_: Exception) {
+                        llmCachedSnapshot(filesDir, assets)
                     }
-                }
-            }
+                },
+                onDone = { fresh ->
+                    runOnUiThread {
+                        if (llmGate.isCurrent(gen)) {
+                            llmInspects = fresh
+                            llmVerifying = false
+                        }
+                    }
+                },
+            )
         }
         fun llmPackOf(id: String): LocalPackState =
             llmInspects[id]?.state ?: LocalPackState.MISSING

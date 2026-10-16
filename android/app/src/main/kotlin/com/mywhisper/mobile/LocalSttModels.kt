@@ -365,6 +365,10 @@ object LocalSttModels {
     fun totalBytes(entry: Entry): Long = entry.files.sumOf { it.sizeBytes }
 
     fun isInstalled(filesDir: File, entry: Entry): Boolean {
+        // Hashes every pack file: worker-only (ANR on the UI thread;
+        // decode callers run off-main and `transcribe` degrades a
+        // guard hit to null → server fallback, never a crash).
+        LocalLlmManager.PackVerify.requireWorkerThread("stt-isInstalled:" + entry.id)
         val dir = dirFor(filesDir, entry)
         return entry.files.all { f ->
             val file = File(dir, f.name)
@@ -493,6 +497,29 @@ object LocalSttModels {
             cache[key(filesDir, entry)] = CacheLine(sigFor(filesDir, entry), inspect)
         }
 
+        /**
+         * TOCTOU-safe store: the caller hashes between two stat-only
+         * snapshots ([before] taken pre-hash). The result is cached
+         * only when the post-hash sig still matches — a download /
+         * delete racing the sweep never leaves a stale PRESENT behind.
+         * Returns false when the disk moved mid-hash (caller renders
+         * the fresh result but the cache stays stale → re-verify).
+         * Mtime granularity is ms: same-ms same-size swaps can slip
+         * (documented; SHA on next trigger still fails closed).
+         */
+        @Synchronized
+        fun storeIfStable(
+            filesDir: File,
+            entry: Entry,
+            before: List<LocalLlmManager.PackVerify.FileSig>,
+            inspect: PackInspect,
+        ): Boolean {
+            val after = sigFor(filesDir, entry)
+            if (after != before) return false
+            cache[key(filesDir, entry)] = CacheLine(after, inspect)
+            return true
+        }
+
         @Synchronized
         fun clear() {
             cache.clear()
@@ -537,21 +564,39 @@ object LocalSttModels {
      * Worker-side full verify for every catalog model (hashes — call
      * only off the main thread). Guards via [PackVerify], stores into
      * [SttVerifyCache], returns the fresh map for the UI hop.
+     *
+     * Fresh cache hits short-circuit (stat-only, no re-hash), so a
+     * repeat sweep after the app-start warm is cheap. [isCurrent] is
+     * the [PackVerify.VerifyGate] predicate: stale queued tasks skip
+     * remaining sweeps and fall back to last-known state.
      */
     fun verifyAllOffThread(
         filesDir: File,
         verify: (File, String) -> Boolean = LocalLlmManager::verifySha256,
+        isCurrent: () -> Boolean = { true },
     ): Map<String, PackInspect> {
         LocalLlmManager.PackVerify.requireWorkerThread("stt-verify-all")
-        return MODELS.associate { m ->
+        val out = mutableMapOf<String, PackInspect>()
+        for (m in MODELS) {
+            val hit = SttVerifyCache.cached(filesDir, m)
+            if (hit != null) {
+                out[m.id] = hit
+                continue
+            }
+            if (!isCurrent()) {
+                out[m.id] = cachedOrPlaceholder(filesDir, m)
+                continue
+            }
+            val before = sigFor(filesDir, m)
             val r = try {
                 inspectWithVerifier(filesDir, m, verify)
             } catch (_: Exception) {
                 PackInspect(LocalModelDownload.RowState.MISSING, 0L)
             }
-            SttVerifyCache.store(filesDir, m, r)
-            m.id to r
+            SttVerifyCache.storeIfStable(filesDir, m, before, r)
+            out[m.id] = r
         }
+        return out
     }
 
     /** Worker-side single-model verify (hashes — off main thread only). */
@@ -559,14 +604,18 @@ object LocalSttModels {
         filesDir: File,
         entry: Entry,
         verify: (File, String) -> Boolean = LocalLlmManager::verifySha256,
+        isCurrent: () -> Boolean = { true },
     ): PackInspect {
         LocalLlmManager.PackVerify.requireWorkerThread("stt-verify-one:" + entry.id)
+        SttVerifyCache.cached(filesDir, entry)?.let { return it }
+        if (!isCurrent()) return cachedOrPlaceholder(filesDir, entry)
+        val before = sigFor(filesDir, entry)
         val r = try {
             inspectWithVerifier(filesDir, entry, verify)
         } catch (_: Exception) {
             PackInspect(LocalModelDownload.RowState.MISSING, 0L)
         }
-        SttVerifyCache.store(filesDir, entry, r)
+        SttVerifyCache.storeIfStable(filesDir, entry, before, r)
         return r
     }
 

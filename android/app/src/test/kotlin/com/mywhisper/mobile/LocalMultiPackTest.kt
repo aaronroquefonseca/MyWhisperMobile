@@ -122,6 +122,9 @@ class LocalMultiPackTest {
 
     @Test
     fun stt_fallback_bystanderKeepsSelection_missingFallsToDefault() {
+        // fallbackSelection → installedIds → isInstalled hashes: the
+        // worker-thread guard requires the off-main seam in tests.
+        LocalLlmManager.PackVerify.isMainThreadOverride = { false }
         val dir = Files.createTempDirectory("stt-fallback").toFile()
         try {
             // Nothing verified: bystander delete keeps the selection,
@@ -143,6 +146,7 @@ class LocalMultiPackTest {
                 ),
             )
         } finally {
+            LocalLlmManager.PackVerify.isMainThreadOverride = null
             dir.deleteRecursively()
         }
     }
