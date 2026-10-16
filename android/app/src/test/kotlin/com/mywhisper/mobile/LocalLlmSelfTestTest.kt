@@ -92,25 +92,32 @@ class LocalLlmSelfTestTest {
     // -- Disabled states (button gate) -------------------------------
 
     @Test
-    fun gate_enabledOnlyWithRunnerAndVerifiedPack() {
+    fun gate_enabledOnlyWithRunnerVerifiedPackAndBridge() {
         assertTrue(
-            MainActivity.llmSelfTestAllowed(true, MainActivity.LocalPackState.PRESENT),
+            MainActivity.llmSelfTestAllowed(true, MainActivity.LocalPackState.PRESENT, true),
         )
     }
 
     @Test
-    fun gate_disabledWithoutPackOrRunner() {
+    fun gate_disabledWithoutPackRunnerOrBridge() {
         assertFalse(
-            MainActivity.llmSelfTestAllowed(true, MainActivity.LocalPackState.MISSING),
+            MainActivity.llmSelfTestAllowed(true, MainActivity.LocalPackState.MISSING, true),
         )
         assertFalse(
-            MainActivity.llmSelfTestAllowed(true, MainActivity.LocalPackState.MISMATCH),
+            MainActivity.llmSelfTestAllowed(true, MainActivity.LocalPackState.MISMATCH, true),
         )
         assertFalse(
-            MainActivity.llmSelfTestAllowed(false, MainActivity.LocalPackState.PRESENT),
+            MainActivity.llmSelfTestAllowed(false, MainActivity.LocalPackState.PRESENT, true),
         )
         assertFalse(
-            MainActivity.llmSelfTestAllowed(false, MainActivity.LocalPackState.MISSING),
+            MainActivity.llmSelfTestAllowed(false, MainActivity.LocalPackState.MISSING, true),
         )
+        // No bridge, no test — even runner + verified pack (a present
+        // pack never offers an un-runnable test).
+        assertFalse(
+            MainActivity.llmSelfTestAllowed(true, MainActivity.LocalPackState.PRESENT, false),
+        )
+        assertFalse(MainActivity.llmSelfTestOffered(true, false))
+        assertFalse(LocalLlmManager.isBridgeSupported())
     }
 }

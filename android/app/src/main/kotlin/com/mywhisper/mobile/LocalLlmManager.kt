@@ -333,4 +333,15 @@ object LocalLlmManager {
         } catch (_: Throwable) {
             false
         }
+
+    /**
+     * JVM inference bridge: a wired on-device generate path the
+     * self-test can actually run ([runSelfTest] with a real
+     * [generateFn], never the fail-closed default). False until such
+     * a path lands (the dead LiteRtLmRunner was deleted; the AAR
+     * class alone is NOT enough — see [isPackSupported]). Gates every
+     * LLM self-test entry point: a present pack must never offer an
+     * un-runnable test. Pure for unit tests.
+     */
+    fun isBridgeSupported(): Boolean = false
 }

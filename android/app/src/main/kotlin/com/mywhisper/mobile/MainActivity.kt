@@ -482,26 +482,32 @@ class MainActivity : ComponentActivity() {
 
         /**
          * Local LLM self-test gate: the in-row "Run test" goes live
-         * only with a verified pack on a runner build. Fail-closed:
-         * missing/mismatch/incomplete or lite (no runner) stays disabled.
-         * Pure for unit tests (runner presence + pack injected).
+         * only with a verified pack on a runner build AND a wired
+         * inference bridge ([llmBridgeSupported]). Fail-closed:
+         * missing/mismatch/incomplete, lite (no runner), or no bridge
+         * stays disabled — a present pack never offers an un-runnable
+         * test. Pure for unit tests (all three injected).
          */
         @JvmStatic
         internal fun llmSelfTestAllowed(
             runnerSupported: Boolean,
             packState: LocalPackState,
-        ): Boolean = runnerSupported && packState == LocalPackState.PRESENT
+            bridgeSupported: Boolean,
+        ): Boolean = runnerSupported && bridgeSupported && packState == LocalPackState.PRESENT
 
         /**
          * Whether the Local LLM self-test is offered at all. The
-         * on-device generate bridge (MediaPipe runner) is absent on
-         * lite builds and JVM tests: a test that cannot pass is not
+         * on-device generate bridge is absent (dead runner deleted,
+         * no Rust→Kotlin bridge): a test that cannot pass is not
          * offered — the row shows the honest unavailable reason
-         * instead of a FAIL that means nothing. Pure for unit tests.
+         * instead of a FAIL that means nothing. Pack presence alone
+         * never offers it. Pure for unit tests.
          */
         @JvmStatic
-        internal fun llmSelfTestOffered(runnerSupported: Boolean): Boolean =
-            runnerSupported
+        internal fun llmSelfTestOffered(
+            runnerSupported: Boolean,
+            bridgeSupported: Boolean,
+        ): Boolean = runnerSupported && bridgeSupported
 
         // -- Provider tests: ONE pattern for every chain row ---------
 
@@ -594,6 +600,23 @@ class MainActivity : ComponentActivity() {
         internal fun llmPackSupported(): Boolean =
             try {
                 LocalLlmManager.isPackSupported()
+            } catch (_: Exception) {
+                false
+            } catch (_: LinkageError) {
+                false
+            }
+
+        /**
+         * Wired on-device LLM generate path present (see
+         * [LocalLlmManager.isBridgeSupported]). False until a real
+         * generate path lands — gates every self-test entry point so
+         * a verified pack never offers an un-runnable test. Never
+         * throws.
+         */
+        @JvmStatic
+        internal fun llmBridgeSupported(): Boolean =
+            try {
+                LocalLlmManager.isBridgeSupported()
             } catch (_: Exception) {
                 false
             } catch (_: LinkageError) {
@@ -2297,6 +2320,10 @@ class MainActivity : ComponentActivity() {
                                     )
                             }
                         }
+                        // Stacked vertically (Column, never bare in the
+                        // item Box — Box children overlap): Card first,
+                        // test row below, same as the server branch.
+                        Column(modifier = Modifier.fillMaxWidth()) {
                         LocalChainRow(
                             e = e,
                             summary = entrySummary(e),
@@ -2334,6 +2361,7 @@ class MainActivity : ComponentActivity() {
                                 selPack == LocalPackState.PRESENT,
                             ),
                         )
+                        }
                     } else {
                     Column(modifier = Modifier.fillMaxWidth()) {
                     Card(
@@ -3213,6 +3241,9 @@ class MainActivity : ComponentActivity() {
         }
         // Lite flavor ships no LiteRT-LM AAR: no Download offered.
         val llmPack = remember { llmPackSupported() }
+        // No wired generate path exists yet (dead runner deleted):
+        // the self-test is never offered until one lands.
+        val llmBridge = remember { llmBridgeSupported() }
         fun startLlmDownload(a: LocalLlmManager.ModelAsset) {
             // Lite flavor: downloads could never run — refuse fail-closed.
             if (!llmPack) {
@@ -3249,10 +3280,13 @@ class MainActivity : ComponentActivity() {
             }
         }
         fun startLlmSelfTest() {
-            // Fail-closed: verified pack + runner only; local path
-            // only, never Ollama/cloud (no fallback masking). United
-            // with every other row via [ProviderTest.fromSelfTest].
-            if (!llmSelfTestAllowed(llmPack, llmSelPack)) return
+            // Fail-closed: verified pack + runner + wired bridge only;
+            // local path only, never Ollama/cloud (no fallback
+            // masking). Without a bridge the button is not offered at
+            // all (see the row below) — this guard is defense in
+            // depth. United with every other row via
+            // [ProviderTest.fromSelfTest].
+            if (!llmSelfTestAllowed(llmPack, llmSelPack, llmBridge)) return
             val target = llmSelected ?: return
             if (llmTestBusy) return
             llmTestBusy = true
@@ -3524,6 +3558,11 @@ class MainActivity : ComponentActivity() {
                                     )
                             }
                         }
+                        // Stacked vertically (Column, never bare in the
+                        // item Box — Box children overlap): Card first,
+                        // self-test row (or its unavailable reason)
+                        // below, same as the server branch.
+                        Column(modifier = Modifier.fillMaxWidth()) {
                         LocalChainRow(
                             e = e,
                             summary = getString(R.string.cleanup_local_summary),
@@ -3552,12 +3591,12 @@ class MainActivity : ComponentActivity() {
                         // Local LLM self-test (existing self-test: fixed prompt
                         // + "this is a test" via generate(), never
                         // Ollama/cloud), same ONE row pattern as every
-                        // provider row. Disabled unless the SELECTED pack
-                        // verifies (multi-pack: one active model). With no
-                        // on-device bridge the test cannot pass, so it is
-                        // not offered at all — the honest reason shows
-                        // instead of a button that only ever FAILs.
-                        if (!llmSelfTestOffered(llmPack)) {
+                        // provider row. Offered only with a wired bridge
+                        // on a runner build; without one the honest
+                        // reason shows instead of a button that only
+                        // ever FAILs — a verified pack alone never
+                        // offers an un-runnable test.
+                        if (!llmSelfTestOffered(llmPack, llmBridge)) {
                             Text(
                                 stringResource(R.string.llm_selftest_unavailable),
                                 style = MaterialTheme.typography.bodySmall,
@@ -3567,13 +3606,14 @@ class MainActivity : ComponentActivity() {
                             ProviderTestRow(
                                 busy = llmTestBusy,
                                 result = llmTestResult,
-                                enabled = llmSelfTestAllowed(llmPack, llmSelPack),
+                                enabled = llmSelfTestAllowed(llmPack, llmSelPack, llmBridge),
                                 onTest = { startLlmSelfTest() },
                                 disabledReason = localTestDisabledReason(
                                     llmPack,
                                     llmSelPack == LocalPackState.PRESENT,
                                 ),
                             )
+                        }
                         }
                     } else {
                     Column(modifier = Modifier.fillMaxWidth()) {

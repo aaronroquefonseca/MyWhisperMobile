@@ -249,18 +249,35 @@ class RowsUxReworkTest {
     // -- LLM self-test gating: no bridge, no button -------------------
 
     @Test
-    fun llmSelfTest_offeredOnlyWithRunner() {
-        assertFalse(MainActivity.llmSelfTestOffered(false))
-        assertTrue(MainActivity.llmSelfTestOffered(true))
-        // Allowed still needs the verified pack on top.
+    fun llmSelfTest_offeredOnlyWithRunnerAndBridge() {
+        // No bridge, no button — even with runner + verified pack.
+        assertFalse(MainActivity.llmSelfTestOffered(false, false))
+        assertFalse(MainActivity.llmSelfTestOffered(true, false))
+        assertFalse(MainActivity.llmSelfTestOffered(false, true))
+        assertTrue(MainActivity.llmSelfTestOffered(true, true))
+        // Allowed needs all three: runner + bridge + verified pack.
         assertTrue(
-            MainActivity.llmSelfTestAllowed(true, MainActivity.LocalPackState.PRESENT),
+            MainActivity.llmSelfTestAllowed(true, MainActivity.LocalPackState.PRESENT, true),
         )
         assertFalse(
-            MainActivity.llmSelfTestAllowed(true, MainActivity.LocalPackState.INCOMPLETE),
+            MainActivity.llmSelfTestAllowed(true, MainActivity.LocalPackState.INCOMPLETE, true),
         )
         assertFalse(
-            MainActivity.llmSelfTestAllowed(false, MainActivity.LocalPackState.PRESENT),
+            MainActivity.llmSelfTestAllowed(false, MainActivity.LocalPackState.PRESENT, true),
+        )
+    }
+
+    @Test
+    fun llmSelfTest_presentPackNeverOffersUnrunnableTest() {
+        // Owner-phone defect: no JVM inference bridge exists (dead
+        // runner deleted), so the default generateFn always throws
+        // and every run rendered FAIL. A present pack must never
+        // offer the test while the bridge is absent.
+        assertFalse(LocalLlmManager.isBridgeSupported())
+        assertFalse(MainActivity.llmBridgeSupported())
+        assertFalse(MainActivity.llmSelfTestOffered(true, false))
+        assertFalse(
+            MainActivity.llmSelfTestAllowed(true, MainActivity.LocalPackState.PRESENT, false),
         )
     }
 

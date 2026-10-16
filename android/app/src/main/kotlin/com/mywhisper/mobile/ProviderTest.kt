@@ -287,4 +287,40 @@ object ProviderTest {
     @Suppress("UNUSED_PARAMETER")
     fun testRowBlockOrder(isRtl: Boolean): List<String> =
         listOf("button", "gap", "result")
+
+    // -- Chain-item stacking / no-overlap contract -------------------
+    //
+    // Owner phone test (correction): the test button OVERLAPPED
+    // neighboring content — not paint order but layout. Cause: the
+    // Local branches emitted Card + test row as sequential children
+    // of the item Box, and Box children stack on top of each other.
+    // Every chain item lays Card first, test row (or its unavailable
+    // reason) below it, in a vertical container — nothing overlaps
+    // to begin with. Within the test row, the button keeps its
+    // intrinsic width, the gap is fixed, and the result takes the
+    // remaining weight and wraps — so the row total never exceeds
+    // the row width on any screen width, LTR or RTL (widths are
+    // direction-independent).
+
+    /** Chain-item block order: Card first, test row below. Never reversed. */
+    fun chainItemBlocks(): List<String> = listOf("card", "test")
+
+    /** Chain items stack vertically (Column) — Box stacking would overlap. */
+    fun chainItemStacksVertically(): Boolean = true
+
+    /** Fixed gap between test button and result (dp). */
+    const val TEST_ROW_GAP_DP = 8f
+
+    /**
+     * True when the test row overflows [rowWidthDp]: with the result
+     * weighted, overflow happens only if the button + gap alone
+     * exceed the row (the button itself escapes its container).
+     * Widths are direction-independent, so LTR and RTL share the
+     * verdict. Pure for unit tests.
+     */
+    fun testRowOverflows(
+        rowWidthDp: Float,
+        buttonWidthDp: Float,
+        gapDp: Float = TEST_ROW_GAP_DP,
+    ): Boolean = buttonWidthDp + gapDp > rowWidthDp
 }
