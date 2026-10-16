@@ -5155,12 +5155,55 @@ class MainActivity : ComponentActivity() {
         ) {
             Section(stringResource(R.string.sync_this)) {
                 val running = status?.optBoolean("running", false) == true
+                // First-foreground promote: a boot-parked sync starts
+                // here (activity visible = FGS exemption holds), then the
+                // status refresh below picks it up. Fires once per tab
+                // entry; promotePendingOnForeground is a no-op (false)
+                // unless a boot/retry actually parked the flag.
+                LaunchedEffect(Unit) {
+                    val promoted = try {
+                        SyncService.promotePendingOnForeground(this@MainActivity)
+                    } catch (_: Exception) {
+                        false
+                    }
+                    if (promoted) {
+                        workers.execute {
+                            try {
+                                Thread.sleep(1_000)
+                            } catch (_: InterruptedException) {
+                            }
+                            runOnUiThread { refresh() }
+                        }
+                    }
+                }
+                // Honest interim copy from power-on: a parked
+                // boot/retry reads "waiting…", never silent nothing, so
+                // the minutes-late start never looks broken.
+                val pendingCopy = if (!running) {
+                    BootPolicy.bootPendingCopy(
+                        syncEnabled = sync.optBoolean("enabled", true),
+                        startOnBoot = sync.optBoolean("start_on_boot", true),
+                        pending = try {
+                            BootReceiver.isSyncBootPending(this@MainActivity)
+                        } catch (_: Exception) {
+                            false
+                        },
+                        attempt = try {
+                            BootReceiver.pendingAttempt(this@MainActivity)
+                        } catch (_: Exception) {
+                            0
+                        },
+                        maxRetries = BootReceiver.MAX_RETRIES,
+                    )
+                } else {
+                    null
+                }
                 Text(
                     if (running) {
                         val shown = displayName.ifEmpty { status?.optString("nodeId", "")?.take(12) + "…" }
 getString(R.string.sync_running, shown)
                     } else {
-                        "Sync stopped."
+                        pendingCopy ?: "Sync stopped."
                     },
                     style = MaterialTheme.typography.bodyMedium,
                 )

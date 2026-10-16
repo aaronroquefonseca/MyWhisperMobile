@@ -92,6 +92,47 @@ class BootPolicyTest {
     @Test fun interactiveStartNeverRetries() {
         assertNull(BootPolicy.nextBootRetryAttempt(-1, BootReceiver.MAX_RETRIES))
     }
+
+    @Test fun retryChainLengthNeverExceedsMax() {
+        // Walk the whole chain: attempts advance 0..MAX then stop.
+        var attempt = 0
+        var steps = 0
+        while (true) {
+            val next = BootPolicy.nextBootRetryAttempt(attempt, BootReceiver.MAX_RETRIES) ?: break
+            attempt = next
+            steps++
+            assertTrue(steps <= BootReceiver.MAX_RETRIES)
+        }
+        assertEquals(BootReceiver.MAX_RETRIES, attempt)
+    }
+
+    @Test fun directStartAllowedBelowApi31Only() {
+        assertTrue(BootPolicy.directStartAllowedAtBoot(29))
+        assertTrue(BootPolicy.directStartAllowedAtBoot(30))
+        assertFalse(BootPolicy.directStartAllowedAtBoot(31))
+        assertFalse(BootPolicy.directStartAllowedAtBoot(34))
+        assertFalse(BootPolicy.directStartAllowedAtBoot(36))
+    }
+
+    @Test fun promoteOnForegroundOnlyWhenParkedWantedAndStopped() {
+        assertTrue(BootPolicy.shouldPromoteOnForeground(true, true, pending = true, running = false))
+        assertFalse(BootPolicy.shouldPromoteOnForeground(true, true, pending = false, running = false))
+        assertFalse(BootPolicy.shouldPromoteOnForeground(true, true, pending = true, running = true))
+        assertFalse(BootPolicy.shouldPromoteOnForeground(false, true, pending = true, running = false))
+        assertFalse(BootPolicy.shouldPromoteOnForeground(true, false, pending = true, running = false))
+    }
+
+    @Test fun pendingCopyNullWhenNothingParked() {
+        assertNull(BootPolicy.bootPendingCopy(true, true, pending = false, attempt = 0, maxRetries = 4))
+        assertNull(BootPolicy.bootPendingCopy(false, true, pending = true, attempt = 0, maxRetries = 4))
+        assertNull(BootPolicy.bootPendingCopy(true, false, pending = true, attempt = 0, maxRetries = 4))
+    }
+
+    @Test fun pendingCopyHonestWhileParked() {
+        val copy = BootPolicy.bootPendingCopy(true, true, pending = true, attempt = 0, maxRetries = 4)
+        assertTrue(copy!!.contains("waiting"))
+        assertTrue(copy.contains("0/4"))
+    }
 }
 
 /**

@@ -12,6 +12,7 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import androidx.core.content.edit
 import java.util.concurrent.Executors
 
 /**
@@ -59,6 +60,32 @@ class SyncService : Service() {
             } catch (_: Exception) {
             }
         }
+
+        /**
+         * First-foreground promote: BOOT_COMPLETED on API 31+ can never
+         * start a dataSync FGS while backgrounded
+         * (ForegroundServiceStartNotAllowedException, no bg exemption),
+         * so the receiver parks a pending flag and the sync tab calls
+         * this on first composition (activity visible = foreground
+         * exemption holds, start is allowed). Returns true when a start
+         * was issued.
+         */
+        fun promotePendingOnForeground(ctx: Context): Boolean {
+            val app = ctx.applicationContext
+            if (!BootReceiver.isSyncBootPending(app)) return false
+            val s = try {
+                CoreBridge.getSettings().getOrThrow()
+            } catch (_: Exception) {
+                return false
+            }
+            val sync = s.optJSONObject("sync")
+            val enabled = sync?.optBoolean("enabled", true) == true
+            val onBoot = sync?.optBoolean("start_on_boot", true) == true
+            if (!BootPolicy.shouldPromoteOnForeground(enabled, onBoot, pending = true, running = NotifPolicy.UnifiedState.syncActive)) return false
+            BootReceiver.clearSyncBootPending(app)
+            start(app)
+            return true
+        }
     }
 
     private val workers = Executors.newSingleThreadExecutor()
@@ -97,6 +124,11 @@ class SyncService : Service() {
                 NotifPolicy.UnifiedState.syncing = false
                 syncing = false
                 stopForeground(STOP_FOREGROUND_REMOVE)
+                // A manual stop cancels any parked boot-pending intent.
+                try {
+                    BootReceiver.clearSyncBootPending(this)
+                } catch (_: Exception) {
+                }
                 // Retired solo bubble row (pre-unification installs):
                 // single-STOP must never leave it behind either.
                 try {
@@ -122,6 +154,11 @@ class SyncService : Service() {
                 NotifPolicy.UnifiedState.syncing = false
                 syncing = false
                 stopForeground(STOP_FOREGROUND_REMOVE)
+                // A manual stop-all cancels any parked boot-pending intent.
+                try {
+                    BootReceiver.clearSyncBootPending(this)
+                } catch (_: Exception) {
+                }
                 try {
                     OverlayService.stop(this)
                 } catch (_: Exception) {
@@ -185,6 +222,10 @@ class SyncService : Service() {
                     NotifPolicy.UnifiedState.syncing = false
                     BootPolicy.nextBootRetryAttempt(bootAttempt, BootReceiver.MAX_RETRIES)?.let { next ->
                         android.util.Log.i("MwSync", "boot start denied, retrying (attempt=$next)")
+                        try {
+                            BootReceiver.markSyncBootPending(this, next)
+                        } catch (_: Exception) {
+                        }
                         BootReceiver.scheduleRetry(this, next)
                     }
                     stopSelf()
@@ -197,6 +238,12 @@ class SyncService : Service() {
                     }
                 }
                 foregrounded = true
+                // Boot-pending fulfilled: the service is up, drop the flag
+                // so the sync tab stops showing "waiting for retry/unlock".
+                try {
+                    BootReceiver.clearSyncBootPending(this)
+                } catch (_: Exception) {
+                }
                 return START_STICKY
             }
         }
@@ -361,6 +408,45 @@ internal object BootPolicy {
     fun shouldRetryBootStart(e: Throwable, attempt: Int, maxRetries: Int): Boolean =
         (isFgsDenied(e) || HardeningGuards.isKeystoreLocked(e)) &&
             HardeningGuards.bootAttemptWithinLimit(attempt, maxRetries)
+
+    /**
+     * Direct FGS start from a BOOT_COMPLETED receiver is allowed only
+     * below API 31. On 31+ a dataSync start while backgrounded always
+     * throws ForegroundServiceStartNotAllowedException (no exemption),
+     * so boot skips the doomed start and goes straight to
+     * pending + bounded retry + first-foreground promote. Literal 31
+     * (not Build.VERSION_CODES.S) keeps this JVM-testable without an
+     * android.os.Build class load.
+     */
+    fun directStartAllowedAtBoot(sdkInt: Int): Boolean = sdkInt < 31
+
+    /**
+     * First-foreground promote gate: parked boot-pending intent turns
+     * into a real start only when sync is still wanted and nothing is
+     * running. Pure for unit tests.
+     */
+    fun shouldPromoteOnForeground(
+        syncEnabled: Boolean,
+        startOnBoot: Boolean,
+        pending: Boolean,
+        running: Boolean,
+    ): Boolean = pending && syncEnabled && startOnBoot && !running
+
+    /**
+     * Honest sync-tab copy for a stopped service: null when nothing is
+     * pending (UI shows "Sync stopped."), otherwise the waiting line so
+     * boot never looks silently dead. Pure for unit tests.
+     */
+    fun bootPendingCopy(
+        syncEnabled: Boolean,
+        startOnBoot: Boolean,
+        pending: Boolean,
+        attempt: Int,
+        maxRetries: Int,
+    ): String? {
+        if (!pending || !syncEnabled || !startOnBoot) return null
+        return "Sync waiting for retry/unlock (attempt $attempt/$maxRetries)."
+    }
 }
 
 /**
@@ -374,63 +460,11 @@ internal object BootPolicy {
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(ctx: Context, intent: Intent) {
         if (!handlesAction(intent.action)) return
-        attemptStart(ctx, intent.getIntExtra(EXTRA_ATTEMPT, 0))
-    }
-
-    private fun attemptStart(ctx: Context, attempt: Int) {
-        val app = ctx.applicationContext
-        try {
-            val s = CoreBridge.getSettings().getOrThrow()
-            val sync = s.optJSONObject("sync")
-            val syncEnabled = sync?.optBoolean("enabled", true) == true
-            val startOnBoot = sync?.optBoolean("start_on_boot", true) == true
-            if (BootPolicy.shouldStartSync(syncEnabled, startOnBoot)) {
-                // The BOOT_COMPLETED temp allowlist lets start() through,
-                // but startForeground(dataSync) is still denied from a
-                // boot/update source (API 34+ FGS-type gate) — the service
-                // self-stops and feeds back into the bounded alarm retry
-                // via EXTRA_BOOT_ATTEMPT. A bare start() throw (no
-                // allowlist, e.g. alarm retry while backgrounded) retries
-                // here. Either way: never swallow, always bounded.
-                try {
-                    SyncService.start(app, attempt)
-                } catch (e: Exception) {
-                    android.util.Log.w(
-                        "MwSync",
-                        "boot sync start failed (attempt=$attempt fgsDenied=${BootPolicy.isFgsDenied(e)}): ${e.message}",
-                    )
-                    if (BootPolicy.shouldRetryBootStart(e, attempt, MAX_RETRIES)) {
-                        scheduleRetry(ctx, attempt + 1)
-                    }
-                }
-            }
-            val floatEnabled =
-                s.optJSONObject("preferences")?.optBoolean("float_enabled", false) == true
-            val canOverlay = try {
-                android.provider.Settings.canDrawOverlays(app)
-            } catch (_: Exception) {
-                false
-            }
-            if (BootPolicy.shouldStartFloat(floatEnabled, canOverlay)) {
-                try {
-                    OverlayService.start(app)
-                } catch (e: Exception) {
-                    android.util.Log.w(
-                        "MwSync",
-                        "boot float start failed (attempt=$attempt fgsDenied=${BootPolicy.isFgsDenied(e)}): ${e.message}",
-                    )
-                    if (BootPolicy.shouldRetryBootStart(e, attempt, MAX_RETRIES)) {
-                        scheduleRetry(ctx, attempt + 1)
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            android.util.Log.w(
-                "MwSync",
-                "boot start deferred (attempt=$attempt locked=${HardeningGuards.isKeystoreLocked(e)}): ${e.message}",
-            )
-            if (HardeningGuards.bootAttemptWithinLimit(attempt, MAX_RETRIES)) scheduleRetry(ctx, attempt + 1)
-        }
+        runBootAttempt(
+            ctx,
+            intent.getIntExtra(EXTRA_ATTEMPT, 0),
+            intent.action == Intent.ACTION_BOOT_COMPLETED,
+        )
     }
 
     companion object {
@@ -438,13 +472,149 @@ class BootReceiver : BroadcastReceiver() {
         const val EXTRA_ATTEMPT = "attempt"
         const val MAX_RETRIES = 4
         private const val RETRY_REQ_CODE = 900
+        /**
+         * Unique WorkManager name for the boot-retry chain: REPLACE
+         * collapses duplicate alarm/worker firings onto one node, and
+         * the shared attempt counter below still bounds the chain.
+         */
+        private const val BOOT_WORK_NAME = "mw-sync-boot-retry"
+        private const val PENDING_PREFS = "mw_boot"
+        private const val KEY_PENDING = "sync_boot_pending"
+        private const val KEY_PENDING_ATTEMPT = "sync_boot_attempt"
+        /** First retry fires fast so power-on→running is seconds, not minutes. */
+        private const val BOOT_FAST_RETRY_MS = 15_000L
+        /**
+         * Parked boot intent: sync wants to run but the boot-time start
+         * was deferred or denied. The sync tab reads this for the honest
+         * interim copy ("waiting…") and the first-foreground promote.
+         */
+        internal fun markSyncBootPending(ctx: Context, attempt: Int) {
+            try {
+                ctx.applicationContext.getSharedPreferences(PENDING_PREFS, Context.MODE_PRIVATE).edit {
+                    putBoolean(KEY_PENDING, true)
+                    putInt(KEY_PENDING_ATTEMPT, attempt)
+                }
+            } catch (_: Exception) {
+            }
+        }
+
+        internal fun clearSyncBootPending(ctx: Context) {
+            try {
+                ctx.applicationContext.getSharedPreferences(PENDING_PREFS, Context.MODE_PRIVATE).edit {
+                    putBoolean(KEY_PENDING, false)
+                }
+            } catch (_: Exception) {
+            }
+        }
+
+        internal fun isSyncBootPending(ctx: Context): Boolean = try {
+            ctx.applicationContext.getSharedPreferences(PENDING_PREFS, Context.MODE_PRIVATE)
+                .getBoolean(KEY_PENDING, false)
+        } catch (_: Exception) {
+            false
+        }
+
+        internal fun pendingAttempt(ctx: Context): Int = try {
+            ctx.applicationContext.getSharedPreferences(PENDING_PREFS, Context.MODE_PRIVATE)
+                .getInt(KEY_PENDING_ATTEMPT, 0)
+        } catch (_: Exception) {
+            0
+        }
 
         /**
-         * Bounded boot/update retry alarm (1m, 2m, 4m, 8m backoff).
-         * Companion so the denied service start can feed back into the
-         * same chain from [SyncService.onStartCommand].
+         * Shared boot/update/unlock/retry entry. [isBoot] skips the
+         * doomed direct start on API 31+ (see
+         * [BootPolicy.directStartAllowedAtBoot]): the denial is certain
+         * there, so boot parks pending and goes straight to the fast
+         * retry (15s alarm + expedited work) instead of burning a
+         * start/stop cycle. Unlock/retry always attempt the direct
+         * start (exemption may hold when the user is already
+         * foregrounded) and park pending only on denial.
+         */
+        internal fun runBootAttempt(ctx: Context, attempt: Int, isBoot: Boolean) {
+            val app = ctx.applicationContext
+            try {
+                val s = CoreBridge.getSettings().getOrThrow()
+                val sync = s.optJSONObject("sync")
+                val syncEnabled = sync?.optBoolean("enabled", true) == true
+                val startOnBoot = sync?.optBoolean("start_on_boot", true) == true
+                if (BootPolicy.shouldStartSync(syncEnabled, startOnBoot)) {
+                    if (isBoot && !BootPolicy.directStartAllowedAtBoot(android.os.Build.VERSION.SDK_INT)) {
+                        android.util.Log.i(
+                            "MwSync",
+                            "boot sync deferred to retry/promote (api=${android.os.Build.VERSION.SDK_INT})",
+                        )
+                        markSyncBootPending(app, 0)
+                        scheduleRetry(app, 0)
+                        enqueueBootWork(app, 0, expedited = true)
+                    } else {
+                        // The BOOT_COMPLETED temp allowlist lets start()
+                        // through, but startForeground(dataSync) is still
+                        // denied from a boot/update source on newer APIs —
+                        // the service self-stops and feeds back into the
+                        // bounded retry chain via EXTRA_BOOT_ATTEMPT. A
+                        // bare start() throw (no allowlist, e.g. alarm
+                        // retry while backgrounded) retries here. Either
+                        // way: never swallow, always bounded.
+                        try {
+                            SyncService.start(app, attempt)
+                        } catch (e: Exception) {
+                            android.util.Log.w(
+                                "MwSync",
+                                "boot sync start failed (attempt=$attempt fgsDenied=${BootPolicy.isFgsDenied(e)}): ${e.message}",
+                            )
+                            if (BootPolicy.shouldRetryBootStart(e, attempt, MAX_RETRIES)) {
+                                markSyncBootPending(ctx, attempt + 1)
+                                scheduleRetry(ctx, attempt + 1)
+                            }
+                        }
+                    }
+                }
+                val floatEnabled =
+                    s.optJSONObject("preferences")?.optBoolean("float_enabled", false) == true
+                val canOverlay = try {
+                    android.provider.Settings.canDrawOverlays(app)
+                } catch (_: Exception) {
+                    false
+                }
+                if (BootPolicy.shouldStartFloat(floatEnabled, canOverlay)) {
+                    try {
+                        OverlayService.start(app)
+                    } catch (e: Exception) {
+                        android.util.Log.w(
+                            "MwSync",
+                            "boot float start failed (attempt=$attempt fgsDenied=${BootPolicy.isFgsDenied(e)}): ${e.message}",
+                        )
+                        if (BootPolicy.shouldRetryBootStart(e, attempt, MAX_RETRIES)) {
+                            scheduleRetry(ctx, attempt + 1)
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.w(
+                    "MwSync",
+                    "boot start deferred (attempt=$attempt locked=${HardeningGuards.isKeystoreLocked(e)}): ${e.message}",
+                )
+                if (HardeningGuards.bootAttemptWithinLimit(attempt, MAX_RETRIES)) {
+                    markSyncBootPending(ctx, attempt + 1)
+                    scheduleRetry(ctx, attempt + 1)
+                }
+            }
+        }
+
+        /**
+         * Bounded boot/update retry, two Doze-aware legs on the same
+         * [nextAttempt] counter: the alarm fires in Doze via
+         * setAndAllowWhileIdle (inexact, ~9-min floor under deep Doze)
+         * and the WorkManager one-time survives app kill. Duplicate
+         * firings collapse (alarm UPDATE_CURRENT, work REPLACE) and the
+         * shared counter still bounds the chain at MAX_RETRIES — never
+         * infinite.
          */
         internal fun scheduleRetry(ctx: Context, nextAttempt: Int) {
+            // Work leg first: it survives even if the alarm leg below
+            // cannot be armed (and survives app kill where alarms don't).
+            enqueueBootWork(ctx, nextAttempt, expedited = false)
             try {
                 val am = ctx.getSystemService(android.app.AlarmManager::class.java) ?: return
                 val pi = PendingIntent.getBroadcast(
@@ -464,7 +634,31 @@ class BootReceiver : BroadcastReceiver() {
         }
 
         /**
-         * Actions routed to [attemptStart]: boot, unlock, app-update
+         * WorkManager leg of the retry chain. [expedited] is only for
+         * the immediate boot-deferral attempt (no delay — expedited
+         * requests cannot carry one): it runs ASAP post-boot, which is
+         * what shrinks power-on→running from minutes to seconds.
+         * Delayed retries ride regular one-time work. The worker itself
+         * re-enters [runBootAttempt], so the MAX_RETRIES bound holds no
+         * matter which leg fires.
+         */
+        internal fun enqueueBootWork(ctx: Context, nextAttempt: Int, expedited: Boolean) {
+            try {
+                val builder = androidx.work.OneTimeWorkRequestBuilder<SyncBootWorker>()
+                    .setInputData(androidx.work.workDataOf(SyncBootWorker.KEY_ATTEMPT to nextAttempt))
+                if (expedited) {
+                    builder.setExpedited(androidx.work.OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+                } else {
+                    builder.setInitialDelay(nextRetryDelayMs(nextAttempt), java.util.concurrent.TimeUnit.MILLISECONDS)
+                }
+                androidx.work.WorkManager.getInstance(ctx.applicationContext)
+                    .enqueueUniqueWork(BOOT_WORK_NAME, androidx.work.ExistingWorkPolicy.REPLACE, builder.build())
+            } catch (_: Exception) {
+            }
+        }
+
+        /**
+         * Actions routed to [runBootAttempt]: boot, unlock, app-update
          * replace (same path restarts sync + float after update) and
          * the internal retry alarm. Unit-testable without Robolectric
          * (action strings only, no Context needed).
@@ -475,11 +669,13 @@ class BootReceiver : BroadcastReceiver() {
             action == ACTION_RETRY
 
         /**
-         * Backoff for retry N (1-based): 1m, 2m, 4m, 8m, capped at 15m.
-         * Delegates to [HardeningGuards] for JVM tests.
+         * Backoff for retry N: attempt 0 fires FAST (15s — the boot
+         * path parks here, so power-on→running shrinks from minutes to
+         * seconds), then 1m, 2m, 4m, 8m, capped at 15m. Delegates to
+         * [HardeningGuards] for JVM tests.
          */
         fun nextRetryDelayMs(retryNumber: Int): Long =
-            HardeningGuards.bootRetryDelayMs(retryNumber)
+            if (retryNumber <= 0) BOOT_FAST_RETRY_MS else HardeningGuards.bootRetryDelayMs(retryNumber)
 
         /**
          * True when the failure chain smells like a locked credential
@@ -487,5 +683,51 @@ class BootReceiver : BroadcastReceiver() {
          */
         fun isKeystoreLocked(e: Throwable): Boolean =
             HardeningGuards.isKeystoreLocked(e)
+    }
+}
+
+/**
+ * Expedited boot worker (same file as the receiver by scope): runs the
+ * boot attempt as a JobScheduler job instead of an FGS start, which is
+ * allowed while backgrounded. Never foregrounds the service itself —
+ * [BootReceiver.runBootAttempt] owns the start-or-defer decision, and
+ * the attempt counter in the input data bounds the chain (attempt >=
+ * MAX_RETRIES pins FAILURE, never an infinite WorkManager retry).
+ */
+class SyncBootWorker(
+    ctx: Context,
+    params: androidx.work.WorkerParameters,
+) : androidx.work.CoroutineWorker(ctx, params) {
+    companion object {
+        const val KEY_ATTEMPT = "boot_attempt"
+    }
+
+    override suspend fun doWork(): Result {
+        val attempt = inputData.getInt(KEY_ATTEMPT, 0)
+        if (attempt >= BootReceiver.MAX_RETRIES) {
+            try {
+                BootReceiver.clearSyncBootPending(applicationContext)
+            } catch (_: Exception) {
+            }
+            return Result.failure()
+        }
+        return try {
+            BootReceiver.runBootAttempt(applicationContext, attempt, isBoot = false)
+            Result.success()
+        } catch (e: Exception) {
+            // runBootAttempt already swallows its own failures into the
+            // bounded chain; this is belt-and-braces for anything that
+            // escapes (e.g. a Worker-lifecycle throw): transient causes
+            // re-enter the shared chain, anything else fails fast.
+            if (BootPolicy.shouldRetryBootStart(e, attempt, BootReceiver.MAX_RETRIES)) {
+                try {
+                    BootReceiver.scheduleRetry(applicationContext, attempt + 1)
+                } catch (_: Exception) {
+                }
+                Result.success()
+            } else {
+                Result.failure()
+            }
+        }
     }
 }
