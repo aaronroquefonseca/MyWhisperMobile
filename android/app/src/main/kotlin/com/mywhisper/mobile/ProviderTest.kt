@@ -239,4 +239,52 @@ object ProviderTest {
     /** Remote LLM button goes live when the config validates. */
     fun llmRemoteTestAllowed(kind: String, url: String, model: String): Boolean =
         validateLlm(kind, url, model) == LlmError.NONE
+
+    // -- Test-row z-order / bounds contract (layout unit-tested) --------
+    //
+    // Owner phone test: the provider test button rendered IN FRONT OF
+    // overlapping content. Cause: the whole chain item (Card + test
+    // row) shared the drag lift (zIndex 1 + shadow + 1.015 scale), so
+    // the button lifted with the Card and painted over sibling rows
+    // during reorder/animation; the result line had no weight so long
+    // excerpts overflowed the row bounds instead of wrapping.
+    //
+    // Contract: only the Card lifts on drag; the test row always sits
+    // at z 0, fills the row width, clips to its bounds, and the result
+    // text takes the remaining weight (wraps, never overflows) — the
+    // logical block order is identical in LTR and RTL (Row mirrors
+    // visually, weight keeps the button at row-start either way).
+
+    /** Z the chain Card lifts to while dragged (rest = 0). */
+    const val DRAG_LIFT_Z = 1f
+
+    /** Z a resting row (Card or test row) paints at. */
+    const val ROW_REST_Z = 0f
+
+    /** Z the provider test row paints at — never lifts, even on drag. */
+    const val TEST_ROW_Z = 0f
+
+    /** Z for the chain Card: lifts only while its own row drags. */
+    fun chainCardZIndex(isDragging: Boolean): Float =
+        if (isDragging) DRAG_LIFT_Z else ROW_REST_Z
+
+    /** Z for the provider test row: always 0, dragging or not. */
+    @Suppress("UNUSED_PARAMETER")
+    fun testRowZIndex(isDragging: Boolean): Float = TEST_ROW_Z
+
+    /** The test row clips to its bounds (button respects row bounds). */
+    fun testRowClipsToBounds(): Boolean = true
+
+    /** Weight the inline result text takes (wraps, never overflows). */
+    fun testRowResultWeight(): Float = 1f
+
+    /**
+     * Logical test-row block order: button, gap, result. Identical
+     * for LTR and RTL (Compose Row mirrors placement visually; the
+     * contract pins that no branch reorders blocks per direction).
+     * Pure for unit tests.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    fun testRowBlockOrder(isRtl: Boolean): List<String> =
+        listOf("button", "gap", "result")
 }

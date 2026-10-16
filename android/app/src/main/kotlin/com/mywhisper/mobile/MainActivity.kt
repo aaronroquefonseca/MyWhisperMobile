@@ -79,6 +79,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -88,6 +89,7 @@ import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -1277,9 +1279,10 @@ class MainActivity : ComponentActivity() {
         onWhy: () -> Unit,
         onDelete: () -> Unit,
         handle: @Composable () -> Unit,
+        modifier: Modifier = Modifier,
     ) {
         Card(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            modifier = modifier.fillMaxWidth().padding(vertical = 4.dp),
             colors = CardDefaults.cardColors(
                 containerColor = MaterialTheme.colorScheme.surfaceVariant,
             ),
@@ -1336,8 +1339,22 @@ class MainActivity : ComponentActivity() {
         onTest: () -> Unit,
         disabledReason: String? = null,
     ) {
-        Column {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+        // Z-order contract ([ProviderTest.testRowZIndex]): the test
+        // row never lifts with the drag — it sits at z 0, fills the
+        // row width and clips, so the button respects row bounds and
+        // siblings. The result line takes the remaining weight and
+        // wraps (never overflows under a sibling); Row mirrors the
+        // button to row-start in both LTR and RTL.
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clipToBounds()
+                .zIndex(ProviderTest.TEST_ROW_Z),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 OutlinedButton(
                     enabled = enabled && !busy,
                     onClick = onTest,
@@ -1351,8 +1368,11 @@ class MainActivity : ComponentActivity() {
                 if (busy && result == null) {
                     Text(
                         stringResource(R.string.provider_test_testing),
+                        modifier = Modifier.weight(ProviderTest.testRowResultWeight()),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        softWrap = true,
+                        overflow = TextOverflow.Clip,
                     )
                 } else if (result != null) {
                     Text(
@@ -1369,12 +1389,15 @@ class MainActivity : ComponentActivity() {
                                 result.excerpt.ifBlank { result.error ?: "failed" },
                             )
                         },
+                        modifier = Modifier.weight(ProviderTest.testRowResultWeight()),
                         style = MaterialTheme.typography.bodySmall,
                         color = if (result.passed) {
                             MaterialTheme.colorScheme.primary
                         } else {
                             MaterialTheme.colorScheme.error
                         },
+                        softWrap = true,
+                        overflow = TextOverflow.Clip,
                     )
                 }
             }
@@ -1382,8 +1405,11 @@ class MainActivity : ComponentActivity() {
             if (reason != null && ProviderTest.showDisabledReason(enabled, busy, reason)) {
                 Text(
                     reason,
+                    modifier = Modifier.fillMaxWidth(),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    softWrap = true,
+                    overflow = TextOverflow.Clip,
                 )
             }
         }
@@ -1563,14 +1589,18 @@ class MainActivity : ComponentActivity() {
      * (never a cached map), the drag offset resets on each swap, and
      * only one drag runs at a time — no runaway multi-row dragging.
      * The dragged row lifts with a soft tonal wash + shadow instead
-     * of a hard full-bleed highlight.
+     * of a hard full-bleed highlight. Only the chain Card lifts
+     * ([ProviderTest.chainCardZIndex]); the provider test row stays
+     * at z 0 ([ProviderTest.testRowZIndex]) so its button never
+     * paints over sibling rows — the item Box itself never elevates
+     * and clips, and each Card applies the lift via [isDragging].
      */
     @Composable
     private fun ReorderableEntries(
         items: List<JSONObject>,
         idOf: (JSONObject) -> String,
         onMove: (from: Int, to: Int) -> Unit,
-        row: @Composable (entry: JSONObject, handle: @Composable () -> Unit) -> Unit,
+        row: @Composable (entry: JSONObject, handle: @Composable () -> Unit, isDragging: Boolean) -> Unit,
     ) {
         val listState = androidx.compose.foundation.lazy.rememberLazyListState()
         var dragging by remember { mutableStateOf<String?>(null) }
@@ -1589,19 +1619,14 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier
                         .fillMaxWidth()
                         .animateItem()
-                        .graphicsLayer {
-                            shadowElevation = if (isDrag) 14f else 0f
-                            scaleX = if (isDrag) 1.015f else 1f
-                            scaleY = if (isDrag) 1.015f else 1f
-                        }
-                        .zIndex(if (isDrag) 1f else 0f)
+                        .clipToBounds()
                         .background(
                             if (isDrag) MaterialTheme.colorScheme.surfaceContainerHighest
                             else Color.Transparent,
                             androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
                         ),
                 ) {
-                    row(item) {
+                    row(item, {
                         Icon(
                             Icons.Filled.Menu,
                             contentDescription = stringResource(R.string.drag_reorder),
@@ -1639,7 +1664,7 @@ class MainActivity : ComponentActivity() {
                                 )
                             },
                         )
-                    }
+                    }, isDrag)
                 }
             }
         }
@@ -2232,8 +2257,21 @@ class MainActivity : ComponentActivity() {
                     onMove = { from, to ->
                         moveEntry(entries, from, to); save(); version++
                     },
-                ) { e, handle ->
+                ) { e, handle, isDrag ->
                     val isLocal = e.optString("kind") == "Local"
+                    // Drag lift lives on the Card only
+                    // ([ProviderTest.chainCardZIndex]); the test row
+                    // stays at z 0 ([ProviderTest.testRowZIndex]) so
+                    // its button never paints over sibling rows.
+                    // Clipped so the 1.015 drag scale respects bounds.
+                    val cardDrag = Modifier
+                        .graphicsLayer {
+                            shadowElevation = if (isDrag) 14f else 0f
+                            scaleX = if (isDrag) 1.015f else 1f
+                            scaleY = if (isDrag) 1.015f else 1f
+                            clip = true
+                        }
+                        .zIndex(ProviderTest.chainCardZIndex(isDrag))
                     if (isLocal) {
                         // Local follows the ONE chain-row pattern
                         // ([localChainRowBlocks]): title, summary, pack
@@ -2282,6 +2320,7 @@ class MainActivity : ComponentActivity() {
                                 stt.put("entries", next); save(); version++
                             },
                             handle = handle,
+                            modifier = cardDrag,
                         )
                         // Local STT test (decode sample), same ONE
                         // row pattern as every provider row.
@@ -2298,7 +2337,7 @@ class MainActivity : ComponentActivity() {
                     } else {
                     Column(modifier = Modifier.fillMaxWidth()) {
                     Card(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        modifier = cardDrag.fillMaxWidth().padding(vertical = 4.dp),
                     ) {
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(8.dp),
@@ -3445,8 +3484,21 @@ class MainActivity : ComponentActivity() {
                     onMove = { from, to ->
                         moveEntry(entries, from, to); save(); version++
                     },
-                ) { e, handle ->
+                ) { e, handle, isDrag ->
                     val isLocal = e.optString("kind") == "Local"
+                    // Drag lift lives on the Card only
+                    // ([ProviderTest.chainCardZIndex]); the test row
+                    // stays at z 0 ([ProviderTest.testRowZIndex]) so
+                    // its button never paints over sibling rows.
+                    // Clipped so the 1.015 drag scale respects bounds.
+                    val cardDrag = Modifier
+                        .graphicsLayer {
+                            shadowElevation = if (isDrag) 14f else 0f
+                            scaleX = if (isDrag) 1.015f else 1f
+                            scaleY = if (isDrag) 1.015f else 1f
+                            clip = true
+                        }
+                        .zIndex(ProviderTest.chainCardZIndex(isDrag))
                     if (isLocal) {
                         // Same ONE chain-row pattern as STT
                         // ([localChainRowBlocks]): title, summary, pack
@@ -3495,6 +3547,7 @@ class MainActivity : ComponentActivity() {
                                 lm.put("entries", next); save(); version++
                             },
                             handle = handle,
+                            modifier = cardDrag,
                         )
                         // Local LLM self-test (existing self-test: fixed prompt
                         // + "this is a test" via generate(), never
@@ -3525,7 +3578,7 @@ class MainActivity : ComponentActivity() {
                     } else {
                     Column(modifier = Modifier.fillMaxWidth()) {
                     Card(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        modifier = cardDrag.fillMaxWidth().padding(vertical = 4.dp),
                     ) {
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(8.dp),
