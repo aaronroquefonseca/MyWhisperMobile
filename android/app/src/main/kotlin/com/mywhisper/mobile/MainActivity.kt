@@ -1454,15 +1454,14 @@ class MainActivity : ComponentActivity() {
     ) {
         Column {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                OutlinedButton(
-                    enabled = enabled && !busy,
-                    onClick = onTest,
-                ) {
-                    Text(
-                        if (busy) stringResource(R.string.provider_test_testing)
-                        else stringResource(R.string.provider_test_run),
-                    )
-                }
+                // ONE shared test-button style (min height + padding
+                // identical to the Add buttons): every chain row,
+                // dialog, and self-test renders through here.
+                ProviderTestButton(
+                    enabled = enabled,
+                    busy = busy,
+                    onTest = onTest,
+                )
                 Spacer(Modifier.width(8.dp))
                 if (busy && result == null) {
                     Text(
