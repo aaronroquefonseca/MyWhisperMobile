@@ -385,6 +385,135 @@ class MainActivity : ComponentActivity() {
         ): LlmInspect =
             llmInspectWithVerifier(dir, asset, LocalLlmManager::verifySha256)
 
+        // -- Off-main-thread LLM verify cache (ANR fix) -----------------
+
+        /**
+         * Stat-only identity of one LLM asset (slot + legacy slot +
+         * part trace; length + mtime, no reads, no hashing —
+         * main-thread safe). Any change invalidates the cached
+         * [LlmInspect].
+         */
+        @JvmStatic
+        internal fun llmSigFor(
+            dir: File,
+            asset: LocalLlmManager.ModelAsset,
+        ): List<LocalLlmManager.PackVerify.FileSig> {
+            val slot = llmTaskFileFor(dir, asset.id)
+            val legacy = try {
+                LocalLlmManager.defaultTaskFile(dir).takeIf { it != slot }
+            } catch (_: Exception) {
+                null
+            }
+            val part = try {
+                File(File(dir, "models"), "${slot.name}.part.${asset.id}")
+            } catch (_: Exception) {
+                null
+            }
+            return listOf(
+                LocalLlmManager.PackVerify.sigOf(slot),
+                legacy?.let { LocalLlmManager.PackVerify.sigOf(it) }
+                    ?: LocalLlmManager.PackVerify.FileSig(false, -1L, -1L),
+                part?.let { LocalLlmManager.PackVerify.FileSig(it.isFile, 0L, 0L) }
+                    ?: LocalLlmManager.PackVerify.FileSig(false, -1L, -1L),
+            )
+        }
+
+        /**
+         * Last-known LLM verify state per asset. Composition renders
+         * [llmCachedOrPlaceholder] instantly (stat-only); the
+         * background worker runs [llmInspect] once and stores the
+         * fresh result. Fail-closed: sig miss renders
+         * MISSING/INCOMPLETE, never PRESENT. Thread-safe.
+         */
+        internal object LlmVerifyCache {
+            private data class Entry(
+                val sig: List<LocalLlmManager.PackVerify.FileSig>,
+                val inspect: LlmInspect,
+            )
+
+            private val cache = mutableMapOf<String, Entry>()
+
+            private fun key(dir: File, assetId: String): String =
+                dir.absolutePath + "|" + assetId
+
+            @Synchronized
+            fun cached(dir: File, asset: LocalLlmManager.ModelAsset): LlmInspect? {
+                val e = cache[key(dir, asset.id)] ?: return null
+                return if (e.sig == llmSigFor(dir, asset)) e.inspect else null
+            }
+
+            @Synchronized
+            fun store(
+                dir: File,
+                asset: LocalLlmManager.ModelAsset,
+                inspect: LlmInspect,
+            ) {
+                cache[key(dir, asset.id)] = Entry(llmSigFor(dir, asset), inspect)
+            }
+
+            @Synchronized
+            fun clear() {
+                cache.clear()
+            }
+        }
+
+        /**
+         * Composition-safe LLM snapshot: cached state on sig hit, else
+         * a fail-closed placeholder WITHOUT hashing (any trace =
+         * INCOMPLETE so the row offers Resume, else MISSING). The
+         * worker fills [LlmVerifyCache].
+         */
+        @JvmStatic
+        internal fun llmCachedOrPlaceholder(
+            dir: File,
+            asset: LocalLlmManager.ModelAsset,
+        ): LlmInspect {
+            LlmVerifyCache.cached(dir, asset)?.let { return it }
+            return try {
+                if (hasLlmTrace(dir, asset)) LlmInspect(LocalPackState.INCOMPLETE, 0L)
+                else LlmInspect(LocalPackState.MISSING, 0L)
+            } catch (_: Exception) {
+                LlmInspect(LocalPackState.MISSING, 0L)
+            }
+        }
+
+        /** Fail-closed placeholder map for first composition (no hashing). */
+        @JvmStatic
+        internal fun llmCachedSnapshot(
+            dir: File,
+            assets: List<LocalLlmManager.ModelAsset>,
+        ): Map<String, LlmInspect> =
+            assets.associate { a ->
+                a.id to try {
+                    llmCachedOrPlaceholder(dir, a)
+                } catch (_: Exception) {
+                    LlmInspect(LocalPackState.MISSING, 0L)
+                }
+            }
+
+        /**
+         * Worker-side full LLM verify (hashes — call only off the main
+         * thread). Guards via [LocalLlmManager.PackVerify], stores into
+         * [LlmVerifyCache], returns the fresh map for the UI hop.
+         */
+        @JvmStatic
+        internal fun llmVerifyAllOffThread(
+            dir: File,
+            assets: List<LocalLlmManager.ModelAsset>,
+            verify: (File, String) -> Boolean = LocalLlmManager::verifySha256,
+        ): Map<String, LlmInspect> {
+            LocalLlmManager.PackVerify.requireWorkerThread("llm-verify-all")
+            return assets.associate { a ->
+                val r = try {
+                    llmInspectWithVerifier(dir, a, verify)
+                } catch (_: Exception) {
+                    LlmInspect(LocalPackState.MISSING, 0L)
+                }
+                LlmVerifyCache.store(dir, a, r)
+                a.id to r
+            }
+        }
+
         /**
          * True when any trace of [asset] lingers on disk: the slot, the
          * legacy slot, or a stale per-asset `.part` from an interrupted
@@ -1659,8 +1788,14 @@ class MainActivity : ComponentActivity() {
                 found
             }
             val localVerified = remember(s) {
+                // ANR fix: stat-only cached read (no SHA-256 here — the
+                // full verify runs on the SttScreen worker and fills
+                // SttVerifyCache). Fail-closed: unverified reads false.
                 try {
-                    sttModelPackState(LocalStt.selectedEntry(setupPrefs)) == LocalPackState.PRESENT
+                    LocalSttModels.cachedOrPlaceholder(
+                        filesDir,
+                        LocalStt.selectedEntry(setupPrefs),
+                    ).state == LocalModelDownload.RowState.PRESENT
                 } catch (_: Exception) {
                     false
                 }
@@ -2008,14 +2143,6 @@ class MainActivity : ComponentActivity() {
             else -> LocalPackState.MISSING
         }
 
-    /** Pack state for one catalog model (SHA-verified, single-pass). */
-    private fun sttModelPackState(model: LocalSttModels.Entry): LocalPackState =
-        try {
-            packStateForRow(LocalSttModels.stateFor(filesDir, model))
-        } catch (_: Exception) {
-            LocalPackState.MISSING
-        }
-
     /** Total device RAM in MB (selector warning only; 0 when unreadable). */
     private fun totalRamMb(): Long =
         try {
@@ -2050,6 +2177,27 @@ class MainActivity : ComponentActivity() {
         bump()
     }
 
+    /**
+     * StrictMode-style audit (STT/LLM screens, 2026-10-16): main-thread
+     * disk/crypto I/O found in composition —
+     * - FIXED (this change): SHA-256 over pack files via
+     *   `LocalSttModels.inspect` / `llmInspect` / `verifySha256`
+     *   (multi-GB `MessageDigest.update` in composition = the ANR).
+     *   Now worker-only (`workers.execute` + `PackVerify` guard +
+     *   `SttVerifyCache`/`LlmVerifyCache` with length/mtime sigs);
+     *   composition renders last-known state + `verifying…`.
+     * - KEPT (stat-only, no reads/hashing): `File.isFile/length/
+     *   lastModified` in `sigFor`/`llmSigFor`/`cachedOrPlaceholder`/
+     *   `hasLlmTrace`, `absolutePath` for dest lines. Metadata-only;
+     *   StrictMode `DiskReadViolation`-clean by construction.
+     * - KEPT (cheap binder/prefs): `totalRamMb()` (one
+     *   ActivityManager call, `remember`-pinned), `getSharedPreferences`
+     *   reads, `llmAssets()` (parses an in-memory const string).
+     * - FOLLOW-UP (not this change): `CoreBridge.defaultCleanupPrompt`
+     *   already runs on `workers`; download hashing stays in
+     *   WorkManager/`downloadModel`. Decode (`LocalStt.transcribe`,
+     *   `MediaPipeRunner.generate`) untouched per scope.
+     */
     @Composable
     private fun SttScreen(s: JSONObject) {
         val stt = sttObj(s)
@@ -2061,14 +2209,31 @@ class MainActivity : ComponentActivity() {
         // save-generation (not per row or keystroke); enabling Local
         // without a verified selected model fails closed.
         val selectedModel = remember(version) { LocalStt.selectedEntry(statePrefs) }
-        // One inspect per model per save-generation (state + verified
-        // bytes from a single SHA pass — never two full hash sweeps).
-        val modelInspects = remember(version) {
-            LocalSttModels.MODELS.associate { m ->
-                m.id to try {
-                    LocalSttModels.inspect(filesDir, m)
+        // ANR fix: NEVER hash in composition. First paint renders the
+        // last-known cached state (stat-only placeholder, fail-closed);
+        // the worker below runs the single SHA pass per model off the
+        // main thread and posts the fresh map. `sttVerifying` drives
+        // the lightweight `verifying…` marker.
+        var modelInspects by remember(version) {
+            mutableStateOf(LocalSttModels.cachedSnapshot(filesDir))
+        }
+        var sttVerifying by remember(version) { mutableStateOf(true) }
+        LaunchedEffect(version) {
+            // Seed from cache synchronously (already done above), then
+            // verify off-thread. The generation check drops stale
+            // results when a newer reload/save bumped `version`.
+            val gen = version
+            workers.execute {
+                val fresh = try {
+                    LocalSttModels.verifyAllOffThread(filesDir)
                 } catch (_: Exception) {
-                    LocalSttModels.PackInspect(LocalModelDownload.RowState.MISSING, 0L)
+                    LocalSttModels.cachedSnapshot(filesDir)
+                }
+                runOnUiThread {
+                    if (gen == version) {
+                        modelInspects = fresh
+                        sttVerifying = false
+                    }
                 }
             }
         }
@@ -2380,6 +2545,15 @@ class MainActivity : ComponentActivity() {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                if (sttVerifying) {
+                    // Lightweight off-thread marker: last-known state
+                    // above, fresh SHA state lands without blocking.
+                    Text(
+                        "verifying…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 if (!sttRunner) {
                     Text(
                         stringResource(R.string.local_need_full),
@@ -3114,12 +3288,30 @@ class MainActivity : ComponentActivity() {
         val llmSelected = remember(version) {
             llmSelectedAsset(assets, statePrefs.getString(PREF_SELECTED_LLM, null))
         }
-        val llmInspects = remember(version) {
-            assets.associate { a ->
-                a.id to try {
-                    llmInspect(filesDir, a)
+        // ANR fix: NEVER hash in composition. First paint renders the
+        // last-known cached state (stat-only placeholder, fail-closed);
+        // the worker below runs the single SHA pass per asset off the
+        // main thread and posts the fresh map. `llmVerifying` drives
+        // the lightweight `verifying…` marker.
+        var llmInspects by remember(version) {
+            mutableStateOf(llmCachedSnapshot(filesDir, assets))
+        }
+        var llmVerifying by remember(version) { mutableStateOf(true) }
+        LaunchedEffect(version) {
+            val gen = version
+            // Snapshot the dir reference off the composable state read:
+            // filesDir never changes, assets is version-pinned above.
+            workers.execute {
+                val fresh = try {
+                    llmVerifyAllOffThread(filesDir, assets)
                 } catch (_: Exception) {
-                    LlmInspect(LocalPackState.MISSING, 0L)
+                    llmCachedSnapshot(filesDir, assets)
+                }
+                runOnUiThread {
+                    if (gen == version) {
+                        llmInspects = fresh
+                        llmVerifying = false
+                    }
                 }
             }
         }
@@ -3153,6 +3345,10 @@ class MainActivity : ComponentActivity() {
             )
         /** Verified file backing [a]: per-asset slot, else the adopted legacy slot. */
         fun llmActiveFile(a: LocalLlmManager.ModelAsset): File {
+            // Off-thread only: the self-test caller runs on `workers`
+            // and the delete flow runs on `workers`. Never call from
+            // composition (SHA-256 over multi-GB packs ANRs).
+            LocalLlmManager.PackVerify.requireWorkerThread("llm-active-file")
             val slot = llmTaskFileFor(filesDir, a.id)
             if (!isPlaceholderSha(a.sha256) && LocalLlmManager.verifySha256(slot, a.sha256)) {
                 return slot
@@ -3622,6 +3818,15 @@ class MainActivity : ComponentActivity() {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                if (llmVerifying) {
+                    // Lightweight off-thread marker: last-known state
+                    // in the rows, fresh SHA state lands without blocking.
+                    Text(
+                        "verifying…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 if (!llmRunner) {
                     Text(
                         stringResource(R.string.local_need_full),
@@ -3863,6 +4068,9 @@ class MainActivity : ComponentActivity() {
                             .filter { it.id != doomedId && llmPackOf(it.id) == LocalPackState.PRESENT }
                             .map { it.id }
                         workers.execute {
+                            // Worker thread: hashing the legacy slot below
+                            // is safe here (never composition).
+                            LocalLlmManager.PackVerify.requireWorkerThread("llm-delete-legacy")
                             try {
                                 if (doomed != null) {
                                     LocalLlmManager.deleteModel(

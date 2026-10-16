@@ -189,6 +189,85 @@ object LocalLlmManager {
     fun verifySha256(file: File, expectedHex: String): Boolean =
         file.isFile && sha256Hex(file).equals(expectedHex.trim(), ignoreCase = true)
 
+    // -- Off-main-thread pack verification (ANR fix) -------------------
+
+    /**
+     * Shared seam for off-main-thread pack verification (ANR: hashing
+     * multi-GB packs inside composition blocks the UI thread in
+     * MessageDigest.update).
+     *
+     * Rule: SHA-256 over pack files runs ONLY on a background worker
+     * (Activity `workers` executor / WorkManager). Composition reads
+     * the last-known cached [LocalModelDownload.RowState] (stat-only
+     * [FileSig], no hashing) and paints a lightweight `verifying…`
+     * marker until the worker posts the fresh state. Fail-closed is
+     * unchanged: unverified (missing/stale/verifying) never enables.
+     *
+     * Pure JVM (thread-name check, no Looper) so unit tests can drive
+     * the seam via [isMainThreadOverride].
+     */
+    object PackVerify {
+        /** Test seam: return true when on the composition/main thread. */
+        @Volatile
+        var isMainThreadOverride: (() -> Boolean)? = null
+
+        /** True on the UI thread (override wins in tests). */
+        fun isMainThread(): Boolean {
+            isMainThreadOverride?.let { return it() }
+            return Thread.currentThread().name == "main"
+        }
+
+        /**
+         * Guard for every heavy pack hash: throws on the main thread
+         * so a future composition-time call fails loudly instead of
+         * ANR-ing on device.
+         */
+        fun requireWorkerThread(where: String) {
+            check(!isMainThread()) { "pack verify must not run on main thread ($where)" }
+        }
+
+        /** Stat-only file identity (length + mtime; no reads, no hashing). */
+        data class FileSig(
+            val exists: Boolean,
+            val length: Long,
+            val lastModified: Long,
+        )
+
+        /** Stat-only snapshot of one file. Never hashes. */
+        fun sigOf(file: File): FileSig =
+            try {
+                FileSig(file.isFile, if (file.isFile) file.length() else -1L, file.lastModified())
+            } catch (_: Exception) {
+                FileSig(false, -1L, -1L)
+            }
+
+        /** Minimal scheduler seam: production passes `workers::execute`. */
+        fun interface Scheduler {
+            fun execute(task: () -> Unit)
+        }
+
+        /** Immediate scheduler for unit tests (still enforces the guard). */
+        val directScheduler: Scheduler = Scheduler { task -> task() }
+
+        /**
+         * Run [block] off the main thread via [scheduler], posting the
+         * result to [onDone] (caller hops to UI). The guard fires
+         * inside the worker, so scheduling from composition is fine
+         * but hashing in composition throws.
+         */
+        fun <T> verifyAsync(
+            scheduler: Scheduler,
+            where: String,
+            block: () -> T,
+            onDone: (T) -> Unit,
+        ) {
+            scheduler.execute {
+                requireWorkerThread(where)
+                onDone(block())
+            }
+        }
+    }
+
     /**
      * Per-asset partial-download slot: concurrent downloads of
      * different assets into the same directory must not clobber

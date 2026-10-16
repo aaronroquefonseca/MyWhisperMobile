@@ -440,6 +440,136 @@ object LocalSttModels {
     fun inspect(filesDir: File, entry: Entry): PackInspect =
         inspectWithVerifier(filesDir, entry, LocalLlmManager::verifySha256)
 
+    // -- Off-main-thread verify cache (ANR fix) ------------------------
+
+    /**
+     * Stat-only identity of one STT pack (length + mtime per file +
+     * partial trace; no reads, no hashing — main-thread safe). Any
+     * change invalidates the cached [PackInspect].
+     */
+    fun sigFor(filesDir: File, entry: Entry): List<LocalLlmManager.PackVerify.FileSig> {
+        val dir = dirFor(filesDir, entry)
+        return entry.files.map { f ->
+            LocalLlmManager.PackVerify.sigOf(File(dir, f.name))
+        } + LocalLlmManager.PackVerify.FileSig(
+            hasPartials(dir, entry),
+            0L,
+            0L,
+        )
+    }
+
+    /**
+     * Last-known STT verify state per model, keyed by absolute filesDir
+     * + model id. Composition renders [cachedOrPlaceholder] instantly
+     * (stat-only, never hashes); the background worker runs [inspect]
+     * once and [store]s the fresh result. Fail-closed: a sig miss (or
+     * no entry) renders MISSING/INCOMPLETE, never PRESENT.
+     * Thread-safe; JVM-testable.
+     */
+    object SttVerifyCache {
+        private data class CacheLine(
+            val sig: List<LocalLlmManager.PackVerify.FileSig>,
+            val inspect: PackInspect,
+        )
+
+        private val cache = mutableMapOf<String, CacheLine>()
+
+        private fun key(filesDir: File, entry: Entry): String =
+            filesDir.absolutePath + "|" + entry.id
+
+        /** Cached inspect when the on-disk sig still matches, else null. */
+        @Synchronized
+        fun cached(filesDir: File, entry: Entry): PackInspect? {
+            val e = cache[key(filesDir, entry)] ?: return null
+            return if (e.sig == sigFor(filesDir, entry)) e.inspect else null
+        }
+
+        /** True when no fresh cached state exists (worker must verify). */
+        fun needsVerify(filesDir: File, entry: Entry): Boolean =
+            cached(filesDir, entry) == null
+
+        @Synchronized
+        fun store(filesDir: File, entry: Entry, inspect: PackInspect) {
+            cache[key(filesDir, entry)] = CacheLine(sigFor(filesDir, entry), inspect)
+        }
+
+        @Synchronized
+        fun clear() {
+            cache.clear()
+        }
+    }
+
+    /**
+     * Composition-safe snapshot: cached state on sig hit, else a
+     * fail-closed placeholder derived WITHOUT hashing (empty dir =
+     * MISSING, any trace = INCOMPLETE so the row offers Resume, never
+     * "SHA mismatch" and never PRESENT). The worker fills the cache.
+     */
+    fun cachedOrPlaceholder(filesDir: File, entry: Entry): PackInspect {
+        SttVerifyCache.cached(filesDir, entry)?.let { return it }
+        return try {
+            val dir = dirFor(filesDir, entry)
+            val anyTrace = entry.files.any { f ->
+                val file = File(dir, f.name)
+                file.isFile && file.length() > 0
+            } || hasPartials(dir, entry)
+            if (anyTrace) {
+                PackInspect(LocalModelDownload.RowState.INCOMPLETE, 0L)
+            } else {
+                PackInspect(LocalModelDownload.RowState.MISSING, 0L)
+            }
+        } catch (_: Exception) {
+            PackInspect(LocalModelDownload.RowState.MISSING, 0L)
+        }
+    }
+
+    /** Fail-closed placeholder map for first composition (no hashing). */
+    fun cachedSnapshot(filesDir: File): Map<String, PackInspect> =
+        MODELS.associate { m ->
+            m.id to try {
+                cachedOrPlaceholder(filesDir, m)
+            } catch (_: Exception) {
+                PackInspect(LocalModelDownload.RowState.MISSING, 0L)
+            }
+        }
+
+    /**
+     * Worker-side full verify for every catalog model (hashes — call
+     * only off the main thread). Guards via [PackVerify], stores into
+     * [SttVerifyCache], returns the fresh map for the UI hop.
+     */
+    fun verifyAllOffThread(
+        filesDir: File,
+        verify: (File, String) -> Boolean = LocalLlmManager::verifySha256,
+    ): Map<String, PackInspect> {
+        LocalLlmManager.PackVerify.requireWorkerThread("stt-verify-all")
+        return MODELS.associate { m ->
+            val r = try {
+                inspectWithVerifier(filesDir, m, verify)
+            } catch (_: Exception) {
+                PackInspect(LocalModelDownload.RowState.MISSING, 0L)
+            }
+            SttVerifyCache.store(filesDir, m, r)
+            m.id to r
+        }
+    }
+
+    /** Worker-side single-model verify (hashes — off main thread only). */
+    fun verifyOneOffThread(
+        filesDir: File,
+        entry: Entry,
+        verify: (File, String) -> Boolean = LocalLlmManager::verifySha256,
+    ): PackInspect {
+        LocalLlmManager.PackVerify.requireWorkerThread("stt-verify-one:" + entry.id)
+        val r = try {
+            inspectWithVerifier(filesDir, entry, verify)
+        } catch (_: Exception) {
+            PackInspect(LocalModelDownload.RowState.MISSING, 0L)
+        }
+        SttVerifyCache.store(filesDir, entry, r)
+        return r
+    }
+
     /** True when a stale `.part` from an interrupted download lingers. Pure java.io. */
     fun hasPartials(dir: File, entry: Entry): Boolean =
         entry.files.any { f -> File(dir, "${f.name}.part").isFile }
