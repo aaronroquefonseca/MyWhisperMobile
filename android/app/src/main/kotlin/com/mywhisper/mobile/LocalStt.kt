@@ -647,6 +647,14 @@ object LocalStt {
     internal object SherpaRunner {
         private const val PKG = "com.k2fsa.sherpa.onnx"
 
+        /**
+         * Trailing-silence pad for utterance streaming (samples @16k):
+         * one 560ms chunk + margin so the final speech frames sit in a
+         * full decode window with right context. See
+         * [decodeOnlineUtterance].
+         */
+        private const val ONLINE_TAIL_PAD_SAMPLES = 9600
+
         /** False on lite builds / JVM tests (no sherpa classes). */
         fun isSupported(): Boolean = loadClass("$PKG.OfflineRecognizer") != null
 
@@ -864,12 +872,12 @@ object LocalStt {
          * valid pipeline, zero tokens). Desktop parity: the FULL
          * utterance goes in (no VAD trim, no short-utterance skip —
          * server-side endpointing owns that path), fed as mic-sized
-         * slices with periodic drains; inputFinished + final drain +
-         * single read at the end. No language is sent (desktop
-         * parity: auto and explicit are byte-identical there — the
-         * model decides). Emits diagnostics (fed, slices, iterations,
-         * tokens, chars). Null (→ server fallback) on any failure.
-         * Never throws.
+         * slices with periodic drains; trailing-silence pad (below),
+         * inputFinished + final drain + single read at the end. No
+         * language is sent (desktop parity: auto and explicit are
+         * byte-identical there — the model decides). Emits
+         * diagnostics (fed, slices, iterations, tokens, chars). Null
+         * (→ server fallback) on any failure. Never throws.
          */
         fun decodeOnlineUtterance(
             rec: Any,
@@ -900,6 +908,15 @@ object LocalStt {
                         }
                         offset = end
                     }
+                    // Trailing-silence pad: the streaming encoder needs
+                    // right context past the last speech frame to emit
+                    // the tail (owner repro in EN+ES: the final word
+                    // always missing — "prueba"/"test" dropped). A live
+                    // mic always has trailing audio; a burst feed has
+                    // none, so one chunk of zeros (~600ms) guarantees a
+                    // full final window. Silence decodes to blanks,
+                    // never text.
+                    callOnline(stream, "acceptWaveform", FloatArray(ONLINE_TAIL_PAD_SAMPLES), sampleRate)
                     callOnline(stream, "inputFinished")
                     var guard = 0
                     while ((callOnline(rec, "isReady", stream) as? Boolean) == true && guard++ < 1000) {
