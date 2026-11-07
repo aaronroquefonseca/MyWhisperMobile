@@ -8,6 +8,22 @@ import java.util.concurrent.atomic.AtomicInteger
 internal const val MAX_LOCAL_PCM_SAMPLES = 16_000 * 60
 
 /**
+ * User-facing rewrite for a failed [Dictation.finish]: when on-device
+ * missed and no server chain exists, the committed core copy still
+ * claims on-device is unsupported ("Local/on-device is not supported
+ * yet") — stale on Android, where the Kotlin local-first hook above
+ * runs before the server chain. iOS keeps the raw copy (server-only
+ * there). Pure for unit tests.
+ */
+internal fun userFacingFinishError(msg: String): String =
+    if ("no server STT configured" in msg) {
+        "On-device found nothing and no server is configured — " +
+            "check the Local entry and its model, or add a server."
+    } else {
+        msg
+    }
+
+/**
  * Mic-button controller: hold-to-talk / toggle / smart, mirroring the
  * desktop activation modes. Mode comes from settings
  * (`preferences.mic_mode`): Push = hold talks, Tap = press toggles,
@@ -324,8 +340,9 @@ class Dictation(
             capture = null
             val text: String
             try {
-                // Local-first: sherpa-onnx moonshine-v2 on the utterance
-                // PCM; miss or throw → server chain (fallback intact).
+                // Local-first: the on-device catalog model via LocalStt
+                // on the utterance PCM; miss or throw → server chain
+                // (fallback intact).
                 // Only the LOCAL hook is guarded here: a server throw
                 // must reach the outer catch (session-gated drop) so
                 // cancel/shutdown during a blocked transcribe still
@@ -363,7 +380,7 @@ class Dictation(
                 text = local ?: finishTranscription().first
             } catch (e: Exception) {
                 if (gen == session.get()) {
-                    listener?.onError(e.message ?: "transcription failed")
+                    listener?.onError(userFacingFinishError(e.message ?: "transcription failed"))
                     set(State.IDLE)
                 } else {
                     log("finish drop stale-error gen=$gen session=${session.get()}")
