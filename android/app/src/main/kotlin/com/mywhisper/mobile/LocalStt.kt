@@ -822,11 +822,12 @@ object LocalStt {
         /**
          * Streaming decode for one VAD chunk: fresh online stream per
          * chunk (matches the offline chunk flow in [transcribe]).
-         * Drain order mirrors the upstream streaming demos (decode
-         * while ready, then inputFinished, drain again, then read);
-         * explicit language goes via `setOption` when pinned (empty
-         * stays auto-detect). Emits diagnostics (iterations, chars)
-         * so a silent model is distinguishable from a dead pipeline.
+         * The chunk is fed in ~100ms slices with a drain after each
+         * (upstream mic/file demos never bulk-feed a whole utterance),
+         * then inputFinished + final drain + read; explicit language
+         * goes via `setOption` when pinned (empty stays auto-detect).
+         * Emits diagnostics (slices, iterations, chars) so a silent
+         * model is distinguishable from a dead pipeline.
          * Null (→ blank, skipped) on any failure. Never throws.
          */
         fun decodeOnlineChunkText(
@@ -844,21 +845,34 @@ object LocalStt {
                     if (language.isNotEmpty()) {
                         call(stream, "setOption", "language", language)
                     }
-                    call(stream, "acceptWaveform", samples, sampleRate)
                     var iters = 0
-                    while ((call(rec, "isReady", stream) as? Boolean) == true && iters++ < 500) {
-                        call(rec, "decode", stream)
+                    var slices = 0
+                    // ~100ms mic-sized slices (1600 samples @16k floor).
+                    val slice = (sampleRate / 10).coerceAtLeast(1600)
+                    var offset = 0
+                    while (offset < samples.size) {
+                        val end = minOf(offset + slice, samples.size)
+                        call(stream, "acceptWaveform", samples.sliceArray(offset until end), sampleRate)
+                        slices++
+                        var guard = 0
+                        while ((call(rec, "isReady", stream) as? Boolean) == true && guard++ < 50) {
+                            call(rec, "decode", stream)
+                            iters++
+                        }
+                        offset = end
                     }
                     call(stream, "inputFinished")
-                    while ((call(rec, "isReady", stream) as? Boolean) == true && iters++ < 1000) {
+                    var guard = 0
+                    while ((call(rec, "isReady", stream) as? Boolean) == true && guard++ < 500) {
                         call(rec, "decode", stream)
+                        iters++
                     }
                     val result = call(rec, "getResult", stream) ?: run {
-                        Log.w(TAG, "online getResult null iters=$iters")
+                        Log.w(TAG, "online getResult null slices=$slices iters=$iters")
                         return null
                     }
                     val text = call(result, "getText") as? String
-                    Log.i(TAG, "online decode samples=${samples.size} iters=$iters chars=${text?.length ?: -1}")
+                    Log.i(TAG, "online decode samples=${samples.size} slices=$slices iters=$iters chars=${text?.length ?: -1}")
                     return text
                 } finally {
                     call(stream, "release")
