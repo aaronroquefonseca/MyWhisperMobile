@@ -2204,13 +2204,23 @@ class MainActivity : ComponentActivity() {
             workers.execute {
                 val result = try {
                     ProviderTest.runProbe(ProviderTest.LOCAL_TIMEOUT_MS) {
+                        // Reference speech when the debug asset ships
+                        // (real recorded Spanish — a blank decode FAILS);
+                        // sine probe otherwise (pipeline-only, blank is
+                        // expected → "pack ok"). See [SampleSpeech].
+                        val refPcm = SampleSpeech.loadAsset(this)
+                        val probePcm = refPcm ?: ProviderTest.samplePcm16()
                         val r = LocalStt.transcribe(
-                            this, ProviderTest.samplePcm16(), 16000,
+                            this, probePcm, 16000,
                             stt.optString("language", "auto").ifBlank { "auto" },
                         ) ?: throw IllegalStateException("decode skipped — engine unavailable")
                         val text = r.text.trim()
                         if (text.isNotBlank()) text
-                        else "pack ok · ${r.chunks} chunks · ${r.decodeMs}ms"
+                        else if (refPcm != null) {
+                            throw IllegalStateException("blank decode on reference speech")
+                        } else {
+                            "pack ok · ${r.chunks} chunks · ${r.decodeMs}ms"
+                        }
                     }
                 } catch (ex: Exception) {
                     ProviderTest.mapLocalSttResult(
