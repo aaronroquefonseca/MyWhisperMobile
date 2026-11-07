@@ -195,7 +195,7 @@ object LocalLlmManager {
      * `<task>.xnnpack_cache` file in the app cache dir and aborts the
      * process when Android's per-app cache quota (~100MB here) trips
      * mid-write — every GB-scale model crashes on first load
-     * otherwise (owner repros: gemma3 + gemma2, phone + emulator).
+     * otherwise (owner repros, phone + emulator).
      * Point it at the quota-free models dir via symlink before each
      * run (idempotent; replaces a real file, which could only ever
      * grow into the same crash). Pure path math is unit-tested; the

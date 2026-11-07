@@ -154,7 +154,7 @@ class LocalMultiPackTest {
         val dir = Files.createTempDirectory("llm-slots").toFile()
         try {
             val a = MainActivity.llmTaskFileFor(dir, "gemma3-1b-it-int4")
-            val b = MainActivity.llmTaskFileFor(dir, "gemma2-2b-it-q8")
+            val b = MainActivity.llmTaskFileFor(dir, "gemma3-1b-it-mpseq-q8")
             assertFalse(a == b)
             assertEquals(File(File(dir, "models"), "llm-gemma3-1b-it-int4.task"), a)
             assertEquals("models", a.parentFile?.name)

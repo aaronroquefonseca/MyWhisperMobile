@@ -17,14 +17,6 @@
       "size_bytes": 1073765694,
       "min_ram_mb": 4096,
       "note": "Official multi-prefill-seq q8 (ekv2048): the parameterization Google's Android sample used (tasks-genai 0.10.29); gated - needs HF auth + Gemma license."
-    },
-    {
-      "id": "gemma2-2b-it-q8",
-      "url": "https://huggingface.co/MiCkSoftware/Gemma2-2B-IT-LiteRT/resolve/main/gemma2_q8_multi-prefill-seq_ekv1280.task",
-      "sha256": "407aaa8f86f5450370d5fc6d274aae2e62f07ae91f9c5e97d1d7b1e05078c752",
-      "size_bytes": 2702868915,
-      "min_ram_mb": 7168,
-      "note": "Capable phones only: ~2.5GB weights, needs 8GB+ RAM (Note9-class: use the 1B)."
     }
   ]
 }
