@@ -23,12 +23,15 @@ import kotlinx.coroutines.withContext
  *   unified FGS row): per-model bar + Cancel action.
  * - Constraints/backoff come from [ModelDownloadManager] (unmetered,
  *   battery-not-low, exponential backoff).
- * - Cancel/stop: partials are KEPT (no retry on user cancel,
- *   but the next Download resumes where it stopped — same as an
- *   app-kill restart). Transient errors: `Result.retry` until
+ * - Cancel/stop: the in-flight worker aborts at the next 64KB
+ *   chunk (both download callbacks throw on `isStopped`); partials
+ *   are KEPT here — explicit Cancel wipes them synchronously in
+ *   [ModelDownloadManager.cancel], so cancel truly resets while
+ *   kills/errors keep resumable partials for the HTTP-Range path.
+ *   Transient errors: `Result.retry` until
  *   [ModelDownloadSchedule.MAX_ATTEMPTS], then failure (row pins
  *   FAILED, Retry re-enqueues and resumes). Explicit model Delete
- *   (trash row) is the only path that wipes files + partials.
+ *   (trash row) is the only other path that wipes files + partials.
  * - App-kill: WorkManager re-runs; surviving `.part` files resume
  *   via HTTP Range (both download fns), verified finals are skipped
  *   — a kill can never promote an unverified pack (trailing
@@ -59,7 +62,7 @@ class ModelDownloadWorker(
         // doWork into a silent retry loop (see
         // ModelDownloadSchedule.degradeToNotificationOnly).
         try {
-            setForegroundAsync(foregroundInfo(label.ifBlank { modelId.orEmpty() }, 0L, null, workName, notifId, target)).get()
+            setForegroundAsync(foregroundInfo(label.ifBlank { modelId.orEmpty() }, 0L, null, workName, notifId, target, kind.orEmpty(), modelId.orEmpty())).get()
         } catch (e: Exception) {
             if (!ModelDownloadSchedule.degradeToNotificationOnly(e)) throw e
         }
@@ -117,7 +120,7 @@ class ModelDownloadWorker(
             ?: throw IllegalArgumentException("unknown stt model $modelId")
         LocalSttModels.download(applicationContext.filesDir, entry) { r, t ->
             if (isStopped) throw CancellationException("cancelled")
-            reportProgress(label.ifBlank { entry.name }, r, t, workName, notifId, target)
+            reportProgress(label.ifBlank { entry.name }, r, t, workName, notifId, target, ModelDownloadSchedule.KIND_STT, entry.id)
         }
     }
 
@@ -143,7 +146,7 @@ class ModelDownloadWorker(
         val dest = MainActivity.llmTaskFileFor(applicationContext.filesDir, assetId)
         LocalLlmManager.downloadModel(asset, dest) { r, t ->
             if (isStopped) throw CancellationException("cancelled")
-            reportProgress(label.ifBlank { assetId }, r, t, workName, notifId, target)
+            reportProgress(label.ifBlank { assetId }, r, t, workName, notifId, target, ModelDownloadSchedule.KIND_LLM, assetId)
         }
     }
 
@@ -154,6 +157,8 @@ class ModelDownloadWorker(
         workName: String,
         notifId: Int,
         target: String,
+        kind: String,
+        modelId: String,
     ) {
         try {
             setProgressAsync(workDataOf(ModelDownloadSchedule.PROG_RECEIVED to received, ModelDownloadSchedule.PROG_TOTAL to (total ?: -1L)))
@@ -162,7 +167,7 @@ class ModelDownloadWorker(
         try {
             ModelDownloadNotifications.notify(
                 applicationContext, notifId,
-                ModelDownloadNotifications.buildProgress(applicationContext, label, received, total, workName, notifId, target),
+                ModelDownloadNotifications.buildProgress(applicationContext, label, received, total, workName, notifId, target, kind, modelId),
             )
         } catch (_: Exception) {
         }
@@ -175,9 +180,11 @@ class ModelDownloadWorker(
         workName: String,
         notifId: Int,
         target: String,
+        kind: String,
+        modelId: String,
     ): ForegroundInfo =
         ForegroundInfo(
             notifId,
-            ModelDownloadNotifications.buildProgress(applicationContext, label, received, total, workName, notifId, target),
+            ModelDownloadNotifications.buildProgress(applicationContext, label, received, total, workName, notifId, target, kind, modelId),
         )
 }

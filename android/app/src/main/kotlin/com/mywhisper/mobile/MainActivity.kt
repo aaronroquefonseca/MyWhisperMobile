@@ -2154,7 +2154,7 @@ class MainActivity : ComponentActivity() {
                 onProgress = { r, t ->
                     dlProg = dlProg + (m.id to (r to (t ?: LocalSttModels.totalBytes(m))))
                 },
-                onDone = { dlBusy = dlBusy - m.id; version++ },
+                onDone = { dlBusy = dlBusy - m.id; dlProg = dlProg - m.id; version++ },
                 onError = { msg ->
                     dlBusy = dlBusy - m.id
                     dlErr = dlErr + (m.id to msg)
@@ -3269,7 +3269,7 @@ class MainActivity : ComponentActivity() {
                 kind = ModelDownloadSchedule.KIND_LLM,
                 id = a.id,
                 onProgress = { r, t -> llmDlProg = llmDlProg + (a.id to (r to t)) },
-                onDone = { llmDlBusy = llmDlBusy - a.id; version++ },
+                onDone = { llmDlBusy = llmDlBusy - a.id; llmDlProg = llmDlProg - a.id; version++ },
                 onError = { msg ->
                     llmDlBusy = llmDlBusy - a.id
                     llmDlErr = llmDlErr + (a.id to msg)

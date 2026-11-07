@@ -176,6 +176,25 @@ object ModelDownloadSchedule {
         ".part" in name
 
     /**
+     * Reverse [workNameFor]: (kind, modelId) for the notification
+     * Cancel path. Fallback-grade only: [clean] maps dots to dashes,
+     * so dotted ids (both Nemotron entries) do NOT round-trip — the
+     * live Cancel path carries explicit extras instead. Returns null
+     * on malformed input. Pure for unit tests.
+     */
+    @JvmStatic
+    fun kindIdFromWorkName(workName: String): Pair<String, String>? {
+        val rest = workName.removePrefix("$WORK_PREFIX-")
+        if (rest == workName) return null
+        val dash = rest.indexOf('-')
+        if (dash <= 0) return null
+        val kind = rest.substring(0, dash)
+        val id = rest.substring(dash + 1)
+        if ((kind == KIND_STT || kind == KIND_LLM) && id.isNotEmpty()) return kind to id
+        return null
+    }
+
+    /**
      * Determinate progress percent, null when the total is unknown
      * (notification + row show indeterminate). Pure for unit tests.
      */

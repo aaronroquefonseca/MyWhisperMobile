@@ -31,6 +31,7 @@ import java.util.concurrent.TimeUnit
  *   flow through the SHA-verified pack derivation.
  */
 object ModelDownloadManager {
+    private const val TAG = "MwDl"
     private fun baseConstraints(): Constraints =
         Constraints.Builder()
             .setRequiredNetworkType(NetworkType.UNMETERED)
@@ -106,9 +107,43 @@ object ModelDownloadManager {
         }
     }
 
-    /** Cancel one download (worker deletes its partials on stop). */
+    /**
+     * Cancel one download AND wipe its partials synchronously: cancel
+     * means reset (next Download starts from zero), while
+     * interruptions (kill, error, timeout) keep resumable partials
+     * for the HTTP-Range resume path. Finals are never touched here.
+     * Pure file math (JVM-testable); the WorkManager cancel runs
+     * alongside, best-effort.
+     */
+    internal fun deletePartialsFor(filesDir: java.io.File, kind: String, id: String) {
+        when (kind) {
+            ModelDownloadSchedule.KIND_STT -> {
+                val entry = LocalSttModels.MODELS.firstOrNull { it.id == id } ?: return
+                val dir = LocalSttModels.dirFor(filesDir, entry)
+                dir.listFiles { f -> ModelDownloadSchedule.isPartialName(f.name) }
+                    ?.forEach { try { it.delete() } catch (_: Exception) {} }
+            }
+            ModelDownloadSchedule.KIND_LLM -> {
+                val dest = MainActivity.llmTaskFileFor(filesDir, id)
+                try {
+                    val dir = java.io.File(dest.parent ?: return)
+                    dir.listFiles { f ->
+                        ModelDownloadSchedule.isOwnLlmPart(f.name, dest.name, id)
+                    }?.forEach { try { it.delete() } catch (_: Exception) {} }
+                } catch (_: Exception) {
+                }
+            }
+        }
+    }
+
+    /** Cancel one download (wipes partials: cancel means reset, see above). */
     @JvmStatic
     fun cancel(ctx: Context, kind: String, id: String) {
+        android.util.Log.i(TAG, "cancel $kind/$id (wipes partials)")
+        try {
+            deletePartialsFor(ctx.applicationContext.filesDir, kind, id)
+        } catch (_: Exception) {
+        }
         try {
             WorkManager.getInstance(ctx.applicationContext)
                 .cancelUniqueWork(ModelDownloadSchedule.workNameFor(kind, id))
