@@ -473,8 +473,37 @@ object LocalLlmManager {
                 } catch (_: Exception) {
                     android.util.Log.w("MwLlm", "sizeInTokens failed")
                 }
-                return llmClass.getMethod("generateResponse", String::class.java)
-                    .invoke(session, prompt) as String
+                // Explicit session (never the implicit generateResponse
+                // path): it segfaults in nativePredictSync with a null
+                // handle on these runtimes (owner phone + emulator
+                // repros). Mirrors the official Android sample:
+                // session options (defaults) → addQueryChunk →
+                // generateResponse → close both.
+                val sessOptsClass = Class.forName(
+                    "com.google.mediapipe.tasks.genai.llminference.LlmInferenceSession\$LlmInferenceSessionOptions",
+                )
+                val sessBuilder = sessOptsClass.getMethod("builder").invoke(null)
+                val sessOpts = sessBuilder.javaClass.getMethod("build").invoke(sessBuilder)
+                val sessionClass = Class.forName(
+                    "com.google.mediapipe.tasks.genai.llminference.LlmInferenceSession",
+                )
+                val createSession = sessionClass.getMethod(
+                    "createFromOptions",
+                    llmClass,
+                    sessOptsClass,
+                )
+                val convo = createSession.invoke(null, session, sessOpts)
+                try {
+                    sessionClass.getMethod("addQueryChunk", String::class.java)
+                        .invoke(convo, prompt)
+                    return sessionClass.getMethod("generateResponse")
+                        .invoke(convo) as String
+                } finally {
+                    try {
+                        sessionClass.getMethod("close").invoke(convo)
+                    } catch (_: Exception) {
+                    }
+                }
             } finally {
                 try {
                     llmClass.getMethod("close").invoke(session)
