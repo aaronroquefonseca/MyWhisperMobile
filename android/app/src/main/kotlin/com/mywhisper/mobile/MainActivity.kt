@@ -3302,6 +3302,9 @@ class MainActivity : ComponentActivity() {
                         LocalLlmManager.runSelfTest(
                             llmActiveFile(target),
                             system,
+                            generateFn = { f, p ->
+                                LocalLlmManager.generate(f, p, context = applicationContext)
+                            },
                         ),
                     )
                 } catch (ex: Exception) {
