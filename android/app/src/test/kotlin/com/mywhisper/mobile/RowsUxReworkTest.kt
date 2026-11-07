@@ -249,6 +249,15 @@ class RowsUxReworkTest {
     // -- LLM self-test gating: no bridge, no button -------------------
 
     @Test
+    fun sttLocalTestReason_hiddenOnLite_shownWithRunner() {
+        // Lite (no runner): the row card's status line already shows
+        // the full-APK pointer, so the Test button carries no second
+        // copy. Runner builds keep the explicit reason.
+        assertFalse(MainActivity.sttLocalTestShowsReason(false))
+        assertTrue(MainActivity.sttLocalTestShowsReason(true))
+    }
+
+    @Test
     fun llmSelfTest_offeredOnlyWithRunner() {
         assertFalse(MainActivity.llmSelfTestOffered(false))
         assertTrue(MainActivity.llmSelfTestOffered(true))
