@@ -793,7 +793,7 @@ class MainActivity : ComponentActivity() {
           */
         internal const val LLM_MANIFEST_JSON = """{
   "provider": "mediapipe",
-  "notes": "Binaries NEVER committed. Download via the in-app Text cleanup > Local row (SHA-256 verified) or scripts/fetch-local-llm.sh. SHAs below were verified by full download + sha256sum (public repos, no auth).",
+  "notes": "Binaries NEVER committed. Download via the in-app Text cleanup > Local row (SHA-256 verified) or scripts/fetch-local-llm.sh. SHAs below were verified by full download + sha256sum (public repos, no auth). Gemma 4 note: only web.task (WebGPU) and .litertlm (LiteRT-LM runtime) artifacts exist - no Android MediaPipe .task ('Unable to open zip archive' on-device), so Gemma 4 stays out until a LiteRT-LM runner lands; use Ollama gemma4:* entries meanwhile.",
   "models": [
     {
       "id": "gemma3-1b-it-int4",
@@ -810,22 +810,6 @@ class MainActivity : ComponentActivity() {
       "size_bytes": 2702868915,
       "min_ram_mb": 7168,
       "note": "Capable phones only: ~2.5GB weights, needs 8GB+ RAM (Note9-class: use the 1B)."
-    },
-    {
-      "id": "gemma4-e2b-it-web",
-      "url": "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it-web.task",
-      "sha256": "2cbff161177a4d51c9d04360016185976f504517ba5758cd10c1564e5421c5a5",
-      "size_bytes": 2003697664,
-      "min_ram_mb": 6144,
-      "note": "Gemma 4 edge model: ~1.9GB weights, needs 6GB+ RAM. Runs on tasks-genai 0.10.35+."
-    },
-    {
-      "id": "gemma4-e4b-it-web",
-      "url": "https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it-web.task",
-      "sha256": "f3bd72fc27627be2a2cc6722199a333599590ed0962ee7047b516a506b7bf086",
-      "size_bytes": 2964324352,
-      "min_ram_mb": 8192,
-      "note": "Gemma 4 edge model: ~2.8GB weights, needs 8GB+ RAM. Runs on tasks-genai 0.10.35+."
     }
   ]
 }"""
