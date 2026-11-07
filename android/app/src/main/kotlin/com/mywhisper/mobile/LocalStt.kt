@@ -826,7 +826,10 @@ object LocalStt {
                 val model = newOf("$PKG.OnlineModelConfig") ?: return null
                 call(model, "setTransducer", transducer)
                 call(model, "setTokens", tokens)
-                call(model, "setNumThreads", 2)
+                // Threads stay at the upstream default (1): every
+                // working reference (Kotlin demo, CLI, desktop server)
+                // runs the online path single-threaded; the offline
+                // path keeps its own numThreads=2 below.
                 call(model, "setProvider", "cpu")
                 val feat = newOf("$PKG.FeatureConfig") ?: return null
                 call(feat, "setSampleRate", 16000)
