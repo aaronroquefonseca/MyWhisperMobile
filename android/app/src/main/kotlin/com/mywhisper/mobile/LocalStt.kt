@@ -906,30 +906,11 @@ object LocalStt {
                         callOnline(rec, "decode", stream)
                         iters++
                     }
-                    // Tail flush: the ready gate needs a full chunk, so
-                    // a short tail (< chunk size) would never decode —
-                    // yet it holds the utterance end (owner repro:
-                    // longer holds yield more words, the tail always
-                    // missing). Decode unconditionally until the text
-                    // stops growing (stable 3 reads) or the cap hits;
-                    // each call advances the read window, so this
-                    // terminates. Diagnostics log the growth.
-                    var flushes = 0
-                    var stable = 0
-                    var lastLen = -1
-                    while (stable < 3 && flushes++ < 15) {
-                        callOnline(rec, "decode", stream)
-                        iters++
-                        val curLen = (callOnline(rec, "getResult", stream)
-                            ?.let { callOnline(it, "getText") as? String }?.length) ?: -1
-                        if (curLen == lastLen) {
-                            stable++
-                        } else {
-                            stable = 0
-                            lastLen = curLen
-                        }
-                    }
-                    Log.i(TAG, "online tail flush flushes=$flushes finalLen=$lastLen")
+                    // NOTE: no unconditional tail flush — decoding past
+                    // the buffered frames aborts the process (owner
+                    // phone repro: crash before commit). The ready gate
+                    // above is load-bearing; the tail (< 1 chunk) is
+                    // consumed by the last gated pass.
                     val endpoint = callOnline(rec, "isEndpoint", stream) as? Boolean
                     val result = callOnline(rec, "getResult", stream) ?: run {
                         Log.w(TAG, "online getResult null fed=${pcm16.size} slices=$slices iters=$iters")
