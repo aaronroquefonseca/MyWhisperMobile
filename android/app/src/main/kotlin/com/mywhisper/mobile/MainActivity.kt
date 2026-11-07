@@ -1890,6 +1890,18 @@ class MainActivity : ComponentActivity() {
                     stringResource(R.string.setup_float_sub),
                     style = MaterialTheme.typography.bodySmall,
                 )
+                // Old-Android caveat: hint leaks into node.text on some
+                // fields there (stripped in commit, but the IME stays
+                // the safer path) — red note, gated on SDK < 33, so it
+                // never shows on current devices.
+                if (android.os.Build.VERSION.SDK_INT < 33) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        stringResource(R.string.setup_float_old_warn),
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
                 Spacer(Modifier.height(4.dp))
                 Text(
                     if (on) stringResource(R.string.setup_float_on)

@@ -56,6 +56,18 @@ class MyWhisperAccessibility : AccessibilityService() {
         fun shouldMarkSensitive(sdkInt: Int): Boolean = sdkInt >= 33
 
         /**
+         * Hint-leak guard: on some fields (older phones / WebViews /
+         * OEM inputs) the placeholder leaks into `node.text` when the
+         * field is actually empty, so pasting would materialize it in
+         * front of the dictation ("Search…" + "hello"). When the
+         * exposed text exactly equals the node's hint, the field is
+         * empty — treat it as such (bare insert, no join space).
+         * Pure for JVM tests.
+         */
+        fun withoutHint(existing: String, hint: String?): String =
+            if (hint != null && hint.isNotEmpty() && existing == hint) "" else existing
+
+        /**
          * Pure paste payload: the exact bytes to put on the clipboard
          * for ACTION_PASTE. End-appends (cursor at the end, or a
          * stale/invalid selection — e.g. node recycled between read
@@ -166,7 +178,15 @@ class MyWhisperAccessibility : AccessibilityService() {
                     android.util.Log.i("MwCommit", "commit not-editable")
                     return false
                 }
-                val existing = node.text?.toString() ?: ""
+                val rawExisting = node.text?.toString() ?: ""
+                // Hint text is API 26+; minSdk 29 makes this a direct
+                // read (best-effort: a recycled node may throw).
+                val hint = try {
+                    node.hintText?.toString()
+                } catch (_: Exception) {
+                    null
+                }
+                val existing = withoutHint(rawExisting, hint)
                 val selS = node.textSelectionStart
                 val selE = node.textSelectionEnd
                 val payload = pasteInsert(existing, selS, selE, text)
@@ -174,7 +194,7 @@ class MyWhisperAccessibility : AccessibilityService() {
                     "MwCommit",
                     "commit before len=${existing.length} sel=($selS,$selE) " +
                         "insertLen=${text.length} payloadLen=${payload.length} " +
-                        "before=<$existing> insert=<$text> payload=<$payload>",
+                        "before=<$existing> insert=<$text> payload=<$payload> hint=<$hint>",
                 )
                 val ok = try {
                     val cm = s.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager

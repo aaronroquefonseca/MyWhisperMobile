@@ -90,8 +90,28 @@ class MyWhisperAccessibilityCommitTest {
     }
 
     @Test
-    fun sensitive_on33plus_only() {
-        assertTrue(MyWhisperAccessibility.shouldMarkSensitive(33))
+    fun withoutHint_hintLeak_treatedAsEmpty() {
+        // Owner repro: placeholder "Search…" leaks into node.text on
+        // an empty field — strip to "" so the payload is the bare
+        // word, never "Search… word".
+        assertEquals("", MyWhisperAccessibility.withoutHint("Search…", "Search…"))
+        assertEquals("X", MyWhisperAccessibility.pasteInsert(
+            MyWhisperAccessibility.withoutHint("Search…", "Search…"), -1, -1, "X",
+        ))
+    }
+
+    @Test
+    fun withoutHint_realText_untouched() {
+        assertEquals("hello", MyWhisperAccessibility.withoutHint("hello", "Search…"))
+        assertEquals("hello", MyWhisperAccessibility.withoutHint("hello", null))
+        assertEquals("hello", MyWhisperAccessibility.withoutHint("hello", ""))
+        assertEquals("", MyWhisperAccessibility.withoutHint("", "Search…"))
+        // Prefix match is not a leak: only exact equality strips.
+        assertEquals("Search…x", MyWhisperAccessibility.withoutHint("Search…x", "Search…"))
+    }
+
+    @Test
+    fun sensitive_on33plus_only() {        assertTrue(MyWhisperAccessibility.shouldMarkSensitive(33))
         assertTrue(MyWhisperAccessibility.shouldMarkSensitive(34))
         assertTrue(MyWhisperAccessibility.shouldMarkSensitive(36))
         assertFalse(MyWhisperAccessibility.shouldMarkSensitive(32))
