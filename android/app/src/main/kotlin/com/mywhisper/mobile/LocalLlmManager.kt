@@ -392,56 +392,43 @@ object LocalLlmManager {
      * Loaded by reflection (`com.google.mediapipe.tasks.genai.llminference.LlmInference`)
      * so the tasks-genai AAR is optional at unit-test time.
      * Throws when the model file is missing or the runner is unavailable —
-     * callers fall back to the next cleanup entry. The Android Context
-     * is mandatory on tasks-genai 0.10.35+ (`createFromOptions`
-     * requires one); a null context fails closed here instead of
-     * crashing in reflection.
+     * callers fall back to the next cleanup entry.
      */
-    fun generate(
-        taskFile: File,
-        prompt: String,
-        maxTokens: Int = 512,
-        context: android.content.Context? = null,
-    ): String {
+    fun generate(taskFile: File, prompt: String, maxTokens: Int = 512): String {
         require(taskFile.isFile) { "local llm model not ready at ${taskFile.absolutePath}" }
-        return MediaPipeRunner.generate(taskFile.absolutePath, prompt, maxTokens, context)
+        return MediaPipeRunner.generate(taskFile.absolutePath, prompt, maxTokens)
     }
 
     /**
-     * Reflection bridge to `LlmInference` (defaults: GPU when
-     * available, model-default sampling). tasks-genai 0.10.35 API,
-     * verified against the AAR `classes.jar` via javap: the options
-     * class is NESTED (`LlmInference$LlmInferenceOptions` — the old
-     * top-level one is gone, its lookup throws ClassNotFoundException)
-     * and `createFromOptions` takes `(Context, options)`.
+     * Reflection bridge to `LlmInference` (GPU delegate, temp 0).
+     *
+     * Pinned to the tasks-genai 0.10.27 API on purpose: 0.10.35 moved
+     * the options class nested (`LlmInference$LlmInferenceOptions`,
+     * Context-mandatory create) and its native stack segfaults on the
+     * legacy zip `.task` bundles (owner phone + emulator repros) —
+     * Gemma 4 `web.task` (LiteRT-LM flatbuffer) loads on neither, so
+     * there is no working configuration newer than 0.10.27 right now.
      */
     internal object MediaPipeRunner {
-        fun generate(
-            modelPath: String,
-            prompt: String,
-            maxTokens: Int,
-            context: android.content.Context?,
-        ): String {
-            val ctx = context
-                ?: throw IllegalStateException("local llm needs an Android context (tasks-genai 0.10.35+)")
+        fun generate(modelPath: String, prompt: String, maxTokens: Int): String {
+            val optionsClass = Class.forName(
+                "com.google.mediapipe.tasks.genai.llminference.LlmInferenceOptions",
+            )
             val llmClass =
                 Class.forName("com.google.mediapipe.tasks.genai.llminference.LlmInference")
-            val optionsClass = Class.forName(
-                "com.google.mediapipe.tasks.genai.llminference.LlmInference\$LlmInferenceOptions",
-            )
             val builder = optionsClass.getMethod("builder").invoke(null)
             val builderClass = builder.javaClass
             builderClass.getMethod("setModelPath", String::class.java)
                 .invoke(builder, modelPath)
-            builderClass.getMethod("setMaxTokens", Int::class.javaPrimitiveType)
-                .invoke(builder, maxTokens)
+            try {
+                builderClass.getMethod("setMaxTokens", Int::class.javaPrimitiveType)
+                    .invoke(builder, maxTokens)
+            } catch (_: NoSuchMethodException) {
+                // Older tasks-genai: no setMaxTokens — defaults apply.
+            }
             val options = builderClass.getMethod("build").invoke(builder)
-            val create = llmClass.getMethod(
-                "createFromOptions",
-                android.content.Context::class.java,
-                optionsClass,
-            )
-            val session = create.invoke(null, ctx, options)
+            val create = llmClass.getMethod("createFromOptions", optionsClass)
+            val session = create.invoke(null, options)
             try {
                 return llmClass.getMethod("generateResponse", String::class.java)
                     .invoke(session, prompt) as String
