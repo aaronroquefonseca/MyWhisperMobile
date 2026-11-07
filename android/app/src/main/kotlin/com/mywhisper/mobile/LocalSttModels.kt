@@ -70,10 +70,9 @@ import java.util.Locale
  *   `csukuangfj2/…-560ms-int8-2026-06-11`): int8 ONNX magic +
  *   full-download SHA-256 verified (encoder 657601403B, decoder
  *   14978075B, joiner 9504438B, tokens 131440B; ~651MB total).
- *   28 base-code languages (19 ready + 13 broad per the sherpa
- *   Nemotron docs; adaptation locales excluded), auto-detect default
- *   with explicit codes via the stream `setOption("language", …)`
- *   knob, dictionary off like its EN sibling.
+ *   15 desktop-parity languages, auto-detect (no language is sent on
+ *   the online path — desktop parity), dictionary off like its EN
+ *   sibling.
  *
  * Drops (with reason, no download path):
  * - sense-voice int8: no Spanish (zh/en/ja/ko/yue only).
@@ -182,16 +181,14 @@ object LocalSttModels {
     const val NEMOTRON35_ID = "nemotron-35-streaming-multilingual-0.6b-int8"
 
     /**
-     * Nemotron 3.5 streaming language codes (base codes; region
-     * variants like en-US/en-GB fold in). 19 transcription-ready +
-     * 13 broad-coverage locales per the sherpa Nemotron docs; the 8
-     * adaptation-ready locales (el/lt/lv/mt/sl/he/th/nn) are excluded
-     * — they need fine-tuning before they transcribe.
+     * Nemotron 3.5 streaming language codes: desktop NEMOTRON_15
+     * parity (transcription-ready locales only; broad-coverage and
+     * adaptation-ready locales excluded — higher error rates or
+     * fine-tuning required).
      */
     val NEMOTRON35_LANGS: List<String> = listOf(
         "en", "es", "fr", "it", "pt", "nl", "de", "tr", "ru", "ar",
-        "hi", "ja", "ko", "vi", "uk", "pl", "sv", "cs", "nb", "da",
-        "bg", "fi", "hr", "sk", "zh", "hu", "ro", "et",
+        "hi", "ja", "ko", "vi", "uk",
     )
 
     /** Default selected model (legacy behavior: English pack). */
@@ -564,7 +561,7 @@ object LocalSttModels {
             langMode = LangMode.AUTO,
             languages = NEMOTRON35_LANGS,
             dictionary = false,
-            runtimeNote = "28 languages incl. Spanish · auto-detect · 560ms transducer · needs ~1.5GB free RAM · speed varies by phone",
+            runtimeNote = "15 languages incl. Spanish · auto-detect · 560ms transducer · needs ~1.5GB free RAM · speed varies by phone",
             phoneTier = "6GB+ total RAM",
             minTotalRamMb = NEMOTRON_MIN_TOTAL_RAM_MB,
             dirRel = "models/sherpa-nemotron-3.5-streaming-0.6b-560ms",
@@ -791,15 +788,15 @@ object LocalSttModels {
      * `DetectLanguage` (auto); any other value MUST be a valid code
      * or the native process hard-exits — so unknown codes fail safe
      * to auto instead of crashing. MANUAL entries ignore the picker
-     * and pin their single language. TRANSDUCER entries follow the
-     * same rule; the online runner passes non-empty codes via the
-     * stream `setOption("language", …)` knob (verified present in
-     * the 1.13.8 AAR via javap — no `setLanguage` exists) and empty
-     * stays auto-detect (3.5 emits tags that sherpa strips).
+     * and pin their single language. TRANSDUCER entries always return
+     * auto (empty): desktop parity — the online path sends no language
+     * at all (no flag, no per-stream option; the model decides), and
+     * the picker value is display-only there.
      * Pure for unit tests.
      */
     @JvmStatic
     fun whisperLanguageFor(pickedCode: String, entry: Entry): String {
+        if (entry.engine == Engine.TRANSDUCER) return ""
         if (entry.langMode == LangMode.MANUAL) return entry.languages.first()
         val t = pickedCode.trim().lowercase()
         if (t.isEmpty() || t == "auto") return ""

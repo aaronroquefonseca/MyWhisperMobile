@@ -232,17 +232,24 @@ class LocalSttModelsTest {
     }
 
     @Test
-    fun nemotron35Langs_baseCodesNoAdaptationLocales() {
+    fun nemotron35Langs_desktopParity15() {
         val langs = LocalSttModels.NEMOTRON35_LANGS
-        assertEquals(28, langs.size)
-        for (c in listOf("en", "es", "zh", "et")) assertTrue(c, langs.contains(c))
-        for (c in listOf("el", "lt", "lv", "mt", "sl", "he", "th", "nn")) {
+        assertEquals(
+            listOf(
+                "en", "es", "fr", "it", "pt", "nl", "de", "tr", "ru", "ar",
+                "hi", "ja", "ko", "vi", "uk",
+            ),
+            langs,
+        )
+        // Broad-coverage (pl/sv/zh/…) and adaptation-ready
+        // (el/lt/th/…) locales stay out, like desktop NEMOTRON_15.
+        for (c in listOf("pl", "sv", "cs", "zh", "el", "lt", "lv", "mt", "sl", "he", "th", "nn")) {
             assertFalse(c, langs.contains(c))
         }
     }
 
     @Test
-    fun transducerLanguage_autoOrListedCode() {
+    fun transducerLanguage_alwaysAuto() {
         val entry = LocalSttModels.Entry(
             id = "x", name = "x", sizeLabel = "x",
             engine = LocalSttModels.Engine.TRANSDUCER,
@@ -252,10 +259,10 @@ class LocalSttModelsTest {
             dictionary = false, runtimeNote = "x", phoneTier = "x",
             dirRel = "x", files = emptyList(),
         )
-        // Empty = auto-detect; listed codes pass to the stream
-        // setOption("language", …) knob; unknown fails safe to auto.
+        // Desktop parity: the online path sends no language at all —
+        // auto and explicit are identical, the model decides.
         assertEquals("", LocalSttModels.whisperLanguageFor("auto", entry))
-        assertEquals("es", LocalSttModels.whisperLanguageFor("es", entry))
+        assertEquals("", LocalSttModels.whisperLanguageFor("es", entry))
         assertEquals("", LocalSttModels.whisperLanguageFor("xx", entry))
     }
 
@@ -342,7 +349,7 @@ class LocalSttModelsTest {
         assertEquals(LocalSttModels.Engine.TRANSDUCER, multi.engine)
         assertEquals(LocalSttModels.Provider.NVIDIA, multi.provider)
         assertEquals(LocalSttModels.LangMode.AUTO, multi.langMode)
-        assertEquals(28, multi.languages.size)
+        assertEquals(15, multi.languages.size)
         assertTrue(multi.languages.contains("es"))
         assertEquals("~651MB", multi.sizeLabel)
         assertEquals("models/sherpa-nemotron-3.5-streaming-0.6b-560ms", multi.dirRel)
@@ -362,10 +369,11 @@ class LocalSttModelsTest {
             mbyName["joiner.int8.onnx"]?.sha256,
         )
         assertEquals(6_000L, multi.minTotalRamMb)
-        // Explicit codes pass to the stream language knob, auto stays auto.
+        // Online path sends no language (desktop parity): auto and
+        // explicit both resolve empty — the model decides.
         assertEquals("", LocalSttModels.whisperLanguageFor("auto", multi))
-        assertEquals("es", LocalSttModels.whisperLanguageFor("es", multi))
-        assertEquals("en", LocalSttModels.whisperLanguageFor("es", en))
+        assertEquals("", LocalSttModels.whisperLanguageFor("es", multi))
+        assertEquals("", LocalSttModels.whisperLanguageFor("es", en))
     }
 
     @Test
