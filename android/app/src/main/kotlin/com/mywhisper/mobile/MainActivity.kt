@@ -2245,6 +2245,11 @@ class MainActivity : ComponentActivity() {
                 ) { e, handle ->
                     val isLocal = e.optString("kind") == "Local"
                     if (isLocal) {
+                        // Box stacks un-wrapped children: card + test
+                        // row need this Column (the server branch below
+                        // already has one) — without it the Test button
+                        // draws on top of the card (owner photo).
+                        Column(modifier = Modifier.fillMaxWidth()) {
                         // Local follows the ONE chain-row pattern
                         // ([localChainRowBlocks]): title, summary, pack
                         // status, using-model line, toggle, Why?,
@@ -2312,6 +2317,7 @@ class MainActivity : ComponentActivity() {
                                 null
                             },
                         )
+                        }
                     } else {
                     Column(modifier = Modifier.fillMaxWidth()) {
                     Card(
@@ -3465,6 +3471,11 @@ class MainActivity : ComponentActivity() {
                 ) { e, handle ->
                     val isLocal = e.optString("kind") == "Local"
                     if (isLocal) {
+                        // Box stacks un-wrapped children: card + test
+                        // row need this Column (the server branch below
+                        // already has one) — without it they draw on
+                        // top of each other (owner photo).
+                        Column(modifier = Modifier.fillMaxWidth()) {
                         // Same ONE chain-row pattern as STT
                         // ([localChainRowBlocks]): title, summary, pack
                         // status, using-model line, toggle, Why?,
@@ -3538,6 +3549,7 @@ class MainActivity : ComponentActivity() {
                                     llmSelPack == LocalPackState.PRESENT,
                                 ),
                             )
+                        }
                         }
                     } else {
                     Column(modifier = Modifier.fillMaxWidth()) {
