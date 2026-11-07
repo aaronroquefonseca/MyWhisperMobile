@@ -1,6 +1,7 @@
 package com.mywhisper.mobile
 
 import java.io.File
+import java.nio.file.Files
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -89,6 +90,32 @@ class LocalLlmManagerTest {
     fun freeSpace_gateRejectsShortfall() {
         assertTrue(LocalLlmManager.hasFreeSpace(412_000_000L, 412_000_000L))
         assertFalse(LocalLlmManager.hasFreeSpace(1L, 412_000_000L))
+    }
+
+    @Test
+    fun weightCacheLink_pointsAtModelsDir() {
+        val dirs = Files.createTempDirectory("llm-cachelink").toFile()
+        try {
+            val cache = File(dirs, "cache").apply { mkdirs() }
+            val models = File(dirs, "models").apply { mkdirs() }
+            assertEquals("m.task.xnnpack_cache", LocalLlmManager.xnnpackCacheName("m.task"))
+            // Fresh: link created, points at the models dir.
+            assertTrue(LocalLlmManager.ensureWeightCacheLink(cache, models, "m.task"))
+            val link = File(cache, "m.task.xnnpack_cache")
+            assertTrue(java.nio.file.Files.isSymbolicLink(link.toPath()))
+            // Content written through the link lands in models/.
+            link.writeBytes("packed".toByteArray())
+            assertEquals("packed", File(models, "m.task.xnnpack_cache").readText())
+            // Idempotent second call (link already there).
+            assertTrue(LocalLlmManager.ensureWeightCacheLink(cache, models, "m.task"))
+            // Real file in the way: replaced by the link.
+            java.nio.file.Files.delete(link.toPath())
+            File(cache, "m.task.xnnpack_cache").writeBytes("stale".toByteArray())
+            assertTrue(LocalLlmManager.ensureWeightCacheLink(cache, models, "m.task"))
+            assertTrue(java.nio.file.Files.isSymbolicLink(link.toPath()))
+        } finally {
+            dirs.deleteRecursively()
+        }
     }
 
     @Test

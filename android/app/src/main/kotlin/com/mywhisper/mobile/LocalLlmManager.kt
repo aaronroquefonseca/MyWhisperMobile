@@ -190,6 +190,38 @@ object LocalLlmManager {
         sizeBytes = if (taskFile.isFile) taskFile.length() else null,
     )
 
+    /**
+     * XNNPack weight-cache redirect: MediaPipe derives a
+     * `<task>.xnnpack_cache` file in the app cache dir and aborts the
+     * process when Android's per-app cache quota (~100MB here) trips
+     * mid-write — every GB-scale model crashes on first load
+     * otherwise (owner repros: gemma3 + gemma2, phone + emulator).
+     * Point it at the quota-free models dir via symlink before each
+     * run (idempotent; replaces a real file, which could only ever
+     * grow into the same crash). Pure path math is unit-tested; the
+     * symlink step itself never throws (false = old behavior).
+     */
+    fun xnnpackCacheName(taskFileName: String): String = "$taskFileName.xnnpack_cache"
+
+    @JvmStatic
+    fun ensureWeightCacheLink(cacheDir: File, modelsDir: File, taskName: String): Boolean {
+        return try {
+            val link = File(cacheDir, xnnpackCacheName(taskName))
+            val target = File(modelsDir, xnnpackCacheName(taskName))
+            val linkPath = link.toPath()
+            if (java.nio.file.Files.isSymbolicLink(linkPath)) return true
+            try {
+                link.delete()
+            } catch (_: Exception) {
+            }
+            target.parentFile?.mkdirs()
+            java.nio.file.Files.createSymbolicLink(linkPath, target.toPath())
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     /** Lowercase hex SHA-256 of [file] (streamed). */
     fun sha256Hex(file: File): String {
         val md = MessageDigest.getInstance("SHA-256")
@@ -403,6 +435,13 @@ object LocalLlmManager {
         context: android.content.Context? = null,
     ): String {
         require(taskFile.isFile) { "local llm model not ready at ${taskFile.absolutePath}" }
+        if (context != null) {
+            try {
+                val ok = ensureWeightCacheLink(context.cacheDir, taskFile.parentFile ?: taskFile, taskFile.name)
+                android.util.Log.i("MwLlm", "weight-cache link ok=$ok file=${taskFile.name}")
+            } catch (_: Exception) {
+            }
+        }
         return MediaPipeRunner.generate(taskFile.absolutePath, prompt, maxTokens, context)
     }
 
