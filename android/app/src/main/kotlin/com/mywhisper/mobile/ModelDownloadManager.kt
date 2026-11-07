@@ -74,7 +74,12 @@ object ModelDownloadManager {
 
     /** Enqueue an LLM `.task` download (fail-closed on placeholder SHA). */
     @JvmStatic
-    fun enqueueLlmAsset(ctx: Context, asset: LocalLlmManager.ModelAsset) {
+    @JvmOverloads
+    fun enqueueLlmAsset(
+        ctx: Context,
+        asset: LocalLlmManager.ModelAsset,
+        metered: Boolean = false,
+    ) {
         if (MainActivity.isPlaceholderSha(asset.sha256)) return
         try {
             if (!MainActivity.llmRunnerSupported()) return
@@ -90,9 +95,19 @@ object ModelDownloadManager {
             .putString(ModelDownloadSchedule.KEY_SHA, asset.sha256)
             .putLong(ModelDownloadSchedule.KEY_SIZE, asset.sizeBytes)
             .build()
+        // Metered override (explicit user consent from the waiting
+        // row): any network, not unmetered-only. Default false keeps
+        // the never-burn-mobile-data rule for every other caller.
+        val constraints = Constraints.Builder()
+            .setRequiredNetworkType(
+                if (metered) NetworkType.CONNECTED else NetworkType.UNMETERED,
+            )
+            .setRequiresBatteryNotLow(true)
+            .setRequiresStorageNotLow(true)
+            .build()
         val req = OneTimeWorkRequestBuilder<ModelDownloadWorker>()
             .setInputData(input)
-            .setConstraints(baseConstraints())
+            .setConstraints(constraints)
             .setBackoffCriteria(
                 BackoffPolicy.EXPONENTIAL,
                 ModelDownloadSchedule.BACKOFF_MS,

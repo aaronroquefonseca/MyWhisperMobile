@@ -136,6 +136,9 @@
     <string name="local_downloading">Downloading %1$s…</string>
     <string name="local_downloaded">Downloaded %1$s — pack verified.</string>
     <string name="local_download_failed">Download failed: %1$s</string>
+    <string name="llm_wait_wifi">Waiting for Wi-Fi — connect to unmetered Wi-Fi and the download starts on its own.</string>
+    <string name="llm_wait_offline">Waiting for a network connection…</string>
+    <string name="llm_use_metered">Use mobile data (%1$s MB)</string>
     <string name="local_selected_needs_download">Selected %1$s — download it to go on-device; until verified the server chain is used.</string>
     <string name="local_deleted_active">Deleted %1$s — switched to %2$s.</string>
     <string name="local_deleted_active_none">Deleted %1$s — no on-device model left; the server chain is used.</string>

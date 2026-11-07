@@ -86,4 +86,24 @@ object LocalModelDownload {
     @JvmStatic
     fun progressMb(receivedBytes: Long, totalBytes: Long?): Pair<Long, Long?> =
         Pair(receivedBytes / 1_000_000, totalBytes?.let { it / 1_000_000 })
+
+    /**
+     * Network posture for the constraint-blocked download message.
+     * UNMETERED = work can run; METERED/OFFLINE = WorkManager holds
+     * ENQUEUED (unmetered constraint) and the row would otherwise sit
+     * at 0 bytes forever with no explanation (owner repro: cancelled
+     * a stalled 1GB download, retry stalled identically).
+     */
+    enum class NetState { OFFLINE, METERED, UNMETERED }
+
+    /**
+     * True when a DOWNLOADING row has no bytes yet AND the network
+     * posture explains it (metered/offline) — the row should say
+     * "waiting", not fake progress. Null/unknown posture never
+     * triggers (no wrong text); unmetered never triggers (zero bytes
+     * there just means starting up). Pure for unit tests.
+     */
+    @JvmStatic
+    fun needsWaiting(receivedBytes: Long?, net: NetState?): Boolean =
+        (receivedBytes ?: 0L) <= 0L && (net == NetState.METERED || net == NetState.OFFLINE)
 }

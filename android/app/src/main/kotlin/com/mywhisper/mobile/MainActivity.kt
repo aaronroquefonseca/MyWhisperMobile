@@ -1085,6 +1085,27 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Current network posture for the download waiting row (null =
+     * unknown — the row never shows waiting text then, only the
+     * normal starting bar). Fully-qualified framework types: no new
+     * imports for one call site.
+     */
+    private fun activeNetState(): LocalModelDownload.NetState? {
+        return try {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+            val net = cm.activeNetwork ?: return LocalModelDownload.NetState.OFFLINE
+            val caps = cm.getNetworkCapabilities(net) ?: return null
+            if (caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_NOT_METERED)) {
+                LocalModelDownload.NetState.UNMETERED
+            } else {
+                LocalModelDownload.NetState.METERED
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     private fun imeEnabled(): Boolean {
         // NOTE: Settings.Secure ENABLED_INPUT_METHODS is unreadable for
         // targetSdk 34+. InputMethodManager is the allowed path.
@@ -3208,6 +3229,11 @@ class MainActivity : ComponentActivity() {
         var llmDlBusy by remember { mutableStateOf(setOf<String>()) }
         var llmDlProg by remember { mutableStateOf(mapOf<String, Pair<Long, Long?>>()) }
         var llmDlErr by remember { mutableStateOf(mapOf<String, String>()) }
+        // Network posture for the constraint-blocked download message
+        // (recomputed per composition; cheap binder call). When set,
+        // a zero-progress DOWNLOADING row says "waiting" + offers
+        // metered consent instead of a dead 0-byte bar.
+        val netState = activeNetState()
         var llmDeleteConfirm by remember { mutableStateOf<String?>(null) }
         // Local LLM test (existing self-test harness, now through
         // the ONE [ProviderTest.Result] pattern) + remote LLM probes
@@ -3249,6 +3275,32 @@ class MainActivity : ComponentActivity() {
             // required, own progress notification + Cancel); the row
             // tracks the unique work below for in-place progress.
             ModelDownloadManager.enqueueLlmAsset(this@MainActivity, a)
+            observeDownloadWork(
+                kind = ModelDownloadSchedule.KIND_LLM,
+                id = a.id,
+                onProgress = { r, t -> llmDlProg = llmDlProg + (a.id to (r to t)) },
+                onDone = { llmDlBusy = llmDlBusy - a.id; llmDlProg = llmDlProg - a.id; version++ },
+                onError = { msg ->
+                    llmDlBusy = llmDlBusy - a.id
+                    llmDlErr = llmDlErr + (a.id to msg)
+                    version++
+                },
+            )
+        }
+        fun startLlmDownloadMetered(a: LocalLlmManager.ModelAsset) {
+            // Explicit metered-data consent from the waiting row: same
+            // busy/progress tracking as [startLlmDownload], but the
+            // work runs on any network (CONNECTED, not UNMETERED).
+            // Battery/storage constraints still apply.
+            if (!llmRunner) {
+                toast(getString(R.string.local_need_full))
+                return
+            }
+            if (llmDlBusy.contains(a.id) || isPlaceholderSha(a.sha256)) return
+            llmDlBusy = llmDlBusy + a.id
+            llmDlErr = llmDlErr - a.id
+            llmDlProg = llmDlProg + (a.id to (0L to a.sizeBytes.takeIf { it > 0 }))
+            ModelDownloadManager.enqueueLlmAsset(this@MainActivity, a, metered = true)
             observeDownloadWork(
                 kind = ModelDownloadSchedule.KIND_LLM,
                 id = a.id,
@@ -3785,28 +3837,50 @@ class MainActivity : ComponentActivity() {
                                             // DOWNLOADING = live worker progress;
                                             // INCOMPLETE = interrupted file, resume
                                             // from verified bytes on disk.
-                                            val total = if (row == LocalModelDownload.RowState.DOWNLOADING) {
-                                                prog?.second
+                                            // Constraint-blocked (metered/offline,
+                                            // zero bytes): say "waiting" instead of
+                                            // a dead 0-byte bar — the unmetered
+                                            // WorkManager constraint holds ENQUEUED
+                                            // with no progress events at all.
+                                            val waiting = if (row == LocalModelDownload.RowState.DOWNLOADING) {
+                                                netState?.takeIf {
+                                                    LocalModelDownload.needsWaiting(prog?.first, it)
+                                                }
                                             } else {
-                                                a.sizeBytes.takeIf { it > 0 }
+                                                null
                                             }
-                                            val received = if (row == LocalModelDownload.RowState.DOWNLOADING) {
-                                                prog?.first ?: 0L
-                                            } else {
-                                                llmBytesOf(a.id)
-                                            }
-                                            if (total != null && total > 0) {
+                                            if (waiting != null) {
                                                 stringResource(
-                                                    R.string.local_downloading_mb,
-                                                    a.id,
-                                                    received / 1_000_000,
-                                                    total / 1_000_000,
+                                                    if (waiting == LocalModelDownload.NetState.METERED) {
+                                                        R.string.llm_wait_wifi
+                                                    } else {
+                                                        R.string.llm_wait_offline
+                                                    },
                                                 )
                                             } else {
-                                                stringResource(
-                                                    R.string.local_downloading,
-                                                    a.id,
-                                                )
+                                                val total = if (row == LocalModelDownload.RowState.DOWNLOADING) {
+                                                    prog?.second
+                                                } else {
+                                                    a.sizeBytes.takeIf { it > 0 }
+                                                }
+                                                val received = if (row == LocalModelDownload.RowState.DOWNLOADING) {
+                                                    prog?.first ?: 0L
+                                                } else {
+                                                    llmBytesOf(a.id)
+                                                }
+                                                if (total != null && total > 0) {
+                                                    stringResource(
+                                                        R.string.local_downloading_mb,
+                                                        a.id,
+                                                        received / 1_000_000,
+                                                        total / 1_000_000,
+                                                    )
+                                                } else {
+                                                    stringResource(
+                                                        R.string.local_downloading,
+                                                        a.id,
+                                                    )
+                                                }
                                             }
                                         }
                                         LocalModelDownload.RowState.FAILED ->
@@ -3866,7 +3940,38 @@ class MainActivity : ComponentActivity() {
                                         color = MaterialTheme.colorScheme.error,
                                     )
                                 } else when (row) {
-                                    LocalModelDownload.RowState.DOWNLOADING -> {}
+                                    LocalModelDownload.RowState.DOWNLOADING -> {
+                                        // Constraint-blocked with zero bytes:
+                                        // offer explicit metered consent + a
+                                        // visible Cancel (the row otherwise
+                                        // has neither while stalled).
+                                        val waiting = netState?.takeIf {
+                                            LocalModelDownload.needsWaiting(prog?.first, it)
+                                        }
+                                        if (waiting == LocalModelDownload.NetState.METERED) {
+                                            OutlinedButton(
+                                                enabled = !noPin,
+                                                onClick = { startLlmDownloadMetered(a) },
+                                            ) {
+                                                Text(
+                                                    stringResource(
+                                                        R.string.llm_use_metered,
+                                                        (a.sizeBytes / 1_000_000).toString(),
+                                                    ),
+                                                )
+                                            }
+                                            Spacer(Modifier.width(8.dp))
+                                        }
+                                        TextButton(onClick = {
+                                            ModelDownloadManager.cancel(
+                                                this@MainActivity,
+                                                ModelDownloadSchedule.KIND_LLM,
+                                                a.id,
+                                            )
+                                        }) {
+                                            Text(stringResource(R.string.action_cancel))
+                                        }
+                                    }
                                     LocalModelDownload.RowState.FAILED -> {
                                         OutlinedButton(
                                             enabled = !noPin,

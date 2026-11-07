@@ -103,6 +103,26 @@ class LocalDownloadTest {
     }
 
     @Test
+    fun needsWaiting_onlyZeroBytesOnMeteredOrOffline() {
+        val metered = LocalModelDownload.NetState.METERED
+        val offline = LocalModelDownload.NetState.OFFLINE
+        val unmetered = LocalModelDownload.NetState.UNMETERED
+        // Zero progress + blocked posture → waiting UI.
+        assertTrue(LocalModelDownload.needsWaiting(null, metered))
+        assertTrue(LocalModelDownload.needsWaiting(0L, metered))
+        assertTrue(LocalModelDownload.needsWaiting(null, offline))
+        assertTrue(LocalModelDownload.needsWaiting(0L, offline))
+        // Any bytes flowing → genuinely downloading, never waiting.
+        assertFalse(LocalModelDownload.needsWaiting(1L, metered))
+        assertFalse(LocalModelDownload.needsWaiting(1L, offline))
+        // Unmetered/unknown → zero bytes just means starting up.
+        assertFalse(LocalModelDownload.needsWaiting(null, unmetered))
+        assertFalse(LocalModelDownload.needsWaiting(0L, unmetered))
+        assertFalse(LocalModelDownload.needsWaiting(null, null))
+        assertFalse(LocalModelDownload.needsWaiting(0L, null))
+    }
+
+    @Test
     fun sttPack_emptyDirIsMissing() {
         val dir = Files.createTempDirectory("stt-pack").toFile()
         try {
