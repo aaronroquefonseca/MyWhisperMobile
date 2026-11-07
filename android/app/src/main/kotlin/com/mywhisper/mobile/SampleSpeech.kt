@@ -18,6 +18,23 @@ package com.mywhisper.mobile
  */
 object SampleSpeech {
     const val ES_ASSET = "selftest/speech-es.wav"
+    const val EN_ASSET = "selftest/speech-en.wav"
+
+    /**
+     * Asset matching the selected entry: English-only MANUAL entries
+     * get the English reference (a Spanish probe would false-fail a
+     * working English model); everything else gets the Spanish one.
+     * Pure for unit tests.
+     */
+    @JvmStatic
+    fun assetFor(entry: LocalSttModels.Entry): String =
+        if (entry.langMode == LocalSttModels.LangMode.MANUAL &&
+            entry.languages == listOf("en")
+        ) {
+            EN_ASSET
+        } else {
+            ES_ASSET
+        }
 
     /** Load + decode the asset to 16 kHz mono PCM, or null. */
     fun loadAsset(context: android.content.Context, path: String = ES_ASSET): ShortArray? {

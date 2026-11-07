@@ -2205,10 +2205,12 @@ class MainActivity : ComponentActivity() {
                 val result = try {
                     ProviderTest.runProbe(ProviderTest.LOCAL_TIMEOUT_MS) {
                         // Reference speech when the debug asset ships
-                        // (real recorded Spanish — a blank decode FAILS);
-                        // sine probe otherwise (pipeline-only, blank is
-                        // expected → "pack ok"). See [SampleSpeech].
-                        val refPcm = SampleSpeech.loadAsset(this)
+                        // (real recorded speech matched to the model:
+                        // English asset for English-only entries, else
+                        // Spanish — a blank decode FAILS); sine probe
+                        // otherwise (pipeline-only, blank is expected
+                        // → "pack ok"). See [SampleSpeech].
+                        val refPcm = SampleSpeech.loadAsset(this, SampleSpeech.assetFor(selectedModel))
                         val probePcm = refPcm ?: ProviderTest.samplePcm16()
                         val r = LocalStt.transcribe(
                             this, probePcm, 16000,

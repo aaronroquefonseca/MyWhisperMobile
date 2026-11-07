@@ -58,6 +58,27 @@ class SampleSpeechTest {
     }
 
     @Test
+    fun assetFor_englishOnlyGetsEnAsset() {
+        val enEntry = LocalSttModels.Entry(
+            id = "x", name = "x", sizeLabel = "x",
+            engine = LocalSttModels.Engine.MOONSHINE,
+            provider = LocalSttModels.Provider.MOONSHINE,
+            langMode = LocalSttModels.LangMode.MANUAL,
+            languages = listOf("en"),
+            dictionary = false, runtimeNote = "x", phoneTier = "x",
+            dirRel = "x", files = emptyList(),
+        )
+        assertEquals(SampleSpeech.EN_ASSET, SampleSpeech.assetFor(enEntry))
+        val multiEntry = enEntry.copy(
+            engine = LocalSttModels.Engine.TRANSDUCER,
+            provider = LocalSttModels.Provider.NVIDIA,
+            langMode = LocalSttModels.LangMode.AUTO,
+            languages = LocalSttModels.NEMOTRON35_LANGS,
+        )
+        assertEquals(SampleSpeech.ES_ASSET, SampleSpeech.assetFor(multiEntry))
+    }
+
+    @Test
     fun mono16k_passthrough() {
         val samples = ShortArray(160) { (it * 100).toShort() }
         val out = SampleSpeech.decodeWav16kMono(wavBytes(16000, 1, samples = samples))!!
