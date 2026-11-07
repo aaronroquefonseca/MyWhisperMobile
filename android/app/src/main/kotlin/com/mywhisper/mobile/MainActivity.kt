@@ -514,6 +514,18 @@ class MainActivity : ComponentActivity() {
             packState == LocalPackState.PRESENT,
         )
 
+        /**
+         * STT Local test-button reason visibility: hidden without a
+         * runner (lite) — the row card's own status line directly
+         * above already shows the full-APK pointer, and a second copy
+         * doubles the paragraph (owner photo). Runner builds always
+         * show the explicit reason per the ONE row pattern. Pure for
+         * unit tests.
+         */
+        @JvmStatic
+        internal fun sttLocalTestShowsReason(runnerSupported: Boolean): Boolean =
+            runnerSupported
+
         /** Server STT row test goes live when the config validates. Pure. */
         @JvmStatic
         internal fun sttServerTestAllowed(kind: String, url: String, model: String): Boolean =
@@ -2282,16 +2294,23 @@ class MainActivity : ComponentActivity() {
                             handle = handle,
                         )
                         // Local STT test (decode sample), same ONE
-                        // row pattern as every provider row.
+                        // row pattern as every provider row. Lite (no
+                        // runner): no second copy of the full-APK
+                        // pointer — the row card's own status line
+                        // directly above already shows it.
                         ProviderTestRow(
                             busy = sttLocalBusy,
                             result = sttLocalResult,
                             enabled = sttLocalTestAllowed(sttRunner, selPack),
                             onTest = { startSttLocalTest() },
-                            disabledReason = localTestDisabledReason(
-                                sttRunner,
-                                selPack == LocalPackState.PRESENT,
-                            ),
+                            disabledReason = if (sttLocalTestShowsReason(sttRunner)) {
+                                localTestDisabledReason(
+                                    sttRunner,
+                                    selPack == LocalPackState.PRESENT,
+                                )
+                            } else {
+                                null
+                            },
                         )
                     } else {
                     Column(modifier = Modifier.fillMaxWidth()) {
