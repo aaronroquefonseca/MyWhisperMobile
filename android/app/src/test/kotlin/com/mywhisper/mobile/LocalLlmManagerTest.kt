@@ -136,4 +136,23 @@ class LocalLlmManagerTest {
     fun generate_throwsWhenModelMissing() {
         LocalLlmManager.generate(File("/nonexistent/cleanup.task"), "prompt")
     }
+
+    @Test
+    fun generate_nullContextFailsClosed() {
+        // createFromOptions requires a Context: without one the
+        // bridge must throw (row shows FAIL), never half-built
+        // reflection. Needs no AAR (fails before lookup).
+        val f = File.createTempFile("llm-ctx", ".task")
+        try {
+            f.writeBytes("x".toByteArray())
+            try {
+                LocalLlmManager.generate(f, "prompt", context = null)
+                throw AssertionError("expected IllegalStateException")
+            } catch (e: IllegalStateException) {
+                assertTrue(e.message.orEmpty().contains("Android context"))
+            }
+        } finally {
+            f.delete()
+        }
+    }
 }

@@ -392,30 +392,46 @@ object LocalLlmManager {
      * Loaded by reflection (`com.google.mediapipe.tasks.genai.llminference.LlmInference`)
      * so the tasks-genai AAR is optional at unit-test time.
      * Throws when the model file is missing or the runner is unavailable —
-     * callers fall back to the next cleanup entry.
+     * callers fall back to the next cleanup entry. The Android Context
+     * is mandatory (`createFromOptions` requires one); a null context
+     * fails closed here instead of crashing in reflection.
      */
-    fun generate(taskFile: File, prompt: String, maxTokens: Int = 512): String {
+    fun generate(
+        taskFile: File,
+        prompt: String,
+        maxTokens: Int = 512,
+        context: android.content.Context? = null,
+    ): String {
         require(taskFile.isFile) { "local llm model not ready at ${taskFile.absolutePath}" }
-        return MediaPipeRunner.generate(taskFile.absolutePath, prompt, maxTokens)
+        return MediaPipeRunner.generate(taskFile.absolutePath, prompt, maxTokens, context)
     }
 
     /**
-     * Reflection bridge to `LlmInference` (GPU delegate, temp 0).
-     *
-     * Pinned to the tasks-genai 0.10.27 API on purpose: 0.10.35 moved
-     * the options class nested (`LlmInference$LlmInferenceOptions`,
-     * Context-mandatory create) and its native stack segfaults on the
-     * legacy zip `.task` bundles (owner phone + emulator repros) —
-     * Gemma 4 `web.task` (LiteRT-LM flatbuffer) loads on neither, so
-     * there is no working configuration newer than 0.10.27 right now.
+     * Reflection bridge to `LlmInference` (defaults: GPU when
+     * available, model-default sampling). Verified truth, learned
+     * the hard way: the top-level `LlmInferenceOptions` class has
+     * NEVER existed (not in 0.10.27 either — checked via javap) —
+     * the only options class is NESTED (`LlmInference$...Options`)
+     * and `createFromOptions` takes `(Context, options)` on both
+     * runtimes. An earlier top-level-lookup bridge could never have
+     * worked; its "passes" were the vacuous sine probe. The 0.10.35
+     * native stack separately segfaults on legacy zip `.task`
+     * bundles (phone + emulator repros), so the pin stays 0.10.27.
      */
     internal object MediaPipeRunner {
-        fun generate(modelPath: String, prompt: String, maxTokens: Int): String {
-            val optionsClass = Class.forName(
-                "com.google.mediapipe.tasks.genai.llminference.LlmInferenceOptions",
-            )
+        fun generate(
+            modelPath: String,
+            prompt: String,
+            maxTokens: Int,
+            context: android.content.Context?,
+        ): String {
+            val ctx = context
+                ?: throw IllegalStateException("local llm needs an Android context")
             val llmClass =
                 Class.forName("com.google.mediapipe.tasks.genai.llminference.LlmInference")
+            val optionsClass = Class.forName(
+                "com.google.mediapipe.tasks.genai.llminference.LlmInference\$LlmInferenceOptions",
+            )
             val builder = optionsClass.getMethod("builder").invoke(null)
             val builderClass = builder.javaClass
             builderClass.getMethod("setModelPath", String::class.java)
@@ -427,8 +443,12 @@ object LocalLlmManager {
                 // Older tasks-genai: no setMaxTokens — defaults apply.
             }
             val options = builderClass.getMethod("build").invoke(builder)
-            val create = llmClass.getMethod("createFromOptions", optionsClass)
-            val session = create.invoke(null, options)
+            val create = llmClass.getMethod(
+                "createFromOptions",
+                android.content.Context::class.java,
+                optionsClass,
+            )
+            val session = create.invoke(null, ctx, options)
             try {
                 return llmClass.getMethod("generateResponse", String::class.java)
                     .invoke(session, prompt) as String
