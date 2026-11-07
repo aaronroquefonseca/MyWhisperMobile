@@ -163,8 +163,25 @@ object LocalLlmManager {
             mapSelfTestResult(out, latencyMs, timeoutMs, null)
         } catch (e: Exception) {
             val latencyMs = (System.nanoTime() - start) / 1_000_000
-            mapSelfTestResult(null, latencyMs, timeoutMs, e.message ?: "failed")
+            mapSelfTestResult(null, latencyMs, timeoutMs, rootMessage(e))
         }
+    }
+
+    /**
+     * Deepest non-blank message in the cause chain. Reflection wraps
+     * runner failures in InvocationTargetException (null message),
+     * which otherwise surfaces as a bare "failed" with no detail.
+     * Pure for unit tests.
+     */
+    @JvmStatic
+    fun rootMessage(e: Throwable): String {
+        var msg: String? = e.message
+        var t = e.cause
+        while (t != null) {
+            if (!t.message.isNullOrBlank()) msg = t.message
+            t = t.cause
+        }
+        return msg?.ifBlank { null } ?: "failed"
     }
 
     fun statusFor(taskFile: File): Status = Status(

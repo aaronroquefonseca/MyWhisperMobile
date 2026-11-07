@@ -76,8 +76,18 @@ class LocalLlmSelfTestTest {
     }
 
     @Test
-    fun runSelfTest_passThroughInjectedGenerate() {
-        val r = LocalLlmManager.runSelfTest(
+    fun rootMessage_unwrapsReflectionWrapping() {
+        // InvocationTargetException (null message) must not surface
+        // as a bare "failed": deepest non-blank wins.
+        val inner = IllegalStateException("tokenizer mismatch")
+        val wrapped = java.lang.reflect.InvocationTargetException(inner)
+        assertEquals("tokenizer mismatch", LocalLlmManager.rootMessage(wrapped))
+        assertEquals("boom", LocalLlmManager.rootMessage(IllegalStateException("boom")))
+        assertEquals("failed", LocalLlmManager.rootMessage(IllegalStateException()))
+    }
+
+    @Test
+    fun runSelfTest_passThroughInjectedGenerate() {        val r = LocalLlmManager.runSelfTest(
             File("/nonexistent/cleanup.task"),
             "SYS",
             timeoutMs = 60_000L,
