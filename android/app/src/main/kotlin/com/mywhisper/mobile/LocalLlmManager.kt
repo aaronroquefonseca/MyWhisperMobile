@@ -481,22 +481,6 @@ object LocalLlmManager {
             } catch (_: NoSuchMethodException) {
                 // Older tasks-genai: no setMaxTokens — defaults apply.
             }
-            try {
-                // Diagnostic experiment (owner repros: native segfault
-                // in predict on GPU default, emulator + phone): force
-                // CPU and log tokenizer sizing before generating.
-                val backendClass = Class.forName(
-                    "com.google.mediapipe.tasks.genai.llminference.LlmInference\$Backend",
-                )
-                val cpu = java.lang.Enum.valueOf(
-                    backendClass as Class<out Enum<*>>,
-                    "CPU",
-                )
-                builderClass.getMethod("setPreferredBackend", backendClass)
-                    .invoke(builder, cpu)
-            } catch (_: Exception) {
-                android.util.Log.w("MwLlm", "CPU backend select unavailable, default kept")
-            }
             val options = builderClass.getMethod("build").invoke(builder)
             val create = llmClass.getMethod(
                 "createFromOptions",
