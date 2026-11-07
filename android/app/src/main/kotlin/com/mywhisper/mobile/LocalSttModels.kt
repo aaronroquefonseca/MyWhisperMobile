@@ -692,7 +692,11 @@ object LocalSttModels {
     /**
      * Download missing/mismatched files for [entry] (atomic .part
      * rename, SHA-256 verified per file). Skips files that already
-     * verify. [onProgress] gets aggregate (received, total).
+     * verify. Interrupted files resume via HTTP Range (see
+     * [LocalLlmManager.resumeAction]); servers that ignore Range get
+     * one clean restart, and the trailing SHA-verify keeps a
+     * stale/corrupt partial fail-closed either way.
+     * [onProgress] gets aggregate (received, total).
      */
     fun download(
         filesDir: File,
@@ -711,42 +715,98 @@ object LocalSttModels {
                 continue
             }
             val tmp = File(dir, "${f.name}.part")
-            val conn = (URL(f.url).openConnection() as HttpURLConnection).apply {
-                connectTimeout = 10_000
-                readTimeout = 60_000
-                instanceFollowRedirects = true
-            }
-            try {
-                if (conn.responseCode !in 200..299) {
-                    throw IllegalStateException("local-stt download http ${conn.responseCode}")
-                }
-                conn.inputStream.buffered().use { ins ->
-                    tmp.outputStream().buffered().use { out ->
-                        val buf = ByteArray(65536)
-                        var fileReceived = 0L
-                        while (true) {
-                            val n = ins.read(buf)
-                            if (n <= 0) break
-                            out.write(buf, 0, n)
-                            fileReceived += n
-                            onProgress(
-                                receivedBase + fileReceived.coerceAtMost(f.sizeBytes),
-                                total,
-                            )
-                        }
+            // Resume loop (single restart allowed): see
+            // LocalLlmManager.downloadModel for the shared protocol.
+            var existing = if (tmp.isFile) tmp.length() else 0L
+            var allowRestart = true
+            while (true) {
+                if (existing <= 0) {
+                    try {
+                        tmp.delete()
+                    } catch (_: Exception) {
                     }
                 }
-            } finally {
-                conn.disconnect()
+                val conn = (URL(f.url).openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 10_000
+                    readTimeout = 60_000
+                    instanceFollowRedirects = true
+                }
+                // VERIFY-hit skips the stream below (partial already
+                // good); every other path streams, then shares the
+                // verify/rename tail and the loop's closing break.
+                var verified = false
+                try {
+                    if (existing > 0) {
+                        conn.setRequestProperty("Range", "bytes=$existing-")
+                    }
+                    val code = conn.responseCode
+                    when (LocalLlmManager.resumeAction(existing, code)) {
+                        LocalLlmManager.ResumeAction.FAIL -> throw IllegalStateException(
+                            "local-stt download http $code",
+                        )
+                        LocalLlmManager.ResumeAction.VERIFY -> {
+                            if (LocalLlmManager.verifySha256(tmp, f.sha256)) {
+                                // Verified partial: skip the stream;
+                                // the shared tail below renames and
+                                // accounts (receivedBase added once).
+                                verified = true
+                            } else if (!allowRestart) {
+                                try {
+                                    tmp.delete()
+                                } catch (_: Exception) {
+                                }
+                                throw IllegalStateException("local-stt sha256 mismatch for ${f.name}")
+                            } else {
+                                allowRestart = false
+                                existing = 0
+                                continue
+                            }
+                        }
+                        LocalLlmManager.ResumeAction.RESTART -> {
+                            if (allowRestart) {
+                                allowRestart = false
+                                existing = 0
+                                continue
+                            }
+                            existing = 0
+                        }
+                        LocalLlmManager.ResumeAction.APPEND -> Unit
+                    }
+                    if (!verified) {
+                        var fileReceived = existing
+                        onProgress(
+                            (receivedBase + fileReceived).coerceAtMost(total),
+                            total,
+                        )
+                        conn.inputStream.buffered().use { ins ->
+                            java.io.FileOutputStream(tmp, existing > 0).buffered().use { out ->
+                                val buf = ByteArray(65536)
+                                while (true) {
+                                    val n = ins.read(buf)
+                                    if (n <= 0) break
+                                    out.write(buf, 0, n)
+                                    fileReceived += n
+                                    onProgress(
+                                        (receivedBase + fileReceived).coerceAtMost(total),
+                                        total,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                } finally {
+                    conn.disconnect()
+                }
+                if (!verified && !LocalLlmManager.verifySha256(tmp, f.sha256)) {
+                    tmp.delete()
+                    throw IllegalStateException("local-stt sha256 mismatch for ${f.name}")
+                }
+                if (dest.exists() && !dest.delete()) throw IllegalStateException("local-stt replace failed")
+                if (!tmp.renameTo(dest)) throw IllegalStateException("local-stt rename failed")
+                receivedBase += f.sizeBytes
+                onProgress(receivedBase, total)
+                break
             }
-            if (!LocalLlmManager.verifySha256(tmp, f.sha256)) {
-                tmp.delete()
-                throw IllegalStateException("local-stt sha256 mismatch for ${f.name}")
-            }
-            if (dest.exists() && !dest.delete()) throw IllegalStateException("local-stt replace failed")
-            if (!tmp.renameTo(dest)) throw IllegalStateException("local-stt rename failed")
-            receivedBase += f.sizeBytes
-            onProgress(receivedBase, total)
         }
     }
 

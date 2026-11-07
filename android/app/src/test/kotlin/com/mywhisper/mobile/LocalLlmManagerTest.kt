@@ -92,6 +92,29 @@ class LocalLlmManagerTest {
     }
 
     @Test
+    fun resumeAction_matrix() {
+        val A = LocalLlmManager.ResumeAction.APPEND
+        val R = LocalLlmManager.ResumeAction.RESTART
+        val V = LocalLlmManager.ResumeAction.VERIFY
+        val F = LocalLlmManager.ResumeAction.FAIL
+        // 206 with a partial appends; 200 means the server ignored
+        // Range → truncate and start over.
+        assertEquals(A, LocalLlmManager.resumeAction(123L, 206))
+        assertEquals(A, LocalLlmManager.resumeAction(0L, 206))
+        assertEquals(R, LocalLlmManager.resumeAction(123L, 200))
+        assertEquals(R, LocalLlmManager.resumeAction(0L, 200))
+        // 416 with a surviving partial verifies (hit = done);
+        // only an empty partial restarts outright.
+        assertEquals(V, LocalLlmManager.resumeAction(1000L, 416))
+        assertEquals(V, LocalLlmManager.resumeAction(123L, 416))
+        assertEquals(R, LocalLlmManager.resumeAction(0L, 416))
+        // Anything else fails without writing.
+        for (code in listOf(301, 302, 400, 403, 404, 500, 503)) {
+            assertEquals("code $code", F, LocalLlmManager.resumeAction(123L, code))
+        }
+    }
+
+    @Test
     fun download_skipsWhenDestAlreadyVerifies() {
         val dest = File.createTempFile("llm-dl", ".task")
         try {

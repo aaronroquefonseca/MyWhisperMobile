@@ -5,7 +5,6 @@ import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
-import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -24,13 +23,16 @@ import kotlinx.coroutines.withContext
  *   unified FGS row): per-model bar + Cancel action.
  * - Constraints/backoff come from [ModelDownloadManager] (unmetered,
  *   battery-not-low, exponential backoff).
- * - Cancel/stop: delete partials, `Result.failure` (no retry on
- *   user cancel). Transient errors: `Result.retry` until
+ * - Cancel/stop: partials are KEPT (no retry on user cancel,
+ *   but the next Download resumes where it stopped — same as an
+ *   app-kill restart). Transient errors: `Result.retry` until
  *   [ModelDownloadSchedule.MAX_ATTEMPTS], then failure (row pins
- *   FAILED, Retry re-enqueues).
- * - App-kill: WorkManager re-runs; partials are deleted on start
- *   (clean restart) and verified finals are skipped — a kill can
- *   never promote an unverified pack.
+ *   FAILED, Retry re-enqueues and resumes). Explicit model Delete
+ *   (trash row) is the only path that wipes files + partials.
+ * - App-kill: WorkManager re-runs; surviving `.part` files resume
+ *   via HTTP Range (both download fns), verified finals are skipped
+ *   — a kill can never promote an unverified pack (trailing
+ *   SHA-verify + atomic rename hold on every path).
  */
 class ModelDownloadWorker(
     ctx: Context,
@@ -47,12 +49,9 @@ class ModelDownloadWorker(
         // vs LLM models) from cold start via MainActivity tab routing.
         val target = ModelDownloadSchedule.targetForKind(kind)
         ModelDownloadNotifications.ensureChannel(applicationContext)
-        // Clean restart first: drop stale partials from a kill, then
-        // the download fns skip already-verified finals.
-        try {
-            deletePartials(kind, modelId)
-        } catch (_: Exception) {
-        }
+        // Resume-first: surviving `.part` files from a kill or a
+        // cancel continue via HTTP Range in the download fns below;
+        // verified finals are skipped. Nothing is deleted here.
         // Foreground promotion can throw on API 31+ when the work
         // starts while the app is backgrounded
         // (ForegroundServiceStartNotAllowedException). That must
@@ -71,10 +70,6 @@ class ModelDownloadWorker(
                 else -> return@withContext Result.failure()
             }
             if (isStopped) {
-                try {
-                    deletePartials(kind, modelId)
-                } catch (_: Exception) {
-                }
                 return@withContext Result.failure()
             }
             ModelDownloadNotifications.notify(
@@ -83,28 +78,16 @@ class ModelDownloadWorker(
             )
             Result.success()
         } catch (e: CancellationException) {
-            try {
-                deletePartials(kind, modelId)
-            } catch (_: Exception) {
-            }
             ModelDownloadNotifications.cancel(applicationContext, notifId)
             throw e
         } catch (e: Exception) {
             if (isStopped) {
-                try {
-                    deletePartials(kind, modelId)
-                } catch (_: Exception) {
-                }
                 ModelDownloadNotifications.cancel(applicationContext, notifId)
                 return@withContext Result.failure()
             }
             // User-cancel surfaces as failure (no retry); transient
             // errors retry with backoff until the attempt cap.
             if (runAttemptCount >= ModelDownloadSchedule.MAX_ATTEMPTS - 1) {
-                try {
-                    deletePartials(kind, modelId)
-                } catch (_: Exception) {
-                }
                 val detail = e.message.orEmpty()
                 ModelDownloadNotifications.notify(
                     applicationContext, notifId,
@@ -197,34 +180,4 @@ class ModelDownloadWorker(
             notifId,
             ModelDownloadNotifications.buildProgress(applicationContext, label, received, total, workName, notifId, target),
         )
-
-    /** Best-effort partial cleanup (cancel + kill-restart paths). */
-    private fun deletePartials(kind: String?, modelId: String?) {
-        val filesDir = applicationContext.filesDir
-        when (kind) {
-            ModelDownloadSchedule.KIND_STT -> {
-                // Partial-only sweep: cancel/kill-restart must KEEP
-                // already-verified finals (the download fns skip them
-                // on resume). Never delete finals here.
-                val entry = LocalSttModels.MODELS.firstOrNull { it.id == modelId } ?: return
-                val dir = LocalSttModels.dirFor(filesDir, entry)
-                dir.listFiles { f -> ModelDownloadSchedule.isPartialName(f.name) }
-                    ?.forEach { try { it.delete() } catch (_: Exception) {} }
-            }
-            ModelDownloadSchedule.KIND_LLM -> {
-                // Per-asset slot (multi-pack coexist): sweep THIS
-                // asset's partial only — a dir-wide sweep would wipe a
-                // concurrently-downloading sibling's `.part.<other-id>`.
-                val assetId = modelId.orEmpty()
-                val dest = MainActivity.llmTaskFileFor(filesDir, assetId)
-                try {
-                    val dir = File(dest.parent ?: return)
-                    dir.listFiles { f ->
-                        ModelDownloadSchedule.isOwnLlmPart(f.name, dest.name, assetId)
-                    }?.forEach { try { it.delete() } catch (_: Exception) {} }
-                } catch (_: Exception) {
-                }
-            }
-        }
-    }
 }

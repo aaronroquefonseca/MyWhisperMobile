@@ -2,6 +2,7 @@ package com.mywhisper.mobile
 
 import android.os.StatFs
 import java.io.File
+import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
@@ -189,6 +190,36 @@ object LocalLlmManager {
     fun verifySha256(file: File, expectedHex: String): Boolean =
         file.isFile && sha256Hex(file).equals(expectedHex.trim(), ignoreCase = true)
 
+    /** Resume decision for an interrupted download (pure, unit-tested). */
+    enum class ResumeAction {
+        /** Server honored Range: append to the partial. */
+        APPEND,
+        /** Server ignored Range (200) or 416 on a short partial: truncate, full download. */
+        RESTART,
+        /** 416 with a surviving partial: SHA-verify it (hit = done). */
+        VERIFY,
+        /** Non-2xx/416 status: fail, never write. */
+        FAIL,
+    }
+
+    /**
+     * Pure resume matrix shared by both download paths (STT packs +
+     * LLM tasks): [tmpLen] is the surviving `.part` size (0 = none),
+     * [httpCode] the status after following redirects.
+     */
+    @JvmStatic
+    fun resumeAction(tmpLen: Long, httpCode: Int): ResumeAction {
+        if (httpCode == 416) {
+            // Range unsatisfiable: the partial usually holds the whole
+            // file already — verify (hit = done, miss = one restart).
+            // Only an empty partial restarts outright.
+            return if (tmpLen > 0) ResumeAction.VERIFY else ResumeAction.RESTART
+        }
+        if (httpCode !in 200..299) return ResumeAction.FAIL
+        if (httpCode == 206) return ResumeAction.APPEND
+        return ResumeAction.RESTART
+    }
+
     /**
      * Per-asset partial-download slot: concurrent downloads of
      * different assets into the same directory must not clobber
@@ -236,37 +267,88 @@ object LocalLlmManager {
             }
         }
         val tmp = partFileFor(dest, asset.id)
-        val conn = (URL(asset.url).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 10_000
-            readTimeout = 60_000
-            instanceFollowRedirects = true
-        }
-        try {
-            if (conn.responseCode !in 200..299) {
-                throw IllegalStateException("local-llm download http ${conn.responseCode}")
-            }
-            val total = conn.contentLengthLong.takeIf { it > 0 }
-                ?: asset.sizeBytes.takeIf { it > 0 }
-            var received = 0L
-            onProgress(0L, total)
-            conn.inputStream.buffered().use { ins ->
-                tmp.outputStream().buffered().use { out ->
-                    val buf = ByteArray(65536)
-                    while (true) {
-                        val n = ins.read(buf)
-                        if (n <= 0) break
-                        out.write(buf, 0, n)
-                        received += n
-                        onProgress(received, total)
-                    }
+        // Resume loop (single restart allowed): a surviving `.part`
+        // continues via HTTP Range; servers that ignore Range (200)
+        // or a short 416 fall back to one clean full download. The
+        // trailing SHA-verify makes a stale/corrupt partial fail
+        // closed either way.
+        var existing = if (tmp.isFile) tmp.length() else 0L
+        var allowRestart = true
+        while (true) {
+            if (existing <= 0) {
+                try {
+                    tmp.delete()
+                } catch (_: Exception) {
                 }
             }
-        } finally {
-            conn.disconnect()
-        }
-        if (!verifySha256(tmp, asset.sha256)) {
-            tmp.delete()
-            throw IllegalStateException("local-llm sha256 mismatch for ${asset.id}")
+            val conn = (URL(asset.url).openConnection() as HttpURLConnection).apply {
+                connectTimeout = 10_000
+                readTimeout = 60_000
+                instanceFollowRedirects = true
+            }
+            try {
+                if (existing > 0) {
+                    conn.setRequestProperty("Range", "bytes=$existing-")
+                }
+                val code = conn.responseCode
+                when (resumeAction(existing, code)) {
+                    ResumeAction.FAIL -> throw IllegalStateException(
+                        "local-llm download http $code",
+                    )
+                    ResumeAction.VERIFY -> {
+                        if (verifySha256(tmp, asset.sha256)) {
+                            onProgress(asset.sizeBytes, asset.sizeBytes)
+                            break
+                        }
+                        if (!allowRestart) {
+                            try {
+                                tmp.delete()
+                            } catch (_: Exception) {
+                            }
+                            throw IllegalStateException("local-llm sha256 mismatch for ${asset.id}")
+                        }
+                        allowRestart = false
+                        existing = 0
+                        continue
+                    }
+                    ResumeAction.RESTART -> {
+                        if (!allowRestart) {
+                            // Second sighting: just download fresh below.
+                            existing = 0
+                        } else {
+                            allowRestart = false
+                            existing = 0
+                            continue
+                        }
+                    }
+                    ResumeAction.APPEND -> Unit
+                }
+                val total = conn.contentLengthLong.takeIf { it > 0 }
+                    ?: asset.sizeBytes.takeIf { it > 0 }
+                // APPEND with existing bytes continues the file; a
+                // fresh RESTART truncates (existing is 0 here).
+                var received = existing
+                onProgress(received, total)
+                conn.inputStream.buffered().use { ins ->
+                    FileOutputStream(tmp, existing > 0).buffered().use { out ->
+                        val buf = ByteArray(65536)
+                        while (true) {
+                            val n = ins.read(buf)
+                            if (n <= 0) break
+                            out.write(buf, 0, n)
+                            received += n
+                            onProgress(received, total)
+                        }
+                    }
+                }
+                if (!verifySha256(tmp, asset.sha256)) {
+                    tmp.delete()
+                    throw IllegalStateException("local-llm sha256 mismatch for ${asset.id}")
+                }
+                break
+            } finally {
+                conn.disconnect()
+            }
         }
         if (dest.exists() && !dest.delete()) throw IllegalStateException("local-llm replace failed")
         if (!tmp.renameTo(dest)) throw IllegalStateException("local-llm rename failed")
