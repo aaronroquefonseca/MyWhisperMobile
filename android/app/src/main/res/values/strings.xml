@@ -75,6 +75,7 @@
     <string name="setup_float_overlay">Allow display over apps</string>
     <string name="setup_float_a11y">Enable dictation service</string>
     <string name="setup_float_a11y_sub">Lets results land in the focused field.</string>
+    <string name="setup_float_old_warn">On Android 12 and below the floating button may pick up placeholder text in some apps. The MyWhisper keyboard is recommended there.</string>
     <string name="unified_notif_channel">MyWhisper status</string>
     <string name="float_notif_title">MyWhisper bubble</string>
     <string name="float_notif_text">Floating dictation active</string>
