@@ -106,10 +106,10 @@ class LocalEnablementTest {
     }
 
     @Test
-    fun llmManifest_parsesTwoKnownAssets() {
+    fun llmManifest_parsesKnownAssets() {
         val assets = LocalLlmManager.parseManifest(MainActivity.LLM_MANIFEST_JSON)
         assertEquals(
-            listOf("gemma3-1b-it-int4", "gemma2-2b-it-q8"),
+            listOf("gemma3-1b-it-int4", "gemma3-1b-it-mpseq-q8", "gemma2-2b-it-q8"),
             assets.map { it.id },
         )
         // Real pins: verified by full download + sha256sum (public

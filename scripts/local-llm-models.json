@@ -11,6 +11,14 @@
       "note": "Small-phone option: ~0.5GB weights, fits 4-6GB phones (Note9-class)."
     },
     {
+      "id": "gemma3-1b-it-mpseq-q8",
+      "url": "https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/Gemma3-1B-IT_multi-prefill-seq_q8_ekv2048.task",
+      "sha256": "e79a6c3fc0fd109f3b2697e7ae0905fcfded68640656d0433ca6276dc8d1b734",
+      "size_bytes": 1073765694,
+      "min_ram_mb": 4096,
+      "note": "Official multi-prefill-seq q8 (ekv2048): the parameterization Google's Android sample used (tasks-genai 0.10.29); gated - needs HF auth + Gemma license."
+    },
+    {
       "id": "gemma2-2b-it-q8",
       "url": "https://huggingface.co/MiCkSoftware/Gemma2-2B-IT-LiteRT/resolve/main/gemma2_q8_multi-prefill-seq_ekv1280.task",
       "sha256": "407aaa8f86f5450370d5fc6d274aae2e62f07ae91f9c5e97d1d7b1e05078c752",

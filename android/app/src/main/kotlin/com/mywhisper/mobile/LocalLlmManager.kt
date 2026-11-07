@@ -431,7 +431,12 @@ object LocalLlmManager {
     fun generate(
         taskFile: File,
         prompt: String,
-        maxTokens: Int = 512,
+        // Sample parity (official Android sample: MAX_TOKENS=1024):
+        // maxTokens bounds input+output; our cleanup prompt alone is
+        // ~752 tokens, so 512 fails CLOSED with OUT_OF_RANGE
+        // (input_size was not less than maxTokens(512)) instead of
+        // generating. Model ctx is 2048 (int4) / ekv2048 (mpseq).
+        maxTokens: Int = 1024,
         context: android.content.Context? = null,
     ): String {
         require(taskFile.isFile) { "local llm model not ready at ${taskFile.absolutePath}" }
@@ -446,16 +451,21 @@ object LocalLlmManager {
     }
 
     /**
-     * Reflection bridge to `LlmInference` (defaults: GPU when
-     * available, model-default sampling). Verified truth, learned
-     * the hard way: the top-level `LlmInferenceOptions` class has
-     * NEVER existed (not in 0.10.27 either — checked via javap) —
-     * the only options class is NESTED (`LlmInference$...Options`)
-     * and `createFromOptions` takes `(Context, options)` on both
-     * runtimes. An earlier top-level-lookup bridge could never have
-     * worked; its "passes" were the vacuous sine probe. The 0.10.35
-     * native stack separately segfaults on legacy zip `.task`
-     * bundles (phone + emulator repros), so the pin stays 0.10.27.
+     * Reflection bridge to `LlmInference` (GPU default,
+     * vendor-recipe sampling). Verified truths, learned the hard
+     * way: the top-level `LlmInferenceOptions` class has NEVER
+     * existed (checked via javap on every runtime) — the only
+     * options class is NESTED (`LlmInference$...Options`) and
+     * `createFromOptions` takes `(Context, options)`. An earlier
+     * top-level-lookup bridge could never have worked; its
+     * "passes" were the vacuous sine probe. Recipe parity with
+     * the (deleted) official Android sample: tasks-genai 0.10.29,
+     * multi-prefill-seq model file, maxTokens=1024, explicit
+     * session sampler, ASYNC generate — the sync path segfaults
+     * in nativePredictSync past ~32 prompt tokens on every
+     * runtime tried (0.10.27/0.10.32/0.10.35), while async fails
+     * closed. An earlier CPU-force + tokenizer-sizing diagnostic
+     * was fully reverted (nothing of it remains).
      */
     internal object MediaPipeRunner {
         fun generate(
@@ -502,11 +512,23 @@ object LocalLlmManager {
                 // repros). Mirrors the official Android sample:
                 // session options (defaults) → addQueryChunk →
                 // generateResponse → close both.
+                // Sample parity (deleted official Android sample,
+                // verified via git history): explicit session sampler
+                // topK=64 / temp=1.0 / topP=0.95. Runtime defaults
+                // (40/0.8/1.0) are left alone — the vendor recipe is
+                // the tested configuration.
                 val sessOptsClass = Class.forName(
                     "com.google.mediapipe.tasks.genai.llminference.LlmInferenceSession\$LlmInferenceSessionOptions",
                 )
                 val sessBuilder = sessOptsClass.getMethod("builder").invoke(null)
-                val sessOpts = sessBuilder.javaClass.getMethod("build").invoke(sessBuilder)
+                val sessBuilderClass = sessBuilder.javaClass
+                sessBuilderClass.getMethod("setTopK", Int::class.javaPrimitiveType)
+                    .invoke(sessBuilder, 64)
+                sessBuilderClass.getMethod("setTemperature", Float::class.javaPrimitiveType)
+                    .invoke(sessBuilder, 1.0f)
+                sessBuilderClass.getMethod("setTopP", Float::class.javaPrimitiveType)
+                    .invoke(sessBuilder, 0.95f)
+                val sessOpts = sessBuilderClass.getMethod("build").invoke(sessBuilder)
                 val sessionClass = Class.forName(
                     "com.google.mediapipe.tasks.genai.llminference.LlmInferenceSession",
                 )
@@ -519,8 +541,24 @@ object LocalLlmManager {
                 try {
                     sessionClass.getMethod("addQueryChunk", String::class.java)
                         .invoke(convo, prompt)
-                    return sessionClass.getMethod("generateResponse")
-                        .invoke(convo) as String
+                    // Async generate (sample parity — the sample never
+                    // calls sync generateResponse): the sync path
+                    // segfaults in nativePredictSync on long prompts
+                    // (all runtimes tried); the async path fails closed
+                    // with OUT_OF_RANGE instead. Block for the result;
+                    // timeout/cancel surfaces as FAIL, never a crash.
+                    @Suppress("UNCHECKED_CAST")
+                    val future = sessionClass.getMethod("generateResponseAsync")
+                        .invoke(convo) as java.util.concurrent.Future<String>
+                    return try {
+                        future.get(8, java.util.concurrent.TimeUnit.MINUTES)
+                    } catch (e: Exception) {
+                        try {
+                            future.cancel(true)
+                        } catch (_: Exception) {
+                        }
+                        throw e
+                    }
                 } finally {
                     try {
                         sessionClass.getMethod("close").invoke(convo)
