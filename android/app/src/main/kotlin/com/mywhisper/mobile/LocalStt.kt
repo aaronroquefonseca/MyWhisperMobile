@@ -536,20 +536,27 @@ object LocalStt {
             }
             val sb = StringBuilder()
             var decodeMs = 0L
+            if (entry.engine == LocalSttModels.Engine.TRANSDUCER) {
+                // Streaming transducer: one stream for the whole
+                // utterance (see decodeOnlineUtterance) — per-chunk
+                // fresh streams starve its language/decoder state.
+                val t1 = android.os.SystemClock.elapsedRealtime()
+                val utterance =
+                    SherpaRunner.decodeOnlineUtterance(rec, pcm16, ranges, sampleRate, whisperLang) ?: ""
+                if (utterance.isNotBlank()) sb.append(utterance.trim())
+                decodeMs = android.os.SystemClock.elapsedRealtime() - t1
+            } else {
             for (r in ranges) {
                 val slice = pcm16.sliceArray(r)
                 val samples = FloatArray(slice.size) { i -> slice[i] / 32768.0f }
                 val t1 = android.os.SystemClock.elapsedRealtime()
-                val text = if (entry.engine == LocalSttModels.Engine.TRANSDUCER) {
-                    SherpaRunner.decodeOnlineChunkText(rec, samples, sampleRate, whisperLang) ?: ""
-                } else {
-                    SherpaRunner.decodeChunkText(rec, samples, sampleRate) ?: ""
-                }
+                val text = SherpaRunner.decodeChunkText(rec, samples, sampleRate) ?: ""
                 if (text.isNotBlank()) {
                     if (sb.isNotEmpty()) sb.append(' ')
                     sb.append(text.trim())
                 }
                 decodeMs += android.os.SystemClock.elapsedRealtime() - t1
+            }
             }
             Log.i(TAG, "local decode chunks=${ranges.size} chars=${sb.length} loadMs=$loadMs decodeMs=$decodeMs")
             return Result(sb.toString(), loadMs, decodeMs, ranges.size)
@@ -844,19 +851,22 @@ object LocalStt {
         }
 
         /**
-         * Streaming decode for one VAD chunk: fresh online stream per
-         * chunk (matches the offline chunk flow in [transcribe]).
-         * The chunk is fed in ~100ms slices with a drain after each
-         * (upstream mic/file demos never bulk-feed a whole utterance),
-         * then inputFinished + final drain + read; explicit language
-         * goes via `setOption` when pinned (empty stays auto-detect).
-         * Emits diagnostics (slices, iterations, chars) so a silent
-         * model is distinguishable from a dead pipeline.
-         * Null (→ blank, skipped) on any failure. Never throws.
+         * Streaming-transducer UTTERANCE decode: ONE online stream for
+         * the whole utterance. Transducers carry decoder + language
+         * state across frames — per-chunk fresh streams starve the
+         * language detector on short VAD segments (owner phone repro:
+         * valid pipeline, zero tokens). VAD ranges are still honored
+         * (silence skipped), fed as mic-sized slices with periodic
+         * drains; inputFinished + final drain + single read at the end.
+         * Explicit language goes via `setOption` when pinned (empty
+         * stays auto-detect). Emits diagnostics (fed, slices,
+         * iterations, tokens, chars). Null (→ server fallback) on any
+         * failure. Never throws.
          */
-        fun decodeOnlineChunkText(
+        fun decodeOnlineUtterance(
             rec: Any,
-            samples: FloatArray,
+            pcm16: ShortArray,
+            ranges: List<IntRange>,
             sampleRate: Int,
             language: String = "",
         ): String? {
@@ -871,34 +881,40 @@ object LocalStt {
                     }
                     var iters = 0
                     var slices = 0
+                    var fed = 0
                     // ~100ms mic-sized slices (1600 samples @16k floor).
                     val slice = (sampleRate / 10).coerceAtLeast(1600)
-                    var offset = 0
-                    while (offset < samples.size) {
-                        val end = minOf(offset + slice, samples.size)
-                        callOnline(stream, "acceptWaveform", samples.sliceArray(offset until end), sampleRate)
-                        slices++
-                        var guard = 0
-                        while ((callOnline(rec, "isReady", stream) as? Boolean) == true && guard++ < 50) {
-                            callOnline(rec, "decode", stream)
-                            iters++
+                    for (r in ranges) {
+                        var offset = r.first
+                        while (offset <= r.last) {
+                            val end = minOf(offset + slice - 1, r.last)
+                            val n = end - offset + 1
+                            val buf = FloatArray(n) { i -> pcm16[offset + i] / 32768.0f }
+                            callOnline(stream, "acceptWaveform", buf, sampleRate)
+                            slices++
+                            fed += n
+                            var guard = 0
+                            while ((callOnline(rec, "isReady", stream) as? Boolean) == true && guard++ < 50) {
+                                callOnline(rec, "decode", stream)
+                                iters++
+                            }
+                            offset = end + 1
                         }
-                        offset = end
                     }
                     callOnline(stream, "inputFinished")
                     var guard = 0
-                    while ((callOnline(rec, "isReady", stream) as? Boolean) == true && guard++ < 500) {
+                    while ((callOnline(rec, "isReady", stream) as? Boolean) == true && guard++ < 1000) {
                         callOnline(rec, "decode", stream)
                         iters++
                     }
                     val endpoint = callOnline(rec, "isEndpoint", stream) as? Boolean
                     val result = callOnline(rec, "getResult", stream) ?: run {
-                        Log.w(TAG, "online getResult null slices=$slices iters=$iters")
+                        Log.w(TAG, "online getResult null fed=$fed slices=$slices iters=$iters")
                         return null
                     }
                     val text = callOnline(result, "getText") as? String
                     val tokens = callOnline(result, "getTokens") as? Array<*>
-                    Log.i(TAG, "online decode samples=${samples.size} slices=$slices iters=$iters endpoint=$endpoint tokens=${tokens?.size ?: -1} chars=${text?.length ?: -1}")
+                    Log.i(TAG, "online utterance fed=$fed slices=$slices iters=$iters endpoint=$endpoint tokens=${tokens?.size ?: -1} chars=${text?.length ?: -1}")
                     return text
                 } finally {
                     call(stream, "release")
