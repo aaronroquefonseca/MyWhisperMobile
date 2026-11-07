@@ -670,6 +670,30 @@ object LocalStt {
                 null
             }
 
+        /**
+         * Loud twin of [call] for the online path: missing methods and
+         * throws are logged (method + message) instead of swallowed, so
+         * a silently-noop streaming call shows up in logcat. Never
+         * throws itself.
+         */
+        private fun callOnline(target: Any, method: String, vararg args: Any?): Any? {
+            try {
+                val m = target.javaClass.methods.firstOrNull {
+                    it.name == method && it.parameterCount == args.size
+                } ?: run {
+                    Log.w(TAG, "online missing $method/${args.size}")
+                    return null
+                }
+                return m.invoke(target, *args)
+            } catch (e: Exception) {
+                Log.w(TAG, "online $method threw ${e.javaClass.simpleName}: ${e.message}")
+                return null
+            } catch (e: LinkageError) {
+                Log.w(TAG, "online $method linkage ${e.javaClass.simpleName}: ${e.message}")
+                return null
+            }
+        }
+
         private fun modelConfig(moonshine: Any? = null, whisper: Any? = null, tokens: String): Any? {
             val mc = newOf("$PKG.OfflineModelConfig") ?: return null
             if (moonshine != null) call(mc, "setMoonshine", moonshine)
@@ -837,13 +861,13 @@ object LocalStt {
             language: String = "",
         ): String? {
             try {
-                val stream = call(rec, "createStream", "") ?: run {
+                val stream = callOnline(rec, "createStream", "") ?: run {
                     Log.w(TAG, "online stream create failed")
                     return null
                 }
                 try {
                     if (language.isNotEmpty()) {
-                        call(stream, "setOption", "language", language)
+                        callOnline(stream, "setOption", "language", language)
                     }
                     var iters = 0
                     var slices = 0
@@ -852,27 +876,29 @@ object LocalStt {
                     var offset = 0
                     while (offset < samples.size) {
                         val end = minOf(offset + slice, samples.size)
-                        call(stream, "acceptWaveform", samples.sliceArray(offset until end), sampleRate)
+                        callOnline(stream, "acceptWaveform", samples.sliceArray(offset until end), sampleRate)
                         slices++
                         var guard = 0
-                        while ((call(rec, "isReady", stream) as? Boolean) == true && guard++ < 50) {
-                            call(rec, "decode", stream)
+                        while ((callOnline(rec, "isReady", stream) as? Boolean) == true && guard++ < 50) {
+                            callOnline(rec, "decode", stream)
                             iters++
                         }
                         offset = end
                     }
-                    call(stream, "inputFinished")
+                    callOnline(stream, "inputFinished")
                     var guard = 0
-                    while ((call(rec, "isReady", stream) as? Boolean) == true && guard++ < 500) {
-                        call(rec, "decode", stream)
+                    while ((callOnline(rec, "isReady", stream) as? Boolean) == true && guard++ < 500) {
+                        callOnline(rec, "decode", stream)
                         iters++
                     }
-                    val result = call(rec, "getResult", stream) ?: run {
+                    val endpoint = callOnline(rec, "isEndpoint", stream) as? Boolean
+                    val result = callOnline(rec, "getResult", stream) ?: run {
                         Log.w(TAG, "online getResult null slices=$slices iters=$iters")
                         return null
                     }
-                    val text = call(result, "getText") as? String
-                    Log.i(TAG, "online decode samples=${samples.size} slices=$slices iters=$iters chars=${text?.length ?: -1}")
+                    val text = callOnline(result, "getText") as? String
+                    val tokens = callOnline(result, "getTokens") as? Array<*>
+                    Log.i(TAG, "online decode samples=${samples.size} slices=$slices iters=$iters endpoint=$endpoint tokens=${tokens?.size ?: -1} chars=${text?.length ?: -1}")
                     return text
                 } finally {
                     call(stream, "release")
