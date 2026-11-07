@@ -540,7 +540,11 @@ object LocalStt {
                 val slice = pcm16.sliceArray(r)
                 val samples = FloatArray(slice.size) { i -> slice[i] / 32768.0f }
                 val t1 = android.os.SystemClock.elapsedRealtime()
-                val text = SherpaRunner.decodeChunkText(rec, samples, sampleRate) ?: ""
+                val text = if (entry.engine == LocalSttModels.Engine.TRANSDUCER) {
+                    SherpaRunner.decodeOnlineChunkText(rec, samples, sampleRate, whisperLang) ?: ""
+                } else {
+                    SherpaRunner.decodeChunkText(rec, samples, sampleRate) ?: ""
+                }
                 if (text.isNotBlank()) {
                     if (sb.isNotEmpty()) sb.append(' ')
                     sb.append(text.trim())
@@ -707,6 +711,11 @@ object LocalStt {
                         call(whisper, "setEnableSegmentTimestamps", false)
                         modelConfig(whisper = whisper, tokens = tokens) ?: return null
                     }
+                    LocalSttModels.Engine.TRANSDUCER -> {
+                        // Streaming transducer (Nemotron): a different
+                        // recognizer class — hand off to the online path.
+                        return createOnlineRecognizer(dir, entry)
+                    }
                 }
                 val feat = newOf("$PKG.FeatureConfig") ?: return null
                 call(feat, "setSampleRate", 16000)
@@ -740,6 +749,101 @@ object LocalStt {
                 try {
                     call(stream, "acceptWaveform", samples, sampleRate)
                     call(rec, "decode", stream)
+                    val result = call(rec, "getResult", stream) ?: return null
+                    return call(result, "getText") as? String
+                } finally {
+                    call(stream, "release")
+                }
+            } catch (_: Exception) {
+                return null
+            } catch (_: UnsatisfiedLinkError) {
+                return null
+            } catch (_: LinkageError) {
+                return null
+            }
+        }
+
+        /**
+         * Streaming-transducer recognizer (Nemotron) via the ONLINE
+         * API. Class/method spec verified against the 1.13.8 AAR
+         * `classes.jar` via javap (constructor takes nullable
+         * AssetManager + config like the offline one; `createStream`
+         * takes a hotwords string — empty here; per-stream language
+         * goes through `setOption("language", …)`; no `setLanguage`
+         * exists). Null when the AAR is absent, files are missing, or
+         * the native lib fails.
+         */
+        fun createOnlineRecognizer(dir: File, entry: LocalSttModels.Entry): Any? {
+            try {
+                fun fileFor(vararg keys: String): String {
+                    val name = entry.files.first { f ->
+                        keys.any { k -> k in f.name }
+                    }.name
+                    return File(dir, name).absolutePath
+                }
+                val tokens = File(
+                    dir,
+                    entry.files.first { it.name.endsWith("tokens.txt") }.name,
+                ).absolutePath
+                val transducer = newOf("$PKG.OnlineTransducerModelConfig") ?: return null
+                call(transducer, "setEncoder", fileFor("encoder"))
+                call(transducer, "setDecoder", fileFor("decoder"))
+                call(transducer, "setJoiner", fileFor("joiner"))
+                val model = newOf("$PKG.OnlineModelConfig") ?: return null
+                call(model, "setTransducer", transducer)
+                call(model, "setTokens", tokens)
+                call(model, "setNumThreads", 2)
+                call(model, "setProvider", "cpu")
+                val feat = newOf("$PKG.FeatureConfig") ?: return null
+                call(feat, "setSampleRate", 16000)
+                call(feat, "setFeatureDim", 80)
+                val config = newOf("$PKG.OnlineRecognizerConfig") ?: return null
+                call(config, "setFeatConfig", feat)
+                call(config, "setModelConfig", model)
+                call(config, "setDecodingMethod", "greedy_search")
+                call(config, "setMaxActivePaths", 4)
+                val recCls = loadClass("$PKG.OnlineRecognizer") ?: return null
+                // OnlineRecognizer(AssetManager, OnlineRecognizerConfig):
+                // null assets → newFromFile, models live in filesDir.
+                val ctor = recCls.constructors.firstOrNull { it.parameterCount == 2 } ?: return null
+                return ctor.newInstance(null, config)
+            } catch (_: Exception) {
+                Log.w(TAG, "online recognizer create failed")
+                return null
+            } catch (_: UnsatisfiedLinkError) {
+                Log.w(TAG, "sherpa native missing")
+                return null
+            } catch (_: LinkageError) {
+                Log.w(TAG, "sherpa classes missing (lite build?)")
+                return null
+            }
+        }
+
+        /**
+         * Streaming decode for one VAD chunk: fresh online stream per
+         * chunk (matches the offline chunk flow in [transcribe]),
+         * explicit language via `setOption` when pinned (empty stays
+         * auto-detect), `inputFinished` + drain loop, final text.
+         * Null (→ blank, skipped) on any failure. Never throws.
+         */
+        fun decodeOnlineChunkText(
+            rec: Any,
+            samples: FloatArray,
+            sampleRate: Int,
+            language: String = "",
+        ): String? {
+            try {
+                val stream = call(rec, "createStream", "") ?: return null
+                try {
+                    if (language.isNotEmpty()) {
+                        call(stream, "setOption", "language", language)
+                    }
+                    call(stream, "acceptWaveform", samples, sampleRate)
+                    call(stream, "inputFinished")
+                    var guard = 0
+                    while ((call(rec, "isReady", stream) as? Boolean) == true && guard++ < 500) {
+                        call(rec, "decode", stream)
+                    }
                     val result = call(rec, "getResult", stream) ?: return null
                     return call(result, "getText") as? String
                 } finally {

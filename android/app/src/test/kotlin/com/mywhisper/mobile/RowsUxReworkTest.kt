@@ -479,7 +479,7 @@ class RowsUxReworkTest {
         assumeTrue(es.isFile)
         for (f in listOf(en, es)) {
             val strings = stringMap(f)
-            for (key in listOf("local_resume", "provider_test_need_pack", "llm_selftest_unavailable")) {
+            for (key in listOf("local_resume", "provider_test_need_pack", "llm_selftest_unavailable", "stt_provider_all")) {
                 assertTrue("$key present in ${f.parentFile?.name}", strings[key].orEmpty().isNotBlank())
             }
         }

@@ -18,7 +18,7 @@ import org.junit.Test
 class LocalSttModelsTest {
 
     @Test
-    fun catalog_hasFivePhoneSaneEntries() {
+    fun catalog_hasNinePhoneSaneEntries() {
         assertEquals(
             listOf(
                 LocalSttModels.MOONSHINE_ID,
@@ -26,6 +26,10 @@ class LocalSttModelsTest {
                 LocalSttModels.WHISPER_BASE_ID,
                 LocalSttModels.WHISPER_SMALL_ID,
                 LocalSttModels.WHISPER_MEDIUM_ID,
+                LocalSttModels.WHISPER_LARGE_ID,
+                LocalSttModels.WHISPER_TURBO_ID,
+                LocalSttModels.NEMOTRON_EN_ID,
+                LocalSttModels.NEMOTRON35_ID,
             ),
             LocalSttModels.MODELS.map { it.id },
         )
@@ -71,6 +75,8 @@ class LocalSttModelsTest {
             LocalSttModels.WHISPER_BASE_ID,
             LocalSttModels.WHISPER_SMALL_ID,
             LocalSttModels.WHISPER_MEDIUM_ID,
+            LocalSttModels.WHISPER_LARGE_ID,
+            LocalSttModels.WHISPER_TURBO_ID,
         )) {
             val m = LocalSttModels.findById(id)
             assertEquals(LocalSttModels.Engine.WHISPER, m.engine)
@@ -87,13 +93,21 @@ class LocalSttModelsTest {
 
     @Test
     fun downloadMatrix_sizesPinned() {
-        // Phone-sane cap (500MB) applies to every entry EXCEPT the
-        // flagship medium tier, which is over the cap by design
-        // (verified ~902MB) and gated by total RAM instead.
+        // Phone-sane cap (500MB) applies to every UNGATED entry; the
+        // flagship/RAM-gated tiers (medium, large, turbo, both
+        // Nemotrons) are over the cap by design with verified totals.
+        val gatedTotals = mapOf(
+            LocalSttModels.WHISPER_MEDIUM_ID to 946072270L,
+            LocalSttModels.WHISPER_LARGE_ID to 1775753918L,
+            LocalSttModels.WHISPER_TURBO_ID to 1036613791L,
+            LocalSttModels.NEMOTRON_EN_ID to 661919397L,
+            LocalSttModels.NEMOTRON35_ID to 682215356L,
+        )
         for (m in LocalSttModels.MODELS) {
             val total = LocalSttModels.totalBytes(m)
-            if (m.id == LocalSttModels.WHISPER_MEDIUM_ID) {
-                assertEquals(946072270L, total)
+            val pinned = gatedTotals[m.id]
+            if (pinned != null) {
+                assertEquals(pinned, total)
             } else {
                 assertTrue(m.id, total in 1..500_000_000)
             }
@@ -104,10 +118,14 @@ class LocalSttModelsTest {
         val small = LocalSttModels.totalBytes(LocalSttModels.findById(LocalSttModels.WHISPER_SMALL_ID))
         val medium = LocalSttModels.totalBytes(LocalSttModels.findById(LocalSttModels.WHISPER_MEDIUM_ID))
         val moon = LocalSttModels.totalBytes(LocalSttModels.findById(LocalSttModels.MOONSHINE_ID))
+        val turbo = LocalSttModels.totalBytes(LocalSttModels.findById(LocalSttModels.WHISPER_TURBO_ID))
+        val large = LocalSttModels.totalBytes(LocalSttModels.findById(LocalSttModels.WHISPER_LARGE_ID))
         assertTrue(moon < tiny)
         assertTrue(tiny < base)
         assertTrue(base < small)
         assertTrue(small < medium)
+        assertTrue(medium < turbo)
+        assertTrue(turbo < large)
     }
 
     @Test
@@ -174,6 +192,183 @@ class LocalSttModelsTest {
     }
 
     @Test
+    fun providers_presentInCatalogOrder() {
+        assertEquals(
+            listOf(
+                LocalSttModels.Provider.MOONSHINE,
+                LocalSttModels.Provider.WHISPER,
+                LocalSttModels.Provider.NVIDIA,
+            ),
+            LocalSttModels.providers(),
+        )
+        assertEquals("Moonshine", LocalSttModels.providerLabel(LocalSttModels.Provider.MOONSHINE))
+        assertEquals("Whisper", LocalSttModels.providerLabel(LocalSttModels.Provider.WHISPER))
+        assertEquals("NVIDIA", LocalSttModels.providerLabel(LocalSttModels.Provider.NVIDIA))
+    }
+
+    @Test
+    fun forProvider_filtersByVendor() {
+        assertEquals(LocalSttModels.MODELS, LocalSttModels.forProvider(null))
+        assertEquals(
+            listOf(LocalSttModels.MOONSHINE_ID),
+            LocalSttModels.forProvider(LocalSttModels.Provider.MOONSHINE).map { it.id },
+        )
+        val whisper = LocalSttModels.forProvider(LocalSttModels.Provider.WHISPER)
+        assertEquals(
+            listOf(
+                LocalSttModels.WHISPER_TINY_ID,
+                LocalSttModels.WHISPER_BASE_ID,
+                LocalSttModels.WHISPER_SMALL_ID,
+                LocalSttModels.WHISPER_MEDIUM_ID,
+                LocalSttModels.WHISPER_LARGE_ID,
+                LocalSttModels.WHISPER_TURBO_ID,
+            ),
+            whisper.map { it.id },
+        )
+        assertEquals(
+            listOf(LocalSttModels.NEMOTRON_EN_ID, LocalSttModels.NEMOTRON35_ID),
+            LocalSttModels.forProvider(LocalSttModels.Provider.NVIDIA).map { it.id },
+        )
+    }
+
+    @Test
+    fun nemotron35Langs_baseCodesNoAdaptationLocales() {
+        val langs = LocalSttModels.NEMOTRON35_LANGS
+        assertEquals(28, langs.size)
+        for (c in listOf("en", "es", "zh", "et")) assertTrue(c, langs.contains(c))
+        for (c in listOf("el", "lt", "lv", "mt", "sl", "he", "th", "nn")) {
+            assertFalse(c, langs.contains(c))
+        }
+    }
+
+    @Test
+    fun transducerLanguage_autoOrListedCode() {
+        val entry = LocalSttModels.Entry(
+            id = "x", name = "x", sizeLabel = "x",
+            engine = LocalSttModels.Engine.TRANSDUCER,
+            provider = LocalSttModels.Provider.NVIDIA,
+            langMode = LocalSttModels.LangMode.AUTO,
+            languages = LocalSttModels.NEMOTRON35_LANGS,
+            dictionary = false, runtimeNote = "x", phoneTier = "x",
+            dirRel = "x", files = emptyList(),
+        )
+        // Empty = auto-detect; listed codes pass to the stream
+        // setOption("language", …) knob; unknown fails safe to auto.
+        assertEquals("", LocalSttModels.whisperLanguageFor("auto", entry))
+        assertEquals("es", LocalSttModels.whisperLanguageFor("es", entry))
+        assertEquals("", LocalSttModels.whisperLanguageFor("xx", entry))
+    }
+
+    @Test
+    fun largeTurboEntries_verifiedShaPinsAndGates() {
+        val large = LocalSttModels.findById(LocalSttModels.WHISPER_LARGE_ID)
+        assertFalse(large.id == LocalSttModels.DEFAULT_ID)
+        assertEquals(LocalSttModels.Engine.WHISPER, large.engine)
+        assertEquals(LocalSttModels.Provider.WHISPER, large.provider)
+        assertEquals(LocalSttModels.LangMode.AUTO, large.langMode)
+        assertEquals("~1.7GB", large.sizeLabel)
+        assertEquals("models/sherpa-whisper-large-v3-int8", large.dirRel)
+        val lbyName = large.files.associateBy { it.name }
+        assertEquals(
+            "d531cf17248acc43e8c09b472a0877055e770877857a5332fc1304b36534ec85",
+            lbyName["large-v3-encoder.int8.onnx"]?.sha256,
+        )
+        assertEquals(766671985L, lbyName["large-v3-encoder.int8.onnx"]?.sizeBytes)
+        assertEquals(
+            "ebc6bfd88e162a46cb3edee8a7e727e1dcbc65cabecb19e2573695e4d495e1af",
+            lbyName["large-v3-decoder.int8.onnx"]?.sha256,
+        )
+        assertEquals(1008265203L, lbyName["large-v3-decoder.int8.onnx"]?.sizeBytes)
+        // Shared multilingual vocab pin, same as the smaller whispers.
+        assertEquals(
+            "b34b360dbb493e781e479794586d661700670d65564001f23024971d1f2fa126",
+            lbyName["large-v3-tokens.txt"]?.sha256,
+        )
+        assertEquals(10_000L, large.minTotalRamMb)
+        assertTrue(large.phoneTier.lowercase().contains("flagship"))
+
+        val turbo = LocalSttModels.findById(LocalSttModels.WHISPER_TURBO_ID)
+        assertEquals(LocalSttModels.Engine.WHISPER, turbo.engine)
+        assertEquals(LocalSttModels.Provider.WHISPER, turbo.provider)
+        assertEquals("~989MB", turbo.sizeLabel)
+        assertEquals("models/sherpa-whisper-turbo-int8", turbo.dirRel)
+        val tbyName = turbo.files.associateBy { it.name }
+        assertEquals(
+            "b02dcdf54f348741e93fe732b67d933c8dcb6735655f710640143081db38878b",
+            tbyName["turbo-encoder.int8.onnx"]?.sha256,
+        )
+        assertEquals(674716297L, tbyName["turbo-encoder.int8.onnx"]?.sizeBytes)
+        assertEquals(
+            "20accd02388482eb3a46bd615631adfdc85e1eb2c7db9ea3f02a40ffe6b81547",
+            tbyName["turbo-decoder.int8.onnx"]?.sha256,
+        )
+        assertEquals(361080764L, tbyName["turbo-decoder.int8.onnx"]?.sizeBytes)
+        assertEquals(
+            "b34b360dbb493e781e479794586d661700670d65564001f23024971d1f2fa126",
+            tbyName["turbo-tokens.txt"]?.sha256,
+        )
+        assertEquals(8_000L, turbo.minTotalRamMb)
+    }
+
+    @Test
+    fun nemotronEntries_transducerEngineVerifiedPins() {
+        val en = LocalSttModels.findById(LocalSttModels.NEMOTRON_EN_ID)
+        assertEquals(LocalSttModels.Engine.TRANSDUCER, en.engine)
+        assertEquals(LocalSttModels.Provider.NVIDIA, en.provider)
+        assertEquals(LocalSttModels.LangMode.MANUAL, en.langMode)
+        assertEquals(listOf("en"), en.languages)
+        assertEquals("~631MB", en.sizeLabel)
+        assertEquals("models/sherpa-nemotron-streaming-en-0.6b", en.dirRel)
+        // No decoder-bias channel for transducers yet: dictionary off.
+        assertEquals(false, en.dictionary)
+        val ebyName = en.files.associateBy { it.name }
+        assertEquals(
+            "2f6ae81fe4ccd69ef04cdf048ecd49628e2d3148a6195e152a91b4d2497952dc",
+            ebyName["encoder.int8.onnx"]?.sha256,
+        )
+        assertEquals(652916830L, ebyName["encoder.int8.onnx"]?.sizeBytes)
+        assertEquals(
+            "1fb1795cb46e7d0e99b2e096eae83f7e324294e895975a1a894b0384cbbe37f6",
+            ebyName["decoder.int8.onnx"]?.sha256,
+        )
+        assertEquals(
+            "a3f41dccc0f67f37e4210051d1c39a29d473c841cfc32fe574135bac890db91d",
+            ebyName["joiner.int8.onnx"]?.sha256,
+        )
+        assertEquals(1735862L, ebyName["joiner.int8.onnx"]?.sizeBytes)
+        assertEquals(6_000L, en.minTotalRamMb)
+
+        val multi = LocalSttModels.findById(LocalSttModels.NEMOTRON35_ID)
+        assertEquals(LocalSttModels.Engine.TRANSDUCER, multi.engine)
+        assertEquals(LocalSttModels.Provider.NVIDIA, multi.provider)
+        assertEquals(LocalSttModels.LangMode.AUTO, multi.langMode)
+        assertEquals(28, multi.languages.size)
+        assertTrue(multi.languages.contains("es"))
+        assertEquals("~651MB", multi.sizeLabel)
+        assertEquals("models/sherpa-nemotron-3.5-streaming-0.6b-560ms", multi.dirRel)
+        assertEquals(false, multi.dictionary)
+        val mbyName = multi.files.associateBy { it.name }
+        assertEquals(
+            "012e9321373af99021415e0b0eb3ec827b4be3153be6f30d9b448fe65e896e68",
+            mbyName["encoder.int8.onnx"]?.sha256,
+        )
+        assertEquals(657601403L, mbyName["encoder.int8.onnx"]?.sizeBytes)
+        assertEquals(
+            "19f9c98fc6d0a2c33a65a43b36fdb2e914c26c0aa9764be3aebc502a1e982fb0",
+            mbyName["decoder.int8.onnx"]?.sha256,
+        )
+        assertEquals(
+            "4101c7c679a0bc30483794b27a059e34e79232aa2068d78d51231a22c8b0d7ce",
+            mbyName["joiner.int8.onnx"]?.sha256,
+        )
+        assertEquals(6_000L, multi.minTotalRamMb)
+        // Explicit codes pass to the stream language knob, auto stays auto.
+        assertEquals("", LocalSttModels.whisperLanguageFor("auto", multi))
+        assertEquals("es", LocalSttModels.whisperLanguageFor("es", multi))
+        assertEquals("en", LocalSttModels.whisperLanguageFor("es", en))
+    }
+
+    @Test
     fun rtf_speedFactorMath() {
         // 10s of audio decoded in 5s = 2.0× realtime.
         assertEquals(2.0, LocalSttModels.speedFactor(10.0, 5_000)!!, 1e-9)
@@ -216,7 +411,7 @@ class LocalSttModelsTest {
     }
 
     @Test
-    fun ramGate_flagsMediumOnly() {
+    fun ramGate_flagsGatedTiersOnly() {
         val medium = LocalSttModels.findById(LocalSttModels.WHISPER_MEDIUM_ID)
         // Note10+-class device (12GB) passes; 4GB phone does not.
         assertTrue(LocalSttModels.passesRamGate(12_000, medium))
@@ -225,9 +420,27 @@ class LocalSttModelsTest {
         // Unreadable RAM fails closed on gated entries.
         assertFalse(LocalSttModels.passesRamGate(0, medium))
         assertFalse(LocalSttModels.passesRamGate(-1, medium))
+        // Gated tiers and their floors.
+        val gates = mapOf(
+            LocalSttModels.WHISPER_MEDIUM_ID to 6_000L,
+            LocalSttModels.WHISPER_LARGE_ID to 10_000L,
+            LocalSttModels.WHISPER_TURBO_ID to 8_000L,
+            LocalSttModels.NEMOTRON_EN_ID to 6_000L,
+            LocalSttModels.NEMOTRON35_ID to 6_000L,
+        )
+        for ((id, floor) in gates) {
+            val m = LocalSttModels.findById(id)
+            assertEquals(id, floor, m.minTotalRamMb)
+            assertTrue(id, LocalSttModels.passesRamGate(12_000, m))
+            assertFalse(id, LocalSttModels.passesRamGate(0, m))
+        }
+        // The 12GB owner phone passes every gate.
+        for (m in LocalSttModels.MODELS) {
+            assertTrue(m.id, LocalSttModels.passesRamGate(12_000, m))
+        }
         // Ungated entries always pass (small kept as-is: RAM note, no gate).
         for (m in LocalSttModels.MODELS) {
-            if (m.id == LocalSttModels.WHISPER_MEDIUM_ID) continue
+            if (m.id in gates) continue
             assertEquals(m.id, 0L, m.minTotalRamMb)
             assertTrue(m.id, LocalSttModels.passesRamGate(0, m))
             assertTrue(m.id, LocalSttModels.passesRamGate(512, m))

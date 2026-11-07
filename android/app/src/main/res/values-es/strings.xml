@@ -101,6 +101,7 @@
 
     <!-- Transcription -->
     <string name="stt_chain">Cadena (arriba = se prueba primero)</string>
+    <string name="stt_provider_all">Todos</string>
     <string name="stt_chain_sub">Las entradas se prueban de arriba abajo; gana la primera que funciona. La voz local es experimental y está apagada por defecto — sin su pack verificado la entrada se omite y se usa la cadena del servidor.</string>
     <string name="stt_local_summary">local · experimental</string>
     <string name="stt_local_note">No necesita configuración — necesita su pack de modelos.</string>

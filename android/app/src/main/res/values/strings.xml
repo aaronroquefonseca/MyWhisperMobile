@@ -101,7 +101,7 @@
 
     <!-- Transcription -->
     <string name="stt_chain">Chain (top = first tried)</string>
-    <string name="stt_chain_sub">Entries are tried top-down; the first success wins. Local on-device speech is experimental and off by default — without its verified model pack the entry is skipped and the server chain is used.</string>
+    <string name="stt_provider_all">All</string>    <string name="stt_chain_sub">Entries are tried top-down; the first success wins. Local on-device speech is experimental and off by default — without its verified model pack the entry is skipped and the server chain is used.</string>
     <string name="stt_local_summary">on-device · experimental</string>
     <string name="stt_local_note">Needs no configuration — needs its model pack.</string>
     <string name="stt_local_why">Why?</string>

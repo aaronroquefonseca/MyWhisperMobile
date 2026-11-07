@@ -96,7 +96,7 @@ dependencies {
     // successor API: LiteRT-LM). Loaded lazily via reflection in
     // LocalLlmManager so lite builds and JVM unit tests run without the
     // native runner.
-    add("fullImplementation", "com.google.mediapipe:tasks-genai:0.10.27")
+    add("fullImplementation", "com.google.mediapipe:tasks-genai:0.10.35")
     // On-device STT runtime (sherpa-onnx 1.13.8, arm64-v8a + x86_64 JNI).
     // AAR fetched by scripts/fetch-sherpa-aar.sh (run once after
     // checkout, CI does it too), never committed. fullImplementation only:

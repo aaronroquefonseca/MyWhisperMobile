@@ -106,14 +106,31 @@ class LocalEnablementTest {
     }
 
     @Test
-    fun llmManifest_parsesTwoKnownAssets() {
+    fun llmManifest_parsesFourKnownAssets() {
         val assets = LocalLlmManager.parseManifest(MainActivity.LLM_MANIFEST_JSON)
-        assertEquals(listOf("gemma3-1b-it-int4", "gemma2-2b-it-q8"), assets.map { it.id })
+        assertEquals(
+            listOf("gemma3-1b-it-int4", "gemma2-2b-it-q8", "gemma4-e2b-it-web", "gemma4-e4b-it-web"),
+            assets.map { it.id },
+        )
         // Real pins: verified by full download + sha256sum (public
         // repos, no auth) — downloads are live, fail-closed otherwise.
         assertTrue(assets.none { MainActivity.isPlaceholderSha(it.sha256) })
         assertTrue(assets.all { it.sizeBytes > 0 })
         assertTrue(assets.all { it.minRamMb > 0 })
+        // Gemma 4 pins (verified full-download sizes).
+        val byId = assets.associateBy { it.id }
+        assertEquals(2003697664L, byId["gemma4-e2b-it-web"]?.sizeBytes)
+        assertEquals(6144L, byId["gemma4-e2b-it-web"]?.minRamMb)
+        assertEquals(2964324352L, byId["gemma4-e4b-it-web"]?.sizeBytes)
+        assertEquals(8192L, byId["gemma4-e4b-it-web"]?.minRamMb)
+        assertEquals(
+            "2cbff161177a4d51c9d04360016185976f504517ba5758cd10c1564e5421c5a5",
+            byId["gemma4-e2b-it-web"]?.sha256,
+        )
+        assertEquals(
+            "f3bd72fc27627be2a2cc6722199a333599590ed0962ee7047b516a506b7bf086",
+            byId["gemma4-e4b-it-web"]?.sha256,
+        )
     }
 
     @Test

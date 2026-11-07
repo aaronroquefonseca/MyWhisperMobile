@@ -49,6 +49,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -809,6 +810,22 @@ class MainActivity : ComponentActivity() {
       "size_bytes": 2702868915,
       "min_ram_mb": 7168,
       "note": "Capable phones only: ~2.5GB weights, needs 8GB+ RAM (Note9-class: use the 1B)."
+    },
+    {
+      "id": "gemma4-e2b-it-web",
+      "url": "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it-web.task",
+      "sha256": "2cbff161177a4d51c9d04360016185976f504517ba5758cd10c1564e5421c5a5",
+      "size_bytes": 2003697664,
+      "min_ram_mb": 6144,
+      "note": "Gemma 4 edge model: ~1.9GB weights, needs 6GB+ RAM. Runs on tasks-genai 0.10.35+."
+    },
+    {
+      "id": "gemma4-e4b-it-web",
+      "url": "https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it-web.task",
+      "sha256": "f3bd72fc27627be2a2cc6722199a333599590ed0962ee7047b516a506b7bf086",
+      "size_bytes": 2964324352,
+      "min_ram_mb": 8192,
+      "note": "Gemma 4 edge model: ~2.8GB weights, needs 8GB+ RAM. Runs on tasks-genai 0.10.35+."
     }
   ]
 }"""
@@ -2428,7 +2445,32 @@ class MainActivity : ComponentActivity() {
                     ?: captureLang
                 // Device total RAM for the flagship gate note (display only).
                 val deviceRamMb = remember { totalRamMb() }
-                for (m in LocalSttModels.MODELS) {
+                // Provider filter pills (desktop local_provider
+                // parity, UI-local: the active model selection is
+                // untouched). Stored as the enum name (nullable =
+                // All) so the value stays saveable.
+                var sttProvider by rememberSaveable { mutableStateOf<String?>(null) }
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    FilterChip(
+                        selected = sttProvider == null,
+                        onClick = { sttProvider = null },
+                        label = { Text(stringResource(R.string.stt_provider_all)) },
+                    )
+                    for (p in LocalSttModels.providers()) {
+                        FilterChip(
+                            selected = sttProvider == p.name,
+                            onClick = { sttProvider = p.name },
+                            label = { Text(LocalSttModels.providerLabel(p)) },
+                        )
+                    }
+                }
+                val providerFilter = sttProvider?.let { n ->
+                    LocalSttModels.Provider.entries.firstOrNull { it.name == n }
+                }
+                for (m in LocalSttModels.forProvider(providerFilter)) {
                     val row = rowOf(m)
                     val isSelected = m.id == selectedModel.id
                     val prog = dlProg[m.id]
