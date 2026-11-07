@@ -94,6 +94,7 @@ object ModelDownloadManager {
             .putString(ModelDownloadSchedule.KEY_URL, asset.url)
             .putString(ModelDownloadSchedule.KEY_SHA, asset.sha256)
             .putLong(ModelDownloadSchedule.KEY_SIZE, asset.sizeBytes)
+            .putString(ModelDownloadSchedule.KEY_RUNTIME, asset.runtime)
             .build()
         // Metered override (explicit user consent from the waiting
         // row): any network, not unmetered-only. Default false keeps
@@ -139,13 +140,19 @@ object ModelDownloadManager {
                     ?.forEach { try { it.delete() } catch (_: Exception) {} }
             }
             ModelDownloadSchedule.KIND_LLM -> {
-                val dest = MainActivity.llmTaskFileFor(filesDir, id)
-                try {
-                    val dir = java.io.File(dest.parent ?: return)
-                    dir.listFiles { f ->
-                        ModelDownloadSchedule.isOwnLlmPart(f.name, dest.name, id)
-                    }?.forEach { try { it.delete() } catch (_: Exception) {} }
-                } catch (_: Exception) {
+                // Sweep both extensions: the id alone does not carry
+                // the entry runtime (mediapipe .task vs litertlm
+                // .litertlm), and a cancel must reset either one's
+                // partials.
+                for (ext in listOf("task", "litertlm")) {
+                    val dest = MainActivity.llmTaskFileFor(filesDir, id, ext)
+                    try {
+                        val dir = java.io.File(dest.parent ?: continue)
+                        dir.listFiles { f ->
+                            ModelDownloadSchedule.isOwnLlmPart(f.name, dest.name, id)
+                        }?.forEach { try { it.delete() } catch (_: Exception) {} }
+                    } catch (_: Exception) {
+                    }
                 }
             }
         }

@@ -93,6 +93,32 @@ class LocalLlmManagerTest {
     }
 
     @Test
+    fun manifestRuntime_defaultsMediapipeAndParsesLitertlm() {
+        val assets = LocalLlmManager.parseManifest(MainActivity.LLM_MANIFEST_JSON)
+        assertEquals(
+            listOf("gemma3-1b-it-int4", "gemma3-1b-it-mpseq-q8", "gemma4-e2b-it", "gemma4-e4b-it"),
+            assets.map { it.id },
+        )
+        assertEquals(LocalLlmManager.RUNTIME_MEDIAPIPE, assets[0].runtime)
+        assertEquals(LocalLlmManager.RUNTIME_LITERTLM, assets[2].runtime)
+        assertEquals(LocalLlmManager.RUNTIME_LITERTLM, assets[3].runtime)
+        assertEquals("task", LocalLlmManager.extForRuntime(assets[0].runtime))
+        assertEquals("litertlm", LocalLlmManager.extForRuntime(assets[2].runtime))
+        assertEquals("task", LocalLlmManager.extForRuntime("bogus"))
+    }
+
+    @Test
+    fun generateLitertlm_missingFileFailsClosed() {
+        var msg: String? = null
+        try {
+            LocalLlmManager.generateLitertlm(File("/nonexistent/m.litertlm"), "s", "t")
+        } catch (e: IllegalArgumentException) {
+            msg = e.message
+        }
+        assertTrue(msg?.contains("not ready") == true)
+    }
+
+    @Test
     fun weightCacheLink_pointsAtModelsDir() {
         val dirs = Files.createTempDirectory("llm-cachelink").toFile()
         try {

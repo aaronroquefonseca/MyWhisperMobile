@@ -30,3 +30,7 @@
 # them (full flavor; harmless when absent in lite).
 -keep class com.k2fsa.sherpa.onnx.** { *; }
 -keep class com.google.mediapipe.tasks.genai.llminference.** { *; }
+# Own bridge (loaded by NAME from common code, never referenced
+# directly — R8 cannot see the edge). The litertlm library classes
+# it touches are traced normally through its direct references.
+-keep class com.mywhisper.mobile.LiteRtLmBridge { *; }

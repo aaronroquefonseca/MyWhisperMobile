@@ -168,6 +168,29 @@ class LocalMultiPackTest {
     }
 
     @Test
+    fun llm_slots_useRuntimeExtension() {
+        val dir = Files.createTempDirectory("llm-ext").toFile()
+        try {
+            val lm = LocalLlmManager.ModelAsset(
+                "gemma4-e2b-it",
+                "https://example/g4.litertlm",
+                "c".repeat(64),
+                9,
+                runtime = LocalLlmManager.RUNTIME_LITERTLM,
+            )
+            assertEquals(File(File(dir, "models"), "llm-gemma4-e2b-it.litertlm"), MainActivity.llmTaskFileFor(dir, lm))
+            // Id default + explicit ext stay .task (existing callers/tests).
+            assertEquals(File(File(dir, "models"), "llm-plain-id.task"), MainActivity.llmTaskFileFor(dir, "plain-id"))
+            assertEquals(
+                File(File(dir, "models"), "llm-plain-id.litertlm"),
+                MainActivity.llmTaskFileFor(dir, "plain-id", "litertlm"),
+            )
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
     fun llm_selection_storedWins_unknownFallsToFirst_emptyIsNull() {
         val assets = listOf(
             LocalLlmManager.ModelAsset("a", "https://example/a.task", "0".repeat(64), 5),

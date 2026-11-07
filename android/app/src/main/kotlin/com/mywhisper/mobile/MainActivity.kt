@@ -282,18 +282,25 @@ class MainActivity : ComponentActivity() {
         }
 
         /**
-         * Per-asset task file: `models/llm-<assetId>.task`, so several
+         * Per-asset model file: `models/llm-<assetId>.<ext>` (`.task`
+         * for MediaPipe, `.litertlm` for LiteRT-LM), so several
          * downloaded LLM packs coexist (one file per asset) while the
          * legacy single `cleanup.task` slot stays untouched. Pure for
          * unit tests (file mapping only, no Context).
          */
         @JvmStatic
-        internal fun llmTaskFileFor(dir: File, assetId: String): File {
+        internal fun llmTaskFileFor(dir: File, assetId: String, ext: String = "task"): File {
             val safe = assetId.map { c ->
                 if (c.isLetterOrDigit() || c == '-' || c == '_') c else '_'
             }.joinToString("").ifBlank { "model" }
-            return File(File(dir, "models"), "llm-$safe.task")
+            val cleanExt = ext.trimStart('.').ifBlank { "task" }
+            return File(File(dir, "models"), "llm-$safe.$cleanExt")
         }
+
+        /** Asset-aware slot: extension follows the entry runtime. */
+        @JvmStatic
+        internal fun llmTaskFileFor(dir: File, asset: LocalLlmManager.ModelAsset): File =
+            llmTaskFileFor(dir, asset.id, LocalLlmManager.extForRuntime(asset.runtime))
 
         /**
          * Selected LLM asset: stored id wins, else the first manifest
@@ -354,7 +361,7 @@ class MainActivity : ComponentActivity() {
             if (isPlaceholderSha(asset.sha256)) {
                 return LlmInspect(LocalPackState.MISSING, 0L)
             }
-            val slot = llmTaskFileFor(dir, asset.id)
+            val slot = llmTaskFileFor(dir, asset)
             val slotOk = verify(slot, asset.sha256)
             // Legacy slot is only probed when the per-asset slot
             // misses (adoption path) — a verified slot short-circuits.
@@ -393,7 +400,7 @@ class MainActivity : ComponentActivity() {
          */
         @JvmStatic
         internal fun hasLlmTrace(dir: File, asset: LocalLlmManager.ModelAsset): Boolean {
-            val slot = llmTaskFileFor(dir, asset.id)
+            val slot = llmTaskFileFor(dir, asset)
             if (slot.isFile && slot.length() > 0) return true
             try {
                 val legacy = LocalLlmManager.defaultTaskFile(dir)
@@ -419,7 +426,7 @@ class MainActivity : ComponentActivity() {
         @JvmStatic
         internal fun hasCompleteLlmFile(dir: File, asset: LocalLlmManager.ModelAsset): Boolean {
             if (asset.sizeBytes <= 0) return true
-            val slot = llmTaskFileFor(dir, asset.id)
+            val slot = llmTaskFileFor(dir, asset)
             if (slot.isFile && slot.length() >= asset.sizeBytes) return true
             return try {
                 val legacy = LocalLlmManager.defaultTaskFile(dir)
@@ -589,6 +596,21 @@ class MainActivity : ComponentActivity() {
         /** MediaPipe LLM runner present (false on lite builds / JVM tests). Never throws. */
         @JvmStatic
         internal fun llmRunnerSupported(): Boolean =
+            mediapipeRunnerSupported() || litertlmRunnerSupported()
+
+        /** LiteRT-LM runner present (false on lite builds / JVM tests). Never throws. */
+        @JvmStatic
+        internal fun litertlmRunnerSupported(): Boolean =
+            try {
+                Class.forName("com.mywhisper.mobile.LiteRtLmBridge")
+                true
+            } catch (_: Exception) {
+                false
+            } catch (_: LinkageError) {
+                false
+            }
+
+        private fun mediapipeRunnerSupported(): Boolean =
             try {
                 Class.forName("com.google.mediapipe.tasks.genai.llminference.LlmInference")
                 true
@@ -793,7 +815,7 @@ class MainActivity : ComponentActivity() {
           */
         internal const val LLM_MANIFEST_JSON = """{
   "provider": "mediapipe",
-  "notes": "Binaries NEVER committed. Download via the in-app Text cleanup > Local row (SHA-256 verified) or scripts/fetch-local-llm.sh. SHAs below were verified by full download + sha256sum (public repos, no auth). Gemma 4 note: only web.task (WebGPU) and .litertlm (LiteRT-LM runtime) artifacts exist - no Android MediaPipe .task ('Unable to open zip archive' on-device), so Gemma 4 stays out until a LiteRT-LM runner lands; use Ollama gemma4:* entries meanwhile.",
+  "notes": "Binaries NEVER committed. Download via the in-app Text cleanup > Local row (SHA-256 verified) or scripts/fetch-local-llm.sh. SHAs below were verified by full download + sha256sum. Gemma 4 note: only .litertlm (LiteRT-LM runtime) + web.task (WebGPU) artifacts exist - no Android MediaPipe .task; Gemma 4 entries use runtime litertlm (own runner, full flavor). Gated files need HF auth + license; Apache-2.0 files download directly.",
   "models": [
     {
       "id": "gemma3-1b-it-int4",
@@ -810,6 +832,24 @@ class MainActivity : ComponentActivity() {
       "size_bytes": 1073765694,
       "min_ram_mb": 4096,
       "note": "Official multi-prefill-seq q8 (ekv2048): the parameterization Google's Android sample used (tasks-genai 0.10.29); gated - needs HF auth + Gemma license."
+    },
+    {
+      "id": "gemma4-e2b-it",
+      "runtime": "litertlm",
+      "url": "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm",
+      "sha256": "181938105e0eefd105961417e8da75903eacda102c4fce9ce90f50b97139a63c",
+      "size_bytes": 2588147712,
+      "min_ram_mb": 8192,
+      "note": "Gemma 4 E2B via LiteRT-LM (Apache-2.0, ungated). Needs the litertlm runner; 12GB phones fine."
+    },
+    {
+      "id": "gemma4-e4b-it",
+      "runtime": "litertlm",
+      "url": "https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it.litertlm",
+      "sha256": "0b2a8980ce155fd97673d8e820b4d29d9c7d99b8fa6806f425d969b145bd52e0",
+      "size_bytes": 3659530240,
+      "min_ram_mb": 10240,
+      "note": "Gemma 4 E4B via LiteRT-LM (Apache-2.0, ungated). Heaviest option: ~3.4GB weights, 12GB phones."
     }
   ]
 }"""
@@ -3253,7 +3293,7 @@ class MainActivity : ComponentActivity() {
             )
         /** Verified file backing [a]: per-asset slot, else the adopted legacy slot. */
         fun llmActiveFile(a: LocalLlmManager.ModelAsset): File {
-            val slot = llmTaskFileFor(filesDir, a.id)
+            val slot = llmTaskFileFor(filesDir, a)
             if (!isPlaceholderSha(a.sha256) && LocalLlmManager.verifySha256(slot, a.sha256)) {
                 return slot
             }
@@ -3339,7 +3379,15 @@ class MainActivity : ComponentActivity() {
                             llmActiveFile(target),
                             system,
                             generateFn = { f, p ->
-                                LocalLlmManager.generate(f, p, context = applicationContext)
+                                if (target.runtime == LocalLlmManager.RUNTIME_LITERTLM) {
+                                    LocalLlmManager.generateLitertlm(
+                                        f,
+                                        system,
+                                        LocalLlmManager.SELFTEST_TRANSCRIPT,
+                                    )
+                                } else {
+                                    LocalLlmManager.generate(f, p, context = applicationContext)
+                                }
                             },
                         ),
                     )
@@ -3902,7 +3950,7 @@ class MainActivity : ComponentActivity() {
                             Text(
                                 stringResource(
                                     R.string.llm_pack_dest,
-                                    llmTaskFileFor(filesDir, a.id).absolutePath,
+                                    llmTaskFileFor(filesDir, a).absolutePath,
                                 ),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -4054,7 +4102,7 @@ class MainActivity : ComponentActivity() {
                             try {
                                 if (doomed != null) {
                                     LocalLlmManager.deleteModel(
-                                        llmTaskFileFor(filesDir, doomed.id),
+                                        llmTaskFileFor(filesDir, doomed),
                                         listOf(doomed),
                                     )
                                     // Adopted legacy slot: clear it only when
@@ -4152,7 +4200,7 @@ class MainActivity : ComponentActivity() {
                         Text(
                             stringResource(
                                 R.string.llm_pack_dest,
-                                (llmSelected?.let { llmTaskFileFor(filesDir, it.id) }
+                                (llmSelected?.let { llmTaskFileFor(filesDir, it) }
                                     ?: LocalLlmManager.defaultTaskFile(filesDir)).absolutePath,
                             ),
                             style = MaterialTheme.typography.bodySmall,

@@ -26,6 +26,10 @@ object LocalLlmManager {
     const val PROVIDER = "mediapipe"
     const val DEFAULT_TASK_NAME = "cleanup.task"
 
+    /** On-device runner backends (manifest `runtime`, one per entry). */
+    const val RUNTIME_MEDIAPIPE = "mediapipe"
+    const val RUNTIME_LITERTLM = "litertlm"
+
     data class ModelAsset(
         val id: String,
         val url: String,
@@ -33,6 +37,8 @@ object LocalLlmManager {
         val sizeBytes: Long,
         /** Minimum device RAM (MB) for the selector warning; 0 = unknown. */
         val minRamMb: Long = 0,
+        /** Runner backend id ([RUNTIME_MEDIAPIPE]/[RUNTIME_LITERTLM]). */
+        val runtime: String = RUNTIME_MEDIAPIPE,
     )
 
     data class Status(
@@ -71,15 +77,23 @@ object LocalLlmManager {
                     ?: throw IllegalArgumentException("manifest entry lacks $name")
             fun optLongField(name: String): Long =
                 Regex("\"$name\"\\s*:\\s*(\\d+)").find(entry)?.groupValues?.get(1)?.toLong() ?: 0
+            fun optStrField(name: String, default: String): String =
+                Regex("\"$name\"\\s*:\\s*\"([^\"]*)\"").find(entry)?.groupValues?.get(1) ?: default
             ModelAsset(
                 id = strField("id"),
                 url = strField("url"),
                 sha256 = strField("sha256"),
                 sizeBytes = longField("size_bytes"),
                 minRamMb = optLongField("min_ram_mb"),
+                runtime = optStrField("runtime", RUNTIME_MEDIAPIPE),
             )
         }
     }
+
+    /** Model-file extension for a runner backend (`task` vs `litertlm`). Pure. */
+    @JvmStatic
+    fun extForRuntime(runtime: String): String =
+        if (runtime == RUNTIME_LITERTLM) "litertlm" else "task"
 
     /** Byte-stable prompt packing — must match `local_llm::build_cleanup_prompt`. */
     fun buildPrompt(system: String, transcript: String): String =
@@ -449,6 +463,38 @@ object LocalLlmManager {
             }
         }
         return MediaPipeRunner.generate(taskFile.absolutePath, prompt, maxTokens, context)
+    }
+
+    /**
+     * LiteRT-LM generation (Gemma 4 `.litertlm`) via the full-flavor
+     * `LiteRtLmBridge`, discovered by class NAME (stable, ours) so
+     * lite builds and JVM unit tests (no litertlm classes) fail
+     * closed with ClassNotFoundException and callers fall back.
+     * Split system/transcript (the API models them separately);
+     * [maxTokens] null = model default. The engine cache lives in
+     * the models dir (quota-free), never the app cache dir.
+     * Throws on failure — callers map to FAIL, never crash.
+     */
+    fun generateLitertlm(
+        taskFile: File,
+        system: String,
+        transcript: String,
+        maxTokens: Int? = null,
+        cacheDir: File? = null,
+    ): String {
+        require(taskFile.isFile) { "local llm model not ready at ${taskFile.absolutePath}" }
+        val bridge = Class.forName("com.mywhisper.mobile.LiteRtLmBridge")
+        val dir = (cacheDir ?: taskFile.parentFile)?.absolutePath
+            ?: throw IllegalStateException("local llm needs a cache dir")
+        val boxed = maxTokens?.let { Integer.valueOf(it) }
+        return bridge.getMethod(
+            "generate",
+            String::class.java,
+            String::class.java,
+            String::class.java,
+            Integer::class.java,
+            String::class.java,
+        ).invoke(null, taskFile.absolutePath, system, transcript, boxed, dir) as String
     }
 
     /**
