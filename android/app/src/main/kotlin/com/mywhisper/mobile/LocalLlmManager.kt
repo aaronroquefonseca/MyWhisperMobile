@@ -431,12 +431,13 @@ object LocalLlmManager {
     fun generate(
         taskFile: File,
         prompt: String,
-        // Sample parity (official Android sample: MAX_TOKENS=1024):
-        // maxTokens bounds input+output; our cleanup prompt alone is
-        // ~752 tokens, so 512 fails CLOSED with OUT_OF_RANGE
-        // (input_size was not less than maxTokens(512)) instead of
-        // generating. Model ctx is 2048 (int4) / ekv2048 (mpseq).
-        maxTokens: Int = 1024,
+        // Sample used 1024, but our prompt alone is ~752 tokens and
+        // grows with the transcript (system ~700 + dictation), so
+        // 1024 fails real dictations. 2048 = the files' baked context
+        // (int4 card: ctx 2048; mpseq: ekv2048) — the highest value
+        // the conversions physically support. Longer inputs fail
+        // closed (OUT_OF_RANGE) and the chain falls through.
+        maxTokens: Int = 2048,
         context: android.content.Context? = null,
     ): String {
         require(taskFile.isFile) { "local llm model not ready at ${taskFile.absolutePath}" }
