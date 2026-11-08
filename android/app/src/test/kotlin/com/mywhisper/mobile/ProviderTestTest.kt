@@ -2,6 +2,7 @@ package com.mywhisper.mobile
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -253,5 +254,24 @@ class ProviderTestTest {
             MainActivity.llmRemoteTestAllowed("Ollama", "http://127.0.0.1:11434", "llama3"),
         )
         assertFalse(MainActivity.llmRemoteTestAllowed("Ollama", "", "llama3"))
+    }
+
+    // -- Probe bearer auth (bearer-gated proxies) ---------------------
+
+    @Test
+    fun bearerToken_returnsKeyWhenPresent() {
+        assertEquals("sk-test-123", ProviderTest.bearerToken("sk-test-123"))
+    }
+
+    @Test
+    fun bearerToken_nullWhenBlank() {
+        assertNull(ProviderTest.bearerToken(""))
+        assertNull(ProviderTest.bearerToken("   "))
+        assertNull(ProviderTest.bearerToken("\n\t "))
+    }
+
+    @Test
+    fun bearerToken_trimsWhitespace() {
+        assertEquals("sk-test-123", ProviderTest.bearerToken("  sk-test-123\n"))
     }
 }
