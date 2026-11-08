@@ -2,6 +2,7 @@ package com.mywhisper.mobile
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -258,22 +259,19 @@ class ProviderTestTest {
     // -- Probe bearer auth (bearer-gated proxies) ---------------------
 
     @Test
-    fun bearerHeaders_sendsBearerWhenKeyPresent() {
-        val h = ProviderTest.bearerHeaders("sk-test-123")
-        assertEquals("Bearer sk-test-123", h["Authorization"])
+    fun bearerToken_returnsKeyWhenPresent() {
+        assertEquals("sk-test-123", ProviderTest.bearerToken("sk-test-123"))
     }
 
     @Test
-    fun bearerHeaders_omitsHeaderWhenBlank() {
-        assertTrue(ProviderTest.bearerHeaders("").isEmpty())
-        assertTrue(ProviderTest.bearerHeaders("   ").isEmpty())
-        assertTrue(ProviderTest.bearerHeaders("\n\t ").isEmpty())
+    fun bearerToken_nullWhenBlank() {
+        assertNull(ProviderTest.bearerToken(""))
+        assertNull(ProviderTest.bearerToken("   "))
+        assertNull(ProviderTest.bearerToken("\n\t "))
     }
 
     @Test
-    fun bearerHeaders_trimsWhitespace() {
-        val h = ProviderTest.bearerHeaders("  sk-test-123\n")
-        assertEquals("Bearer sk-test-123", h["Authorization"])
+    fun bearerToken_trimsWhitespace() {
         assertEquals("sk-test-123", ProviderTest.bearerToken("  sk-test-123\n"))
     }
 }

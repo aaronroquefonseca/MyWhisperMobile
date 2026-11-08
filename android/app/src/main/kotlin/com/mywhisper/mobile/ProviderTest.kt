@@ -250,10 +250,4 @@ object ProviderTest {
         val t = apiKey.trim()
         return if (t.isEmpty()) null else t
     }
-
-    /** `Authorization: Bearer` header map (empty when no key). Pure. */
-    fun bearerHeaders(apiKey: String): Map<String, String> {
-        val t = bearerToken(apiKey) ?: return emptyMap()
-        return mapOf("Authorization" to "Bearer $t")
-    }
 }
