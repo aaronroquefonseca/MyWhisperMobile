@@ -137,6 +137,7 @@
     <string name="local_downloading">Descargando %1$s…</string>
     <string name="local_downloaded">%1$s descargado — pack verificado.</string>
     <string name="local_download_failed">Falló la descarga: %1$s</string>
+    <string name="local_checking">Comprobando pack…</string>
     <string name="llm_wait_wifi">Esperando Wi-Fi — conéctate a un Wi-Fi no medido y la descarga empezará sola.</string>
     <string name="llm_wait_offline">Esperando conexión de red…</string>
     <string name="llm_use_metered">Usar datos móviles (%1$s MB)</string>

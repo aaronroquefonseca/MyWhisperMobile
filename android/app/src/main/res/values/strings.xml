@@ -136,6 +136,7 @@
     <string name="local_downloading">Downloading %1$s…</string>
     <string name="local_downloaded">Downloaded %1$s — pack verified.</string>
     <string name="local_download_failed">Download failed: %1$s</string>
+    <string name="local_checking">Checking pack…</string>
     <string name="llm_wait_wifi">Waiting for Wi-Fi — connect to unmetered Wi-Fi and the download starts on its own.</string>
     <string name="llm_wait_offline">Waiting for a network connection…</string>
     <string name="llm_use_metered">Use mobile data (%1$s MB)</string>

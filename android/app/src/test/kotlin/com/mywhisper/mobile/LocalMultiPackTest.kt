@@ -191,6 +191,35 @@ class LocalMultiPackTest {
     }
 
     @Test
+    fun llm_packFiles_coverSlotAndParts() {
+        val dir = Files.createTempDirectory("llm-files").toFile()
+        try {
+            val lm = LocalLlmManager.ModelAsset(
+                "gemma4-e2b-it",
+                "https://example/g4.litertlm",
+                "c".repeat(64),
+                9,
+                runtime = LocalLlmManager.RUNTIME_LITERTLM,
+            )
+            val slot = MainActivity.llmTaskFileFor(dir, lm)
+            slot.parentFile?.mkdirs()
+            slot.writeBytes(ByteArray(7))
+            // Own part participates (download in flight changes it).
+            val part = File(slot.parentFile, "${slot.name}.part.${lm.id}")
+            part.writeBytes(ByteArray(3))
+            val names = MainActivity.llmPackFiles(dir, lm).map { it.name }
+            assertTrue(names.contains(slot.name))
+            assertTrue(names.contains(part.name))
+            // Fingerprint moves when the part grows (resume progress).
+            val before = LocalModelDownload.packFingerprint(MainActivity.llmPackFiles(dir, lm))
+            part.appendBytes(ByteArray(2))
+            assertTrue(LocalModelDownload.packFingerprint(MainActivity.llmPackFiles(dir, lm)) != before)
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
     fun llm_selection_storedWins_unknownFallsToFirst_emptyIsNull() {
         val assets = listOf(
             LocalLlmManager.ModelAsset("a", "https://example/a.task", "0".repeat(64), 5),

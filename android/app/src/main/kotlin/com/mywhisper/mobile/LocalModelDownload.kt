@@ -1,28 +1,33 @@
 package com.mywhisper.mobile
 
+import java.io.File
+
 /**
  * Row-state machine for the Local STT/LLM download rows (desktop
  * `fill_stt_models` parity: install state + Download/Delete/Retry
  * actions + in-place progress). Pure JVM, unit-tested.
  *
  * States: MISSING (nothing usable) / DOWNLOADING (worker in flight)
- * / INCOMPLETE (interrupted set: subset of files, short file, or
- * stale `.part` — resumable, NEVER "SHA mismatch") / PRESENT
- * (verified, toggle live) / MISMATCH (COMPLETE files fail verify,
- * re-download) / FAILED (last download threw, Retry offered).
+ * / CHECKING (pack verify running in background — rows show this,
+ * never a stale MISSING, until the first pass lands) / INCOMPLETE
+ * (interrupted set: subset of files, short file, or stale `.part` —
+ * resumable, NEVER "SHA mismatch") / PRESENT (verified, toggle
+ * live) / MISMATCH (COMPLETE files fail verify, re-download) /
+ * FAILED (last download threw, Retry offered).
  * Fail-closed: only PRESENT enables the toggle.
  */
 object LocalModelDownload {
-    enum class RowState { MISSING, DOWNLOADING, INCOMPLETE, PRESENT, MISMATCH, FAILED }
+    enum class RowState { MISSING, DOWNLOADING, CHECKING, INCOMPLETE, PRESENT, MISMATCH, FAILED }
 
     /**
      * Resolve the row state. Precedence: an in-flight download wins
      * over everything (progress shows in place); otherwise a terminal
-     * error pins FAILED until Retry/Delete clears it; otherwise the
-     * verified-pack outcome decides. [incomplete] (subset/short/stale
-     * partial, nothing verified) reads as INCOMPLETE — resumable —
-     * and never as MISMATCH; MISMATCH needs [packMismatch] (complete
-     * files that fail verify).
+     * error pins FAILED until Retry/Delete clears it; otherwise a
+     * running background verify reads CHECKING (never stale MISSING);
+     * otherwise the verified-pack outcome decides. [incomplete]
+     * (subset/short/stale partial, nothing verified) reads as
+     * INCOMPLETE — resumable — and never as MISMATCH; MISMATCH needs
+     * [packMismatch] (complete files that fail verify).
      */
     @JvmStatic
     fun resolve(
@@ -31,9 +36,11 @@ object LocalModelDownload {
         downloading: Boolean,
         error: String?,
         incomplete: Boolean = false,
+        checking: Boolean = false,
     ): RowState = when {
         downloading -> RowState.DOWNLOADING
         !error.isNullOrEmpty() -> RowState.FAILED
+        checking -> RowState.CHECKING
         packPresent -> RowState.PRESENT
         packMismatch -> RowState.MISMATCH
         incomplete -> RowState.INCOMPLETE
@@ -86,6 +93,49 @@ object LocalModelDownload {
     @JvmStatic
     fun progressMb(receivedBytes: Long, totalBytes: Long?): Pair<Long, Long?> =
         Pair(receivedBytes / 1_000_000, totalBytes?.let { it / 1_000_000 })
+
+    /**
+     * Fingerprint of a pack's on-disk inputs for the verify cache:
+     * `name=length@mtime` per file (`name:-` when absent), joined.
+     * Stat-only (no content reads) — safe to compute on any thread,
+     * including composition. Any download/delete/modify changes the
+     * fingerprint, so cached verdicts can never go stale.
+     * Pure for unit tests.
+     */
+    @JvmStatic
+    fun packFingerprint(files: List<File>): String =
+        files.sortedBy { it.name }.joinToString("|") { f ->
+            if (f.isFile) "${f.name}=${f.length()}@${f.lastModified()}" else "${f.name}:-"
+        }
+
+    /**
+     * Fingerprint-gated verify cache: verification (GB-scale SHA)
+     * runs at most once per on-disk state. Recomposition bumps,
+     * tab switches and scrolls hit the cache with stat-only cost —
+     * no re-hash storms, no UI-thread hashing, no ANR. Callers post
+     * results back to row state themselves (CHECKING meanwhile).
+     * Thread-safe. Pure JVM-testable with fakes.
+     */
+    class PackVerifyCache {
+        private val lock = Any()
+        private val map = mutableMapOf<String, Pair<String, Any>>()
+
+        /** Cached verdict when [fingerprint] matches, else compute + store. */
+        @Suppress("UNCHECKED_CAST")
+        fun <T : Any> getOrPut(id: String, fingerprint: String, compute: () -> T): T =
+            synchronized(lock) {
+                val hit = map[id]
+                if (hit != null && hit.first == fingerprint) return hit.second as T
+                val fresh = compute()
+                map[id] = fingerprint to fresh
+                return fresh
+            }
+
+        /** True when [id] holds a verdict for [fingerprint]. */
+        fun has(id: String, fingerprint: String): Boolean = synchronized(lock) {
+            fingerprint.isNotEmpty() && map[id]?.first == fingerprint
+        }
+    }
 
     /**
      * Network posture for the constraint-blocked download message.

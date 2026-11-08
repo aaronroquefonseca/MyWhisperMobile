@@ -1,5 +1,6 @@
 package com.mywhisper.mobile
 
+import java.io.File
 import java.nio.file.Files
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -571,6 +572,40 @@ class LocalSttModelsTest {
                     LocalSttModels.stateFor(dir, m),
                 )
             }
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun sttPackFiles_coverPackAndParts() {
+        val entry = LocalSttModels.Entry(
+            id = "x", name = "x", sizeLabel = "x",
+            engine = LocalSttModels.Engine.WHISPER,
+            provider = LocalSttModels.Provider.WHISPER,
+            langMode = LocalSttModels.LangMode.AUTO,
+            languages = listOf("en"),
+            dictionary = false, runtimeNote = "x", phoneTier = "x",
+            dirRel = "models/x",
+            files = listOf(
+                LocalSttModels.ModelFile("a.onnx", "u", "c".repeat(64), 3),
+                LocalSttModels.ModelFile("b.onnx", "u", "c".repeat(64), 4),
+            ),
+        )
+        val dir = Files.createTempDirectory("stt-files").toFile()
+        try {
+            // Absent pack: stable fingerprint across calls.
+            val missing1 = MainActivity.sttPackFiles(dir, entry)
+                .let { LocalModelDownload.packFingerprint(it) }
+            assertEquals(missing1, LocalModelDownload.packFingerprint(MainActivity.sttPackFiles(dir, entry)))
+            // Present pack + a growing part move the fingerprint.
+            val modelDir = File(dir, "models/x").apply { mkdirs() }
+            File(modelDir, "a.onnx").writeBytes(ByteArray(6))
+            val part = File(modelDir, "b.onnx.part").apply { writeBytes(ByteArray(2)) }
+            val grown = LocalModelDownload.packFingerprint(MainActivity.sttPackFiles(dir, entry))
+            assertTrue(grown != missing1)
+            part.appendBytes(ByteArray(1))
+            assertTrue(LocalModelDownload.packFingerprint(MainActivity.sttPackFiles(dir, entry)) != grown)
         } finally {
             dir.deleteRecursively()
         }

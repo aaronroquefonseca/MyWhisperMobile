@@ -303,6 +303,49 @@ class MainActivity : ComponentActivity() {
             llmTaskFileFor(dir, asset.id, LocalLlmManager.extForRuntime(asset.runtime))
 
         /**
+         * Files whose stats gate an LLM asset's cached verdict: the
+         * slot, the legacy slot, and this asset's own `.part` files.
+         * Stat-only (no content reads) — safe anywhere, including
+         * composition. Pure java.io for unit tests.
+         */
+        @JvmStatic
+        internal fun llmPackFiles(dir: File, asset: LocalLlmManager.ModelAsset): List<File> {
+            val slot = llmTaskFileFor(dir, asset)
+            val modelsDir = slot.parentFile ?: dir
+            val parts = try {
+                modelsDir.listFiles { f ->
+                    ModelDownloadSchedule.isOwnLlmPart(f.name, slot.name, asset.id)
+                }?.toList() ?: emptyList()
+            } catch (_: Exception) {
+                emptyList()
+            }
+            val legacy = try {
+                LocalLlmManager.defaultTaskFile(dir).takeIf { it != slot }
+            } catch (_: Exception) {
+                null
+            }
+            return listOf(slot) + parts + listOfNotNull(legacy)
+        }
+
+        /**
+         * Files whose stats gate an STT model's cached verdict: the
+         * pack files plus this model's `.part` files. Stat-only, pure
+         * java.io for unit tests.
+         */
+        @JvmStatic
+        internal fun sttPackFiles(dir: File, entry: LocalSttModels.Entry): List<File> {
+            val modelDir = LocalSttModels.dirFor(dir, entry)
+            val pack = entry.files.map { f -> File(modelDir, f.name) }
+            val parts = try {
+                modelDir.listFiles { f -> f.name.endsWith(".part") }?.toList()
+                    ?: emptyList()
+            } catch (_: Exception) {
+                emptyList()
+            }
+            return pack + parts
+        }
+
+        /**
          * Selected LLM asset: stored id wins, else the first manifest
          * asset, else null (empty manifest — download and enable stay
          * fail-closed). Pure for unit tests (stored id injected).
@@ -574,6 +617,7 @@ class MainActivity : ComponentActivity() {
                 LocalModelDownload.RowState.MISSING -> GatedRowState.MISSING
                 LocalModelDownload.RowState.DOWNLOADING,
                 LocalModelDownload.RowState.INCOMPLETE,
+                LocalModelDownload.RowState.CHECKING,
                 -> GatedRowState.DOWNLOADING
                 LocalModelDownload.RowState.PRESENT -> GatedRowState.PRESENT
                 LocalModelDownload.RowState.MISMATCH -> GatedRowState.MISMATCH
@@ -2363,6 +2407,7 @@ class MainActivity : ComponentActivity() {
         // computed OFF the composition thread: pack hashes (up to GBs)
         // on the UI thread ANR the app and drop input. Rows read
         // missing until the first pass lands.
+        val sttPackCache = remember { LocalModelDownload.PackVerifyCache() }
         var modelInspects by remember {
             mutableStateOf<Map<String, LocalSttModels.PackInspect>>(emptyMap())
         }
@@ -2370,7 +2415,8 @@ class MainActivity : ComponentActivity() {
             workers.execute {
                 val fresh = LocalSttModels.MODELS.associate { m ->
                     m.id to try {
-                        LocalSttModels.inspect(filesDir, m)
+                        val fp = LocalModelDownload.packFingerprint(sttPackFiles(filesDir, m))
+                        sttPackCache.getOrPut(m.id, fp) { LocalSttModels.inspect(filesDir, m) }
                     } catch (_: Exception) {
                         LocalSttModels.PackInspect(LocalModelDownload.RowState.MISSING, 0L)
                     }
@@ -2392,14 +2438,24 @@ class MainActivity : ComponentActivity() {
         var dlProg by remember { mutableStateOf(mapOf<String, Pair<Long, Long>>()) }
         var dlErr by remember { mutableStateOf(mapOf<String, String>()) }
         var deleteConfirm by remember { mutableStateOf<String?>(null) }
-        fun rowOf(m: LocalSttModels.Entry): LocalModelDownload.RowState =
-            LocalModelDownload.resolve(
+        fun rowOf(m: LocalSttModels.Entry): LocalModelDownload.RowState {
+            val checking = try {
+                !sttPackCache.has(
+                    m.id,
+                    LocalModelDownload.packFingerprint(sttPackFiles(filesDir, m)),
+                )
+            } catch (_: Exception) {
+                false
+            }
+            return LocalModelDownload.resolve(
                 packOf(m.id) == LocalPackState.PRESENT,
                 packOf(m.id) == LocalPackState.MISMATCH,
                 dlBusy.contains(m.id),
                 dlErr[m.id],
                 packOf(m.id) == LocalPackState.INCOMPLETE,
+                checking = checking,
             )
+        }
         fun startModelDownload(m: LocalSttModels.Entry) {
             // Lite flavor: downloads could never run — refuse fail-closed.
             if (!sttRunner) {
@@ -2894,6 +2950,8 @@ class MainActivity : ComponentActivity() {
                                         stringResource(R.string.local_pack_present)
                                     LocalModelDownload.RowState.MISMATCH ->
                                         stringResource(R.string.local_pack_mismatch)
+                                    LocalModelDownload.RowState.CHECKING ->
+                                        stringResource(R.string.local_checking)
                                     LocalModelDownload.RowState.DOWNLOADING,
                                     LocalModelDownload.RowState.INCOMPLETE,
                                     -> {
@@ -2976,10 +3034,13 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                             if (row == LocalModelDownload.RowState.DOWNLOADING ||
-                                row == LocalModelDownload.RowState.INCOMPLETE
+                                row == LocalModelDownload.RowState.INCOMPLETE ||
+                                row == LocalModelDownload.RowState.CHECKING
                             ) {
                                 Spacer(Modifier.height(4.dp))
-                                val frac = if (row == LocalModelDownload.RowState.DOWNLOADING) {
+                                val frac = if (row == LocalModelDownload.RowState.CHECKING) {
+                                    null
+                                } else if (row == LocalModelDownload.RowState.DOWNLOADING) {
                                     LocalModelDownload.progressFraction(
                                         prog?.first ?: 0L,
                                         prog?.second?.takeIf { it > 0 },
@@ -3010,6 +3071,7 @@ class MainActivity : ComponentActivity() {
                                     )
                                 } else when (row) {
                                     LocalModelDownload.RowState.DOWNLOADING -> {}
+                                    LocalModelDownload.RowState.CHECKING -> {}
                                     LocalModelDownload.RowState.FAILED -> {
                                         OutlinedButton(onClick = { startModelDownload(m) }) {
                                             Text(stringResource(R.string.action_retry))
@@ -3505,12 +3567,14 @@ class MainActivity : ComponentActivity() {
         // hashes (up to GBs) on the UI thread ANR the app and drop
         // input (owner repro on a 2.6GB pack). Rows read missing
         // until the first pass lands, then flip as verified.
+        val packCache = remember { LocalModelDownload.PackVerifyCache() }
         var llmInspects by remember { mutableStateOf<Map<String, LlmInspect>>(emptyMap()) }
         LaunchedEffect(version) {
             workers.execute {
                 val fresh = assets.associate { a ->
                     a.id to try {
-                        llmInspect(filesDir, a)
+                        val fp = LocalModelDownload.packFingerprint(llmPackFiles(filesDir, a))
+                        packCache.getOrPut(a.id, fp) { llmInspect(filesDir, a) }
                     } catch (_: Exception) {
                         LlmInspect(LocalPackState.MISSING, 0L)
                     }
@@ -3543,14 +3607,26 @@ class MainActivity : ComponentActivity() {
         var llmTestResult by remember { mutableStateOf<ProviderTest.Result?>(null) }
         var llmBusy by remember { mutableStateOf(setOf<String>()) }
         var llmResults by remember { mutableStateOf(mapOf<String, ProviderTest.Result>()) }
-        fun llmRowOf(a: LocalLlmManager.ModelAsset): LocalModelDownload.RowState =
-            LocalModelDownload.resolve(
+        fun llmRowOf(a: LocalLlmManager.ModelAsset): LocalModelDownload.RowState {
+            // Background verify still running for these exact bytes:
+            // show CHECKING, never a stale MISSING.
+            val checking = try {
+                !packCache.has(
+                    a.id,
+                    LocalModelDownload.packFingerprint(llmPackFiles(filesDir, a)),
+                )
+            } catch (_: Exception) {
+                false
+            }
+            return LocalModelDownload.resolve(
                 llmPackOf(a.id) == LocalPackState.PRESENT,
                 llmPackOf(a.id) == LocalPackState.MISMATCH,
                 llmDlBusy.contains(a.id),
                 llmDlErr[a.id],
                 llmPackOf(a.id) == LocalPackState.INCOMPLETE,
+                checking = checking,
             )
+        }
         /** Verified file backing [a]: per-asset slot, else the adopted legacy slot. */
         fun llmActiveFile(a: LocalLlmManager.ModelAsset): File {
             val slot = llmTaskFileFor(filesDir, a)
@@ -4156,6 +4232,8 @@ class MainActivity : ComponentActivity() {
                                             stringResource(R.string.local_pack_present)
                                         LocalModelDownload.RowState.MISMATCH ->
                                             stringResource(R.string.local_pack_mismatch)
+                                        LocalModelDownload.RowState.CHECKING ->
+                                            stringResource(R.string.local_checking)
                                         LocalModelDownload.RowState.DOWNLOADING,
                                         LocalModelDownload.RowState.INCOMPLETE,
                                         -> {
@@ -4284,10 +4362,13 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                             if (row == LocalModelDownload.RowState.DOWNLOADING ||
-                                row == LocalModelDownload.RowState.INCOMPLETE
+                                row == LocalModelDownload.RowState.INCOMPLETE ||
+                                row == LocalModelDownload.RowState.CHECKING
                             ) {
                                 Spacer(Modifier.height(4.dp))
-                                val frac = if (row == LocalModelDownload.RowState.DOWNLOADING) {
+                                val frac = if (row == LocalModelDownload.RowState.CHECKING) {
+                                    null
+                                } else if (row == LocalModelDownload.RowState.DOWNLOADING) {
                                     LocalModelDownload.progressFraction(
                                         prog?.first ?: 0L, prog?.second,
                                     )
@@ -4348,6 +4429,7 @@ class MainActivity : ComponentActivity() {
                                             Text(stringResource(R.string.action_cancel))
                                         }
                                     }
+                                    LocalModelDownload.RowState.CHECKING -> {}
                                     LocalModelDownload.RowState.FAILED -> {
                                         OutlinedButton(
                                             enabled = !noPin,

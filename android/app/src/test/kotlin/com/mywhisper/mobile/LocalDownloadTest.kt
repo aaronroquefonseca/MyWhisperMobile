@@ -103,8 +103,7 @@ class LocalDownloadTest {
     }
 
     @Test
-    fun needsWaiting_onlyZeroBytesOnMeteredOrOffline() {
-        val metered = LocalModelDownload.NetState.METERED
+    fun needsWaiting_onlyZeroBytesOnMeteredOrOffline() {        val metered = LocalModelDownload.NetState.METERED
         val offline = LocalModelDownload.NetState.OFFLINE
         val unmetered = LocalModelDownload.NetState.UNMETERED
         // Zero progress + blocked posture → waiting UI.
@@ -120,6 +119,83 @@ class LocalDownloadTest {
         assertFalse(LocalModelDownload.needsWaiting(0L, unmetered))
         assertFalse(LocalModelDownload.needsWaiting(null, null))
         assertFalse(LocalModelDownload.needsWaiting(0L, null))
+    }
+
+    @Test
+    fun resolve_checkingBeatsStaleMissing_yieldsToDownloadAndError() {
+        // Checking (verify running) reads CHECKING, never stale MISSING.
+        assertEquals(
+            LocalModelDownload.RowState.CHECKING,
+            LocalModelDownload.resolve(false, false, false, null, checking = true),
+        )
+        // A live download still wins (progress owns the row).
+        assertEquals(
+            LocalModelDownload.RowState.DOWNLOADING,
+            LocalModelDownload.resolve(false, false, true, null, checking = true),
+        )
+        // A pinned error still wins (explicit failure beats background probe).
+        assertEquals(
+            LocalModelDownload.RowState.FAILED,
+            LocalModelDownload.resolve(false, false, false, "boom", checking = true),
+        )
+        // A known verdict with a stale fingerprint still reads
+        // CHECKING: the cached PRESENT/MISMATCH describes changed
+        // bytes, so re-verify first, display after.
+        assertEquals(
+            LocalModelDownload.RowState.CHECKING,
+            LocalModelDownload.resolve(true, false, false, null, checking = true),
+        )
+        // Default stays backward compatible (no checking).
+        assertEquals(
+            LocalModelDownload.RowState.MISSING,
+            LocalModelDownload.resolve(false, false, false, null),
+        )
+    }
+
+    @Test
+    fun packVerifyCache_hitMissAndStale() {
+        val cache = LocalModelDownload.PackVerifyCache()
+        var calls = 0
+        // Miss computes and stores.
+        assertEquals("v1", cache.getOrPut("a", "fp1") { calls++; "v1" })
+        assertEquals(1, calls)
+        // Same fingerprint hits without recompute.
+        assertEquals("v1", cache.getOrPut("a", "fp1") { calls++; "v2" })
+        assertEquals(1, calls)
+        assertTrue(cache.has("a", "fp1"))
+        // Changed fingerprint recomputes (file downloaded/modified/deleted).
+        assertEquals("v2", cache.getOrPut("a", "fp2") { calls++; "v2" })
+        assertEquals(2, calls)
+        assertTrue(cache.has("a", "fp2"))
+        assertFalse(cache.has("a", "fp1"))
+        assertFalse(cache.has("missing", "fp1"))
+        assertFalse(cache.has("a", ""))
+    }
+
+    @Test
+    fun packFingerprint_stableSortedAndSensitive() {
+        val dir = Files.createTempDirectory("fp").toFile()
+        try {
+            val f1 = File(dir, "b.task").apply { writeBytes(ByteArray(10)) }
+            val f2 = File(dir, "a.task").apply { writeBytes(ByteArray(5)) }
+            val base = LocalModelDownload.packFingerprint(listOf(f1, f2))
+            // Order-independent (sorted by name).
+            assertEquals(base, LocalModelDownload.packFingerprint(listOf(f2, f1)))
+            // Absent files pin as missing (stable across calls).
+            val ghost = File(dir, "ghost.task")
+            assertEquals(
+                LocalModelDownload.packFingerprint(listOf(f1, ghost)),
+                LocalModelDownload.packFingerprint(listOf(f1, ghost)),
+            )
+            // Content growth changes the fingerprint (re-verify).
+            f1.appendBytes(ByteArray(3))
+            assertTrue(LocalModelDownload.packFingerprint(listOf(f1, f2)) != base)
+            // Deletion changes the fingerprint.
+            assertTrue(f2.delete())
+            assertTrue(LocalModelDownload.packFingerprint(listOf(f1, f2)) != base)
+        } finally {
+            dir.deleteRecursively()
+        }
     }
 
     @Test
