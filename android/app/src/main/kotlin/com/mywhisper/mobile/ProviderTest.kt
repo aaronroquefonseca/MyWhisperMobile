@@ -10,9 +10,9 @@ package com.mywhisper.mobile
  *   The probe returns decoded text, or a non-blank status
  *   (`pack ok · N chunks`) when the engine ran on silence —
  *   PASS needs a non-blank return, same rule as every kind.
- * - Server STT: lightweight endpoint check (any HTTP response =
- *   reachable; network throw = FAIL). `ws(s)` has no HTTP surface:
- *   scheme validation only, no heavy transcribe anywhere.
+ * - Server STT: lightweight endpoint GET (2xx = reachable;
+ *   bearer-gated 401/403 = FAIL, never PASS). `ws(s)` has no HTTP
+ *   surface: scheme validation only, no heavy transcribe anywhere.
  * - Local LLM: existing [LocalLlmManager.runSelfTest] via
  *   [fromSelfTest] (same [Result], no second pattern).
  * - Remote LLM: minimal ping/generate probe (HTTP GET, short
@@ -249,5 +249,17 @@ object ProviderTest {
     fun bearerToken(apiKey: String): String? {
         val t = apiKey.trim()
         return if (t.isEmpty()) null else t
+    }
+
+    /**
+     * Probe status excerpt for lightweight GET checks: 2xx means the
+     * endpoint is reachable AND authorized; anything else (a gated
+     * 401/403, a 404 on a POST-only route, a 5xx) is FAIL. Bearer-gated
+     * proxies answer 401 without a key, so accepting any status would
+     * report PASS on an endpoint that rejects us.
+     */
+    fun probeHttpExcerpt(code: Int, model: String): String {
+        if (code !in 200..299) throw IllegalStateException("http $code")
+        return "HTTP $code · $model"
     }
 }

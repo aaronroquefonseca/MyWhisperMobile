@@ -274,4 +274,24 @@ class ProviderTestTest {
     fun bearerToken_trimsWhitespace() {
         assertEquals("sk-test-123", ProviderTest.bearerToken("  sk-test-123\n"))
     }
+
+    // -- Probe 2xx rule (gated 401/403 = FAIL, never PASS) -----------
+
+    @Test
+    fun probeHttpExcerpt_passOn2xx() {
+        assertEquals("HTTP 200 · m", ProviderTest.probeHttpExcerpt(200, "m"))
+        assertEquals("HTTP 204 · m", ProviderTest.probeHttpExcerpt(204, "m"))
+    }
+
+    @Test
+    fun probeHttpExcerpt_failOnGatedOrMissing() {
+        for (code in listOf(401, 403, 404, 500)) {
+            try {
+                ProviderTest.probeHttpExcerpt(code, "m")
+                throw AssertionError("expected http $code to throw")
+            } catch (e: IllegalStateException) {
+                assertEquals("http $code", e.message)
+            }
+        }
+    }
 }

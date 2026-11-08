@@ -1389,8 +1389,9 @@ class MainActivity : ComponentActivity() {
 
     /**
      * Lightweight endpoint check (no heavy transcribe/generate):
-     * any HTTP response = reachable (even 404/405 on POST-only
-     * endpoints); only network throws read as FAIL. Short timeouts.
+     * 2xx = reachable AND authorized — a bearer-gated 401/403 reads
+     * as FAIL, never PASS (see [ProviderTest.probeHttpExcerpt]).
+     * Only network throws read as FAIL beyond that. Short timeouts.
      * Never touches engines/runners/services.
      */
     private fun httpGetCode(urlStr: String, timeoutMs: Int = 8000, apiKey: String = ""): Int {
@@ -1436,12 +1437,13 @@ class MainActivity : ComponentActivity() {
     /**
      * THE server-probe implementations shared by chain rows and
      * add/edit dialogs (one pattern, one result shape): lightweight
-     * endpoint checks, never a heavy transcribe/generate. STT: any
-     * HTTP response = reachable; `ws(s)` / blank vendor-default URL
-     * has no HTTP surface so config validation stands in. LLM: blank
-     * URL = config validation; Ollama checks model reachability via
-     * GET /api/tags where cheap; Cloud does the lightweight GET.
-     * Never touches engines/runners/services.
+     * endpoint checks, never a heavy transcribe/generate. STT/Cloud:
+     * 2xx = reachable; a gated 401/403 = FAIL (wrong or missing key),
+     * never PASS. `ws(s)` / blank vendor-default URL has no HTTP
+     * surface so config validation stands in. LLM: blank URL = config
+     * validation; Ollama checks model reachability via GET /api/tags
+     * where cheap (2xx required, model must be listed). Never touches
+     * engines/runners/services.
      */
     private fun probeSttEndpoint(url: String, model: String, apiKey: String = ""): ProviderTest.Result {
         val u = url.trim()
@@ -1453,7 +1455,7 @@ class MainActivity : ComponentActivity() {
         }
         return ProviderTest.runProbe(ProviderTest.SERVER_TIMEOUT_MS) {
             val code = httpGetCode(u, apiKey = apiKey)
-            "HTTP $code · $m"
+            ProviderTest.probeHttpExcerpt(code, m)
         }
     }
 
@@ -1477,7 +1479,7 @@ class MainActivity : ComponentActivity() {
         }
         return ProviderTest.runProbe(ProviderTest.SERVER_TIMEOUT_MS) {
             val code = httpGetCode(u, apiKey = apiKey)
-            "HTTP $code · $m"
+            ProviderTest.probeHttpExcerpt(code, m)
         }
     }
 
