@@ -254,4 +254,26 @@ class ProviderTestTest {
         )
         assertFalse(MainActivity.llmRemoteTestAllowed("Ollama", "", "llama3"))
     }
+
+    // -- Probe bearer auth (bearer-gated proxies) ---------------------
+
+    @Test
+    fun bearerHeaders_sendsBearerWhenKeyPresent() {
+        val h = ProviderTest.bearerHeaders("sk-test-123")
+        assertEquals("Bearer sk-test-123", h["Authorization"])
+    }
+
+    @Test
+    fun bearerHeaders_omitsHeaderWhenBlank() {
+        assertTrue(ProviderTest.bearerHeaders("").isEmpty())
+        assertTrue(ProviderTest.bearerHeaders("   ").isEmpty())
+        assertTrue(ProviderTest.bearerHeaders("\n\t ").isEmpty())
+    }
+
+    @Test
+    fun bearerHeaders_trimsWhitespace() {
+        val h = ProviderTest.bearerHeaders("  sk-test-123\n")
+        assertEquals("Bearer sk-test-123", h["Authorization"])
+        assertEquals("sk-test-123", ProviderTest.bearerToken("  sk-test-123\n"))
+    }
 }

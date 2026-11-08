@@ -239,4 +239,21 @@ object ProviderTest {
     /** Remote LLM button goes live when the config validates. */
     fun llmRemoteTestAllowed(kind: String, url: String, model: String): Boolean =
         validateLlm(kind, url, model) == LlmError.NONE
+
+    /**
+     * Trimmed bearer token for probe/generate auth (null when blank).
+     * Probes send `Authorization: Bearer <token>` only when non-null;
+     * blank stays header-free (unchanged local behavior). Trims pasted
+     * whitespace/newlines so a copied key still authenticates.
+     */
+    fun bearerToken(apiKey: String): String? {
+        val t = apiKey.trim()
+        return if (t.isEmpty()) null else t
+    }
+
+    /** `Authorization: Bearer` header map (empty when no key). Pure. */
+    fun bearerHeaders(apiKey: String): Map<String, String> {
+        val t = bearerToken(apiKey) ?: return emptyMap()
+        return mapOf("Authorization" to "Bearer $t")
+    }
 }

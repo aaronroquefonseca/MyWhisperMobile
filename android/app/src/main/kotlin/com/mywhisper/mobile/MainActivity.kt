@@ -1393,13 +1393,16 @@ class MainActivity : ComponentActivity() {
      * endpoints); only network throws read as FAIL. Short timeouts.
      * Never touches engines/runners/services.
      */
-    private fun httpGetCode(urlStr: String, timeoutMs: Int = 8000): Int {
+    private fun httpGetCode(urlStr: String, timeoutMs: Int = 8000, apiKey: String = ""): Int {
         val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
             connectTimeout = timeoutMs
             readTimeout = timeoutMs
             instanceFollowRedirects = true
             requestMethod = "GET"
             setRequestProperty("Accept", "application/json")
+            ProviderTest.bearerToken(apiKey)?.let {
+                setRequestProperty("Authorization", "Bearer $it")
+            }
         }
         try {
             conn.connect()
@@ -1410,13 +1413,16 @@ class MainActivity : ComponentActivity() {
     }
 
     /** GET body snippet for model-list checks (Ollama `/api/tags`). */
-    private fun httpGetBody(urlStr: String, timeoutMs: Int = 8000, maxChars: Int = 4096): String {
+    private fun httpGetBody(urlStr: String, timeoutMs: Int = 8000, maxChars: Int = 4096, apiKey: String = ""): String {
         val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
             connectTimeout = timeoutMs
             readTimeout = timeoutMs
             instanceFollowRedirects = true
             requestMethod = "GET"
             setRequestProperty("Accept", "application/json")
+            ProviderTest.bearerToken(apiKey)?.let {
+                setRequestProperty("Authorization", "Bearer $it")
+            }
         }
         try {
             val code = conn.responseCode
@@ -1437,7 +1443,7 @@ class MainActivity : ComponentActivity() {
      * GET /api/tags where cheap; Cloud does the lightweight GET.
      * Never touches engines/runners/services.
      */
-    private fun probeSttEndpoint(url: String, model: String): ProviderTest.Result {
+    private fun probeSttEndpoint(url: String, model: String, apiKey: String = ""): ProviderTest.Result {
         val u = url.trim()
         val m = model.trim()
         if (u.isEmpty() || u.startsWith("ws", ignoreCase = true)) {
@@ -1446,12 +1452,12 @@ class MainActivity : ComponentActivity() {
             }
         }
         return ProviderTest.runProbe(ProviderTest.SERVER_TIMEOUT_MS) {
-            val code = httpGetCode(u)
+            val code = httpGetCode(u, apiKey = apiKey)
             "HTTP $code · $m"
         }
     }
 
-    private fun probeLlmEndpoint(kind: String, url: String, model: String): ProviderTest.Result {
+    private fun probeLlmEndpoint(kind: String, url: String, model: String, apiKey: String = ""): ProviderTest.Result {
         val u = url.trim()
         val m = model.trim()
         if (u.isEmpty()) {
@@ -1462,7 +1468,7 @@ class MainActivity : ComponentActivity() {
         if (kind == "Ollama") {
             return ProviderTest.runProbe(ProviderTest.SERVER_TIMEOUT_MS) {
                 val base = u.trimEnd('/')
-                val body = httpGetBody("$base/api/tags")
+                val body = httpGetBody("$base/api/tags", apiKey = apiKey)
                 if (!body.contains(m, ignoreCase = true)) {
                     throw IllegalStateException("reachable · model not listed")
                 }
@@ -1470,7 +1476,7 @@ class MainActivity : ComponentActivity() {
             }
         }
         return ProviderTest.runProbe(ProviderTest.SERVER_TIMEOUT_MS) {
-            val code = httpGetCode(u)
+            val code = httpGetCode(u, apiKey = apiKey)
             "HTTP $code · $m"
         }
     }
@@ -2152,20 +2158,21 @@ class MainActivity : ComponentActivity() {
         var sttLocalResult by remember { mutableStateOf<ProviderTest.Result?>(null) }
         var sttBusy by remember { mutableStateOf(setOf<String>()) }
         var sttResults by remember { mutableStateOf(mapOf<String, ProviderTest.Result>()) }
-        fun probeSttServer(url: String, model: String): ProviderTest.Result =
-            probeSttEndpoint(url, model)
+        fun probeSttServer(url: String, model: String, apiKey: String = ""): ProviderTest.Result =
+            probeSttEndpoint(url, model, apiKey)
         fun startSttServerTest(e: JSONObject) {
             val id = e.optString("id")
             if (id.isBlank() || sttBusy.contains(id)) return
             val kind = e.optString("kind")
             val url = e.optString("url")
             val model = e.optString("model")
+            val apiKey = e.optString("api_key")
             if (!sttServerTestAllowed(kind, url, model)) return
             sttBusy = sttBusy + id
             sttResults = sttResults - id
             workers.execute {
                 val result = try {
-                    probeSttServer(url, model)
+                    probeSttServer(url, model, apiKey)
                 } catch (ex: Exception) {
                     ProviderTest.mapServerSttResult(
                         null, 0L, ProviderTest.SERVER_TIMEOUT_MS,
@@ -2964,9 +2971,10 @@ class MainActivity : ComponentActivity() {
             draftResult = null
             val u = url
             val m = model
+            val k = key
             workers.execute {
                 val result = try {
-                    probeSttEndpoint(u, m)
+                    probeSttEndpoint(u, m, k)
                 } catch (ex: Exception) {
                     ProviderTest.mapServerSttResult(
                         null, 0L, ProviderTest.SERVER_TIMEOUT_MS,
@@ -3063,7 +3071,7 @@ class MainActivity : ComponentActivity() {
                     }
                     if (!isLocalKind) {
                         OutlinedTextField(
-                            value = key, onValueChange = { key = it },
+                            value = key, onValueChange = { key = it; draftResult = null },
                             label = { Text(stringResource(R.string.stt_apikey)) },
                             visualTransformation = if (showKey) VisualTransformation.None
                             else PasswordVisualTransformation(),
@@ -3266,20 +3274,21 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-        fun probeLlmRemote(kind: String, url: String, model: String): ProviderTest.Result =
-            probeLlmEndpoint(kind, url, model)
+        fun probeLlmRemote(kind: String, url: String, model: String, apiKey: String = ""): ProviderTest.Result =
+            probeLlmEndpoint(kind, url, model, apiKey)
         fun startLlmRemoteTest(e: JSONObject) {
             val id = e.optString("id")
             if (id.isBlank() || llmBusy.contains(id)) return
             val kind = e.optString("kind")
             val url = e.optString("url")
             val model = e.optString("model")
+            val apiKey = e.optString("api_key")
             if (!llmRemoteTestAllowed(kind, url, model)) return
             llmBusy = llmBusy + id
             llmResults = llmResults - id
             workers.execute {
                 val result = try {
-                    probeLlmRemote(kind, url, model)
+                    probeLlmRemote(kind, url, model, apiKey)
                 } catch (ex: Exception) {
                     ProviderTest.mapRemoteLlmResult(
                         null, 0L, ProviderTest.SERVER_TIMEOUT_MS,
@@ -4090,9 +4099,10 @@ class MainActivity : ComponentActivity() {
             val k = kind
             val u = url
             val m = model
+            val ak = key
             workers.execute {
                 val result = try {
-                    probeLlmEndpoint(k, u, m)
+                    probeLlmEndpoint(k, u, m, ak)
                 } catch (ex: Exception) {
                     ProviderTest.mapRemoteLlmResult(
                         null, 0L, ProviderTest.SERVER_TIMEOUT_MS,
@@ -4159,13 +4169,13 @@ class MainActivity : ComponentActivity() {
                             label = { Text(stringResource(R.string.stt_model)) }, modifier = Modifier.fillMaxWidth())
                     }
                     if (kind == "Cloud") {
-                        OutlinedTextField(value = key, onValueChange = { key = it },
+                        OutlinedTextField(value = key, onValueChange = { key = it; draftResult = null },
                             label = { Text(stringResource(R.string.stt_apikey)) },
                             visualTransformation = PasswordVisualTransformation(),
                             modifier = Modifier.fillMaxWidth())
                     }
                     if (kind == "Ollama") {
-                        OutlinedTextField(value = key, onValueChange = { key = it },
+                        OutlinedTextField(value = key, onValueChange = { key = it; draftResult = null },
                             label = { Text(stringResource(R.string.stt_apikey)) },
                             visualTransformation = PasswordVisualTransformation(),
                             modifier = Modifier.fillMaxWidth())

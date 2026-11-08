@@ -242,7 +242,7 @@ fn llm_cleanup_one(
                     entry.model
                 );
                 let text =
-                    http_post_json(&url, &[("x-goog-api-key", entry.api_key.as_str())], &body)?;
+                    http_post_json(&url, &[("x-goog-api-key", entry.api_key.trim())], &body)?;
                 let v: serde_json::Value =
                     serde_json::from_str(&text).map_err(|e| format!("gemini json: {e}"))?;
                 Ok(v.pointer("/candidates/0/content/parts")
@@ -270,7 +270,7 @@ fn llm_cleanup_one(
                 let text = http_post_json(
                     "https://api.anthropic.com/v1/messages",
                     &[
-                        ("x-api-key", entry.api_key.as_str()),
+                        ("x-api-key", entry.api_key.trim()),
                         ("anthropic-version", "2023-06-01"),
                     ],
                     &body,
@@ -294,7 +294,7 @@ fn llm_cleanup_one(
                 let base = entry.provider.base_url();
                 let text = http_post_json(
                     &format!("{base}/chat/completions"),
-                    &[("authorization-bearer", entry.api_key.as_str())],
+                    &[("authorization-bearer", entry.api_key.trim())],
                     &body,
                 )?;
                 let v: serde_json::Value =
