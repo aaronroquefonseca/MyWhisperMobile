@@ -34,3 +34,10 @@
 # directly — R8 cannot see the edge). The litertlm library classes
 # it touches are traced normally through its direct references.
 -keep class com.mywhisper.mobile.LiteRtLmBridge { *; }
+# LiteRT-LM itself: its NATIVE library looks up these classes and
+# members BY NAME at runtime (verified root cause of the release-
+# only nativeCreateConversation abort — R8 had renamed Engine to
+# m4.f, Conversation to m4.e and removed ConversationConfig
+# outright, while debug builds worked). No consumer rules ship in
+# the AAR, so keep the whole surface here.
+-keep class com.google.ai.edge.litertlm.** { *; }

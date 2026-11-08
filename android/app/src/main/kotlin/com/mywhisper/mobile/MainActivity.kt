@@ -391,7 +391,11 @@ class MainActivity : ComponentActivity() {
             dir: File,
             asset: LocalLlmManager.ModelAsset,
         ): LlmInspect =
-            llmInspectWithVerifier(dir, asset, LocalLlmManager::verifySha256)
+            // Direct-call lambda, NOT a ::verifySha256 function
+            // reference: callable references need Kotlin metadata at
+            // runtime, which R8 mangles (release showed every pack as
+            // missing). A lambda compiles to a plain static call.
+            llmInspectWithVerifier(dir, asset, { f, s -> LocalLlmManager.verifySha256(f, s) })
 
         /**
          * True when any trace of [asset] lingers on disk: the slot, the
@@ -2355,14 +2359,23 @@ class MainActivity : ComponentActivity() {
         // without a verified selected model fails closed.
         val selectedModel = remember(version) { LocalStt.selectedEntry(statePrefs) }
         // One inspect per model per save-generation (state + verified
-        // bytes from a single SHA pass — never two full hash sweeps).
-        val modelInspects = remember(version) {
-            LocalSttModels.MODELS.associate { m ->
-                m.id to try {
-                    LocalSttModels.inspect(filesDir, m)
-                } catch (_: Exception) {
-                    LocalSttModels.PackInspect(LocalModelDownload.RowState.MISSING, 0L)
+        // bytes from a single SHA pass — never two full hash sweeps),
+        // computed OFF the composition thread: pack hashes (up to GBs)
+        // on the UI thread ANR the app and drop input. Rows read
+        // missing until the first pass lands.
+        var modelInspects by remember {
+            mutableStateOf<Map<String, LocalSttModels.PackInspect>>(emptyMap())
+        }
+        LaunchedEffect(version) {
+            workers.execute {
+                val fresh = LocalSttModels.MODELS.associate { m ->
+                    m.id to try {
+                        LocalSttModels.inspect(filesDir, m)
+                    } catch (_: Exception) {
+                        LocalSttModels.PackInspect(LocalModelDownload.RowState.MISSING, 0L)
+                    }
                 }
+                runOnUiThread { modelInspects = fresh }
             }
         }
         fun packOf(id: String): LocalPackState =
@@ -3488,13 +3501,21 @@ class MainActivity : ComponentActivity() {
         val llmSelected = remember(version) {
             llmSelectedAsset(assets, statePrefs.getString(PREF_SELECTED_LLM, null))
         }
-        val llmInspects = remember(version) {
-            assets.associate { a ->
-                a.id to try {
-                    llmInspect(filesDir, a)
-                } catch (_: Exception) {
-                    LlmInspect(LocalPackState.MISSING, 0L)
+        // Per-asset verify runs OFF the composition thread: pack
+        // hashes (up to GBs) on the UI thread ANR the app and drop
+        // input (owner repro on a 2.6GB pack). Rows read missing
+        // until the first pass lands, then flip as verified.
+        var llmInspects by remember { mutableStateOf<Map<String, LlmInspect>>(emptyMap()) }
+        LaunchedEffect(version) {
+            workers.execute {
+                val fresh = assets.associate { a ->
+                    a.id to try {
+                        llmInspect(filesDir, a)
+                    } catch (_: Exception) {
+                        LlmInspect(LocalPackState.MISSING, 0L)
+                    }
                 }
+                runOnUiThread { llmInspects = fresh }
             }
         }
         fun llmPackOf(id: String): LocalPackState =

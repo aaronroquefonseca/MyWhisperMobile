@@ -675,7 +675,10 @@ object LocalSttModels {
 
     /** Single-pass inspect with the real SHA verifier. Pure java.io. */
     fun inspect(filesDir: File, entry: Entry): PackInspect =
-        inspectWithVerifier(filesDir, entry, LocalLlmManager::verifySha256)
+        // Direct-call lambda, NOT a ::verifySha256 function reference
+        // (callable references need Kotlin metadata at runtime, which
+        // R8 mangles — release showed every pack as missing).
+        inspectWithVerifier(filesDir, entry, { f, s -> LocalLlmManager.verifySha256(f, s) })
 
     /** True when a stale `.part` from an interrupted download lingers. Pure java.io. */
     fun hasPartials(dir: File, entry: Entry): Boolean =
