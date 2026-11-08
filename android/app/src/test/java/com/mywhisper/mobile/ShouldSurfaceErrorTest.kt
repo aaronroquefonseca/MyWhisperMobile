@@ -1,5 +1,6 @@
 package com.mywhisper.mobile
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -25,5 +26,9 @@ class ShouldSurfaceErrorTest {
 
     @Test fun emptyMessageSurfaces() {
         assertTrue(shouldSurfaceError(""))
+    }
+
+    @Test fun onErrorLogCarriesFullMessage() {
+        assertEquals("onError: boom", onErrorLogMessage("boom"))
     }
 }

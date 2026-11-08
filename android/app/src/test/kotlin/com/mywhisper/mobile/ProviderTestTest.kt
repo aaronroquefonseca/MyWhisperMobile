@@ -274,4 +274,39 @@ class ProviderTestTest {
     fun bearerToken_trimsWhitespace() {
         assertEquals("sk-test-123", ProviderTest.bearerToken("  sk-test-123\n"))
     }
+
+    // -- Probe 2xx rule (gated 401/403 = FAIL, never PASS) -----------
+
+    @Test
+    fun probeHttpExcerpt_passWhenReachable() {
+        assertEquals("HTTP 200 · m", ProviderTest.probeHttpExcerpt(200, "m"))
+        assertEquals("HTTP 204 · m", ProviderTest.probeHttpExcerpt(204, "m"))
+        // Healthy POST-only transcribe routes 404/405 on GET — a 404
+        // with the key still proves the gate let us through.
+        assertEquals("HTTP 404 · m", ProviderTest.probeHttpExcerpt(404, "m"))
+        assertEquals("HTTP 500 · m", ProviderTest.probeHttpExcerpt(500, "m"))
+    }
+
+    @Test
+    fun probeHttpExcerpt_failOnGated() {
+        for (code in listOf(401, 403)) {
+            try {
+                ProviderTest.probeHttpExcerpt(code, "m")
+                throw AssertionError("expected http $code to throw")
+            } catch (e: IllegalStateException) {
+                assertEquals("http $code · m", e.message)
+            }
+        }
+    }
+
+    @Test
+    fun requireHttp2xx_forGenuineGetEndpoints() {
+        ProviderTest.requireHttp2xx(200)
+        try {
+            ProviderTest.requireHttp2xx(404)
+            throw AssertionError("expected http 404 to throw")
+        } catch (e: IllegalStateException) {
+            assertEquals("http 404", e.message)
+        }
+    }
 }

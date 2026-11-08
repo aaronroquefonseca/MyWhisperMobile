@@ -10,9 +10,10 @@ package com.mywhisper.mobile
  *   The probe returns decoded text, or a non-blank status
  *   (`pack ok · N chunks`) when the engine ran on silence —
  *   PASS needs a non-blank return, same rule as every kind.
- * - Server STT: lightweight endpoint check (any HTTP response =
- *   reachable; network throw = FAIL). `ws(s)` has no HTTP surface:
- *   scheme validation only, no heavy transcribe anywhere.
+ * - Server STT: lightweight endpoint GET (gated 401/403 = FAIL,
+ *   never PASS; other statuses = reachable since POST-only routes
+ *   404/405 on GET). `ws(s)` has no HTTP surface: scheme validation
+ *   only, no heavy transcribe anywhere.
  * - Local LLM: existing [LocalLlmManager.runSelfTest] via
  *   [fromSelfTest] (same [Result], no second pattern).
  * - Remote LLM: minimal ping/generate probe (HTTP GET, short
@@ -249,5 +250,24 @@ object ProviderTest {
     fun bearerToken(apiKey: String): String? {
         val t = apiKey.trim()
         return if (t.isEmpty()) null else t
+    }
+
+    /**
+     * Probe status excerpt for lightweight GET checks: a gated 401/403
+     * means the endpoint rejects us (wrong or missing key) and reads as
+     * FAIL; any other status reads as reachable, because healthy
+     * POST-only transcribe routes answer GET with 404/405/501 (the
+     * repo's own stub STT server is POST-only). Bearer-gated proxies
+     * answer 401 without a key, so accepting every status would report
+     * PASS on an endpoint that rejects us.
+     */
+    fun probeHttpExcerpt(code: Int, model: String): String {
+        if (code == 401 || code == 403) throw IllegalStateException("http $code · $model")
+        return "HTTP $code · $model"
+    }
+
+    /** Throw unless 2xx: for genuine GET endpoints (Ollama `/api/tags`). */
+    fun requireHttp2xx(code: Int) {
+        if (code !in 200..299) throw IllegalStateException("http $code")
     }
 }

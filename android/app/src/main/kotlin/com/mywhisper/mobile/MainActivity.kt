@@ -1388,9 +1388,11 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Lightweight endpoint check (no heavy transcribe/generate):
-     * any HTTP response = reachable (even 404/405 on POST-only
-     * endpoints); only network throws read as FAIL. Short timeouts.
+     * Lightweight endpoint check (no heavy transcribe/generate): a
+     * gated 401/403 reads as FAIL, never PASS (see
+     * [ProviderTest.probeHttpExcerpt]); other statuses read as
+     * reachable (healthy POST-only routes 404/405 on GET). Only
+     * network throws read as FAIL beyond that. Short timeouts.
      * Never touches engines/runners/services.
      */
     private fun httpGetCode(urlStr: String, timeoutMs: Int = 8000, apiKey: String = ""): Int {
@@ -1426,7 +1428,9 @@ class MainActivity : ComponentActivity() {
         }
         try {
             val code = conn.responseCode
-            if (code !in 200..299) throw IllegalStateException("http $code")
+            // Genuine GET endpoint (model list): 2xx required — unlike
+            // the httpGetCode probes, where POST-only routes 404/405.
+            ProviderTest.requireHttp2xx(code)
             return conn.inputStream.bufferedReader().use { it.readText().take(maxChars) }
         } finally {
             conn.disconnect()
@@ -1436,12 +1440,15 @@ class MainActivity : ComponentActivity() {
     /**
      * THE server-probe implementations shared by chain rows and
      * add/edit dialogs (one pattern, one result shape): lightweight
-     * endpoint checks, never a heavy transcribe/generate. STT: any
-     * HTTP response = reachable; `ws(s)` / blank vendor-default URL
-     * has no HTTP surface so config validation stands in. LLM: blank
-     * URL = config validation; Ollama checks model reachability via
-     * GET /api/tags where cheap; Cloud does the lightweight GET.
-     * Never touches engines/runners/services.
+     * endpoint checks, never a heavy transcribe/generate. STT/Cloud:
+     * gated 401/403 = FAIL (wrong or missing key), never PASS; other
+     * statuses = reachable (POST-only routes 404/405 on GET — a 404
+     * with the key still proves the gate let us through). `ws(s)` /
+     * blank vendor-default URL has no HTTP surface so config
+     * validation stands in. LLM: blank URL = config validation;
+     * Ollama checks model reachability via GET /api/tags where cheap
+     * (2xx required, model must be listed). Never touches
+     * engines/runners/services.
      */
     private fun probeSttEndpoint(url: String, model: String, apiKey: String = ""): ProviderTest.Result {
         val u = url.trim()
@@ -1453,7 +1460,7 @@ class MainActivity : ComponentActivity() {
         }
         return ProviderTest.runProbe(ProviderTest.SERVER_TIMEOUT_MS) {
             val code = httpGetCode(u, apiKey = apiKey)
-            "HTTP $code · $m"
+            ProviderTest.probeHttpExcerpt(code, m)
         }
     }
 
@@ -1477,7 +1484,7 @@ class MainActivity : ComponentActivity() {
         }
         return ProviderTest.runProbe(ProviderTest.SERVER_TIMEOUT_MS) {
             val code = httpGetCode(u, apiKey = apiKey)
-            "HTTP $code · $m"
+            ProviderTest.probeHttpExcerpt(code, m)
         }
     }
 
