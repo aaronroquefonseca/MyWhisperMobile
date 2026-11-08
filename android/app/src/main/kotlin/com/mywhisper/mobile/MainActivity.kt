@@ -1207,6 +1207,105 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun copyText(text: String) {
+        try {
+            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("mw-diagnostics", text))
+            toast("Copied")
+        } catch (_: Exception) {
+        }
+    }
+
+    /**
+     * On-device diagnostics for support without USB/logcat: app
+     * version, last process exits (Android 11+ records native
+     * crashes with their tombstone text), free storage and RAM.
+     * Never throws; empty sections degrade to one-liners.
+     */
+    private fun collectDiagnostics(): String {
+        val sb = StringBuilder()
+        try {
+            val pi = packageManager.getPackageInfo(packageName, 0)
+            @Suppress("DEPRECATION")
+            val code = if (android.os.Build.VERSION.SDK_INT >= 28) {
+                pi.longVersionCode
+            } else {
+                pi.versionCode.toLong()
+            }
+            sb.append("app ").append(pi.versionName).append(" (").append(code).append(")\n")
+        } catch (_: Exception) {
+            sb.append("app unknown\n")
+        }
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            try {
+                val am = getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+                val exits = am.getHistoricalProcessExitReasons(packageName, 0, 3)
+                if (exits.isEmpty()) {
+                    sb.append("exits: none recorded\n")
+                }
+                for (e in exits) {
+                    val ts = try {
+                        java.text.SimpleDateFormat(
+                            "MM-dd HH:mm:ss",
+                            java.util.Locale.US,
+                        ).format(java.util.Date(e.timestamp))
+                    } catch (_: Exception) {
+                        e.timestamp.toString()
+                    }
+                    sb.append("exit reason=").append(exitReasonName(e.reason))
+                        .append(" ts=").append(ts)
+                        .append(" pss=").append(e.pss / 1024).append("MB\n")
+                    val desc = e.description?.take(700)
+                    if (!desc.isNullOrBlank()) {
+                        sb.append(desc).append("\n")
+                    }
+                }
+            } catch (ex: Exception) {
+                sb.append("exits: unavailable (").append(ex.message).append(")\n")
+            }
+        } else {
+            sb.append("exits: needs Android 11+\n")
+        }
+        try {
+            sb.append("storage free=").append(filesDir.usableSpace / 1_000_000)
+                .append("MB total=").append(filesDir.totalSpace / 1_000_000).append("MB\n")
+        } catch (_: Exception) {
+        }
+        try {
+            val am = getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+            val mi = android.app.ActivityManager.MemoryInfo()
+            am.getMemoryInfo(mi)
+            sb.append("ram avail=").append(mi.availMem / 1_000_000)
+                .append("MB total=").append(mi.totalMem / 1_000_000)
+                .append("MB low=").append(mi.lowMemory).append('\n')
+        } catch (_: Exception) {
+        }
+        return sb.toString()
+    }
+
+    private fun exitReasonName(r: Int): String =
+        when (r) {
+            0 -> "UNKNOWN"
+            1 -> "EXIT_SELF"
+            2 -> "SIGNALED"
+            3 -> "LOW_MEMORY"
+            4 -> "CRASH_NATIVE"
+            5 -> "CRASH"
+            6 -> "SHUTDOWN"
+            7 -> "ANR"
+            8 -> "PERMISSION_CHANGE"
+            9 -> "EXCESSIVE_RESOURCE_USAGE"
+            10 -> "INITIALIZATION_FAILURE"
+            11 -> "DEPENDENCY_DIED"
+            12 -> "STATE_CHANGE"
+            13 -> "USER_REQUESTED"
+            14 -> "USER_STOPPED"
+            15 -> "PACKAGE_STATE_CHANGE"
+            16 -> "PACKAGE_UPDATED"
+            17 -> "OTHER"
+            else -> "REASON_$r"
+        }
+
     private fun imeEnabled(): Boolean {
         // NOTE: Settings.Secure ENABLED_INPUT_METHODS is unreadable for
         // targetSdk 34+. InputMethodManager is the allowed path.
@@ -2096,6 +2195,25 @@ class MainActivity : ComponentActivity() {
                     prefs.put("theme", it)
                     s.put("preferences", prefs)
                     save()
+                }
+            }
+            Section(stringResource(R.string.diag_title)) {
+                var diag by remember { mutableStateOf("") }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Button(onClick = { diag = collectDiagnostics() }) {
+                        Text(stringResource(R.string.diag_refresh))
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Button(
+                        onClick = { copyText(diag) },
+                        enabled = diag.isNotEmpty(),
+                    ) {
+                        Text(stringResource(R.string.diag_copy))
+                    }
+                }
+                if (diag.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(diag, style = MaterialTheme.typography.bodySmall)
                 }
             }
         }

@@ -149,6 +149,9 @@
     <string name="think_label">Thinking:</string>
     <string name="think_off">Off</string>
     <string name="think_budget">%1$d tokens</string>
+    <string name="diag_title">Diagnostics</string>
+    <string name="diag_refresh">Refresh</string>
+    <string name="diag_copy">Copy</string>
     <string name="local_selected_needs_download">Selected %1$s — download it to go on-device; until verified the server chain is used.</string>
     <string name="local_deleted_active">Deleted %1$s — switched to %2$s.</string>
     <string name="local_deleted_active_none">Deleted %1$s — no on-device model left; the server chain is used.</string>

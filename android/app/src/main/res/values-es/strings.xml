@@ -150,6 +150,9 @@
     <string name="think_label">Razonamiento:</string>
     <string name="think_off">No</string>
     <string name="think_budget">%1$d tokens</string>
+    <string name="diag_title">Diagnóstico</string>
+    <string name="diag_refresh">Actualizar</string>
+    <string name="diag_copy">Copiar</string>
     <string name="local_selected_needs_download">Elegido %1$s — descárgalo para usarlo en el teléfono; hasta verificarlo se usa la cadena del servidor.</string>
     <string name="local_deleted_active">Eliminado %1$s — cambiado a %2$s.</string>
     <string name="local_deleted_active_none">Eliminado %1$s — no queda modelo local; se usa la cadena del servidor.</string>
