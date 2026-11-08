@@ -361,7 +361,7 @@ fn post_openai_compat(
     if !api_key.trim().is_empty() {
         req = req.bearer_auth(api_key.trim());
     }
-    let resp = req.send().map_err(|e| format!("request: {e}"))?;
+    let resp = req.send().map_err(|e| format!("request: {e:?}"))?;
     let status = resp.status();
     let body = capped_text(resp, "transcription")?;
     if !status.is_success() {
@@ -416,7 +416,7 @@ fn post_deepgram(
         .header("Content-Type", "audio/wav")
         .body(wav)
         .send()
-        .map_err(|e| format!("request: {e}"))?;
+        .map_err(|e| format!("request: {e:?}"))?;
     let status = resp.status();
     let body = capped_text(resp, "deepgram transcription")?;
     if !status.is_success() {

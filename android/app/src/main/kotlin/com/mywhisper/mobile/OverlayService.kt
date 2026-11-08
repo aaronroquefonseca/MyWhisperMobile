@@ -1176,6 +1176,9 @@ class OverlayService : Service(), Dictation.Listener {
 
     override fun onError(msg: String) {
         micBtn?.post { refreshChrome(Dictation.State.IDLE) }
+        // The bubble toast truncates, so the full cause must also go
+        // to logcat — otherwise the true error is unrecoverable.
+        android.util.Log.w("MwFloat", onErrorLogMessage(msg))
         // Surface errors where the user looks: the bubble has no
         // text row, so only failures that matter get a toast.
         // Listener fires off the main thread — post the toast.
@@ -1242,6 +1245,9 @@ class OverlayService : Service(), Dictation.Listener {
 internal fun shouldSurfaceError(msg: String): Boolean =
     !msg.contains("too short") && !msg.contains("silence") &&
         !msg.contains("empty transcript")
+
+/** Logcat line for bubble failures (unit-testable; toast truncates). */
+internal fun onErrorLogMessage(msg: String): String = "onError: $msg"
 
 /** Mic glyph elevation (dp): the spinner must sit above this. */
 internal const val BUBBLE_MIC_ELEVATION_DP = 6
