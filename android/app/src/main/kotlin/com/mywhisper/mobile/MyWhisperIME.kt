@@ -183,7 +183,10 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
             localTranscribe = { pcm -> LocalStt.transcribeIfEnabled(this, pcm) },
             // IME destroy releases the native recognizer (no resident
             // ORT session across enable/disable cycles in one process).
-            releaseLocal = { try { LocalStt.unload() } catch (_: Throwable) {} },
+            releaseLocal = {
+                try { LocalStt.unload() } catch (_: Throwable) {}
+                try { LocalLlmManager.releaseLocalEngines() } catch (_: Throwable) {}
+            },
         )
         dictation.listener = this
         dictation.onLevel = { peak ->

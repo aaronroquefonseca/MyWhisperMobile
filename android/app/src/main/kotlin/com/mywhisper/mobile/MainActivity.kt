@@ -1146,6 +1146,67 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun keepLabel(secs: Long): String =
+        when (secs) {
+            LocalKeepWarm.IMMEDIATE -> getString(R.string.keep_immediate)
+            60L -> getString(R.string.keep_1min)
+            600L -> getString(R.string.keep_10min)
+            1800L -> getString(R.string.keep_30min)
+            LocalKeepWarm.INDEFINITE -> getString(R.string.keep_indefinite)
+            else -> getString(R.string.keep_custom, secs)
+        }
+
+    private fun thinkLabel(budget: Int): String =
+        if (budget <= 0) {
+            getString(R.string.think_off)
+        } else {
+            getString(R.string.think_budget, budget)
+        }
+
+    /** Keep-warm preset menu (current value + one pick callback). */
+    @Composable
+    private fun KeepDropdown(current: Long, onPick: (Long) -> Unit) {
+        var open by remember { mutableStateOf(false) }
+        Box {
+            OutlinedButton(onClick = { open = true }) {
+                Text(keepLabel(current))
+            }
+            DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                for (preset in LocalKeepWarm.presets()) {
+                    DropdownMenuItem(
+                        text = { Text(keepLabel(preset)) },
+                        onClick = {
+                            open = false
+                            onPick(preset)
+                        },
+                    )
+                }
+            }
+        }
+    }
+
+    /** Thinking-budget menu, litertlm entries only (0 = off, default). */
+    @Composable
+    private fun ThinkDropdown(current: Int, onPick: (Int) -> Unit) {
+        var open by remember { mutableStateOf(false) }
+        Box {
+            OutlinedButton(onClick = { open = true }) {
+                Text(thinkLabel(current))
+            }
+            DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                for (budget in LocalKeepWarm.thinkBudgets()) {
+                    DropdownMenuItem(
+                        text = { Text(thinkLabel(budget)) },
+                        onClick = {
+                            open = false
+                            onPick(budget)
+                        },
+                    )
+                }
+            }
+        }
+    }
+
     private fun imeEnabled(): Boolean {
         // NOTE: Settings.Secure ENABLED_INPUT_METHODS is unreadable for
         // targetSdk 34+. InputMethodManager is the allowed path.
@@ -2723,6 +2784,37 @@ class MainActivity : ComponentActivity() {
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
+                            // Keep-warm policy (per-model resident slot).
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    stringResource(R.string.keep_label),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                KeepDropdown(
+                                    LocalKeepWarm.readKeepSecs(
+                                        statePrefs,
+                                        LocalKeepWarm.KIND_STT,
+                                        m.id,
+                                        LocalKeepWarm.INDEFINITE,
+                                    ),
+                                ) { picked ->
+                                    LocalKeepWarm.writeKeepSecs(
+                                        statePrefs,
+                                        LocalKeepWarm.KIND_STT,
+                                        m.id,
+                                        picked,
+                                    )
+                                    if (picked == LocalKeepWarm.IMMEDIATE) {
+                                        try {
+                                            LocalStt.unload()
+                                        } catch (_: Throwable) {
+                                        }
+                                    }
+                                    version++
+                                }
+                            }
                             if (row == LocalModelDownload.RowState.DOWNLOADING ||
                                 row == LocalModelDownload.RowState.INCOMPLETE
                             ) {
@@ -3380,13 +3472,30 @@ class MainActivity : ComponentActivity() {
                             system,
                             generateFn = { f, p ->
                                 if (target.runtime == LocalLlmManager.RUNTIME_LITERTLM) {
+                                    val prefs = applicationContext.getSharedPreferences(
+                                        "mw_state",
+                                        MODE_PRIVATE,
+                                    )
                                     LocalLlmManager.generateLitertlm(
                                         f,
                                         system,
                                         LocalLlmManager.SELFTEST_TRANSCRIPT,
+                                        keepSecs = LocalKeepWarm.readKeepSecs(
+                                            prefs,
+                                            LocalKeepWarm.KIND_LLM,
+                                            target.id,
+                                            LocalKeepWarm.IMMEDIATE,
+                                        ),
+                                        thinkBudget = LocalKeepWarm.readThinkBudget(prefs, target.id)
+                                            .takeIf { it > 0 },
                                     )
                                 } else {
-                                    LocalLlmManager.generate(f, p, context = applicationContext)
+                                    LocalLlmManager.generate(
+                                        f,
+                                        p,
+                                        context = applicationContext,
+                                        assetId = target.id,
+                                    )
                                 }
                             },
                         ),
@@ -3955,6 +4064,57 @@ class MainActivity : ComponentActivity() {
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
+                            // Keep-warm policy (per-asset resident engine slot).
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    stringResource(R.string.keep_label),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                KeepDropdown(
+                                    LocalKeepWarm.readKeepSecs(
+                                        statePrefs,
+                                        LocalKeepWarm.KIND_LLM,
+                                        a.id,
+                                        LocalKeepWarm.IMMEDIATE,
+                                    ),
+                                ) { picked ->
+                                    LocalKeepWarm.writeKeepSecs(
+                                        statePrefs,
+                                        LocalKeepWarm.KIND_LLM,
+                                        a.id,
+                                        picked,
+                                    )
+                                    if (picked == LocalKeepWarm.IMMEDIATE) {
+                                        try {
+                                            LocalLlmManager.dropCachedLlm(
+                                                llmTaskFileFor(filesDir, a),
+                                            )
+                                        } catch (_: Exception) {
+                                        }
+                                    }
+                                    version++
+                                }
+                            }
+                            // Thinking budget (litertlm entries only —
+                            // tasks-genai exposes no thinking knob).
+                            if (a.runtime == LocalLlmManager.RUNTIME_LITERTLM) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        stringResource(R.string.think_label),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    ThinkDropdown(
+                                        LocalKeepWarm.readThinkBudget(statePrefs, a.id),
+                                    ) { picked ->
+                                        LocalKeepWarm.writeThinkBudget(statePrefs, a.id, picked)
+                                        version++
+                                    }
+                                }
+                            }
                             if (row == LocalModelDownload.RowState.DOWNLOADING ||
                                 row == LocalModelDownload.RowState.INCOMPLETE
                             ) {

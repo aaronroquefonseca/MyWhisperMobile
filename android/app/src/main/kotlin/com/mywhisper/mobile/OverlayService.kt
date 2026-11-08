@@ -169,7 +169,10 @@ class OverlayService : Service(), Dictation.Listener {
             localTranscribe = { pcm -> LocalStt.transcribeIfEnabled(this, pcm) },
             // Shutdown releases the native recognizer (no resident ORT
             // session across service restarts in one process).
-            releaseLocal = { try { LocalStt.unload() } catch (_: Throwable) {} },
+            releaseLocal = {
+                try { LocalStt.unload() } catch (_: Throwable) {}
+                try { LocalLlmManager.releaseLocalEngines() } catch (_: Throwable) {}
+            },
         )
         dictation.listener = this
         // Live peaks feed the bottom-center visualizer pill (capture

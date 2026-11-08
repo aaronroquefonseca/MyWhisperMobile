@@ -140,6 +140,16 @@
     <string name="llm_wait_wifi">Esperando Wi-Fi — conéctate a un Wi-Fi no medido y la descarga empezará sola.</string>
     <string name="llm_wait_offline">Esperando conexión de red…</string>
     <string name="llm_use_metered">Usar datos móviles (%1$s MB)</string>
+    <string name="keep_label">Mantener cargado:</string>
+    <string name="keep_immediate">Descargar inmediatamente</string>
+    <string name="keep_1min">1 minuto</string>
+    <string name="keep_10min">10 minutos</string>
+    <string name="keep_30min">30 minutos</string>
+    <string name="keep_indefinite">Indefinidamente</string>
+    <string name="keep_custom">%1$d segundos</string>
+    <string name="think_label">Razonamiento:</string>
+    <string name="think_off">No</string>
+    <string name="think_budget">%1$d tokens</string>
     <string name="local_selected_needs_download">Elegido %1$s — descárgalo para usarlo en el teléfono; hasta verificarlo se usa la cadena del servidor.</string>
     <string name="local_deleted_active">Eliminado %1$s — cambiado a %2$s.</string>
     <string name="local_deleted_active_none">Eliminado %1$s — no queda modelo local; se usa la cadena del servidor.</string>

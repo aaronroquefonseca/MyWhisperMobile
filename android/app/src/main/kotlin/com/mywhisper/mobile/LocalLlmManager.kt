@@ -95,6 +95,20 @@ object LocalLlmManager {
     fun extForRuntime(runtime: String): String =
         if (runtime == RUNTIME_LITERTLM) "litertlm" else "task"
 
+    /**
+     * True when [modelPath] is a GPU-targeted LiteRT-LM build
+     * (`*-gpu.litertlm`). Backend and file must match: base builds
+     * are CPU-only, and a GPU attempt on one does not fail closed —
+     * it aborts the process natively (owner repro: Mali GPU +
+     * base E2B file dies in nativeCreateConversation, while the
+     * same file on CPU generates fine). Pure filename rule.
+     */
+    @JvmStatic
+    fun preferGpuFor(modelPath: String): Boolean {
+        val name = modelPath.substringAfterLast('/').substringAfterLast('\\')
+        return name.contains("-gpu.", ignoreCase = true)
+    }
+
     /** Byte-stable prompt packing — must match `local_llm::build_cleanup_prompt`. */
     fun buildPrompt(system: String, transcript: String): String =
         "$system\n\n<transcript>$transcript</transcript>"
@@ -421,6 +435,8 @@ object LocalLlmManager {
     /** Remove the model file + any per-asset partials (delete / retry cleanup). */
     fun deleteModel(dest: File, assets: List<ModelAsset> = emptyList()) {
         try { dest.delete() } catch (_: Exception) {}
+        // A deleted pack must not linger resident (stale engine).
+        try { dropCachedLlm(dest) } catch (_: Exception) {}
         for (a in assets) {
             try { partFileFor(dest, a.id).delete() } catch (_: Exception) {}
         }
@@ -453,6 +469,8 @@ object LocalLlmManager {
         // closed (OUT_OF_RANGE) and the chain falls through.
         maxTokens: Int = 2048,
         context: android.content.Context? = null,
+        // Keep-warm asset id (null = immediate, today's behavior).
+        assetId: String? = null,
     ): String {
         require(taskFile.isFile) { "local llm model not ready at ${taskFile.absolutePath}" }
         if (context != null) {
@@ -462,7 +480,38 @@ object LocalLlmManager {
             } catch (_: Exception) {
             }
         }
-        return MediaPipeRunner.generate(taskFile.absolutePath, prompt, maxTokens, context)
+        return MediaPipeRunner.generate(taskFile.absolutePath, prompt, maxTokens, context, assetId)
+    }
+
+    /** Close every resident LLM engine (service destroy). Never throws. */
+    @JvmStatic
+    fun releaseLocalEngines() {
+        try {
+            MediaPipeRunner.releaseAll()
+        } catch (_: Exception) {
+        }
+        try {
+            val bridge = Class.forName("com.mywhisper.mobile.LiteRtLmBridge")
+            bridge.getMethod("releaseAll").invoke(null)
+        } catch (_: Exception) {
+        } catch (_: LinkageError) {
+        }
+    }
+
+    /** Drop the resident engine backing [taskFile] (delete/policy-immediate). */
+    @JvmStatic
+    fun dropCachedLlm(taskFile: File) {
+        try {
+            MediaPipeRunner.dropCached(taskFile.absolutePath)
+        } catch (_: Exception) {
+        }
+        try {
+            val bridge = Class.forName("com.mywhisper.mobile.LiteRtLmBridge")
+            bridge.getMethod("dropCached", String::class.java)
+                .invoke(null, taskFile.absolutePath)
+        } catch (_: Exception) {
+        } catch (_: LinkageError) {
+        }
     }
 
     /**
@@ -481,12 +530,15 @@ object LocalLlmManager {
         transcript: String,
         maxTokens: Int? = null,
         cacheDir: File? = null,
+        keepSecs: Long = LocalKeepWarm.IMMEDIATE,
+        thinkBudget: Int? = null,
     ): String {
         require(taskFile.isFile) { "local llm model not ready at ${taskFile.absolutePath}" }
         val bridge = Class.forName("com.mywhisper.mobile.LiteRtLmBridge")
         val dir = (cacheDir ?: taskFile.parentFile)?.absolutePath
             ?: throw IllegalStateException("local llm needs a cache dir")
         val boxed = maxTokens?.let { Integer.valueOf(it) }
+        val thinkBoxed = thinkBudget?.let { Integer.valueOf(it) }
         return bridge.getMethod(
             "generate",
             String::class.java,
@@ -494,7 +546,9 @@ object LocalLlmManager {
             String::class.java,
             Integer::class.java,
             String::class.java,
-        ).invoke(null, taskFile.absolutePath, system, transcript, boxed, dir) as String
+            Long::class.javaPrimitiveType!!,
+            Integer::class.java,
+        ).invoke(null, taskFile.absolutePath, system, transcript, boxed, dir, keepSecs, thinkBoxed) as String
     }
 
     /**
@@ -515,14 +569,109 @@ object LocalLlmManager {
      * was fully reverted (nothing of it remains).
      */
     internal object MediaPipeRunner {
+        @Volatile private var engine: Any? = null
+        @Volatile private var engineKey: String? = null
+        @Volatile private var lastUsedMs: Long = 0L
+        private val lock = Any()
+
         fun generate(
             modelPath: String,
             prompt: String,
             maxTokens: Int,
             context: android.content.Context?,
+            assetId: String? = null,
         ): String {
             val ctx = context
                 ?: throw IllegalStateException("local llm needs an Android context")
+            val prefs = try {
+                ctx.getSharedPreferences("mw_state", android.content.Context.MODE_PRIVATE)
+            } catch (_: Exception) {
+                null
+            }
+            // Keep-warm: one resident engine (memory bound) governed
+            // by this asset's policy (default immediate = today's
+            // load-per-call behavior when the id is unknown).
+            val keepSecs = assetId?.let { id ->
+                prefs?.let {
+                    LocalKeepWarm.readKeepSecs(it, LocalKeepWarm.KIND_LLM, id, LocalKeepWarm.IMMEDIATE)
+                }
+            } ?: LocalKeepWarm.IMMEDIATE
+            val now = LocalKeepWarm.nowMs()
+            val eng: Any = synchronized(lock) {
+                if (engine != null && engineKey != modelPath) {
+                    android.util.Log.i("MwLlm", "keep: model switch, closing resident engine")
+                    closeEngineLocked()
+                }
+                if (engine != null &&
+                    LocalKeepWarm.isExpired(lastUsedMs, keepSecs, now)
+                ) {
+                    android.util.Log.i(
+                        "MwLlm",
+                        "keep: idle-expired idle=${(now - lastUsedMs) / 1000}s " +
+                            "keep=${keepSecs}s, closing resident engine",
+                    )
+                    closeEngineLocked()
+                }
+                val cached = engine?.takeIf { engineKey == modelPath }
+                if (cached != null) {
+                    android.util.Log.i("MwLlm", "keep: reusing resident engine")
+                    cached
+                } else {
+                    val created = createEngine(ctx, modelPath, maxTokens)
+                    engine = created
+                    engineKey = modelPath
+                    android.util.Log.i("MwLlm", "keep: engine loaded for $modelPath")
+                    created
+                }
+            }
+            try {
+                return runSession(eng, prompt)
+            } finally {
+                synchronized(lock) {
+                    if (keepSecs == LocalKeepWarm.IMMEDIATE) {
+                        android.util.Log.i("MwLlm", "keep: immediate policy, closing engine")
+                        closeEngineLocked()
+                    } else if (engineKey == modelPath) {
+                        lastUsedMs = LocalKeepWarm.nowMs()
+                    }
+                }
+            }
+        }
+
+        /** Close the resident engine (service destroy / policy drop). */
+        fun releaseAll() {
+            synchronized(lock) {
+                closeEngineLocked()
+            }
+        }
+
+        /** Drop the resident engine when it backs [modelPath] (delete/policy). */
+        fun dropCached(modelPath: String) {
+            synchronized(lock) {
+                if (engineKey == modelPath) {
+                    android.util.Log.i("MwLlm", "keep: dropping cached engine for $modelPath")
+                    closeEngineLocked()
+                }
+            }
+        }
+
+        private fun closeEngineLocked() {
+            try {
+                val llmClass =
+                    Class.forName("com.google.mediapipe.tasks.genai.llminference.LlmInference")
+                engine?.let { llmClass.getMethod("close").invoke(it) }
+            } catch (_: Exception) {
+            }
+            engine = null
+            engineKey = null
+            lastUsedMs = 0L
+        }
+
+        private fun createEngine(
+            ctx: android.content.Context,
+            modelPath: String,
+            maxTokens: Int,
+        ): Any {
             val llmClass =
                 Class.forName("com.google.mediapipe.tasks.genai.llminference.LlmInference")
             val optionsClass = Class.forName(
@@ -544,77 +693,76 @@ object LocalLlmManager {
                 android.content.Context::class.java,
                 optionsClass,
             )
-            val session = create.invoke(null, ctx, options)
+            return create.invoke(null, ctx, options)
+        }
+
+        /**
+         * One fresh explicit session per call (never the implicit
+         * generateResponse path: it segfaults in nativePredictSync
+         * with a null handle on these runtimes). Sessions accumulate
+         * conversation state, so reuse is incorrect — only the
+         * ENGINE is resident; sessions open and close per call.
+         */
+        private fun runSession(session: Any, prompt: String): String {
+            val llmClass =
+                Class.forName("com.google.mediapipe.tasks.genai.llminference.LlmInference")
             try {
-                try {
-                    val sized = llmClass.getMethod("sizeInTokens", String::class.java)
-                        .invoke(session, prompt) as? Int
-                    android.util.Log.i("MwLlm", "prompt tokens=$sized len=${prompt.length}")
-                } catch (_: Exception) {
-                    android.util.Log.w("MwLlm", "sizeInTokens failed")
-                }
-                // Explicit session (never the implicit generateResponse
-                // path): it segfaults in nativePredictSync with a null
-                // handle on these runtimes (owner phone + emulator
-                // repros). Mirrors the official Android sample:
-                // session options (defaults) → addQueryChunk →
-                // generateResponse → close both.
-                // Sample parity (deleted official Android sample,
-                // verified via git history): explicit session sampler
-                // topK=64 / temp=1.0 / topP=0.95. Runtime defaults
-                // (40/0.8/1.0) are left alone — the vendor recipe is
-                // the tested configuration.
-                val sessOptsClass = Class.forName(
-                    "com.google.mediapipe.tasks.genai.llminference.LlmInferenceSession\$LlmInferenceSessionOptions",
-                )
-                val sessBuilder = sessOptsClass.getMethod("builder").invoke(null)
-                val sessBuilderClass = sessBuilder.javaClass
-                sessBuilderClass.getMethod("setTopK", Int::class.javaPrimitiveType)
-                    .invoke(sessBuilder, 64)
-                sessBuilderClass.getMethod("setTemperature", Float::class.javaPrimitiveType)
-                    .invoke(sessBuilder, 1.0f)
-                sessBuilderClass.getMethod("setTopP", Float::class.javaPrimitiveType)
-                    .invoke(sessBuilder, 0.95f)
-                val sessOpts = sessBuilderClass.getMethod("build").invoke(sessBuilder)
-                val sessionClass = Class.forName(
-                    "com.google.mediapipe.tasks.genai.llminference.LlmInferenceSession",
-                )
-                val createSession = sessionClass.getMethod(
-                    "createFromOptions",
-                    llmClass,
-                    sessOptsClass,
-                )
-                val convo = createSession.invoke(null, session, sessOpts)
-                try {
-                    sessionClass.getMethod("addQueryChunk", String::class.java)
-                        .invoke(convo, prompt)
-                    // Async generate (sample parity — the sample never
-                    // calls sync generateResponse): the sync path
-                    // segfaults in nativePredictSync on long prompts
-                    // (all runtimes tried); the async path fails closed
-                    // with OUT_OF_RANGE instead. Block for the result;
-                    // timeout/cancel surfaces as FAIL, never a crash.
-                    @Suppress("UNCHECKED_CAST")
-                    val future = sessionClass.getMethod("generateResponseAsync")
-                        .invoke(convo) as java.util.concurrent.Future<String>
-                    return try {
-                        future.get(8, java.util.concurrent.TimeUnit.MINUTES)
-                    } catch (e: Exception) {
-                        try {
-                            future.cancel(true)
-                        } catch (_: Exception) {
-                        }
-                        throw e
-                    }
-                } finally {
+                val sized = llmClass.getMethod("sizeInTokens", String::class.java)
+                    .invoke(session, prompt) as? Int
+                android.util.Log.i("MwLlm", "prompt tokens=$sized len=${prompt.length}")
+            } catch (_: Exception) {
+                android.util.Log.w("MwLlm", "sizeInTokens failed")
+            }
+            // Sample parity (deleted official Android sample,
+            // verified via git history): explicit session sampler
+            // topK=64 / temp=1.0 / topP=0.95. Runtime defaults
+            // (40/0.8/1.0) are left alone — the vendor recipe is
+            // the tested configuration.
+            val sessOptsClass = Class.forName(
+                "com.google.mediapipe.tasks.genai.llminference.LlmInferenceSession\$LlmInferenceSessionOptions",
+            )
+            val sessBuilder = sessOptsClass.getMethod("builder").invoke(null)
+            val sessBuilderClass = sessBuilder.javaClass
+            sessBuilderClass.getMethod("setTopK", Int::class.javaPrimitiveType)
+                .invoke(sessBuilder, 64)
+            sessBuilderClass.getMethod("setTemperature", Float::class.javaPrimitiveType)
+                .invoke(sessBuilder, 1.0f)
+            sessBuilderClass.getMethod("setTopP", Float::class.javaPrimitiveType)
+                .invoke(sessBuilder, 0.95f)
+            val sessOpts = sessBuilderClass.getMethod("build").invoke(sessBuilder)
+            val sessionClass = Class.forName(
+                "com.google.mediapipe.tasks.genai.llminference.LlmInferenceSession",
+            )
+            val createSession = sessionClass.getMethod(
+                "createFromOptions",
+                llmClass,
+                sessOptsClass,
+            )
+            val convo = createSession.invoke(null, session, sessOpts)
+            try {
+                sessionClass.getMethod("addQueryChunk", String::class.java)
+                    .invoke(convo, prompt)
+                // Async generate (sample parity — the sample never
+                // calls sync generateResponse): the sync path
+                // segfaults in nativePredictSync on long prompts
+                // (all runtimes tried); the async path fails closed
+                // with OUT_OF_RANGE instead. Block for the result;
+                // timeout/cancel surfaces as FAIL, never a crash.
+                @Suppress("UNCHECKED_CAST")
+                val future = sessionClass.getMethod("generateResponseAsync")
+                    .invoke(convo) as java.util.concurrent.Future<String>
+                return try {
+                    future.get(8, java.util.concurrent.TimeUnit.MINUTES)
+                } catch (e: Exception) {
                     try {
-                        sessionClass.getMethod("close").invoke(convo)
+                        future.cancel(true)
                     } catch (_: Exception) {
                     }
+                    throw e
                 }
             } finally {
                 try {
-                    llmClass.getMethod("close").invoke(session)
+                    sessionClass.getMethod("close").invoke(convo)
                 } catch (_: Exception) {
                 }
             }

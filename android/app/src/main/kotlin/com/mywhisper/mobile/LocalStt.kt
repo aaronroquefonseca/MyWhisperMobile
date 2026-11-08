@@ -117,6 +117,7 @@ object LocalStt {
 
     @Volatile private var recognizer: Any? = null
     @Volatile private var packKey: String? = null
+    @Volatile private var lastUsedMs: Long = 0L
     private val lock = Any()
 
     /**
@@ -519,12 +520,39 @@ object LocalStt {
             // offline engines still need at least one VAD range.
             if (ranges.isEmpty() && entry.engine != LocalSttModels.Engine.TRANSDUCER) return null
             // Cache key covers model dir + whisper language (changing
-            // either rebuilds the native recognizer).
+            // either rebuilds the native recognizer). Keep-warm: one
+            // resident slot (memory bound) governed by this model's
+            // policy (default indefinite = today's behavior); idle
+            // expiry sweeps lazily on every use, immediate releases
+            // after each decode.
             val key = dir.absolutePath + "|" + entry.id + "|" + whisperLang
+            val keepSecs = LocalKeepWarm.readKeepSecs(
+                prefs, LocalKeepWarm.KIND_STT, entry.id, LocalKeepWarm.INDEFINITE,
+            )
             var loadMs = 0L
+            val now = LocalKeepWarm.nowMs()
             val rec: Any = synchronized(lock) {
+                if (recognizer != null && packKey != key) {
+                    Log.i(TAG, "local keep: model switch, releasing resident recognizer")
+                    SherpaRunner.release(recognizer)
+                    recognizer = null
+                    packKey = null
+                }
+                if (recognizer != null &&
+                    LocalKeepWarm.isExpired(lastUsedMs, keepSecs, now)
+                ) {
+                    Log.i(
+                        TAG,
+                        "local keep: idle-expired ${entry.id} " +
+                            "idle=${(now - lastUsedMs) / 1000}s keep=${keepSecs}s, releasing",
+                    )
+                    SherpaRunner.release(recognizer)
+                    recognizer = null
+                    packKey = null
+                }
                 val cached = if (packKey == key) recognizer else null
                 if (cached != null) {
+                    Log.i(TAG, "local keep: reusing resident ${entry.id}")
                     cached
                 } else {
                     val t0 = android.os.SystemClock.elapsedRealtime()
@@ -562,6 +590,17 @@ object LocalStt {
             }
             }
             Log.i(TAG, "local decode chunks=${ranges.size} chars=${sb.length} loadMs=$loadMs decodeMs=$decodeMs")
+            synchronized(lock) {
+                if (keepSecs == LocalKeepWarm.IMMEDIATE) {
+                    Log.i(TAG, "local keep: immediate policy, releasing ${entry.id}")
+                    SherpaRunner.release(recognizer)
+                    recognizer = null
+                    packKey = null
+                    lastUsedMs = 0L
+                } else {
+                    lastUsedMs = LocalKeepWarm.nowMs()
+                }
+            }
             return Result(sb.toString(), loadMs, decodeMs, ranges.size)
         } catch (e: UnsatisfiedLinkError) {
             Log.w(TAG, "sherpa native missing, fallback to server: ${e.message}")
@@ -631,6 +670,7 @@ object LocalStt {
             SherpaRunner.release(recognizer)
             recognizer = null
             packKey = null
+            lastUsedMs = 0L
         }
     }
 

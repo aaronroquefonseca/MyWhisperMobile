@@ -108,8 +108,16 @@ class LocalLlmManagerTest {
     }
 
     @Test
-    fun generateLitertlm_missingFileFailsClosed() {
-        var msg: String? = null
+    fun preferGpuFor_onlyGpuBuilds() {
+        assertTrue(LocalLlmManager.preferGpuFor("llm-gemma4-e2b-it-gpu.litertlm"))
+        assertTrue(LocalLlmManager.preferGpuFor("/data/models/llm-gemma4-e4b-it-gpu.litertlm"))
+        assertFalse(LocalLlmManager.preferGpuFor("llm-gemma4-e2b-it.litertlm"))
+        assertFalse(LocalLlmManager.preferGpuFor("llm-gemma3-1b-it-int4.task"))
+        assertFalse(LocalLlmManager.preferGpuFor("gpu-model.litertlm"))
+    }
+
+    @Test
+    fun generateLitertlm_missingFileFailsClosed() {        var msg: String? = null
         try {
             LocalLlmManager.generateLitertlm(File("/nonexistent/m.litertlm"), "s", "t")
         } catch (e: IllegalArgumentException) {
