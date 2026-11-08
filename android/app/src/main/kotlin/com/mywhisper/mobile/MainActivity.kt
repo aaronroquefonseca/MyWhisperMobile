@@ -1280,6 +1280,23 @@ class MainActivity : ComponentActivity() {
                 .append("MB low=").append(mi.lowMemory).append('\n')
         } catch (_: Exception) {
         }
+        // Own-process log tail (no permission needed for our own
+        // UID): step logs pin a native crash to engine init /
+        // conversation / sendMessage when the tombstone is bare.
+        try {
+            val proc = Runtime.getRuntime().exec(
+                arrayOf("logcat", "-d", "-v", "brief", "MwLlm:I", "litert:I", "*:S"),
+            )
+            val out = proc.inputStream.bufferedReader().readText()
+            proc.waitFor()
+            val lines = out.lines().filter { it.isNotBlank() }.takeLast(40)
+            sb.append("--- logtail (").append(lines.size).append(") ---\n")
+            for (line in lines) {
+                sb.append(line.take(300)).append('\n')
+            }
+        } catch (_: Exception) {
+            sb.append("logtail: unavailable\n")
+        }
         return sb.toString()
     }
 
@@ -2199,21 +2216,33 @@ class MainActivity : ComponentActivity() {
             }
             Section(stringResource(R.string.diag_title)) {
                 var diag by remember { mutableStateOf("") }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Button(onClick = { diag = collectDiagnostics() }) {
-                        Text(stringResource(R.string.diag_refresh))
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    Button(
-                        onClick = { copyText(diag) },
-                        enabled = diag.isNotEmpty(),
-                    ) {
-                        Text(stringResource(R.string.diag_copy))
-                    }
+                var diagOpen by remember { mutableStateOf(false) }
+                TextButton(onClick = { diagOpen = !diagOpen }) {
+                    Text(
+                        if (diagOpen) {
+                            stringResource(R.string.diag_hide)
+                        } else {
+                            stringResource(R.string.diag_show)
+                        },
+                    )
                 }
-                if (diag.isNotEmpty()) {
-                    Spacer(Modifier.height(8.dp))
-                    Text(diag, style = MaterialTheme.typography.bodySmall)
+                if (diagOpen) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Button(onClick = { diag = collectDiagnostics() }) {
+                            Text(stringResource(R.string.diag_refresh))
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Button(
+                            onClick = { copyText(diag) },
+                            enabled = diag.isNotEmpty(),
+                        ) {
+                            Text(stringResource(R.string.diag_copy))
+                        }
+                    }
+                    if (diag.isNotEmpty()) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(diag, style = MaterialTheme.typography.bodySmall)
+                    }
                 }
             }
         }

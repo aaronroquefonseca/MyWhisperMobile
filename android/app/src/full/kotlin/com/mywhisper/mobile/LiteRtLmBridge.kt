@@ -150,6 +150,7 @@ object LiteRtLmBridge {
                     ),
                 )
                 engine.initialize()
+                android.util.Log.i("MwLlm", "litertlm engine initialized")
                 return engine
             } catch (e: Exception) {
                 android.util.Log.w("MwLlm", "litertlm backend init failed, trying next: ${e.message}")
@@ -177,8 +178,10 @@ object LiteRtLmBridge {
                 thinkingConfig = thinking,
             ),
         )
+        android.util.Log.i("MwLlm", "litertlm conversation created")
         try {
             val reply = convo.sendMessage(Contents.of(transcript))
+            android.util.Log.i("MwLlm", "litertlm sendMessage returned")
             return reply.contents.contents
                 .filterIsInstance<Content.Text>()
                 .joinToString("") { it.text }
