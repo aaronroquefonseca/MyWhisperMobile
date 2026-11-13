@@ -137,7 +137,7 @@ fn http_post_json(
     headers: &[(&str, &str)],
     body: &serde_json::Value,
 ) -> Result<String, String> {
-    let client = reqwest::blocking::Client::builder()
+    let client = crate::tls::blocking_client()?
         .connect_timeout(std::time::Duration::from_secs(5))
         .timeout(std::time::Duration::from_secs(60))
         .build()

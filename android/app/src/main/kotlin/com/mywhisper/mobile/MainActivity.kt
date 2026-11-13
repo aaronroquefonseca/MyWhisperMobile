@@ -33,6 +33,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -1622,6 +1624,20 @@ class MainActivity : ComponentActivity() {
         onTest: () -> Unit,
         disabledReason: String? = null,
     ) {
+        // Result visibility: a probe finishes seconds later, and on a long
+        // settings screen the inline PASS/FAIL can land off-screen (owner
+        // repro: the row scrolled away and the result needed a manual
+        // scroll). Bring the result itself into view when it arrives, so
+        // the outcome is always visible where the button was tapped.
+        val resultRequester = remember { BringIntoViewRequester() }
+        LaunchedEffect(result) {
+            if (result != null) {
+                try {
+                    resultRequester.bringIntoView()
+                } catch (_: Exception) {
+                }
+            }
+        }
         Column {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 // ONE shared test-button style (min height + padding
@@ -1660,6 +1676,7 @@ class MainActivity : ComponentActivity() {
                         } else {
                             MaterialTheme.colorScheme.error
                         },
+                        modifier = Modifier.bringIntoViewRequester(resultRequester),
                     )
                 }
             }
