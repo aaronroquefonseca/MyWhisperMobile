@@ -16,6 +16,7 @@ pub mod settings;
 pub mod store;
 pub mod sync_ctl;
 pub mod textnorm;
+pub mod tls;
 pub mod viz_types;
 
 // IOS PORT: Apple/host builds talk to the engine through the C-ABI

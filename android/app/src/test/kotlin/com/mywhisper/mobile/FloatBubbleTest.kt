@@ -25,10 +25,11 @@ class FloatBubbleTest {
     // -- Auto-show rule --------------------------------------------
 
     @Test
-    fun show_requiresEnabled_noIme_focusOrNoA11y() {
-        // a11y off: shows without focus.
-        assertTrue(FloatState.shouldShowBubble(true, false, false, false))
-        // a11y on: needs focus.
+    fun show_requiresEnabled_noIme_a11yAndFocus() {
+        // a11y off: the bubble cannot land text anywhere — never show it.
+        assertFalse(FloatState.shouldShowBubble(true, false, false, false))
+        assertFalse(FloatState.shouldShowBubble(true, false, false, true))
+        // a11y on: needs a focused editable field.
         assertTrue(FloatState.shouldShowBubble(true, false, true, true))
         assertFalse(FloatState.shouldShowBubble(true, false, true, false))
     }

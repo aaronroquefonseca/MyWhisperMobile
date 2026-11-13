@@ -38,8 +38,74 @@ class ModelDownloadBgTest {
     }
 
     @Test
-    fun notifIds_stableAndDistinct() {
-        val a = ModelDownloadSchedule.workNameFor("stt", LocalSttModels.MOONSHINE_ID)
+    fun kindIdFromWorkName_roundTrips() {
+        // Dot-free ids round-trip exactly (explicit intent extras are
+        // the live Cancel path; this parse is the legacy fallback).
+        for (m in LocalSttModels.MODELS) {
+            val w = ModelDownloadSchedule.workNameFor("stt", m.id)
+            if ('.' in m.id) {
+                // Dotted ids are lossy ([clean] maps dots to dashes).
+                assertFalse(
+                    m.id,
+                    ModelDownloadSchedule.kindIdFromWorkName(w) == ("stt" to m.id),
+                )
+                continue
+            }
+            assertEquals(
+                "stt" to m.id,
+                ModelDownloadSchedule.kindIdFromWorkName(w),
+            )
+        }
+        for (id in listOf("gemma3-1b-it-int4", "gemma4-e4b-it-web")) {
+            val w = ModelDownloadSchedule.workNameFor("llm", id)
+            assertEquals("llm" to id, ModelDownloadSchedule.kindIdFromWorkName(w))
+        }
+        // Malformed → null (caller falls back to a plain work cancel).
+        assertNull(ModelDownloadSchedule.kindIdFromWorkName(""))
+        assertNull(ModelDownloadSchedule.kindIdFromWorkName("mw-dl-"))
+        assertNull(ModelDownloadSchedule.kindIdFromWorkName("mw-dl-stt-"))
+        assertNull(ModelDownloadSchedule.kindIdFromWorkName("other-stt-x"))
+        assertNull(ModelDownloadSchedule.kindIdFromWorkName("mw-dl-bogus-x"))
+    }
+
+    @Test
+    fun cancelWipe_removesPartialsKeepsFinals() {
+        val dir = Files.createTempDirectory("dl-cancel").toFile()
+        try {
+            // STT: partial gone, verified final + unrelated file kept.
+            val entry = LocalSttModels.findById(LocalSttModels.WHISPER_TINY_ID)
+            val pack = LocalSttModels.dirFor(dir, entry)
+            pack.mkdirs()
+            val part = File(pack, entry.files.first().name + ".part")
+            part.writeBytes("partial".toByteArray())
+            val final = File(pack, entry.files[1].name)
+            final.writeBytes("final".toByteArray())
+            val other = File(pack, "notes.txt")
+            other.writeBytes("x".toByteArray())
+            ModelDownloadManager.deletePartialsFor(dir, "stt", entry.id)
+            assertFalse(part.exists())
+            assertTrue(final.exists())
+            assertTrue(other.exists())
+            // LLM: only THIS asset's partial goes; the sibling's stays.
+            val dest = MainActivity.llmTaskFileFor(dir, "asset-a")
+            dest.parentFile?.mkdirs()
+            val ownPart = File(dest.parent, dest.name + ".part.asset-a")
+            ownPart.writeBytes("p".toByteArray())
+            val sibPart = File(dest.parent, dest.name + ".part.asset-b")
+            sibPart.writeBytes("p".toByteArray())
+            ModelDownloadManager.deletePartialsFor(dir, "llm", "asset-a")
+            assertFalse(ownPart.exists())
+            assertTrue(sibPart.exists())
+            // Unknown kind/id: no-op, never throws.
+            ModelDownloadManager.deletePartialsFor(dir, "bogus", "x")
+            ModelDownloadManager.deletePartialsFor(dir, "stt", "nope")
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun notifIds_stableAndDistinct() {        val a = ModelDownloadSchedule.workNameFor("stt", LocalSttModels.MOONSHINE_ID)
         val b = ModelDownloadSchedule.workNameFor("stt", LocalSttModels.WHISPER_TINY_ID)
         assertEquals(
             ModelDownloadSchedule.notifIdFor(a),

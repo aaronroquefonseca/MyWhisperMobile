@@ -1,6 +1,7 @@
 package com.mywhisper.mobile
 
 import java.io.File
+import java.nio.file.Files
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -92,6 +93,89 @@ class LocalLlmManagerTest {
     }
 
     @Test
+    fun manifestRuntime_defaultsMediapipeAndParsesLitertlm() {
+        val assets = LocalLlmManager.parseManifest(MainActivity.LLM_MANIFEST_JSON)
+        assertEquals(
+            listOf("gemma3-1b-it-int4", "gemma3-1b-it-mpseq-q8", "gemma4-e2b-it", "gemma4-e4b-it"),
+            assets.map { it.id },
+        )
+        assertEquals(LocalLlmManager.RUNTIME_MEDIAPIPE, assets[0].runtime)
+        assertEquals(LocalLlmManager.RUNTIME_LITERTLM, assets[2].runtime)
+        assertEquals(LocalLlmManager.RUNTIME_LITERTLM, assets[3].runtime)
+        assertEquals("task", LocalLlmManager.extForRuntime(assets[0].runtime))
+        assertEquals("litertlm", LocalLlmManager.extForRuntime(assets[2].runtime))
+        assertEquals("task", LocalLlmManager.extForRuntime("bogus"))
+    }
+
+    @Test
+    fun preferGpuFor_onlyGpuBuilds() {
+        assertTrue(LocalLlmManager.preferGpuFor("llm-gemma4-e2b-it-gpu.litertlm"))
+        assertTrue(LocalLlmManager.preferGpuFor("/data/models/llm-gemma4-e4b-it-gpu.litertlm"))
+        assertFalse(LocalLlmManager.preferGpuFor("llm-gemma4-e2b-it.litertlm"))
+        assertFalse(LocalLlmManager.preferGpuFor("llm-gemma3-1b-it-int4.task"))
+        assertFalse(LocalLlmManager.preferGpuFor("gpu-model.litertlm"))
+    }
+
+    @Test
+    fun generateLitertlm_missingFileFailsClosed() {        var msg: String? = null
+        try {
+            LocalLlmManager.generateLitertlm(File("/nonexistent/m.litertlm"), "s", "t")
+        } catch (e: IllegalArgumentException) {
+            msg = e.message
+        }
+        assertTrue(msg?.contains("not ready") == true)
+    }
+
+    @Test
+    fun weightCacheLink_pointsAtModelsDir() {
+        val dirs = Files.createTempDirectory("llm-cachelink").toFile()
+        try {
+            val cache = File(dirs, "cache").apply { mkdirs() }
+            val models = File(dirs, "models").apply { mkdirs() }
+            assertEquals("m.task.xnnpack_cache", LocalLlmManager.xnnpackCacheName("m.task"))
+            // Fresh: link created, points at the models dir.
+            assertTrue(LocalLlmManager.ensureWeightCacheLink(cache, models, "m.task"))
+            val link = File(cache, "m.task.xnnpack_cache")
+            assertTrue(java.nio.file.Files.isSymbolicLink(link.toPath()))
+            // Content written through the link lands in models/.
+            link.writeBytes("packed".toByteArray())
+            assertEquals("packed", File(models, "m.task.xnnpack_cache").readText())
+            // Idempotent second call (link already there).
+            assertTrue(LocalLlmManager.ensureWeightCacheLink(cache, models, "m.task"))
+            // Real file in the way: replaced by the link.
+            java.nio.file.Files.delete(link.toPath())
+            File(cache, "m.task.xnnpack_cache").writeBytes("stale".toByteArray())
+            assertTrue(LocalLlmManager.ensureWeightCacheLink(cache, models, "m.task"))
+            assertTrue(java.nio.file.Files.isSymbolicLink(link.toPath()))
+        } finally {
+            dirs.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun resumeAction_matrix() {
+        val A = LocalLlmManager.ResumeAction.APPEND
+        val R = LocalLlmManager.ResumeAction.RESTART
+        val V = LocalLlmManager.ResumeAction.VERIFY
+        val F = LocalLlmManager.ResumeAction.FAIL
+        // 206 with a partial appends; 200 means the server ignored
+        // Range → truncate and start over.
+        assertEquals(A, LocalLlmManager.resumeAction(123L, 206))
+        assertEquals(A, LocalLlmManager.resumeAction(0L, 206))
+        assertEquals(R, LocalLlmManager.resumeAction(123L, 200))
+        assertEquals(R, LocalLlmManager.resumeAction(0L, 200))
+        // 416 with a surviving partial verifies (hit = done);
+        // only an empty partial restarts outright.
+        assertEquals(V, LocalLlmManager.resumeAction(1000L, 416))
+        assertEquals(V, LocalLlmManager.resumeAction(123L, 416))
+        assertEquals(R, LocalLlmManager.resumeAction(0L, 416))
+        // Anything else fails without writing.
+        for (code in listOf(301, 302, 400, 403, 404, 500, 503)) {
+            assertEquals("code $code", F, LocalLlmManager.resumeAction(123L, code))
+        }
+    }
+
+    @Test
     fun download_skipsWhenDestAlreadyVerifies() {
         val dest = File.createTempFile("llm-dl", ".task")
         try {
@@ -112,5 +196,24 @@ class LocalLlmManagerTest {
     @Test(expected = RuntimeException::class)
     fun generate_throwsWhenModelMissing() {
         LocalLlmManager.generate(File("/nonexistent/cleanup.task"), "prompt")
+    }
+
+    @Test
+    fun generate_nullContextFailsClosed() {
+        // createFromOptions requires a Context: without one the
+        // bridge must throw (row shows FAIL), never half-built
+        // reflection. Needs no AAR (fails before lookup).
+        val f = File.createTempFile("llm-ctx", ".task")
+        try {
+            f.writeBytes("x".toByteArray())
+            try {
+                LocalLlmManager.generate(f, "prompt", context = null)
+                throw AssertionError("expected IllegalStateException")
+            } catch (e: IllegalStateException) {
+                assertTrue(e.message.orEmpty().contains("Android context"))
+            }
+        } finally {
+            f.delete()
+        }
     }
 }

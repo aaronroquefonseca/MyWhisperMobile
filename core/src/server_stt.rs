@@ -337,7 +337,7 @@ fn post_openai_compat(
     prompt: Option<&str>,
     wav: Vec<u8>,
 ) -> Result<String, String> {
-    let client = reqwest::blocking::Client::builder()
+    let client = crate::tls::blocking_client()?
         .connect_timeout(std::time::Duration::from_secs(CONNECT_TIMEOUT_SECS))
         .timeout(std::time::Duration::from_secs(INFERENCE_TIMEOUT_SECS))
         .build()
@@ -405,7 +405,7 @@ fn post_deepgram(
     if !language.trim().is_empty() && language != "auto" {
         url.push_str(&format!("&language={}", language.trim()));
     }
-    let client = reqwest::blocking::Client::builder()
+    let client = crate::tls::blocking_client()?
         .connect_timeout(std::time::Duration::from_secs(CONNECT_TIMEOUT_SECS))
         .timeout(std::time::Duration::from_secs(INFERENCE_TIMEOUT_SECS))
         .build()

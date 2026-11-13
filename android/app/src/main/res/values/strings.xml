@@ -87,6 +87,7 @@
     <string name="float_stop">Cancel — discard dictation</string>
     <string name="float_processing">Transcribing…</string>
     <string name="float_no_field">No editable field focused — open one and dictate again</string>
+    <string name="float_need_a11y">Turn on the MyWhisper dictation service — Setup → Floating button</string>
     <string name="a11y_desc">Commits floating-bubble dictations into the focused text field.</string>
     <string name="setup_theme">Theme</string>
     <string name="setup_prefs">Preferences</string>
@@ -101,7 +102,7 @@
 
     <!-- Transcription -->
     <string name="stt_chain">Chain (top = first tried)</string>
-    <string name="stt_chain_sub">Entries are tried top-down; the first success wins. Local on-device speech is experimental and off by default — without its verified model pack the entry is skipped and the server chain is used.</string>
+    <string name="stt_provider_all">All</string>    <string name="stt_chain_sub">Entries are tried top-down; the first success wins. Local on-device speech is experimental and off by default — without its verified model pack the entry is skipped and the server chain is used.</string>
     <string name="stt_local_summary">on-device · experimental</string>
     <string name="stt_local_note">Needs no configuration — needs its model pack.</string>
     <string name="stt_local_why">Why?</string>
@@ -136,6 +137,25 @@
     <string name="local_downloading">Downloading %1$s…</string>
     <string name="local_downloaded">Downloaded %1$s — pack verified.</string>
     <string name="local_download_failed">Download failed: %1$s</string>
+    <string name="local_checking">Checking pack…</string>
+    <string name="llm_wait_wifi">Waiting for Wi-Fi — connect to unmetered Wi-Fi and the download starts on its own.</string>
+    <string name="llm_wait_offline">Waiting for a network connection…</string>
+    <string name="llm_use_metered">Use mobile data (%1$s MB)</string>
+    <string name="keep_label">Keep loaded:</string>
+    <string name="keep_immediate">Unload immediately</string>
+    <string name="keep_1min">1 minute</string>
+    <string name="keep_10min">10 minutes</string>
+    <string name="keep_30min">30 minutes</string>
+    <string name="keep_indefinite">Indefinitely</string>
+    <string name="keep_custom">%1$d seconds</string>
+    <string name="think_label">Thinking:</string>
+    <string name="think_off">Off</string>
+    <string name="think_budget">%1$d tokens</string>
+    <string name="diag_title">Diagnostics</string>
+    <string name="diag_show">Show diagnostics</string>
+    <string name="diag_hide">Hide diagnostics</string>
+    <string name="diag_refresh">Refresh</string>
+    <string name="diag_copy">Copy</string>
     <string name="local_selected_needs_download">Selected %1$s — download it to go on-device; until verified the server chain is used.</string>
     <string name="local_deleted_active">Deleted %1$s — switched to %2$s.</string>
     <string name="local_deleted_active_none">Deleted %1$s — no on-device model left; the server chain is used.</string>

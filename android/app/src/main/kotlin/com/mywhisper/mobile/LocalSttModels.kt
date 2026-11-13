@@ -47,6 +47,32 @@ import java.util.Locale
  *   phone-sane cap by design: flagship-only tier gated by device
  *   total RAM ([WHISPER_MEDIUM_ID.minTotalRamMb]) with a clear
  *   requires-flagship note; moonshine stays the default.
+ * - whisper large-v3 multilingual int8
+ *   (`csukuangfj/sherpa-onnx-whisper-large-v3`): int8 ONNX magic +
+ *   full-download SHA-256 verified (encoder 766671985B, decoder
+ *   1008265203B, shared multilingual tokens 816730B — same vocab pin
+ *   `b34b360d…a126` as the smaller whispers; ~1.7GB total). Flagship
+ *   tier gated at 10GB total RAM; moonshine stays the default.
+ * - whisper turbo multilingual int8
+ *   (`csukuangfj/sherpa-onnx-whisper-turbo`): int8 ONNX magic +
+ *   full-download SHA-256 verified (encoder 674716297B, decoder
+ *   361080764B, same shared vocab pin; ~989MB total). Flagship tier
+ *   gated at 8GB total RAM; moonshine stays the default.
+ * - nemotron speech streaming en 0.6B int8 (transducer,
+ *   `csukuangfj/sherpa-onnx-nemotron-speech-streaming-en-0.6b-int8-2026-01-14`):
+ *   int8 ONNX magic + full-download SHA-256 verified (encoder
+ *   652916830B, decoder 7257753B, joiner 1735862B, tokens 8952B;
+ *   ~631MB total). English-only MANUAL entry, dictionary off (no
+ *   hotwords channel for transducers yet), decoded through the
+ *   online recognizer path per VAD chunk. No chunk-size claim: the
+ *   repo README does not state one.
+ * - nemotron 3.5 streaming multilingual 0.6B int8 (transducer,
+ *   `csukuangfj2/…-560ms-int8-2026-06-11`): int8 ONNX magic +
+ *   full-download SHA-256 verified (encoder 657601403B, decoder
+ *   14978075B, joiner 9504438B, tokens 131440B; ~651MB total).
+ *   15 desktop-parity languages, auto-detect (no language is sent on
+ *   the online path — desktop parity), dictionary off like its EN
+ *   sibling.
  *
  * Drops (with reason, no download path):
  * - sense-voice int8: no Spanish (zh/en/ja/ko/yue only).
@@ -65,8 +91,40 @@ import java.util.Locale
  * PR note.
  */
 object LocalSttModels {
-    enum class Engine { MOONSHINE, WHISPER }
+    enum class Engine { MOONSHINE, WHISPER, TRANSDUCER }
     enum class LangMode { AUTO, MANUAL }
+
+    /**
+     * On-device vendor grouping (desktop `local_provider` parity,
+     * phone-sane subset: Moonshine = Useful Sensors moonshine,
+     * Whisper = OpenAI-family via csukuangfj sherpa ports, NVIDIA =
+     * Nemotron streaming transducers). Drives the provider pill filter
+     * in the models section; catalog order = display order.
+     */
+    enum class Provider { MOONSHINE, WHISPER, NVIDIA }
+
+    /** Display label per provider (pill copy). Pure for unit tests. */
+    @JvmStatic
+    fun providerLabel(p: Provider): String = when (p) {
+        Provider.MOONSHINE -> "Moonshine"
+        Provider.WHISPER -> "Whisper"
+        Provider.NVIDIA -> "NVIDIA"
+    }
+
+    /**
+     * Providers present in the catalog, in catalog order. Pure for
+     * unit tests.
+     */
+    @JvmStatic
+    fun providers(): List<Provider> = MODELS.map { it.provider }.distinct()
+
+    /**
+     * Catalog entries for one provider pill (null = All). Pure for
+     * unit tests.
+     */
+    @JvmStatic
+    fun forProvider(p: Provider?): List<Entry> =
+        if (p == null) MODELS else MODELS.filter { it.provider == p }
 
     data class ModelFile(
         val name: String,
@@ -80,6 +138,8 @@ object LocalSttModels {
         val name: String,
         val sizeLabel: String,
         val engine: Engine,
+        /** Vendor group for the provider pill filter (desktop parity). */
+        val provider: Provider,
         val langMode: LangMode,
         /** Full supported code list (desktop WHISPER_LANGS parity for whisper). */
         val languages: List<String>,
@@ -115,6 +175,21 @@ object LocalSttModels {
     const val WHISPER_BASE_ID = "whisper-base-multilingual-int8"
     const val WHISPER_SMALL_ID = "whisper-small-multilingual-int8"
     const val WHISPER_MEDIUM_ID = "whisper-medium-multilingual-int8"
+    const val WHISPER_LARGE_ID = "whisper-large-multilingual-int8"
+    const val WHISPER_TURBO_ID = "whisper-turbo-multilingual-int8"
+    const val NEMOTRON_EN_ID = "nemotron-streaming-en-0.6b-int8"
+    const val NEMOTRON35_ID = "nemotron-35-streaming-multilingual-0.6b-int8"
+
+    /**
+     * Nemotron 3.5 streaming language codes: desktop NEMOTRON_15
+     * parity (transcription-ready locales only; broad-coverage and
+     * adaptation-ready locales excluded — higher error rates or
+     * fine-tuning required).
+     */
+    val NEMOTRON35_LANGS: List<String> = listOf(
+        "en", "es", "fr", "it", "pt", "nl", "de", "tr", "ru", "ar",
+        "hi", "ja", "ko", "vi", "uk",
+    )
 
     /** Default selected model (legacy behavior: English pack). */
     const val DEFAULT_ID = MOONSHINE_ID
@@ -132,6 +207,15 @@ object LocalSttModels {
 
     /** Flagship gate: device needs this much TOTAL RAM (MB) for medium. */
     const val MEDIUM_MIN_TOTAL_RAM_MB = 6_000L
+
+    /** Flagship gate for whisper large-v3 int8 (~1.7GB of weights). */
+    const val LARGE_MIN_TOTAL_RAM_MB = 10_000L
+
+    /** Flagship gate for whisper turbo int8 (~989MB of weights). */
+    const val TURBO_MIN_TOTAL_RAM_MB = 8_000L
+
+    /** RAM gate for the Nemotron streaming transducers (~650MB of weights). */
+    const val NEMOTRON_MIN_TOTAL_RAM_MB = 6_000L
 
     /**
      * Speed factor from one decode: audio seconds per decode second
@@ -199,6 +283,7 @@ object LocalSttModels {
             name = "Moonshine Tiny EN",
             sizeLabel = "~44MB",
             engine = Engine.MOONSHINE,
+            provider = Provider.MOONSHINE,
             langMode = LangMode.MANUAL,
             languages = listOf("en"),
             dictionary = true,
@@ -231,6 +316,7 @@ object LocalSttModels {
             name = "Whisper Tiny Multilingual",
             sizeLabel = "~99MB",
             engine = Engine.WHISPER,
+            provider = Provider.WHISPER,
             langMode = LangMode.AUTO,
             languages = WHISPER_LANGS,
             dictionary = true,
@@ -263,6 +349,7 @@ object LocalSttModels {
             name = "Whisper Base Multilingual",
             sizeLabel = "~153MB",
             engine = Engine.WHISPER,
+            provider = Provider.WHISPER,
             langMode = LangMode.AUTO,
             languages = WHISPER_LANGS,
             dictionary = true,
@@ -295,6 +382,7 @@ object LocalSttModels {
             name = "Whisper Small Multilingual",
             sizeLabel = "~358MB",
             engine = Engine.WHISPER,
+            provider = Provider.WHISPER,
             langMode = LangMode.AUTO,
             languages = WHISPER_LANGS,
             dictionary = true,
@@ -327,6 +415,7 @@ object LocalSttModels {
             name = "Whisper Medium Multilingual",
             sizeLabel = "~902MB",
             engine = Engine.WHISPER,
+            provider = Provider.WHISPER,
             langMode = LangMode.AUTO,
             languages = WHISPER_LANGS,
             dictionary = true,
@@ -352,6 +441,154 @@ object LocalSttModels {
                     "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-medium/resolve/main/medium-tokens.txt",
                     "b34b360dbb493e781e479794586d661700670d65564001f23024971d1f2fa126",
                     816730,
+                ),
+            ),
+        ),
+        Entry(
+            id = WHISPER_LARGE_ID,
+            name = "Whisper Large v3 Multilingual",
+            sizeLabel = "~1.7GB",
+            engine = Engine.WHISPER,
+            provider = Provider.WHISPER,
+            langMode = LangMode.AUTO,
+            languages = WHISPER_LANGS,
+            dictionary = true,
+            runtimeNote = "99 languages incl. Spanish · requires flagship · needs ~4GB free RAM · speed varies by phone",
+            phoneTier = "requires flagship · 10GB+ total RAM",
+            minTotalRamMb = LARGE_MIN_TOTAL_RAM_MB,
+            dirRel = "models/sherpa-whisper-large-v3-int8",
+            files = listOf(
+                ModelFile(
+                    "large-v3-encoder.int8.onnx",
+                    "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-large-v3/resolve/main/large-v3-encoder.int8.onnx",
+                    "d531cf17248acc43e8c09b472a0877055e770877857a5332fc1304b36534ec85",
+                    766671985,
+                ),
+                ModelFile(
+                    "large-v3-decoder.int8.onnx",
+                    "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-large-v3/resolve/main/large-v3-decoder.int8.onnx",
+                    "ebc6bfd88e162a46cb3edee8a7e727e1dcbc65cabecb19e2573695e4d495e1af",
+                    1008265203,
+                ),
+                ModelFile(
+                    "large-v3-tokens.txt",
+                    "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-large-v3/resolve/main/large-v3-tokens.txt",
+                    "b34b360dbb493e781e479794586d661700670d65564001f23024971d1f2fa126",
+                    816730,
+                ),
+            ),
+        ),
+        Entry(
+            id = WHISPER_TURBO_ID,
+            name = "Whisper Turbo Multilingual",
+            sizeLabel = "~989MB",
+            engine = Engine.WHISPER,
+            provider = Provider.WHISPER,
+            langMode = LangMode.AUTO,
+            languages = WHISPER_LANGS,
+            dictionary = true,
+            runtimeNote = "99 languages incl. Spanish · requires flagship · needs ~2GB free RAM · speed varies by phone",
+            phoneTier = "requires flagship · 8GB+ total RAM",
+            minTotalRamMb = TURBO_MIN_TOTAL_RAM_MB,
+            dirRel = "models/sherpa-whisper-turbo-int8",
+            files = listOf(
+                ModelFile(
+                    "turbo-encoder.int8.onnx",
+                    "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-turbo/resolve/main/turbo-encoder.int8.onnx",
+                    "b02dcdf54f348741e93fe732b67d933c8dcb6735655f710640143081db38878b",
+                    674716297,
+                ),
+                ModelFile(
+                    "turbo-decoder.int8.onnx",
+                    "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-turbo/resolve/main/turbo-decoder.int8.onnx",
+                    "20accd02388482eb3a46bd615631adfdc85e1eb2c7db9ea3f02a40ffe6b81547",
+                    361080764,
+                ),
+                ModelFile(
+                    "turbo-tokens.txt",
+                    "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-turbo/resolve/main/turbo-tokens.txt",
+                    "b34b360dbb493e781e479794586d661700670d65564001f23024971d1f2fa126",
+                    816730,
+                ),
+            ),
+        ),
+        Entry(
+            id = NEMOTRON_EN_ID,
+            name = "Nemotron Streaming EN",
+            sizeLabel = "~631MB",
+            engine = Engine.TRANSDUCER,
+            provider = Provider.NVIDIA,
+            langMode = LangMode.MANUAL,
+            languages = listOf("en"),
+            dictionary = false,
+            runtimeNote = "English-only · transducer · needs ~1.5GB free RAM · speed varies by phone",
+            phoneTier = "6GB+ total RAM",
+            minTotalRamMb = NEMOTRON_MIN_TOTAL_RAM_MB,
+            dirRel = "models/sherpa-nemotron-streaming-en-0.6b",
+            files = listOf(
+                ModelFile(
+                    "encoder.int8.onnx",
+                    "https://huggingface.co/csukuangfj/sherpa-onnx-nemotron-speech-streaming-en-0.6b-int8-2026-01-14/resolve/main/encoder.int8.onnx",
+                    "2f6ae81fe4ccd69ef04cdf048ecd49628e2d3148a6195e152a91b4d2497952dc",
+                    652916830,
+                ),
+                ModelFile(
+                    "decoder.int8.onnx",
+                    "https://huggingface.co/csukuangfj/sherpa-onnx-nemotron-speech-streaming-en-0.6b-int8-2026-01-14/resolve/main/decoder.int8.onnx",
+                    "1fb1795cb46e7d0e99b2e096eae83f7e324294e895975a1a894b0384cbbe37f6",
+                    7257753,
+                ),
+                ModelFile(
+                    "joiner.int8.onnx",
+                    "https://huggingface.co/csukuangfj/sherpa-onnx-nemotron-speech-streaming-en-0.6b-int8-2026-01-14/resolve/main/joiner.int8.onnx",
+                    "a3f41dccc0f67f37e4210051d1c39a29d473c841cfc32fe574135bac890db91d",
+                    1735862,
+                ),
+                ModelFile(
+                    "tokens.txt",
+                    "https://huggingface.co/csukuangfj/sherpa-onnx-nemotron-speech-streaming-en-0.6b-int8-2026-01-14/resolve/main/tokens.txt",
+                    "dc0b4584ab2e4ddbf888425c076c61b736e7356a015250db7d307e6f1a8188ff",
+                    8952,
+                ),
+            ),
+        ),
+        Entry(
+            id = NEMOTRON35_ID,
+            name = "Nemotron 3.5 Streaming",
+            sizeLabel = "~651MB",
+            engine = Engine.TRANSDUCER,
+            provider = Provider.NVIDIA,
+            langMode = LangMode.AUTO,
+            languages = NEMOTRON35_LANGS,
+            dictionary = false,
+            runtimeNote = "15 languages incl. Spanish · auto-detect · 560ms transducer · needs ~1.5GB free RAM · speed varies by phone",
+            phoneTier = "6GB+ total RAM",
+            minTotalRamMb = NEMOTRON_MIN_TOTAL_RAM_MB,
+            dirRel = "models/sherpa-nemotron-3.5-streaming-0.6b-560ms",
+            files = listOf(
+                ModelFile(
+                    "encoder.int8.onnx",
+                    "https://huggingface.co/csukuangfj2/sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11/resolve/main/encoder.int8.onnx",
+                    "012e9321373af99021415e0b0eb3ec827b4be3153be6f30d9b448fe65e896e68",
+                    657601403,
+                ),
+                ModelFile(
+                    "decoder.int8.onnx",
+                    "https://huggingface.co/csukuangfj2/sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11/resolve/main/decoder.int8.onnx",
+                    "19f9c98fc6d0a2c33a65a43b36fdb2e914c26c0aa9764be3aebc502a1e982fb0",
+                    14978075,
+                ),
+                ModelFile(
+                    "joiner.int8.onnx",
+                    "https://huggingface.co/csukuangfj2/sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11/resolve/main/joiner.int8.onnx",
+                    "4101c7c679a0bc30483794b27a059e34e79232aa2068d78d51231a22c8b0d7ce",
+                    9504438,
+                ),
+                ModelFile(
+                    "tokens.txt",
+                    "https://huggingface.co/csukuangfj2/sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11/resolve/main/tokens.txt",
+                    "729cc103155bafa785f9cd45746cd41cabe97eab7182fc04d594129587958f8a",
+                    131440,
                 ),
             ),
         ),
@@ -438,7 +675,10 @@ object LocalSttModels {
 
     /** Single-pass inspect with the real SHA verifier. Pure java.io. */
     fun inspect(filesDir: File, entry: Entry): PackInspect =
-        inspectWithVerifier(filesDir, entry, LocalLlmManager::verifySha256)
+        // Direct-call lambda, NOT a ::verifySha256 function reference
+        // (callable references need Kotlin metadata at runtime, which
+        // R8 mangles — release showed every pack as missing).
+        inspectWithVerifier(filesDir, entry, { f, s -> LocalLlmManager.verifySha256(f, s) })
 
     /** True when a stale `.part` from an interrupted download lingers. Pure java.io. */
     fun hasPartials(dir: File, entry: Entry): Boolean =
@@ -455,7 +695,11 @@ object LocalSttModels {
     /**
      * Download missing/mismatched files for [entry] (atomic .part
      * rename, SHA-256 verified per file). Skips files that already
-     * verify. [onProgress] gets aggregate (received, total).
+     * verify. Interrupted files resume via HTTP Range (see
+     * [LocalLlmManager.resumeAction]); servers that ignore Range get
+     * one clean restart, and the trailing SHA-verify keeps a
+     * stale/corrupt partial fail-closed either way.
+     * [onProgress] gets aggregate (received, total).
      */
     fun download(
         filesDir: File,
@@ -474,42 +718,98 @@ object LocalSttModels {
                 continue
             }
             val tmp = File(dir, "${f.name}.part")
-            val conn = (URL(f.url).openConnection() as HttpURLConnection).apply {
-                connectTimeout = 10_000
-                readTimeout = 60_000
-                instanceFollowRedirects = true
-            }
-            try {
-                if (conn.responseCode !in 200..299) {
-                    throw IllegalStateException("local-stt download http ${conn.responseCode}")
-                }
-                conn.inputStream.buffered().use { ins ->
-                    tmp.outputStream().buffered().use { out ->
-                        val buf = ByteArray(65536)
-                        var fileReceived = 0L
-                        while (true) {
-                            val n = ins.read(buf)
-                            if (n <= 0) break
-                            out.write(buf, 0, n)
-                            fileReceived += n
-                            onProgress(
-                                receivedBase + fileReceived.coerceAtMost(f.sizeBytes),
-                                total,
-                            )
-                        }
+            // Resume loop (single restart allowed): see
+            // LocalLlmManager.downloadModel for the shared protocol.
+            var existing = if (tmp.isFile) tmp.length() else 0L
+            var allowRestart = true
+            while (true) {
+                if (existing <= 0) {
+                    try {
+                        tmp.delete()
+                    } catch (_: Exception) {
                     }
                 }
-            } finally {
-                conn.disconnect()
+                val conn = (URL(f.url).openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 10_000
+                    readTimeout = 60_000
+                    instanceFollowRedirects = true
+                }
+                // VERIFY-hit skips the stream below (partial already
+                // good); every other path streams, then shares the
+                // verify/rename tail and the loop's closing break.
+                var verified = false
+                try {
+                    if (existing > 0) {
+                        conn.setRequestProperty("Range", "bytes=$existing-")
+                    }
+                    val code = conn.responseCode
+                    when (LocalLlmManager.resumeAction(existing, code)) {
+                        LocalLlmManager.ResumeAction.FAIL -> throw IllegalStateException(
+                            "local-stt download http $code",
+                        )
+                        LocalLlmManager.ResumeAction.VERIFY -> {
+                            if (LocalLlmManager.verifySha256(tmp, f.sha256)) {
+                                // Verified partial: skip the stream;
+                                // the shared tail below renames and
+                                // accounts (receivedBase added once).
+                                verified = true
+                            } else if (!allowRestart) {
+                                try {
+                                    tmp.delete()
+                                } catch (_: Exception) {
+                                }
+                                throw IllegalStateException("local-stt sha256 mismatch for ${f.name}")
+                            } else {
+                                allowRestart = false
+                                existing = 0
+                                continue
+                            }
+                        }
+                        LocalLlmManager.ResumeAction.RESTART -> {
+                            if (allowRestart) {
+                                allowRestart = false
+                                existing = 0
+                                continue
+                            }
+                            existing = 0
+                        }
+                        LocalLlmManager.ResumeAction.APPEND -> Unit
+                    }
+                    if (!verified) {
+                        var fileReceived = existing
+                        onProgress(
+                            (receivedBase + fileReceived).coerceAtMost(total),
+                            total,
+                        )
+                        conn.inputStream.buffered().use { ins ->
+                            java.io.FileOutputStream(tmp, existing > 0).buffered().use { out ->
+                                val buf = ByteArray(65536)
+                                while (true) {
+                                    val n = ins.read(buf)
+                                    if (n <= 0) break
+                                    out.write(buf, 0, n)
+                                    fileReceived += n
+                                    onProgress(
+                                        (receivedBase + fileReceived).coerceAtMost(total),
+                                        total,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                } finally {
+                    conn.disconnect()
+                }
+                if (!verified && !LocalLlmManager.verifySha256(tmp, f.sha256)) {
+                    tmp.delete()
+                    throw IllegalStateException("local-stt sha256 mismatch for ${f.name}")
+                }
+                if (dest.exists() && !dest.delete()) throw IllegalStateException("local-stt replace failed")
+                if (!tmp.renameTo(dest)) throw IllegalStateException("local-stt rename failed")
+                receivedBase += f.sizeBytes
+                onProgress(receivedBase, total)
+                break
             }
-            if (!LocalLlmManager.verifySha256(tmp, f.sha256)) {
-                tmp.delete()
-                throw IllegalStateException("local-stt sha256 mismatch for ${f.name}")
-            }
-            if (dest.exists() && !dest.delete()) throw IllegalStateException("local-stt replace failed")
-            if (!tmp.renameTo(dest)) throw IllegalStateException("local-stt rename failed")
-            receivedBase += f.sizeBytes
-            onProgress(receivedBase, total)
         }
     }
 
@@ -551,11 +851,15 @@ object LocalSttModels {
      * `DetectLanguage` (auto); any other value MUST be a valid code
      * or the native process hard-exits — so unknown codes fail safe
      * to auto instead of crashing. MANUAL entries ignore the picker
-     * and pin their single language.
+     * and pin their single language. TRANSDUCER entries always return
+     * auto (empty): desktop parity — the online path sends no language
+     * at all (no flag, no per-stream option; the model decides), and
+     * the picker value is display-only there.
      * Pure for unit tests.
      */
     @JvmStatic
     fun whisperLanguageFor(pickedCode: String, entry: Entry): String {
+        if (entry.engine == Engine.TRANSDUCER) return ""
         if (entry.langMode == LangMode.MANUAL) return entry.languages.first()
         val t = pickedCode.trim().lowercase()
         if (t.isEmpty() || t == "auto") return ""

@@ -37,6 +37,7 @@ object ModelDownloadSchedule {
     const val KEY_URL = "mw_dl_url"
     const val KEY_SHA = "mw_dl_sha"
     const val KEY_SIZE = "mw_dl_size"
+    const val KEY_RUNTIME = "mw_dl_runtime"
 
     /** Progress output keys (observed by the row progress hooks). */
     const val PROG_RECEIVED = "mw_dl_received"
@@ -174,6 +175,25 @@ object ModelDownloadSchedule {
     @JvmStatic
     fun isPartialName(name: String): Boolean =
         ".part" in name
+
+    /**
+     * Reverse [workNameFor]: (kind, modelId) for the notification
+     * Cancel path. Fallback-grade only: [clean] maps dots to dashes,
+     * so dotted ids (both Nemotron entries) do NOT round-trip — the
+     * live Cancel path carries explicit extras instead. Returns null
+     * on malformed input. Pure for unit tests.
+     */
+    @JvmStatic
+    fun kindIdFromWorkName(workName: String): Pair<String, String>? {
+        val rest = workName.removePrefix("$WORK_PREFIX-")
+        if (rest == workName) return null
+        val dash = rest.indexOf('-')
+        if (dash <= 0) return null
+        val kind = rest.substring(0, dash)
+        val id = rest.substring(dash + 1)
+        if ((kind == KIND_STT || kind == KIND_LLM) && id.isNotEmpty()) return kind to id
+        return null
+    }
 
     /**
      * Determinate progress percent, null when the total is unknown

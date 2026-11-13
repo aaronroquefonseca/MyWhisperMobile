@@ -75,8 +75,12 @@ object FloatState {
     /**
      * Auto-show rule (mirrors OverlayService.applyVisibility): floating
      * enabled, our IME not active (the bubble stands down while our
-     * own keyboard is up), and — when the accessibility commit path is
-     * on — a text field focused. No manual hide needed.
+     * own keyboard is up), the accessibility commit path on, and a
+     * text field focused. Without the accessibility service the bubble
+     * cannot land text anywhere, so it must not linger on screen: an
+     * a11y-off session used to show it permanently (owner repro: pill
+     * visible on the launcher, every tap answered "no editable field
+     * focused"). Setup carries the enable-service CTA instead.
      */
     fun shouldShowBubble(
         floatEnabled: Boolean,
@@ -84,7 +88,7 @@ object FloatState {
         a11yOn: Boolean,
         hasTextFocus: Boolean,
     ): Boolean =
-        floatEnabled && !imeActive && (!a11yOn || hasTextFocus)
+        floatEnabled && !imeActive && a11yOn && hasTextFocus
 
     /**
      * Edge snap: nearest horizontal safe bound. Ties go right (most

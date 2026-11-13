@@ -169,7 +169,10 @@ class OverlayService : Service(), Dictation.Listener {
             localTranscribe = { pcm -> LocalStt.transcribeIfEnabled(this, pcm) },
             // Shutdown releases the native recognizer (no resident ORT
             // session across service restarts in one process).
-            releaseLocal = { try { LocalStt.unload() } catch (_: Throwable) {} },
+            releaseLocal = {
+                try { LocalStt.unload() } catch (_: Throwable) {}
+                try { LocalLlmManager.releaseLocalEngines() } catch (_: Throwable) {}
+            },
         )
         dictation.listener = this
         // Live peaks feed the bottom-center visualizer pill (capture
@@ -1205,11 +1208,18 @@ class OverlayService : Service(), Dictation.Listener {
             android.util.Log.i("MwFloat", "deliver commit ok=$ok text=<$t>")
             if (!ok) {
                 // Toast must run on the main thread (this is a worker).
+                // a11y off is a configuration failure, not a missing
+                // field: say which one so the fix is obvious.
+                val a11yOff = !MyWhisperAccessibility.isOn(this)
+                android.util.Log.i("MwFloat", "deliver fail a11yOff=$a11yOff")
                 mainHandler.post {
                     try {
                         Toast.makeText(
                             this,
-                            getString(R.string.float_no_field),
+                            getString(
+                                if (a11yOff) R.string.float_need_a11y
+                                else R.string.float_no_field,
+                            ),
                             Toast.LENGTH_LONG,
                         ).show()
                     } catch (_: Exception) {

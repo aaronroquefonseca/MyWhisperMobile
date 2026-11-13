@@ -33,6 +33,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -49,6 +51,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -281,17 +284,67 @@ class MainActivity : ComponentActivity() {
         }
 
         /**
-         * Per-asset task file: `models/llm-<assetId>.task`, so several
+         * Per-asset model file: `models/llm-<assetId>.<ext>` (`.task`
+         * for MediaPipe, `.litertlm` for LiteRT-LM), so several
          * downloaded LLM packs coexist (one file per asset) while the
          * legacy single `cleanup.task` slot stays untouched. Pure for
          * unit tests (file mapping only, no Context).
          */
         @JvmStatic
-        internal fun llmTaskFileFor(dir: File, assetId: String): File {
+        internal fun llmTaskFileFor(dir: File, assetId: String, ext: String = "task"): File {
             val safe = assetId.map { c ->
                 if (c.isLetterOrDigit() || c == '-' || c == '_') c else '_'
             }.joinToString("").ifBlank { "model" }
-            return File(File(dir, "models"), "llm-$safe.task")
+            val cleanExt = ext.trimStart('.').ifBlank { "task" }
+            return File(File(dir, "models"), "llm-$safe.$cleanExt")
+        }
+
+        /** Asset-aware slot: extension follows the entry runtime. */
+        @JvmStatic
+        internal fun llmTaskFileFor(dir: File, asset: LocalLlmManager.ModelAsset): File =
+            llmTaskFileFor(dir, asset.id, LocalLlmManager.extForRuntime(asset.runtime))
+
+        /**
+         * Files whose stats gate an LLM asset's cached verdict: the
+         * slot, the legacy slot, and this asset's own `.part` files.
+         * Stat-only (no content reads) — safe anywhere, including
+         * composition. Pure java.io for unit tests.
+         */
+        @JvmStatic
+        internal fun llmPackFiles(dir: File, asset: LocalLlmManager.ModelAsset): List<File> {
+            val slot = llmTaskFileFor(dir, asset)
+            val modelsDir = slot.parentFile ?: dir
+            val parts = try {
+                modelsDir.listFiles { f ->
+                    ModelDownloadSchedule.isOwnLlmPart(f.name, slot.name, asset.id)
+                }?.toList() ?: emptyList()
+            } catch (_: Exception) {
+                emptyList()
+            }
+            val legacy = try {
+                LocalLlmManager.defaultTaskFile(dir).takeIf { it != slot }
+            } catch (_: Exception) {
+                null
+            }
+            return listOf(slot) + parts + listOfNotNull(legacy)
+        }
+
+        /**
+         * Files whose stats gate an STT model's cached verdict: the
+         * pack files plus this model's `.part` files. Stat-only, pure
+         * java.io for unit tests.
+         */
+        @JvmStatic
+        internal fun sttPackFiles(dir: File, entry: LocalSttModels.Entry): List<File> {
+            val modelDir = LocalSttModels.dirFor(dir, entry)
+            val pack = entry.files.map { f -> File(modelDir, f.name) }
+            val parts = try {
+                modelDir.listFiles { f -> f.name.endsWith(".part") }?.toList()
+                    ?: emptyList()
+            } catch (_: Exception) {
+                emptyList()
+            }
+            return pack + parts
         }
 
         /**
@@ -353,7 +406,7 @@ class MainActivity : ComponentActivity() {
             if (isPlaceholderSha(asset.sha256)) {
                 return LlmInspect(LocalPackState.MISSING, 0L)
             }
-            val slot = llmTaskFileFor(dir, asset.id)
+            val slot = llmTaskFileFor(dir, asset)
             val slotOk = verify(slot, asset.sha256)
             // Legacy slot is only probed when the per-asset slot
             // misses (adoption path) — a verified slot short-circuits.
@@ -383,7 +436,11 @@ class MainActivity : ComponentActivity() {
             dir: File,
             asset: LocalLlmManager.ModelAsset,
         ): LlmInspect =
-            llmInspectWithVerifier(dir, asset, LocalLlmManager::verifySha256)
+            // Direct-call lambda, NOT a ::verifySha256 function
+            // reference: callable references need Kotlin metadata at
+            // runtime, which R8 mangles (release showed every pack as
+            // missing). A lambda compiles to a plain static call.
+            llmInspectWithVerifier(dir, asset, { f, s -> LocalLlmManager.verifySha256(f, s) })
 
         /**
          * True when any trace of [asset] lingers on disk: the slot, the
@@ -392,7 +449,7 @@ class MainActivity : ComponentActivity() {
          */
         @JvmStatic
         internal fun hasLlmTrace(dir: File, asset: LocalLlmManager.ModelAsset): Boolean {
-            val slot = llmTaskFileFor(dir, asset.id)
+            val slot = llmTaskFileFor(dir, asset)
             if (slot.isFile && slot.length() > 0) return true
             try {
                 val legacy = LocalLlmManager.defaultTaskFile(dir)
@@ -418,7 +475,7 @@ class MainActivity : ComponentActivity() {
         @JvmStatic
         internal fun hasCompleteLlmFile(dir: File, asset: LocalLlmManager.ModelAsset): Boolean {
             if (asset.sizeBytes <= 0) return true
-            val slot = llmTaskFileFor(dir, asset.id)
+            val slot = llmTaskFileFor(dir, asset)
             if (slot.isFile && slot.length() >= asset.sizeBytes) return true
             return try {
                 val legacy = LocalLlmManager.defaultTaskFile(dir)
@@ -562,6 +619,7 @@ class MainActivity : ComponentActivity() {
                 LocalModelDownload.RowState.MISSING -> GatedRowState.MISSING
                 LocalModelDownload.RowState.DOWNLOADING,
                 LocalModelDownload.RowState.INCOMPLETE,
+                LocalModelDownload.RowState.CHECKING,
                 -> GatedRowState.DOWNLOADING
                 LocalModelDownload.RowState.PRESENT -> GatedRowState.PRESENT
                 LocalModelDownload.RowState.MISMATCH -> GatedRowState.MISMATCH
@@ -588,6 +646,21 @@ class MainActivity : ComponentActivity() {
         /** MediaPipe LLM runner present (false on lite builds / JVM tests). Never throws. */
         @JvmStatic
         internal fun llmRunnerSupported(): Boolean =
+            mediapipeRunnerSupported() || litertlmRunnerSupported()
+
+        /** LiteRT-LM runner present (false on lite builds / JVM tests). Never throws. */
+        @JvmStatic
+        internal fun litertlmRunnerSupported(): Boolean =
+            try {
+                Class.forName("com.mywhisper.mobile.LiteRtLmBridge")
+                true
+            } catch (_: Exception) {
+                false
+            } catch (_: LinkageError) {
+                false
+            }
+
+        private fun mediapipeRunnerSupported(): Boolean =
             try {
                 Class.forName("com.google.mediapipe.tasks.genai.llminference.LlmInference")
                 true
@@ -792,7 +865,7 @@ class MainActivity : ComponentActivity() {
           */
         internal const val LLM_MANIFEST_JSON = """{
   "provider": "mediapipe",
-  "notes": "Binaries NEVER committed. Download via the in-app Text cleanup > Local row (SHA-256 verified) or scripts/fetch-local-llm.sh. SHAs below were verified by full download + sha256sum (public repos, no auth).",
+  "notes": "Binaries NEVER committed. Download via the in-app Text cleanup > Local row (SHA-256 verified) or scripts/fetch-local-llm.sh. SHAs below were verified by full download + sha256sum. Gemma 4 note: only .litertlm (LiteRT-LM runtime) + web.task (WebGPU) artifacts exist - no Android MediaPipe .task; Gemma 4 entries use runtime litertlm (own runner, full flavor). Gated files need HF auth + license; Apache-2.0 files download directly.",
   "models": [
     {
       "id": "gemma3-1b-it-int4",
@@ -803,12 +876,30 @@ class MainActivity : ComponentActivity() {
       "note": "Small-phone option: ~0.5GB weights, fits 4-6GB phones (Note9-class)."
     },
     {
-      "id": "gemma2-2b-it-q8",
-      "url": "https://huggingface.co/MiCkSoftware/Gemma2-2B-IT-LiteRT/resolve/main/gemma2_q8_multi-prefill-seq_ekv1280.task",
-      "sha256": "407aaa8f86f5450370d5fc6d274aae2e62f07ae91f9c5e97d1d7b1e05078c752",
-      "size_bytes": 2702868915,
-      "min_ram_mb": 7168,
-      "note": "Capable phones only: ~2.5GB weights, needs 8GB+ RAM (Note9-class: use the 1B)."
+      "id": "gemma3-1b-it-mpseq-q8",
+      "url": "https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/Gemma3-1B-IT_multi-prefill-seq_q8_ekv2048.task",
+      "sha256": "e79a6c3fc0fd109f3b2697e7ae0905fcfded68640656d0433ca6276dc8d1b734",
+      "size_bytes": 1073765694,
+      "min_ram_mb": 4096,
+      "note": "Official multi-prefill-seq q8 (ekv2048): the parameterization Google's Android sample used (tasks-genai 0.10.29); gated - needs HF auth + Gemma license."
+    },
+    {
+      "id": "gemma4-e2b-it",
+      "runtime": "litertlm",
+      "url": "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm",
+      "sha256": "181938105e0eefd105961417e8da75903eacda102c4fce9ce90f50b97139a63c",
+      "size_bytes": 2588147712,
+      "min_ram_mb": 8192,
+      "note": "Gemma 4 E2B via LiteRT-LM (Apache-2.0, ungated). Needs the litertlm runner; 12GB phones fine."
+    },
+    {
+      "id": "gemma4-e4b-it",
+      "runtime": "litertlm",
+      "url": "https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it.litertlm",
+      "sha256": "0b2a8980ce155fd97673d8e820b4d29d9c7d99b8fa6806f425d969b145bd52e0",
+      "size_bytes": 3659530240,
+      "min_ram_mb": 10240,
+      "note": "Gemma 4 E4B via LiteRT-LM (Apache-2.0, ungated). Heaviest option: ~3.4GB weights, 12GB phones."
     }
   ]
 }"""
@@ -1084,6 +1175,204 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Current network posture for the download waiting row (null =
+     * unknown — the row never shows waiting text then, only the
+     * normal starting bar). Fully-qualified framework types: no new
+     * imports for one call site.
+     */
+    private fun activeNetState(): LocalModelDownload.NetState? {
+        return try {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+            val net = cm.activeNetwork ?: return LocalModelDownload.NetState.OFFLINE
+            val caps = cm.getNetworkCapabilities(net) ?: return null
+            if (caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_NOT_METERED)) {
+                LocalModelDownload.NetState.UNMETERED
+            } else {
+                LocalModelDownload.NetState.METERED
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun keepLabel(secs: Long): String =
+        when (secs) {
+            LocalKeepWarm.IMMEDIATE -> getString(R.string.keep_immediate)
+            60L -> getString(R.string.keep_1min)
+            600L -> getString(R.string.keep_10min)
+            1800L -> getString(R.string.keep_30min)
+            LocalKeepWarm.INDEFINITE -> getString(R.string.keep_indefinite)
+            else -> getString(R.string.keep_custom, secs)
+        }
+
+    private fun thinkLabel(budget: Int): String =
+        if (budget <= 0) {
+            getString(R.string.think_off)
+        } else {
+            getString(R.string.think_budget, budget)
+        }
+
+    /** Keep-warm preset menu (current value + one pick callback). */
+    @Composable
+    private fun KeepDropdown(current: Long, onPick: (Long) -> Unit) {
+        var open by remember { mutableStateOf(false) }
+        Box {
+            OutlinedButton(onClick = { open = true }) {
+                Text(keepLabel(current))
+            }
+            DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                for (preset in LocalKeepWarm.presets()) {
+                    DropdownMenuItem(
+                        text = { Text(keepLabel(preset)) },
+                        onClick = {
+                            open = false
+                            onPick(preset)
+                        },
+                    )
+                }
+            }
+        }
+    }
+
+    /** Thinking-budget menu, litertlm entries only (0 = off, default). */
+    @Composable
+    private fun ThinkDropdown(current: Int, onPick: (Int) -> Unit) {
+        var open by remember { mutableStateOf(false) }
+        Box {
+            OutlinedButton(onClick = { open = true }) {
+                Text(thinkLabel(current))
+            }
+            DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                for (budget in LocalKeepWarm.thinkBudgets()) {
+                    DropdownMenuItem(
+                        text = { Text(thinkLabel(budget)) },
+                        onClick = {
+                            open = false
+                            onPick(budget)
+                        },
+                    )
+                }
+            }
+        }
+    }
+
+    private fun copyText(text: String) {
+        try {
+            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("mw-diagnostics", text))
+            toast("Copied")
+        } catch (_: Exception) {
+        }
+    }
+
+    /**
+     * On-device diagnostics for support without USB/logcat: app
+     * version, last process exits (Android 11+ records native
+     * crashes with their tombstone text), free storage and RAM.
+     * Never throws; empty sections degrade to one-liners.
+     */
+    private fun collectDiagnostics(): String {
+        val sb = StringBuilder()
+        try {
+            val pi = packageManager.getPackageInfo(packageName, 0)
+            @Suppress("DEPRECATION")
+            val code = if (android.os.Build.VERSION.SDK_INT >= 28) {
+                pi.longVersionCode
+            } else {
+                pi.versionCode.toLong()
+            }
+            sb.append("app ").append(pi.versionName).append(" (").append(code).append(")\n")
+        } catch (_: Exception) {
+            sb.append("app unknown\n")
+        }
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            try {
+                val am = getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+                val exits = am.getHistoricalProcessExitReasons(packageName, 0, 3)
+                if (exits.isEmpty()) {
+                    sb.append("exits: none recorded\n")
+                }
+                for (e in exits) {
+                    val ts = try {
+                        java.text.SimpleDateFormat(
+                            "MM-dd HH:mm:ss",
+                            java.util.Locale.US,
+                        ).format(java.util.Date(e.timestamp))
+                    } catch (_: Exception) {
+                        e.timestamp.toString()
+                    }
+                    sb.append("exit reason=").append(exitReasonName(e.reason))
+                        .append(" ts=").append(ts)
+                        .append(" pss=").append(e.pss / 1024).append("MB\n")
+                    val desc = e.description?.take(700)
+                    if (!desc.isNullOrBlank()) {
+                        sb.append(desc).append("\n")
+                    }
+                }
+            } catch (ex: Exception) {
+                sb.append("exits: unavailable (").append(ex.message).append(")\n")
+            }
+        } else {
+            sb.append("exits: needs Android 11+\n")
+        }
+        try {
+            sb.append("storage free=").append(filesDir.usableSpace / 1_000_000)
+                .append("MB total=").append(filesDir.totalSpace / 1_000_000).append("MB\n")
+        } catch (_: Exception) {
+        }
+        try {
+            val am = getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+            val mi = android.app.ActivityManager.MemoryInfo()
+            am.getMemoryInfo(mi)
+            sb.append("ram avail=").append(mi.availMem / 1_000_000)
+                .append("MB total=").append(mi.totalMem / 1_000_000)
+                .append("MB low=").append(mi.lowMemory).append('\n')
+        } catch (_: Exception) {
+        }
+        // Own-process log tail (no permission needed for our own
+        // UID): step logs pin a native crash to engine init /
+        // conversation / sendMessage when the tombstone is bare.
+        try {
+            val proc = Runtime.getRuntime().exec(
+                arrayOf("logcat", "-d", "-v", "brief", "MwLlm:I", "litert:I", "*:S"),
+            )
+            val out = proc.inputStream.bufferedReader().readText()
+            proc.waitFor()
+            val lines = out.lines().filter { it.isNotBlank() }.takeLast(40)
+            sb.append("--- logtail (").append(lines.size).append(") ---\n")
+            for (line in lines) {
+                sb.append(line.take(300)).append('\n')
+            }
+        } catch (_: Exception) {
+            sb.append("logtail: unavailable\n")
+        }
+        return sb.toString()
+    }
+
+    private fun exitReasonName(r: Int): String =
+        when (r) {
+            0 -> "UNKNOWN"
+            1 -> "EXIT_SELF"
+            2 -> "SIGNALED"
+            3 -> "LOW_MEMORY"
+            4 -> "CRASH_NATIVE"
+            5 -> "CRASH"
+            6 -> "SHUTDOWN"
+            7 -> "ANR"
+            8 -> "PERMISSION_CHANGE"
+            9 -> "EXCESSIVE_RESOURCE_USAGE"
+            10 -> "INITIALIZATION_FAILURE"
+            11 -> "DEPENDENCY_DIED"
+            12 -> "STATE_CHANGE"
+            13 -> "USER_REQUESTED"
+            14 -> "USER_STOPPED"
+            15 -> "PACKAGE_STATE_CHANGE"
+            16 -> "PACKAGE_UPDATED"
+            17 -> "OTHER"
+            else -> "REASON_$r"
+        }
+
     private fun imeEnabled(): Boolean {
         // NOTE: Settings.Secure ENABLED_INPUT_METHODS is unreadable for
         // targetSdk 34+. InputMethodManager is the allowed path.
@@ -1335,6 +1624,20 @@ class MainActivity : ComponentActivity() {
         onTest: () -> Unit,
         disabledReason: String? = null,
     ) {
+        // Result visibility: a probe finishes seconds later, and on a long
+        // settings screen the inline PASS/FAIL can land off-screen (owner
+        // repro: the row scrolled away and the result needed a manual
+        // scroll). Bring the result itself into view when it arrives, so
+        // the outcome is always visible where the button was tapped.
+        val resultRequester = remember { BringIntoViewRequester() }
+        LaunchedEffect(result) {
+            if (result != null) {
+                try {
+                    resultRequester.bringIntoView()
+                } catch (_: Exception) {
+                }
+            }
+        }
         Column {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 // ONE shared test-button style (min height + padding
@@ -1373,6 +1676,7 @@ class MainActivity : ComponentActivity() {
                         } else {
                             MaterialTheme.colorScheme.error
                         },
+                        modifier = Modifier.bringIntoViewRequester(resultRequester),
                     )
                 }
             }
@@ -1988,6 +2292,37 @@ class MainActivity : ComponentActivity() {
                     save()
                 }
             }
+            Section(stringResource(R.string.diag_title)) {
+                var diag by remember { mutableStateOf("") }
+                var diagOpen by remember { mutableStateOf(false) }
+                TextButton(onClick = { diagOpen = !diagOpen }) {
+                    Text(
+                        if (diagOpen) {
+                            stringResource(R.string.diag_hide)
+                        } else {
+                            stringResource(R.string.diag_show)
+                        },
+                    )
+                }
+                if (diagOpen) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Button(onClick = { diag = collectDiagnostics() }) {
+                            Text(stringResource(R.string.diag_refresh))
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Button(
+                            onClick = { copyText(diag) },
+                            enabled = diag.isNotEmpty(),
+                        ) {
+                            Text(stringResource(R.string.diag_copy))
+                        }
+                    }
+                    if (diag.isNotEmpty()) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(diag, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
         }
     }
 
@@ -2098,14 +2433,25 @@ class MainActivity : ComponentActivity() {
         // without a verified selected model fails closed.
         val selectedModel = remember(version) { LocalStt.selectedEntry(statePrefs) }
         // One inspect per model per save-generation (state + verified
-        // bytes from a single SHA pass — never two full hash sweeps).
-        val modelInspects = remember(version) {
-            LocalSttModels.MODELS.associate { m ->
-                m.id to try {
-                    LocalSttModels.inspect(filesDir, m)
-                } catch (_: Exception) {
-                    LocalSttModels.PackInspect(LocalModelDownload.RowState.MISSING, 0L)
+        // bytes from a single SHA pass — never two full hash sweeps),
+        // computed OFF the composition thread: pack hashes (up to GBs)
+        // on the UI thread ANR the app and drop input. Rows read
+        // missing until the first pass lands.
+        val sttPackCache = remember { LocalModelDownload.PackVerifyCache() }
+        var modelInspects by remember {
+            mutableStateOf<Map<String, LocalSttModels.PackInspect>>(emptyMap())
+        }
+        LaunchedEffect(version) {
+            workers.execute {
+                val fresh = LocalSttModels.MODELS.associate { m ->
+                    m.id to try {
+                        val fp = LocalModelDownload.packFingerprint(sttPackFiles(filesDir, m))
+                        sttPackCache.getOrPut(m.id, fp) { LocalSttModels.inspect(filesDir, m) }
+                    } catch (_: Exception) {
+                        LocalSttModels.PackInspect(LocalModelDownload.RowState.MISSING, 0L)
+                    }
                 }
+                runOnUiThread { modelInspects = fresh }
             }
         }
         fun packOf(id: String): LocalPackState =
@@ -2122,14 +2468,24 @@ class MainActivity : ComponentActivity() {
         var dlProg by remember { mutableStateOf(mapOf<String, Pair<Long, Long>>()) }
         var dlErr by remember { mutableStateOf(mapOf<String, String>()) }
         var deleteConfirm by remember { mutableStateOf<String?>(null) }
-        fun rowOf(m: LocalSttModels.Entry): LocalModelDownload.RowState =
-            LocalModelDownload.resolve(
+        fun rowOf(m: LocalSttModels.Entry): LocalModelDownload.RowState {
+            val checking = try {
+                !sttPackCache.has(
+                    m.id,
+                    LocalModelDownload.packFingerprint(sttPackFiles(filesDir, m)),
+                )
+            } catch (_: Exception) {
+                false
+            }
+            return LocalModelDownload.resolve(
                 packOf(m.id) == LocalPackState.PRESENT,
                 packOf(m.id) == LocalPackState.MISMATCH,
                 dlBusy.contains(m.id),
                 dlErr[m.id],
                 packOf(m.id) == LocalPackState.INCOMPLETE,
+                checking = checking,
             )
+        }
         fun startModelDownload(m: LocalSttModels.Entry) {
             // Lite flavor: downloads could never run — refuse fail-closed.
             if (!sttRunner) {
@@ -2150,7 +2506,7 @@ class MainActivity : ComponentActivity() {
                 onProgress = { r, t ->
                     dlProg = dlProg + (m.id to (r to (t ?: LocalSttModels.totalBytes(m))))
                 },
-                onDone = { dlBusy = dlBusy - m.id; version++ },
+                onDone = { dlBusy = dlBusy - m.id; dlProg = dlProg - m.id; version++ },
                 onError = { msg ->
                     dlBusy = dlBusy - m.id
                     dlErr = dlErr + (m.id to msg)
@@ -2201,13 +2557,25 @@ class MainActivity : ComponentActivity() {
             workers.execute {
                 val result = try {
                     ProviderTest.runProbe(ProviderTest.LOCAL_TIMEOUT_MS) {
+                        // Reference speech when the debug asset ships
+                        // (real recorded speech matched to the model:
+                        // English asset for English-only entries, else
+                        // Spanish — a blank decode FAILS); sine probe
+                        // otherwise (pipeline-only, blank is expected
+                        // → "pack ok"). See [SampleSpeech].
+                        val refPcm = SampleSpeech.loadAsset(this, SampleSpeech.assetFor(selectedModel))
+                        val probePcm = refPcm ?: ProviderTest.samplePcm16()
                         val r = LocalStt.transcribe(
-                            this, ProviderTest.samplePcm16(), 16000,
+                            this, probePcm, 16000,
                             stt.optString("language", "auto").ifBlank { "auto" },
                         ) ?: throw IllegalStateException("decode skipped — engine unavailable")
                         val text = r.text.trim()
                         if (text.isNotBlank()) text
-                        else "pack ok · ${r.chunks} chunks · ${r.decodeMs}ms"
+                        else if (refPcm != null) {
+                            throw IllegalStateException("blank decode on reference speech")
+                        } else {
+                            "pack ok · ${r.chunks} chunks · ${r.decodeMs}ms"
+                        }
                     }
                 } catch (ex: Exception) {
                     ProviderTest.mapLocalSttResult(
@@ -2442,7 +2810,32 @@ class MainActivity : ComponentActivity() {
                     ?: captureLang
                 // Device total RAM for the flagship gate note (display only).
                 val deviceRamMb = remember { totalRamMb() }
-                for (m in LocalSttModels.MODELS) {
+                // Provider filter pills (desktop local_provider
+                // parity, UI-local: the active model selection is
+                // untouched). Stored as the enum name (nullable =
+                // All) so the value stays saveable.
+                var sttProvider by rememberSaveable { mutableStateOf<String?>(null) }
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    FilterChip(
+                        selected = sttProvider == null,
+                        onClick = { sttProvider = null },
+                        label = { Text(stringResource(R.string.stt_provider_all)) },
+                    )
+                    for (p in LocalSttModels.providers()) {
+                        FilterChip(
+                            selected = sttProvider == p.name,
+                            onClick = { sttProvider = p.name },
+                            label = { Text(LocalSttModels.providerLabel(p)) },
+                        )
+                    }
+                }
+                val providerFilter = sttProvider?.let { n ->
+                    LocalSttModels.Provider.entries.firstOrNull { it.name == n }
+                }
+                for (m in LocalSttModels.forProvider(providerFilter)) {
                     val row = rowOf(m)
                     val isSelected = m.id == selectedModel.id
                     val prog = dlProg[m.id]
@@ -2588,6 +2981,8 @@ class MainActivity : ComponentActivity() {
                                         stringResource(R.string.local_pack_present)
                                     LocalModelDownload.RowState.MISMATCH ->
                                         stringResource(R.string.local_pack_mismatch)
+                                    LocalModelDownload.RowState.CHECKING ->
+                                        stringResource(R.string.local_checking)
                                     LocalModelDownload.RowState.DOWNLOADING,
                                     LocalModelDownload.RowState.INCOMPLETE,
                                     -> {
@@ -2638,11 +3033,45 @@ class MainActivity : ComponentActivity() {
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
+                            // Keep-warm policy (per-model resident slot).
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    stringResource(R.string.keep_label),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                KeepDropdown(
+                                    LocalKeepWarm.readKeepSecs(
+                                        statePrefs,
+                                        LocalKeepWarm.KIND_STT,
+                                        m.id,
+                                        LocalKeepWarm.INDEFINITE,
+                                    ),
+                                ) { picked ->
+                                    LocalKeepWarm.writeKeepSecs(
+                                        statePrefs,
+                                        LocalKeepWarm.KIND_STT,
+                                        m.id,
+                                        picked,
+                                    )
+                                    if (picked == LocalKeepWarm.IMMEDIATE) {
+                                        try {
+                                            LocalStt.unload()
+                                        } catch (_: Throwable) {
+                                        }
+                                    }
+                                    version++
+                                }
+                            }
                             if (row == LocalModelDownload.RowState.DOWNLOADING ||
-                                row == LocalModelDownload.RowState.INCOMPLETE
+                                row == LocalModelDownload.RowState.INCOMPLETE ||
+                                row == LocalModelDownload.RowState.CHECKING
                             ) {
                                 Spacer(Modifier.height(4.dp))
-                                val frac = if (row == LocalModelDownload.RowState.DOWNLOADING) {
+                                val frac = if (row == LocalModelDownload.RowState.CHECKING) {
+                                    null
+                                } else if (row == LocalModelDownload.RowState.DOWNLOADING) {
                                     LocalModelDownload.progressFraction(
                                         prog?.first ?: 0L,
                                         prog?.second?.takeIf { it > 0 },
@@ -2673,6 +3102,7 @@ class MainActivity : ComponentActivity() {
                                     )
                                 } else when (row) {
                                     LocalModelDownload.RowState.DOWNLOADING -> {}
+                                    LocalModelDownload.RowState.CHECKING -> {}
                                     LocalModelDownload.RowState.FAILED -> {
                                         OutlinedButton(onClick = { startModelDownload(m) }) {
                                             Text(stringResource(R.string.action_retry))
@@ -3165,13 +3595,23 @@ class MainActivity : ComponentActivity() {
         val llmSelected = remember(version) {
             llmSelectedAsset(assets, statePrefs.getString(PREF_SELECTED_LLM, null))
         }
-        val llmInspects = remember(version) {
-            assets.associate { a ->
-                a.id to try {
-                    llmInspect(filesDir, a)
-                } catch (_: Exception) {
-                    LlmInspect(LocalPackState.MISSING, 0L)
+        // Per-asset verify runs OFF the composition thread: pack
+        // hashes (up to GBs) on the UI thread ANR the app and drop
+        // input (owner repro on a 2.6GB pack). Rows read missing
+        // until the first pass lands, then flip as verified.
+        val packCache = remember { LocalModelDownload.PackVerifyCache() }
+        var llmInspects by remember { mutableStateOf<Map<String, LlmInspect>>(emptyMap()) }
+        LaunchedEffect(version) {
+            workers.execute {
+                val fresh = assets.associate { a ->
+                    a.id to try {
+                        val fp = LocalModelDownload.packFingerprint(llmPackFiles(filesDir, a))
+                        packCache.getOrPut(a.id, fp) { llmInspect(filesDir, a) }
+                    } catch (_: Exception) {
+                        LlmInspect(LocalPackState.MISSING, 0L)
+                    }
                 }
+                runOnUiThread { llmInspects = fresh }
             }
         }
         fun llmPackOf(id: String): LocalPackState =
@@ -3185,6 +3625,11 @@ class MainActivity : ComponentActivity() {
         var llmDlBusy by remember { mutableStateOf(setOf<String>()) }
         var llmDlProg by remember { mutableStateOf(mapOf<String, Pair<Long, Long?>>()) }
         var llmDlErr by remember { mutableStateOf(mapOf<String, String>()) }
+        // Network posture for the constraint-blocked download message
+        // (recomputed per composition; cheap binder call). When set,
+        // a zero-progress DOWNLOADING row says "waiting" + offers
+        // metered consent instead of a dead 0-byte bar.
+        val netState = activeNetState()
         var llmDeleteConfirm by remember { mutableStateOf<String?>(null) }
         // Local LLM test (existing self-test harness, now through
         // the ONE [ProviderTest.Result] pattern) + remote LLM probes
@@ -3194,17 +3639,29 @@ class MainActivity : ComponentActivity() {
         var llmTestResult by remember { mutableStateOf<ProviderTest.Result?>(null) }
         var llmBusy by remember { mutableStateOf(setOf<String>()) }
         var llmResults by remember { mutableStateOf(mapOf<String, ProviderTest.Result>()) }
-        fun llmRowOf(a: LocalLlmManager.ModelAsset): LocalModelDownload.RowState =
-            LocalModelDownload.resolve(
+        fun llmRowOf(a: LocalLlmManager.ModelAsset): LocalModelDownload.RowState {
+            // Background verify still running for these exact bytes:
+            // show CHECKING, never a stale MISSING.
+            val checking = try {
+                !packCache.has(
+                    a.id,
+                    LocalModelDownload.packFingerprint(llmPackFiles(filesDir, a)),
+                )
+            } catch (_: Exception) {
+                false
+            }
+            return LocalModelDownload.resolve(
                 llmPackOf(a.id) == LocalPackState.PRESENT,
                 llmPackOf(a.id) == LocalPackState.MISMATCH,
                 llmDlBusy.contains(a.id),
                 llmDlErr[a.id],
                 llmPackOf(a.id) == LocalPackState.INCOMPLETE,
+                checking = checking,
             )
+        }
         /** Verified file backing [a]: per-asset slot, else the adopted legacy slot. */
         fun llmActiveFile(a: LocalLlmManager.ModelAsset): File {
-            val slot = llmTaskFileFor(filesDir, a.id)
+            val slot = llmTaskFileFor(filesDir, a)
             if (!isPlaceholderSha(a.sha256) && LocalLlmManager.verifySha256(slot, a.sha256)) {
                 return slot
             }
@@ -3230,7 +3687,33 @@ class MainActivity : ComponentActivity() {
                 kind = ModelDownloadSchedule.KIND_LLM,
                 id = a.id,
                 onProgress = { r, t -> llmDlProg = llmDlProg + (a.id to (r to t)) },
-                onDone = { llmDlBusy = llmDlBusy - a.id; version++ },
+                onDone = { llmDlBusy = llmDlBusy - a.id; llmDlProg = llmDlProg - a.id; version++ },
+                onError = { msg ->
+                    llmDlBusy = llmDlBusy - a.id
+                    llmDlErr = llmDlErr + (a.id to msg)
+                    version++
+                },
+            )
+        }
+        fun startLlmDownloadMetered(a: LocalLlmManager.ModelAsset) {
+            // Explicit metered-data consent from the waiting row: same
+            // busy/progress tracking as [startLlmDownload], but the
+            // work runs on any network (CONNECTED, not UNMETERED).
+            // Battery/storage constraints still apply.
+            if (!llmRunner) {
+                toast(getString(R.string.local_need_full))
+                return
+            }
+            if (llmDlBusy.contains(a.id) || isPlaceholderSha(a.sha256)) return
+            llmDlBusy = llmDlBusy + a.id
+            llmDlErr = llmDlErr - a.id
+            llmDlProg = llmDlProg + (a.id to (0L to a.sizeBytes.takeIf { it > 0 }))
+            ModelDownloadManager.enqueueLlmAsset(this@MainActivity, a, metered = true)
+            observeDownloadWork(
+                kind = ModelDownloadSchedule.KIND_LLM,
+                id = a.id,
+                onProgress = { r, t -> llmDlProg = llmDlProg + (a.id to (r to t)) },
+                onDone = { llmDlBusy = llmDlBusy - a.id; llmDlProg = llmDlProg - a.id; version++ },
                 onError = { msg ->
                     llmDlBusy = llmDlBusy - a.id
                     llmDlErr = llmDlErr + (a.id to msg)
@@ -3263,6 +3746,34 @@ class MainActivity : ComponentActivity() {
                         LocalLlmManager.runSelfTest(
                             llmActiveFile(target),
                             system,
+                            generateFn = { f, p ->
+                                if (target.runtime == LocalLlmManager.RUNTIME_LITERTLM) {
+                                    val prefs = applicationContext.getSharedPreferences(
+                                        "mw_state",
+                                        MODE_PRIVATE,
+                                    )
+                                    LocalLlmManager.generateLitertlm(
+                                        f,
+                                        system,
+                                        LocalLlmManager.SELFTEST_TRANSCRIPT,
+                                        keepSecs = LocalKeepWarm.readKeepSecs(
+                                            prefs,
+                                            LocalKeepWarm.KIND_LLM,
+                                            target.id,
+                                            LocalKeepWarm.IMMEDIATE,
+                                        ),
+                                        thinkBudget = LocalKeepWarm.readThinkBudget(prefs, target.id)
+                                            .takeIf { it > 0 },
+                                    )
+                                } else {
+                                    LocalLlmManager.generate(
+                                        f,
+                                        p,
+                                        context = applicationContext,
+                                        assetId = target.id,
+                                    )
+                                }
+                            },
                         ),
                     )
                 } catch (ex: Exception) {
@@ -3754,34 +4265,58 @@ class MainActivity : ComponentActivity() {
                                             stringResource(R.string.local_pack_present)
                                         LocalModelDownload.RowState.MISMATCH ->
                                             stringResource(R.string.local_pack_mismatch)
+                                        LocalModelDownload.RowState.CHECKING ->
+                                            stringResource(R.string.local_checking)
                                         LocalModelDownload.RowState.DOWNLOADING,
                                         LocalModelDownload.RowState.INCOMPLETE,
                                         -> {
                                             // DOWNLOADING = live worker progress;
                                             // INCOMPLETE = interrupted file, resume
                                             // from verified bytes on disk.
-                                            val total = if (row == LocalModelDownload.RowState.DOWNLOADING) {
-                                                prog?.second
+                                            // Constraint-blocked (metered/offline,
+                                            // zero bytes): say "waiting" instead of
+                                            // a dead 0-byte bar — the unmetered
+                                            // WorkManager constraint holds ENQUEUED
+                                            // with no progress events at all.
+                                            val waiting = if (row == LocalModelDownload.RowState.DOWNLOADING) {
+                                                netState?.takeIf {
+                                                    LocalModelDownload.needsWaiting(prog?.first, it)
+                                                }
                                             } else {
-                                                a.sizeBytes.takeIf { it > 0 }
+                                                null
                                             }
-                                            val received = if (row == LocalModelDownload.RowState.DOWNLOADING) {
-                                                prog?.first ?: 0L
-                                            } else {
-                                                llmBytesOf(a.id)
-                                            }
-                                            if (total != null && total > 0) {
+                                            if (waiting != null) {
                                                 stringResource(
-                                                    R.string.local_downloading_mb,
-                                                    a.id,
-                                                    received / 1_000_000,
-                                                    total / 1_000_000,
+                                                    if (waiting == LocalModelDownload.NetState.METERED) {
+                                                        R.string.llm_wait_wifi
+                                                    } else {
+                                                        R.string.llm_wait_offline
+                                                    },
                                                 )
                                             } else {
-                                                stringResource(
-                                                    R.string.local_downloading,
-                                                    a.id,
-                                                )
+                                                val total = if (row == LocalModelDownload.RowState.DOWNLOADING) {
+                                                    prog?.second
+                                                } else {
+                                                    a.sizeBytes.takeIf { it > 0 }
+                                                }
+                                                val received = if (row == LocalModelDownload.RowState.DOWNLOADING) {
+                                                    prog?.first ?: 0L
+                                                } else {
+                                                    llmBytesOf(a.id)
+                                                }
+                                                if (total != null && total > 0) {
+                                                    stringResource(
+                                                        R.string.local_downloading_mb,
+                                                        a.id,
+                                                        received / 1_000_000,
+                                                        total / 1_000_000,
+                                                    )
+                                                } else {
+                                                    stringResource(
+                                                        R.string.local_downloading,
+                                                        a.id,
+                                                    )
+                                                }
                                             }
                                         }
                                         LocalModelDownload.RowState.FAILED ->
@@ -3803,16 +4338,70 @@ class MainActivity : ComponentActivity() {
                             Text(
                                 stringResource(
                                     R.string.llm_pack_dest,
-                                    llmTaskFileFor(filesDir, a.id).absolutePath,
+                                    llmTaskFileFor(filesDir, a).absolutePath,
                                 ),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
+                            // Keep-warm policy (per-asset resident engine slot).
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    stringResource(R.string.keep_label),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                KeepDropdown(
+                                    LocalKeepWarm.readKeepSecs(
+                                        statePrefs,
+                                        LocalKeepWarm.KIND_LLM,
+                                        a.id,
+                                        LocalKeepWarm.IMMEDIATE,
+                                    ),
+                                ) { picked ->
+                                    LocalKeepWarm.writeKeepSecs(
+                                        statePrefs,
+                                        LocalKeepWarm.KIND_LLM,
+                                        a.id,
+                                        picked,
+                                    )
+                                    if (picked == LocalKeepWarm.IMMEDIATE) {
+                                        try {
+                                            LocalLlmManager.dropCachedLlm(
+                                                llmTaskFileFor(filesDir, a),
+                                            )
+                                        } catch (_: Exception) {
+                                        }
+                                    }
+                                    version++
+                                }
+                            }
+                            // Thinking budget (litertlm entries only —
+                            // tasks-genai exposes no thinking knob).
+                            if (a.runtime == LocalLlmManager.RUNTIME_LITERTLM) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        stringResource(R.string.think_label),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    ThinkDropdown(
+                                        LocalKeepWarm.readThinkBudget(statePrefs, a.id),
+                                    ) { picked ->
+                                        LocalKeepWarm.writeThinkBudget(statePrefs, a.id, picked)
+                                        version++
+                                    }
+                                }
+                            }
                             if (row == LocalModelDownload.RowState.DOWNLOADING ||
-                                row == LocalModelDownload.RowState.INCOMPLETE
+                                row == LocalModelDownload.RowState.INCOMPLETE ||
+                                row == LocalModelDownload.RowState.CHECKING
                             ) {
                                 Spacer(Modifier.height(4.dp))
-                                val frac = if (row == LocalModelDownload.RowState.DOWNLOADING) {
+                                val frac = if (row == LocalModelDownload.RowState.CHECKING) {
+                                    null
+                                } else if (row == LocalModelDownload.RowState.DOWNLOADING) {
                                     LocalModelDownload.progressFraction(
                                         prog?.first ?: 0L, prog?.second,
                                     )
@@ -3841,7 +4430,39 @@ class MainActivity : ComponentActivity() {
                                         color = MaterialTheme.colorScheme.error,
                                     )
                                 } else when (row) {
-                                    LocalModelDownload.RowState.DOWNLOADING -> {}
+                                    LocalModelDownload.RowState.DOWNLOADING -> {
+                                        // Constraint-blocked with zero bytes:
+                                        // offer explicit metered consent + a
+                                        // visible Cancel (the row otherwise
+                                        // has neither while stalled).
+                                        val waiting = netState?.takeIf {
+                                            LocalModelDownload.needsWaiting(prog?.first, it)
+                                        }
+                                        if (waiting == LocalModelDownload.NetState.METERED) {
+                                            OutlinedButton(
+                                                enabled = !noPin,
+                                                onClick = { startLlmDownloadMetered(a) },
+                                            ) {
+                                                Text(
+                                                    stringResource(
+                                                        R.string.llm_use_metered,
+                                                        (a.sizeBytes / 1_000_000).toString(),
+                                                    ),
+                                                )
+                                            }
+                                            Spacer(Modifier.width(8.dp))
+                                        }
+                                        TextButton(onClick = {
+                                            ModelDownloadManager.cancel(
+                                                this@MainActivity,
+                                                ModelDownloadSchedule.KIND_LLM,
+                                                a.id,
+                                            )
+                                        }) {
+                                            Text(stringResource(R.string.action_cancel))
+                                        }
+                                    }
+                                    LocalModelDownload.RowState.CHECKING -> {}
                                     LocalModelDownload.RowState.FAILED -> {
                                         OutlinedButton(
                                             enabled = !noPin,
@@ -3924,7 +4545,7 @@ class MainActivity : ComponentActivity() {
                             try {
                                 if (doomed != null) {
                                     LocalLlmManager.deleteModel(
-                                        llmTaskFileFor(filesDir, doomed.id),
+                                        llmTaskFileFor(filesDir, doomed),
                                         listOf(doomed),
                                     )
                                     // Adopted legacy slot: clear it only when
@@ -4022,7 +4643,7 @@ class MainActivity : ComponentActivity() {
                         Text(
                             stringResource(
                                 R.string.llm_pack_dest,
-                                (llmSelected?.let { llmTaskFileFor(filesDir, it.id) }
+                                (llmSelected?.let { llmTaskFileFor(filesDir, it) }
                                     ?: LocalLlmManager.defaultTaskFile(filesDir)).absolutePath,
                             ),
                             style = MaterialTheme.typography.bodySmall,

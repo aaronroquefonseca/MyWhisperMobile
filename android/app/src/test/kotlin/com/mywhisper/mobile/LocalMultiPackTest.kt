@@ -154,7 +154,7 @@ class LocalMultiPackTest {
         val dir = Files.createTempDirectory("llm-slots").toFile()
         try {
             val a = MainActivity.llmTaskFileFor(dir, "gemma3-1b-it-int4")
-            val b = MainActivity.llmTaskFileFor(dir, "gemma2-2b-it-q8")
+            val b = MainActivity.llmTaskFileFor(dir, "gemma3-1b-it-mpseq-q8")
             assertFalse(a == b)
             assertEquals(File(File(dir, "models"), "llm-gemma3-1b-it-int4.task"), a)
             assertEquals("models", a.parentFile?.name)
@@ -162,6 +162,58 @@ class LocalMultiPackTest {
             val evil = MainActivity.llmTaskFileFor(dir, "../x")
             assertEquals(File(File(dir, "models"), "llm-___x.task"), evil)
             assertEquals(File(dir, "models"), evil.parentFile)
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun llm_slots_useRuntimeExtension() {
+        val dir = Files.createTempDirectory("llm-ext").toFile()
+        try {
+            val lm = LocalLlmManager.ModelAsset(
+                "gemma4-e2b-it",
+                "https://example/g4.litertlm",
+                "c".repeat(64),
+                9,
+                runtime = LocalLlmManager.RUNTIME_LITERTLM,
+            )
+            assertEquals(File(File(dir, "models"), "llm-gemma4-e2b-it.litertlm"), MainActivity.llmTaskFileFor(dir, lm))
+            // Id default + explicit ext stay .task (existing callers/tests).
+            assertEquals(File(File(dir, "models"), "llm-plain-id.task"), MainActivity.llmTaskFileFor(dir, "plain-id"))
+            assertEquals(
+                File(File(dir, "models"), "llm-plain-id.litertlm"),
+                MainActivity.llmTaskFileFor(dir, "plain-id", "litertlm"),
+            )
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun llm_packFiles_coverSlotAndParts() {
+        val dir = Files.createTempDirectory("llm-files").toFile()
+        try {
+            val lm = LocalLlmManager.ModelAsset(
+                "gemma4-e2b-it",
+                "https://example/g4.litertlm",
+                "c".repeat(64),
+                9,
+                runtime = LocalLlmManager.RUNTIME_LITERTLM,
+            )
+            val slot = MainActivity.llmTaskFileFor(dir, lm)
+            slot.parentFile?.mkdirs()
+            slot.writeBytes(ByteArray(7))
+            // Own part participates (download in flight changes it).
+            val part = File(slot.parentFile, "${slot.name}.part.${lm.id}")
+            part.writeBytes(ByteArray(3))
+            val names = MainActivity.llmPackFiles(dir, lm).map { it.name }
+            assertTrue(names.contains(slot.name))
+            assertTrue(names.contains(part.name))
+            // Fingerprint moves when the part grows (resume progress).
+            val before = LocalModelDownload.packFingerprint(MainActivity.llmPackFiles(dir, lm))
+            part.appendBytes(ByteArray(2))
+            assertTrue(LocalModelDownload.packFingerprint(MainActivity.llmPackFiles(dir, lm)) != before)
         } finally {
             dir.deleteRecursively()
         }

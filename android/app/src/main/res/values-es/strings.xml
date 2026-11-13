@@ -87,6 +87,7 @@
     <string name="float_stop">Cancelar — descartar el dictado</string>
     <string name="float_processing">Transcribiendo…</string>
     <string name="float_no_field">Ningún campo editable activo — abre uno y dicta de nuevo</string>
+    <string name="float_need_a11y">Activa el servicio de dictado de MyWhisper — Ajustes → Botón flotante</string>
     <string name="a11y_desc">Inserta los dictados de la burbuja flotante en el campo de texto activo.</string>
     <string name="setup_theme">Tema</string>
     <string name="setup_prefs">Preferencias</string>
@@ -101,6 +102,7 @@
 
     <!-- Transcription -->
     <string name="stt_chain">Cadena (arriba = se prueba primero)</string>
+    <string name="stt_provider_all">Todos</string>
     <string name="stt_chain_sub">Las entradas se prueban de arriba abajo; gana la primera que funciona. La voz local es experimental y está apagada por defecto — sin su pack verificado la entrada se omite y se usa la cadena del servidor.</string>
     <string name="stt_local_summary">local · experimental</string>
     <string name="stt_local_note">No necesita configuración — necesita su pack de modelos.</string>
@@ -136,6 +138,25 @@
     <string name="local_downloading">Descargando %1$s…</string>
     <string name="local_downloaded">%1$s descargado — pack verificado.</string>
     <string name="local_download_failed">Falló la descarga: %1$s</string>
+    <string name="local_checking">Comprobando pack…</string>
+    <string name="llm_wait_wifi">Esperando Wi-Fi — conéctate a un Wi-Fi no medido y la descarga empezará sola.</string>
+    <string name="llm_wait_offline">Esperando conexión de red…</string>
+    <string name="llm_use_metered">Usar datos móviles (%1$s MB)</string>
+    <string name="keep_label">Mantener cargado:</string>
+    <string name="keep_immediate">Descargar inmediatamente</string>
+    <string name="keep_1min">1 minuto</string>
+    <string name="keep_10min">10 minutos</string>
+    <string name="keep_30min">30 minutos</string>
+    <string name="keep_indefinite">Indefinidamente</string>
+    <string name="keep_custom">%1$d segundos</string>
+    <string name="think_label">Razonamiento:</string>
+    <string name="think_off">No</string>
+    <string name="think_budget">%1$d tokens</string>
+    <string name="diag_title">Diagnóstico</string>
+    <string name="diag_show">Mostrar diagnóstico</string>
+    <string name="diag_hide">Ocultar diagnóstico</string>
+    <string name="diag_refresh">Actualizar</string>
+    <string name="diag_copy">Copiar</string>
     <string name="local_selected_needs_download">Elegido %1$s — descárgalo para usarlo en el teléfono; hasta verificarlo se usa la cadena del servidor.</string>
     <string name="local_deleted_active">Eliminado %1$s — cambiado a %2$s.</string>
     <string name="local_deleted_active_none">Eliminado %1$s — no queda modelo local; se usa la cadena del servidor.</string>

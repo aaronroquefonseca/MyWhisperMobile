@@ -69,6 +69,13 @@ android {
     }
     kotlinOptions {
         jvmTarget = "17"
+        // litertlm-android ships Kotlin 2.4 metadata while the
+        // project pins Kotlin 2.2: our litertlm use is 100%
+        // reflection-discovered (no compile-time linkage — lite
+        // flavor never sees it), so the metadata check buys nothing
+        // for that dep. Scoped justification; revisit on the
+        // project-wide Kotlin upgrade.
+        freeCompilerArgs += "-Xskip-metadata-version-check"
     }
 }
 
@@ -96,7 +103,13 @@ dependencies {
     // successor API: LiteRT-LM). Loaded lazily via reflection in
     // LocalLlmManager so lite builds and JVM unit tests run without the
     // native runner.
-    add("fullImplementation", "com.google.mediapipe:tasks-genai:0.10.27")
+    add("fullImplementation", "com.google.mediapipe:tasks-genai:0.10.29")
+    // On-device LLM runner v2 (LiteRT-LM, for Gemma 4 .litertlm
+    // bundles — MediaPipe tasks-genai is maintenance-only and has no
+    // Gemma 4 artifact). Loaded lazily via reflection in
+    // LocalLlmManager so lite builds and JVM unit tests run without
+    // the native runner, same as tasks-genai above.
+    add("fullImplementation", "com.google.ai.edge.litertlm:litertlm-android:0.18.1")
     // On-device STT runtime (sherpa-onnx 1.13.8, arm64-v8a + x86_64 JNI).
     // AAR fetched by scripts/fetch-sherpa-aar.sh (run once after
     // checkout, CI does it too), never committed. fullImplementation only:
