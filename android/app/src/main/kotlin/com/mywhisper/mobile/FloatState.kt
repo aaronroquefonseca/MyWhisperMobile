@@ -132,6 +132,29 @@ object FloatState {
     ): Boolean =
         onHandle && movedPx > slopPx
 
+    /**
+     * Free-drag arming (grip hidden, the default): the mic itself is
+     * the drag surface, so the same touch slop decides move-vs-press.
+     * Inside the margin the movement is involuntary finger jitter and
+     * never starts a drag; past it the bubble follows the finger.
+     * Pure so the deadzone is pinned by tests.
+     */
+    fun shouldArmFreeMove(movedPx: Float, slopPx: Float): Boolean = movedPx > slopPx
+
+    /**
+     * Hold-delay presets (ms): the pause a finger must stay put on
+     * the bubble before recording starts when no grip is shown. A
+     * quick move inside that window means the touch was a drag, so
+     * dictation never opens. Default 50 ms.
+     */
+    val PRESS_DELAY_OPTIONS_MS: List<Int> = listOf(20, 35, 50, 80, 100, 150)
+    const val PRESS_DELAY_DEFAULT_MS: Int = 50
+
+    /** Stored hold delay, falling back to the default for unknown values. */
+    fun pressDelayMs(stored: Int): Int =
+        if (stored in PRESS_DELAY_OPTIONS_MS) stored else PRESS_DELAY_DEFAULT_MS
+
+
     /** Stop affordance: always visible while active (RECORDING or WORKING). */
     fun isStopVisible(state: Dictation.State): Boolean =
         state != Dictation.State.IDLE

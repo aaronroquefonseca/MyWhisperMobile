@@ -34,6 +34,35 @@ class FloatBubbleTest {
         assertFalse(FloatState.shouldShowBubble(true, false, true, false))
     }
 
+    // -- Free drag + hold delay (grip off) --------------------------
+
+    @Test
+    fun freeMove_requiresPastTheDeadzone() {
+        // Inside the margin: involuntary jitter, never a drag.
+        assertFalse(FloatState.shouldArmFreeMove(0f, 10f))
+        assertFalse(FloatState.shouldArmFreeMove(4f, 10f))
+        assertFalse(FloatState.shouldArmFreeMove(10f, 10f))
+        // Past it: the bubble follows the finger.
+        assertTrue(FloatState.shouldArmFreeMove(10.1f, 10f))
+        assertTrue(FloatState.shouldArmFreeMove(40f, 10f))
+        // The grip keeps its own rule (handle only).
+        assertFalse(FloatState.shouldArmMove(40f, 10f, onHandle = false))
+        assertTrue(FloatState.shouldArmMove(40f, 10f, onHandle = true))
+    }
+
+    @Test
+    fun pressDelay_presetsAndFallback() {
+        assertEquals(listOf(20, 35, 50, 80, 100, 150), FloatState.PRESS_DELAY_OPTIONS_MS)
+        assertEquals(50, FloatState.PRESS_DELAY_DEFAULT_MS)
+        for (ms in FloatState.PRESS_DELAY_OPTIONS_MS) {
+            assertEquals(ms, FloatState.pressDelayMs(ms))
+        }
+        // Unknown / corrupt stored values fall back to the default.
+        assertEquals(50, FloatState.pressDelayMs(0))
+        assertEquals(50, FloatState.pressDelayMs(999))
+        assertEquals(50, FloatState.pressDelayMs(-5))
+    }
+
     @Test
     fun show_hiddenWhenDisabledOrImeUp() {
         assertFalse(FloatState.shouldShowBubble(false, false, false, true))

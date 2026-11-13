@@ -75,6 +75,10 @@
     <string name="setup_float_overlay">Permitir mostrar sobre apps</string>
     <string name="setup_float_a11y">Activar servicio de dictado</string>
     <string name="setup_float_a11y_sub">Permite insertar resultados en el campo activo.</string>
+    <string name="setup_float_grab">Punto de agarre</string>
+    <string name="setup_float_grab_sub">Asa fina sobre la burbuja para moverla. Desactivado: arrastra la propia burbuja.</string>
+    <string name="setup_float_delay">Retardo de pulsación</string>
+    <string name="setup_float_delay_sub">Cuánto debe quedarse quieta la burbuja antes de grabar; un movimiento pequeño cuenta como arrastre.</string>
     <string name="setup_float_old_warn">En Android 12 y versiones anteriores, el botón flotante puede incluir el texto de ayuda en algunas apps. Ahí se recomienda el teclado MyWhisper.</string>
     <string name="unified_notif_channel">Estado de MyWhisper</string>
     <string name="float_notif_title">Burbuja MyWhisper</string>
