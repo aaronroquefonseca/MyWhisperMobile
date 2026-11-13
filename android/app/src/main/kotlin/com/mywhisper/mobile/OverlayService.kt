@@ -1208,11 +1208,18 @@ class OverlayService : Service(), Dictation.Listener {
             android.util.Log.i("MwFloat", "deliver commit ok=$ok text=<$t>")
             if (!ok) {
                 // Toast must run on the main thread (this is a worker).
+                // a11y off is a configuration failure, not a missing
+                // field: say which one so the fix is obvious.
+                val a11yOff = !MyWhisperAccessibility.isOn(this)
+                android.util.Log.i("MwFloat", "deliver fail a11yOff=$a11yOff")
                 mainHandler.post {
                     try {
                         Toast.makeText(
                             this,
-                            getString(R.string.float_no_field),
+                            getString(
+                                if (a11yOff) R.string.float_need_a11y
+                                else R.string.float_no_field,
+                            ),
                             Toast.LENGTH_LONG,
                         ).show()
                     } catch (_: Exception) {
