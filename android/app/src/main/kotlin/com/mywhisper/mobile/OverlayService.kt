@@ -46,6 +46,8 @@ class OverlayService : Service(), Dictation.Listener {
         private const val KEY_X = "float_x"
         private const val KEY_Y = "float_y"
         private const val KEY_MOVE_HINT = "float_move_hint_seen"
+        private const val KEY_GRAB = "float_grab"
+        private const val KEY_PRESS_DELAY = "float_press_delay"
 
         fun start(ctx: Context) {
             val i = Intent(ctx, OverlayService::class.java).setAction(ACTION_START)
@@ -97,6 +99,14 @@ class OverlayService : Service(), Dictation.Listener {
     private var moved = false
     /** Grip drag-down already cancelled this gesture (fire once). */
     private var gripCancelled = false
+    /** Layout built with the optional grip (rebuild when the pref flips). */
+    private var builtGrab = false
+    /** Pending delayed hold start (no grip: wait out finger jitter). */
+    private var pressStart: Runnable? = null
+    /** Recording already opened by this touch (hold or deferred tap). */
+    private var pressStarted = false
+    /** This touch became a free drag (grip hidden). */
+    private var draggingBubble = false
 
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
@@ -123,21 +133,13 @@ class OverlayService : Service(), Dictation.Listener {
      */
     private val watchTick = object : Runnable {
         override fun run() {
+            // Both directions: a missed focus event (IME window wins
+            // the race) must not leave the bubble stuck either way.
             try {
-                val focused = try {
-                    MyWhisperAccessibility.live?.rootInActiveWindow
-                        ?.findFocus(android.view.accessibility.AccessibilityNodeInfo.FOCUS_INPUT)
-                        ?.isEditable == true
-                } catch (_: Exception) {
-                    FloatState.hasTextFocus
-                }
-                if (!focused && FloatState.hasTextFocus) {
-                    FloatState.hasTextFocus = false
-                    FloatState.refresh()
-                }
+                MyWhisperAccessibility.syncFocus()
             } catch (_: Exception) {
             }
-            mainHandler.postDelayed(this, 2500)
+            mainHandler.postDelayed(this, 1000)
         }
     }
 
@@ -194,6 +196,23 @@ class OverlayService : Service(), Dictation.Listener {
         } catch (_: Exception) {
             "Smart"
         }
+    }
+
+    /** Optional grip (default off) and the no-grip hold delay. */
+    private fun grabEnabled(): Boolean = try {
+        getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_GRAB, false)
+    } catch (_: Exception) {
+        false
+    }
+
+    private fun pressDelayMs(): Int = try {
+        FloatState.pressDelayMs(
+            getSharedPreferences(PREFS, MODE_PRIVATE).getInt(
+                KEY_PRESS_DELAY, FloatState.PRESS_DELAY_DEFAULT_MS,
+            ),
+        )
+    } catch (_: Exception) {
+        FloatState.PRESS_DELAY_DEFAULT_MS
     }
 
     private fun readLong(obj: String, key: String, def: Long): Long {
@@ -494,6 +513,11 @@ class OverlayService : Service(), Dictation.Listener {
             hasTextFocus = FloatState.hasTextFocus,
         )
         android.util.Log.i("MwFloat", "apply show=$show holder=${holder != null}")
+        // Grip pref flipped while the bubble is up: rebuild the chrome so
+        // the layout matches (no grip row <=> free drag).
+        if (holder != null && builtGrab != grabEnabled()) {
+            removeBubble()
+        }
         if (show) {
             if (holder == null) showBubble()
         } else {
@@ -528,7 +552,10 @@ class OverlayService : Service(), Dictation.Listener {
         val gripTouch = dp(48)
         val stopSize = dp(STOP_VISUAL_DP)
         val stopCell = dp(40)
-        val gripCell = dp(32)
+        val grab = grabEnabled()
+        // Grip off (default): no grip row at all — the mic itself drags,
+        // and the window shrinks so no dead touch strip sits on top.
+        val gripCell = if (grab) dp(24) else 0
         val rootW = cellW
         val rootH = gripCell + cellW + stopCell + dp(8)
         val lp = WindowManager.LayoutParams(
@@ -552,35 +579,34 @@ class OverlayService : Service(), Dictation.Listener {
             orientation = android.widget.LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
         }
-        // Grip TOP: the move affordance. Opaque rounded tab + white
-        // pill, 48dp touch target, centered in its cell.
-        val grip = FrameLayout(this).apply {
-            contentDescription = getString(R.string.float_drag_handle)
-            elevation = dp(7).toFloat()
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = dp(12).toFloat()
-                setColor(0xCC1D1B20.toInt())
+        // Optional grip TOP (off by default): a discreet handle, never
+        // the old opaque tab. The 48dp touch cell stays invisible so the
+        // affordance is a thin 18x3dp mark at half alpha.
+        if (grab) {
+            val grip = FrameLayout(this).apply {
+                contentDescription = getString(R.string.float_drag_handle)
+                background = null
+                layoutParams = android.widget.LinearLayout.LayoutParams(gripTouch, dp(24)).apply {
+                    gravity = Gravity.CENTER_HORIZONTAL
+                    topMargin = dp(2)
+                }
+                setOnTouchListener { _, ev -> onHandleTouch(ev) }
             }
-            layoutParams = android.widget.LinearLayout.LayoutParams(gripTouch, dp(24)).apply {
-                gravity = Gravity.CENTER_HORIZONTAL
-                topMargin = dp(4)
+            val pill = View(this).apply {
+                isClickable = false
+                isFocusable = false
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.RECTANGLE
+                    cornerRadius = dp(2).toFloat()
+                    setColor(0x8CFFFFFF.toInt())
+                }
+                layoutParams = FrameLayout.LayoutParams(dp(18), dp(3), Gravity.CENTER)
             }
-            setOnTouchListener { _, ev -> onHandleTouch(ev) }
+            grip.addView(pill)
+            dragHandle = grip
+            root.addView(grip)
         }
-        val pill = View(this).apply {
-            isClickable = false
-            isFocusable = false
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = dp(3).toFloat()
-                setColor(0xFFFFFFFF.toInt())
-            }
-            layoutParams = FrameLayout.LayoutParams(dp(24), dp(5), Gravity.CENTER)
-        }
-        grip.addView(pill)
-        dragHandle = grip
-        root.addView(grip)
+        builtGrab = grab
         // Mic cell: static halo glow behind the branded mic button.
         val micCell = FrameLayout(this).apply {
             layoutParams = android.widget.LinearLayout.LayoutParams(cellW, cellW).apply {
@@ -746,29 +772,89 @@ class OverlayService : Service(), Dictation.Listener {
     }
 
     /**
-     * Mic touch: talk, with one escape hatch — releasing ON the X
-     * below discards instead of finishing (drag-to-X cancel, owner
-     * pill round-2: cancel must never transcribe). Movement otherwise
-     * neither moves the bubble nor cancels: the grip moves, the X
-     * cancels, the mic talks.
+     * Mic touch. Two modes:
+     *
+     * Grip on: the handle is the only move surface — the mic talks
+     * immediately and a release ON the X discards.
+     *
+     * Grip off (default): the mic itself drags. A finger that stays
+     * inside the touch-slop margin for [pressDelayMs] opens dictation
+     * (hold semantics; Smart/Tap keep their toggle behavior). Moving
+     * past the margin before that window means the touch was a drag:
+     * dictation never opens, the bubble follows the finger, and release
+     * docks it to the edge. Moving while already recording keeps the
+     * same drag (release still finishes unless dropped on the X).
+     * Inside the margin, jitter is involuntary and ignored.
      */
     private fun onMicTouch(ev: MotionEvent): Boolean {
+        val grab = grabEnabled()
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 downRawX = ev.rawX
                 downRawY = ev.rawY
                 params?.let { baseX = it.x; baseY = it.y }
                 moved = false
-                tick()
-                dictation.pressDown()
+                pressStarted = false
+                draggingBubble = false
+                cancelPendingPress()
+                if (grab) {
+                    tick()
+                    dictation.pressDown()
+                    pressStarted = true
+                } else {
+                    // Give the finger a moment to prove it is not a drag.
+                    val start = Runnable {
+                        pressStart = null
+                        if (!moved && !draggingBubble) {
+                            tick()
+                            dictation.pressDown()
+                            pressStarted = true
+                        }
+                    }
+                    pressStart = start
+                    mainHandler.postDelayed(start, pressDelayMs().toLong())
+                }
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
-                // Deliberately ignored: mic drag never moves, never cancels.
+                if (grab) return true
+                val dx = ev.rawX - downRawX
+                val dy = ev.rawY - downRawY
+                val dist = kotlin.math.hypot(dx.toDouble(), dy.toDouble()).toFloat()
+                if (!draggingBubble && FloatState.shouldArmFreeMove(dist, dp(10).toFloat())) {
+                    // Past the deadzone: this is a drag, never a talk press.
+                    draggingBubble = true
+                    moved = true
+                    cancelPendingPress()
+                }
+                if (draggingBubble) moveBubbleBy(dx, dy)
                 return true
             }
             MotionEvent.ACTION_UP -> {
+                cancelPendingPress()
+                val dragged = draggingBubble
+                draggingBubble = false
                 moved = false
+                if (dragged) {
+                    snapAndPersist()
+                    if (pressStarted && droppedOnStop(ev.rawX, ev.rawY)) {
+                        tick(40L)
+                        dictation.cancel()
+                    } else if (pressStarted) {
+                        tick()
+                        dictation.pressUp()
+                    }
+                    pressStarted = false
+                    return true
+                }
+                if (!pressStarted) {
+                    // Lifted inside the hold window: a tap/toggle press.
+                    tick()
+                    dictation.pressDown()
+                    dictation.pressUp()
+                    return true
+                }
+                pressStarted = false
                 if (droppedOnStop(ev.rawX, ev.rawY)) {
                     // Drag-to-X: discard; the session token invalidates
                     // any in-flight finish so no WORKING follows.
@@ -781,12 +867,21 @@ class OverlayService : Service(), Dictation.Listener {
                 return true
             }
             MotionEvent.ACTION_CANCEL -> {
+                cancelPendingPress()
+                draggingBubble = false
                 moved = false
+                pressStarted = false
                 dictation.cancel()
                 return true
             }
         }
         return false
+    }
+
+    /** Drop a scheduled hold start (finger moved / lifted / cancelled). */
+    private fun cancelPendingPress() {
+        pressStart?.let { mainHandler.removeCallbacks(it) }
+        pressStart = null
     }
 
     /** True when the release point lands on the stop button (drop-on-X). */
@@ -886,6 +981,9 @@ class OverlayService : Service(), Dictation.Listener {
         // Any hide drops the utterance (focus lost mid-press included).
         moved = false
         gripCancelled = false
+        cancelPendingPress()
+        draggingBubble = false
+        pressStarted = false
         try {
             dictation.cancel()
         } catch (_: Exception) {

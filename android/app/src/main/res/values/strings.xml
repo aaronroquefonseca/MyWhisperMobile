@@ -75,6 +75,10 @@
     <string name="setup_float_overlay">Allow display over apps</string>
     <string name="setup_float_a11y">Enable dictation service</string>
     <string name="setup_float_a11y_sub">Lets results land in the focused field.</string>
+    <string name="setup_float_grab">Grab point</string>
+    <string name="setup_float_grab_sub">Thin handle above the bubble for moving it. Off: drag the bubble itself.</string>
+    <string name="setup_float_delay">Hold delay</string>
+    <string name="setup_float_delay_sub">How long the bubble must stay still before recording; a small move counts as a drag.</string>
     <string name="setup_float_old_warn">On Android 12 and below the floating button may pick up placeholder text in some apps. The MyWhisper keyboard is recommended there.</string>
     <string name="unified_notif_channel">MyWhisper status</string>
     <string name="float_notif_title">MyWhisper bubble</string>

@@ -48,6 +48,28 @@ class MyWhisperAccessibility : AccessibilityService() {
         }
 
         /**
+         * Resolve input focus from the live window instead of trusting
+         * one event's source: IME windows emit their own focus events
+         * (their source is not editable) and could clear a real
+         * text-field focus, leaving the bubble hidden while the user
+         * types (owner repro on a launcher search field). One query,
+         * both directions, no flapping.
+         */
+        fun syncFocus() {
+            val focused = try {
+                live?.rootInActiveWindow
+                    ?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+                    ?.isEditable == true
+            } catch (_: Exception) {
+                false
+            }
+            if (focused != FloatState.hasTextFocus) {
+                FloatState.hasTextFocus = focused
+                FloatState.refresh()
+            }
+        }
+
+        /**
          * True on API 33+, where ClipDescription.EXTRA_IS_SENSITIVE
          * exists and keeps the transcription out of the keyboard
          * clipboard history/suggestions. Pure (sdkInt param) for JVM
@@ -249,21 +271,14 @@ class MyWhisperAccessibility : AccessibilityService() {
         // that half lives in the IME via FloatState).
         val e = event ?: return
         when (e.eventType) {
-            AccessibilityEvent.TYPE_VIEW_FOCUSED -> {
-                try {
-                    FloatState.hasTextFocus = e.source?.isEditable == true
-                } catch (_: Exception) {
-                    FloatState.hasTextFocus = false
-                }
-                FloatState.refresh()
-            }
-            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
-                FloatState.hasTextFocus = false
-                FloatState.refresh()
-            }
+            AccessibilityEvent.TYPE_VIEW_FOCUSED,
+            AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED,
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
+            -> syncFocus()
             else -> Unit
         }
     }
+
 
     override fun onInterrupt() {
     }

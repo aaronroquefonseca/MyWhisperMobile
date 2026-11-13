@@ -2280,6 +2280,59 @@ class MainActivity : ComponentActivity() {
                         }
                     })
                 }
+                // Optional grip (default off): the mic drags itself.
+                var grab by remember {
+                    mutableStateOf(setupPrefs.getBoolean("float_grab", false))
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        stringResource(R.string.setup_float_grab),
+                        modifier = Modifier.weight(1f),
+                    )
+                    Switch(checked = grab, onCheckedChange = {
+                        grab = it
+                        setupPrefs.edit { putBoolean("float_grab", it) }
+                        // Rebuild the bubble chrome for the new mode.
+                        OverlayService.start(this@MainActivity)
+                    })
+                }
+                Text(
+                    stringResource(R.string.setup_float_grab_sub),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (!grab) {
+                    // No grip: a finger that stays put this long records;
+                    // moving sooner means a drag (never a dictation).
+                    var delayMs by remember {
+                        mutableIntStateOf(
+                            FloatState.pressDelayMs(
+                                setupPrefs.getInt(
+                                    "float_press_delay",
+                                    FloatState.PRESS_DELAY_DEFAULT_MS,
+                                ),
+                            ),
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    val delayOptions = FloatState.PRESS_DELAY_OPTIONS_MS.map { "$it ms" }
+                    DropDown(
+                        getString(R.string.setup_float_delay),
+                        "$delayMs ms",
+                        delayOptions,
+                    ) { picked ->
+                        delayMs = picked.substringBefore(" ").toIntOrNull()
+                            ?.let { FloatState.pressDelayMs(it) }
+                            ?: FloatState.PRESS_DELAY_DEFAULT_MS
+                        setupPrefs.edit { putInt("float_press_delay", delayMs) }
+                        OverlayService.start(this@MainActivity)
+                    }
+                    Text(
+                        stringResource(R.string.setup_float_delay_sub),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
             Section(stringResource(R.string.setup_prefs)) {
                 val prefs = s.optJSONObject("preferences") ?: JSONObject()
