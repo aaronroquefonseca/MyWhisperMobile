@@ -911,6 +911,7 @@ class OverlayService : Service(), Dictation.Listener {
             PixelFormat.TRANSLUCENT,
         ).also {
             it.gravity = Gravity.TOP or Gravity.START
+            it.alpha = FloatState.overlayWindowOpacity(prefs.getInt("float_opacity", 65))
             val b = safeBubbleBounds(rootW, rootH)
             val (cx, cy) = FloatState.clampBubble(
                 prefs.getInt(KEY_X, 60), prefs.getInt(KEY_Y, 400),
@@ -946,7 +947,7 @@ class OverlayService : Service(), Dictation.Listener {
                 background = GradientDrawable().apply {
                     shape = GradientDrawable.RECTANGLE
                     cornerRadius = dp(2).toFloat()
-                    setColor(0x8CFFFFFF.toInt())
+                    setColor(Color.WHITE)
                 }
                 layoutParams = FrameLayout.LayoutParams(dp(28), dp(4), Gravity.CENTER)
             }
@@ -1436,13 +1437,21 @@ class OverlayService : Service(), Dictation.Listener {
             chromeState = state
         }
         val opacity = getSharedPreferences(PREFS, MODE_PRIVATE)
-            .getInt("float_opacity", 65).coerceIn(30, 100)
+            .getInt("float_opacity", 65)
+        params?.let { lp ->
+            val windowAlpha = FloatState.overlayWindowOpacity(opacity)
+            if (lp.alpha != windowAlpha) {
+                lp.alpha = windowAlpha
+                try { wm?.updateViewLayout(holder, lp) } catch (_: Exception) { }
+            }
+        }
         micBtn?.apply {
             val nextBackground = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
                 cornerRadius = dp(16).toFloat()
                 setColor(if (state == Dictation.State.RECORDING) 0xFFE8E8E8.toInt() else Color.WHITE)
-                alpha = opacity * 255 / 100
+                // Uniform translucency belongs to the compositor's window alpha,
+                // not fractional-alpha pixels in this drawing buffer.
             }
             backgroundTintList = null
             background = nextBackground

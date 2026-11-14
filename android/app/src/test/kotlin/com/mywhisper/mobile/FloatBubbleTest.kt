@@ -22,6 +22,14 @@ import java.util.concurrent.TimeUnit
  */
 class FloatBubbleTest {
     @Test
+    fun surfaceOpacity_preservesConfiguredTranslucency() {
+        assertEquals(0.65f, FloatState.overlayWindowOpacity(65), 0f)
+        assertEquals(1f, FloatState.overlayWindowOpacity(100), 0f)
+        assertEquals(0.3f, FloatState.overlayWindowOpacity(0), 0f)
+        assertEquals(1f, FloatState.overlayWindowOpacity(200), 0f)
+    }
+
+    @Test
     fun idlePosition_leavesRoomForHoldControlsAtBottomEdge() {
         for (grab in listOf(false, true)) {
             val fullHeight = FloatState.recordingWindowHeightDp(grab)
