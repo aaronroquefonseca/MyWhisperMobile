@@ -8,6 +8,57 @@ Dictate into other apps using a floating microphone button or the
 MyWhisper input method. Configure speech recognition, text cleanup, and
 other settings from the app.
 
+## Floating button
+
+Focus any text field and the floating button appears over the app. Tap to
+start dictating, then tap ✓ to transcribe and insert the text, or ✕ to
+discard it.
+It follows the keyboard, snaps to the screen edge, and can be dragged,
+faded, locked, or snoozed.
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/screenshots/pill-ready.png" alt="Floating button ready next to a Messages text field" width="270" /><br />
+      <sub><b>Ready</b> — appears when a text field has focus</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/screenshots/pill-recording.png" alt="Floating button expanded while recording, with confirm and cancel controls" width="270" /><br />
+      <sub><b>Listening</b> — ✓ inserts the text, ✕ cancels</sub>
+    </td>
+  </tr>
+</table>
+
+## Screenshots
+
+<table>
+  <tr>
+    <td align="center" width="33%">
+      <img src="docs/screenshots/setup.png" alt="Setup checklist for microphone, overlay, dictation service, and speech recognition" width="220" /><br />
+      <sub><b>Guided setup</b></sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/screenshots/dictation.png" alt="Dictation tab with floating button and app settings" width="220" /><br />
+      <sub><b>Dictation</b></sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/screenshots/speech-providers.png" alt="Speech provider chain with a self-hosted Whisper server" width="220" /><br />
+      <sub><b>Speech providers</b></sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center">
+      <img src="docs/screenshots/voice.png" alt="Voice tab with speech recognition and text cleanup" width="220" /><br />
+      <sub><b>Voice</b></sub>
+    </td>
+    <td align="center">
+      <img src="docs/screenshots/library.png" alt="Library tab with dictionary, history, activity, and sync" width="220" /><br />
+      <sub><b>Library</b></sub>
+    </td>
+    <td></td>
+  </tr>
+</table>
+
 ## Dictation at a glance
 
 - **Floating button** — keep a microphone available over other apps and
