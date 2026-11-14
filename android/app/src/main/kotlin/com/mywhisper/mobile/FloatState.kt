@@ -174,6 +174,9 @@ object FloatState {
         if (stored in PRESS_DELAY_OPTIONS_MS) stored else PRESS_DELAY_DEFAULT_MS
 
 
+    /** Apply user opacity once at the surface, with the same supported range as Setup. */
+    fun overlayWindowOpacity(percent: Int): Float = percent.coerceIn(30, 100) / 100f
+
     /** Idle positioning reserves the complete hold-control frame, including optional grip. */
     fun recordingWindowHeightDp(grab: Boolean): Int = 50 + 8 + 96 + if (grab) 14 else 0
 
