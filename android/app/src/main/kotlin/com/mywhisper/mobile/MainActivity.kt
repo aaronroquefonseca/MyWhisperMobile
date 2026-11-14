@@ -39,6 +39,7 @@ import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
@@ -75,6 +76,8 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
@@ -1413,6 +1416,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    @OptIn(ExperimentalMaterial3Api::class)
     @Composable
     private fun Root() {
         val s = settingsState.value
@@ -1471,6 +1475,19 @@ class MainActivity : ComponentActivity() {
             val selectedTask = when (tab) { 1, 2, 14 -> 14; 3, 4, 5, 6, 15 -> 15; else -> 0 }
             BackHandler(enabled = backStack.isNotEmpty() || tab == 16) { goBack() }
             Scaffold(
+                topBar = {
+                    TopAppBar(
+                        title = { Text(titles[tab] ?: getString(R.string.setup_float)) },
+                        navigationIcon = {
+                            if (!isRoot && tab != 16) {
+                                IconButton(onClick = { goBack() }) {
+                                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = getString(R.string.new_back))
+                                }
+                            }
+                        },
+                        colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
+                    )
+                },
                 snackbarHost = { SnackbarHost(snackbarHost) },
                 bottomBar = {
                     if (tab != 16 && !backStack.contains(16)) NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
@@ -1492,13 +1509,6 @@ class MainActivity : ComponentActivity() {
                         .fillMaxSize()
                         .padding(pad),
                 ) {
-                    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        if (!isRoot && tab != 16) {
-                            TextButton(onClick = { goBack() }) { Text(getString(R.string.new_back)) }
-                        }
-                        Text(titles[tab] ?: getString(R.string.setup_float), modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
-
-                    }
                     if (s == null) {
                         // Explicit recovery UI: boot/load failures keep
                         // the committed error visible with a retry that
