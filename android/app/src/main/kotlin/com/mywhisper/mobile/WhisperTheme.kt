@@ -2,8 +2,6 @@ package com.mywhisper.mobile
 
 import android.os.Build
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
@@ -45,21 +43,9 @@ internal val WhisperDarkColors = darkColorScheme(
 /** Follow the device palette on Android 12+, retaining a fallback for older devices. */
 @Composable
 internal fun whisperColorScheme(dark: Boolean, black: Boolean = false): androidx.compose.material3.ColorScheme {
-    val context = LocalContext.current
-    val configuration = LocalConfiguration.current
-    // Some OEMs supply a different wallpaper palette to app resources than
-    // to Android/System UI. Read the device palette from the System UI package
-    // so "system colors" follows the user's system accent in either case.
-    val paletteContext = remember(context, configuration) {
-        try {
-            context.createPackageContext("com.android.systemui", 0).createConfigurationContext(configuration)
-        } catch (_: android.content.pm.PackageManager.NameNotFoundException) {
-            context
-        }
-    }
     val colors = when {
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && dark -> dynamicDarkColorScheme(paletteContext)
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> dynamicLightColorScheme(paletteContext)
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && dark -> dynamicDarkColorScheme(LocalContext.current)
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> dynamicLightColorScheme(LocalContext.current)
         dark -> WhisperDarkColors
         else -> WhisperLightColors
     }
