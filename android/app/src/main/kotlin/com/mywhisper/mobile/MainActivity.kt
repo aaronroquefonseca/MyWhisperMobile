@@ -1096,6 +1096,18 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun reconcileFloatingService(committed: JSONObject) {
+        try {
+            if (committed.optJSONObject("preferences")?.optBoolean("float_enabled", true) == true) {
+                OverlayService.start(this)
+            } else {
+                OverlayService.stop(this)
+            }
+        } catch (e: Exception) {
+            toast(e.message ?: getString(R.string.task_service_failed))
+        }
+    }
+
     private fun save(onCommitted: () -> Unit = {}) {
         // Async save with committed-state reflection: persist the
         // snapshot, then re-read the committed settings and apply
@@ -1113,6 +1125,9 @@ class MainActivity : ComponentActivity() {
                     settingsState.value = committed
                     settingsError.value = ""
                     settingsBusy.value = false
+                    // Every winning save reconciles the persisted state, even if a
+                    // later settings edit superseded the original enable callback.
+                    reconcileFloatingService(committed)
                     onCommitted()
                     // Prefs toggle: rebuild live foreground notifications,
                     // no process restart needed.
@@ -2170,13 +2185,7 @@ class MainActivity : ComponentActivity() {
     private fun setFloatingEnabled(s: JSONObject, enabled: Boolean) {
         val prefs = s.optJSONObject("preferences") ?: JSONObject()
         prefs.put("float_enabled", enabled); s.put("preferences", prefs)
-        save {
-            try {
-                if (enabled) {
-                    OverlayService.start(this@MainActivity)
-                } else OverlayService.stop(this@MainActivity)
-            } catch (e: Exception) { toast(e.message ?: getString(R.string.task_service_failed)) }
-        }
+        save()
     }
 
     @Composable

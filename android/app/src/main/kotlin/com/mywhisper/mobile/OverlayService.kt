@@ -49,6 +49,13 @@ class OverlayService : Service(), Dictation.Listener {
         private const val KEY_PRESS_DELAY = "float_press_delay"
 
         fun start(ctx: Context) {
+            // Behavior controls may refresh while disabled. Do not create a
+            // service unless the persisted setting currently enables it.
+            val enabled = try {
+                CoreBridge.getSettings().getOrThrow().optJSONObject("preferences")
+                    ?.optBoolean("float_enabled", true) == true
+            } catch (_: Exception) { false }
+            if (!enabled) return
             // Enabled by default; first-run setup owns permission requests.
             // Avoid launching system settings or a microphone foreground service
             // until the user has granted the required permissions.
