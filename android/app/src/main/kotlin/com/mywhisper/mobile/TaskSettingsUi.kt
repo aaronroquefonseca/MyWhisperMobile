@@ -199,6 +199,11 @@ internal fun ChoiceSetting(label: String, value: String, options: List<String>, 
                                 selected = option == value,
                                 onClick = { select(option) },
                                 shape = SegmentedButtonDefaults.itemShape(index, options.size),
+                                colors = SegmentedButtonDefaults.colors(
+                                    activeContainerColor = MaterialTheme.colorScheme.primary,
+                                    activeContentColor = MaterialTheme.colorScheme.onPrimary,
+                                    activeBorderColor = MaterialTheme.colorScheme.primary,
+                                ),
                                 label = { Text(option) },
                             )
                         }
@@ -246,3 +251,12 @@ internal fun ToggleSetting(title: String, summary: String, checked: Boolean, onC
         }),
     )
 }
+
+/** Selected filters use the same system-primary highlight as switches and sliders. */
+@Composable
+internal fun primaryFilterChipColors() = FilterChipDefaults.filterChipColors(
+    selectedContainerColor = MaterialTheme.colorScheme.primary,
+    selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
+    selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimary,
+    selectedTrailingIconColor = MaterialTheme.colorScheme.onPrimary,
+)

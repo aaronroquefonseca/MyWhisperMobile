@@ -1539,9 +1539,9 @@ class MainActivity : ComponentActivity() {
                                 icon = { Icon(painterResource(listOf(R.drawable.ic_nav_dictation, R.drawable.ic_voice, R.drawable.ic_library)[index]),
                                     contentDescription = null, modifier = Modifier.size(24.dp)) },
                                 colors = NavigationBarItemDefaults.colors(
-                                    selectedIconColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                                    selectedTextColor = MaterialTheme.colorScheme.onSurface,
-                                    indicatorColor = MaterialTheme.colorScheme.secondaryContainer,
+                                    selectedIconColor = MaterialTheme.colorScheme.onPrimary,
+                                    selectedTextColor = MaterialTheme.colorScheme.primary,
+                                    indicatorColor = MaterialTheme.colorScheme.primary,
                                     unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
                                     unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
                                 ),
@@ -2983,12 +2983,14 @@ class MainActivity : ComponentActivity() {
                 ) {
                     FilterChip(
                         selected = sttProvider == null,
+                        colors = primaryFilterChipColors(),
                         onClick = { sttProvider = null },
                         label = { Text(stringResource(R.string.stt_provider_all)) },
                     )
                     for (p in LocalSttModels.providers()) {
                         FilterChip(
                             selected = sttProvider == p.name,
+                            colors = primaryFilterChipColors(),
                             onClick = { sttProvider = p.name },
                             label = { Text(LocalSttModels.providerLabel(p)) },
                         )
