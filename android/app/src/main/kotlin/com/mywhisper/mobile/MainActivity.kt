@@ -1439,7 +1439,7 @@ class MainActivity : ComponentActivity() {
                             )
             var voiceTab by rememberSaveable { mutableIntStateOf(1) }
             val pageState = rememberSaveableStateHolder()
-            BackHandler(enabled = tab in listOf(3, 4, 6, 8)) { tab = 7 }
+            BackHandler(enabled = tab in listOf(3, 4, 6, 8, 9)) { tab = 7 }
             LaunchedEffect(tab) { if (tab == 1 || tab == 2) voiceTab = tab }
             val primaryTab = when (tab) { 0 -> 0; 1, 2 -> 1; 5 -> 2; else -> 3 }
             Scaffold(
@@ -1468,10 +1468,10 @@ class MainActivity : ComponentActivity() {
                     Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp)) {
                         Text("MyWhisper", style = MaterialTheme.typography.labelLarge,
                             color = MaterialTheme.colorScheme.primary)
-                        Text(if (tab == 7) getString(R.string.ux_nav_more) else if (tab == 0) getString(R.string.ux_home_title) else if (tab == 8) getString(R.string.ux_preferences) else tabs[tab],
+                        Text(if (tab == 7) getString(R.string.ux_nav_more) else if (tab == 0) getString(R.string.ux_home_title) else if (tab == 8) getString(R.string.ux_preferences) else if (tab == 9) getString(R.string.setup_float) else tabs[tab],
                             style = MaterialTheme.typography.headlineMedium)
                     }
-                    if (tab in listOf(3, 4, 6, 8)) {
+                    if (tab in listOf(3, 4, 6, 8, 9)) {
                         TextButton(onClick = { tab = 7 }, modifier = Modifier.padding(horizontal = 16.dp)) { Text(getString(R.string.ux_back_more)) }
                     }
                     if (tab == 1 || tab == 2) {
@@ -1516,11 +1516,12 @@ class MainActivity : ComponentActivity() {
                             4 -> ActivityScreen()
                             5 -> HistoryScreen(s)
                             6 -> SyncScreen(s)
+                            9 -> SetupScreen(s, onSpeech = { tab = 1 }, preferencesOnly = true, floatingOnly = true)
                             8 -> SetupScreen(s, onSpeech = { tab = 1 }, preferencesOnly = true)
                             7 -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
                                 Text(getString(R.string.ux_more_intro), style = MaterialTheme.typography.bodyLarge)
                                 Spacer(Modifier.height(16.dp))
-                                listOf(8 to getString(R.string.ux_preferences), 3 to getString(R.string.tab_dict), 4 to getString(R.string.tab_activity), 6 to getString(R.string.ux_devices_sync)).forEach { (target, label) ->
+                                listOf(9 to getString(R.string.setup_float), 8 to getString(R.string.ux_preferences), 3 to getString(R.string.tab_dict), 4 to getString(R.string.tab_activity), 6 to getString(R.string.ux_devices_sync)).forEach { (target, label) ->
                                     OutlinedButton(onClick = { tab = target }, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) { Text(label) }
                                     Spacer(Modifier.height(8.dp))
                                 }
@@ -2011,7 +2012,7 @@ class MainActivity : ComponentActivity() {
     // -- Setup ----------------------------------------------------------
 
     @Composable
-    private fun SetupScreen(s: JSONObject, onSpeech: () -> Unit, preferencesOnly: Boolean = false) {
+    private fun SetupScreen(s: JSONObject, onSpeech: () -> Unit, preferencesOnly: Boolean = false, floatingOnly: Boolean = false) {
         var showPreferences by rememberSaveable { mutableStateOf(false) }
         Column(
             modifier = Modifier
@@ -2149,6 +2150,7 @@ class MainActivity : ComponentActivity() {
                 Text(if (showPreferences) getString(R.string.ux_hide_preferences) else getString(R.string.ux_show_preferences))
             }
             if (preferencesOnly || showPreferences) {
+            if (!floatingOnly) {
             Section("Notifications") {
                 Text(
                     "Shows the sync status while sync runs.",
@@ -2267,6 +2269,7 @@ class MainActivity : ComponentActivity() {
                     save()
                 }) { Text(stringResource(R.string.setup_tap_save)) }
             }
+            }
             Section(stringResource(R.string.setup_float)) {
                 val prefs = s.optJSONObject("preferences") ?: JSONObject()
                 val on = prefs.optBoolean("float_enabled", false)
@@ -2356,6 +2359,59 @@ class MainActivity : ComponentActivity() {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                var upperLock by remember { mutableStateOf(setupPrefs.getBoolean("float_lock_enabled", true)) }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(stringResource(R.string.float_lock_enabled), modifier = Modifier.weight(1f))
+                    Switch(modifier = Modifier.semantics { contentDescription = getString(R.string.float_lock_enabled) }, checked = upperLock, onCheckedChange = {
+                        upperLock = it
+                        setupPrefs.edit { putBoolean("float_lock_enabled", it) }
+                        OverlayService.start(this@MainActivity)
+                    })
+                }
+                var followKeyboard by remember { mutableStateOf(setupPrefs.getBoolean("float_follow_keyboard", true)) }
+                DropDown(getString(R.string.float_visibility),
+                    getString(if (followKeyboard) R.string.float_follow_keyboard else R.string.float_follow_focus),
+                    listOf(getString(R.string.float_follow_keyboard), getString(R.string.float_follow_focus))) { picked ->
+                    followKeyboard = picked == getString(R.string.float_follow_keyboard)
+                    setupPrefs.edit { putBoolean("float_follow_keyboard", followKeyboard) }
+                    OverlayService.start(this@MainActivity)
+                }
+                var snoozeMinutes by remember { mutableIntStateOf(setupPrefs.getInt("float_snooze_minutes", 10)) }
+                DropDown(getString(R.string.float_snooze_duration), "$snoozeMinutes min",
+                    listOf("5 min", "10 min", "15 min", "30 min", "60 min")) { picked ->
+                    snoozeMinutes = picked.substringBefore(" ").toInt()
+                    setupPrefs.edit { putInt("float_snooze_minutes", snoozeMinutes) }
+                }
+                var snoozedUntil by remember { mutableStateOf(setupPrefs.getLong("float_snoozed_until", 0)) }
+                androidx.compose.runtime.DisposableEffect(setupPrefs) {
+                    val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { prefs, key ->
+                        if (key == "float_snoozed_until") snoozedUntil = prefs.getLong(key, 0)
+                    }
+                    setupPrefs.registerOnSharedPreferenceChangeListener(listener)
+                    onDispose { setupPrefs.unregisterOnSharedPreferenceChangeListener(listener) }
+                }
+                LaunchedEffect(snoozedUntil) {
+                    val remaining = snoozedUntil - System.currentTimeMillis()
+                    if (remaining > 0) {
+                        kotlinx.coroutines.delay(remaining)
+                        snoozedUntil = 0
+                    }
+                }
+                if (snoozedUntil > System.currentTimeMillis()) {
+                    TextButton(onClick = {
+                        startService(Intent(this@MainActivity, OverlayService::class.java)
+                            .setAction(OverlayService.ACTION_UNSNOOZE))
+                    }) { Text(stringResource(R.string.float_resume)) }
+                }
+                var bubbleOpacity by remember { mutableIntStateOf(setupPrefs.getInt("float_opacity", 65)) }
+                DropDown(
+                    getString(R.string.setup_float_opacity), "$bubbleOpacity%",
+                    listOf("30%", "45%", "65%", "80%", "100%"),
+                ) { picked ->
+                    bubbleOpacity = picked.removeSuffix("%").toInt()
+                    setupPrefs.edit { putInt("float_opacity", bubbleOpacity) }
+                    OverlayService.start(this@MainActivity)
+                }
                 if (!grab) {
                     // No grip: a finger that stays put this long records;
                     // moving sooner means a drag (never a dictation).
@@ -2389,6 +2445,7 @@ class MainActivity : ComponentActivity() {
                     )
                 }
             }
+            if (!floatingOnly) {
             Section(stringResource(R.string.setup_prefs)) {
                 val prefs = s.optJSONObject("preferences") ?: JSONObject()
                 DropDown(
@@ -2430,6 +2487,7 @@ class MainActivity : ComponentActivity() {
                         Text(diag, style = MaterialTheme.typography.bodySmall)
                     }
                 }
+            }
             }
             }
         }

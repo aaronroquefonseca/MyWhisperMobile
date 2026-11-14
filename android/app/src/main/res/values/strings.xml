@@ -412,4 +412,17 @@
     <string name="ux_microphone_access">Microphone access</string>
     <string name="ux_hide_preferences">Hide preferences</string>
     <string name="ux_show_preferences">Preferences · notifications, microphone &amp; appearance</string>
+    <string name="setup_float_opacity">Bubble opacity</string>
+    <string name="setup_float_logo">Use MyWhisper logo</string>
+    <string name="float_finish">Finish dictation</string>
+    <string name="float_snooze_target">Release to snooze</string>
+    <string name="float_snoozed">Bubble snoozed for %1$d min</string>
+    <string name="float_resume">Resume floating button</string>
+    <string name="float_snooze_duration">Snooze duration</string>
+    <string name="float_cancel_processing">Cancel processing</string>
+    <string name="float_visibility">Show floating button with</string>
+    <string name="float_follow_keyboard">Keyboard</string>
+    <string name="float_follow_focus">Focused text field</string>
+    <string name="float_lock">Slide up to lock recording</string>
+    <string name="float_lock_enabled">Slide up to lock</string>
 </resources>
