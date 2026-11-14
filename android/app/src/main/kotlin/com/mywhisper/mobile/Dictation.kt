@@ -159,6 +159,14 @@ class Dictation(
         listener?.onState(s, toggled)
     }
 
+    /** Switch the live capture to hands-free mode without finishing or restarting it. */
+    fun lockRecording() {
+        if (state != State.RECORDING || toggled) return
+        toggled = true
+        secondDown = false
+        listener?.onState(state, true)
+    }
+
     fun pressDown() {
         when (state) {
             State.WORKING -> return

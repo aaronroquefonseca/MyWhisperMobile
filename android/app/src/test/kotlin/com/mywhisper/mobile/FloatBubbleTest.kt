@@ -21,6 +21,65 @@ import java.util.concurrent.TimeUnit
  * (tap never destroys a recording), overlay-denial latch.
  */
 class FloatBubbleTest {
+    @Test
+    fun disabledLock_upwardMotionNeverBecomesCancelTravel() {
+        assertEquals(0f, FloatState.holdGestureDistance(-100f, false), 0f)
+        assertEquals(0f, FloatState.holdGestureDistance(0f, false), 0f)
+        assertEquals(60f, FloatState.holdGestureDistance(60f, false), 0f)
+        assertEquals(60f, FloatState.holdGestureDistance(-60f, true), 0f)
+    }
+
+    @Test
+    fun lockRecording_keepsCaptureRunningAfterRelease() {
+        val (dictation, results, executor) = dictationForStopTap("Push")
+        try {
+            dictation.lockRecording() // Idle is a no-op.
+            assertEquals(Dictation.State.IDLE, dictation.current)
+            dictation.pressDown()
+            dictation.lockRecording()
+            dictation.lockRecording() // Idempotent.
+            dictation.pressUp()
+            assertEquals(Dictation.State.RECORDING, dictation.current)
+            assertTrue(results.isEmpty())
+            dictation.cancel()
+            assertEquals(Dictation.State.IDLE, dictation.current)
+        } finally { executor.shutdownNow() }
+    }
+
+    @Test
+    fun keyboardVisibility_doesNotWaitForStaleTextFocus() {
+        assertFalse(FloatState.shouldShowBubble(true, false, true, true, true, false))
+        assertTrue(FloatState.shouldShowBubble(true, false, true, false, true, true))
+        assertFalse(FloatState.shouldShowBubble(true, true, true, true, true, true))
+        assertFalse(FloatState.shouldShowBubble(true, false, false, true, true, true))
+        assertTrue(FloatState.shouldShowBubble(true, false, true, true, false, false))
+    }
+
+    @Test
+    fun magnets_haveSeparateCaptureAndReleaseBoundaries() {
+        assertFalse(FloatState.magnetReleased(18f, false, 18f, 10f))
+        assertTrue(FloatState.magnetReleased(19f, false, 18f, 10f))
+        assertTrue(FloatState.magnetReleased(12f, true, 18f, 10f))
+        assertFalse(FloatState.magnetReleased(10f, true, 18f, 10f))
+        assertTrue(FloatState.magnetCaptured(20f, false, 20f, 34f))
+        assertFalse(FloatState.magnetCaptured(21f, false, 20f, 34f))
+        assertTrue(FloatState.magnetCaptured(30f, true, 20f, 34f))
+        assertFalse(FloatState.magnetCaptured(35f, true, 20f, 34f))
+        assertTrue(FloatState.magnetCaptured(60f, false, 64f, 96f))
+        assertTrue(FloatState.magnetCaptured(90f, true, 64f, 96f))
+        assertFalse(FloatState.magnetCaptured(97f, true, 64f, 96f))
+    }
+
+    @Test
+    fun holdCancel_tracksDownwardTravel_andDisarmsOnReturn() {
+        assertEquals(0f, FloatState.holdCancelTravel(-30f, 89f), 0f)
+        assertEquals(40f, FloatState.holdCancelTravel(40f, 89f), 0f)
+        assertEquals(89f, FloatState.holdCancelTravel(130f, 89f), 0f)
+        assertFalse(FloatState.holdCancelArmed(71f, 72f))
+        assertTrue(FloatState.holdCancelArmed(72f, 72f))
+        assertFalse(FloatState.holdCancelArmed(20f, 72f))
+    }
+
 
     // -- Auto-show rule --------------------------------------------
 
@@ -138,7 +197,7 @@ class FloatBubbleTest {
     @Test
     fun stop_visibleWhileActive_hiddenIdle() {
         assertTrue(FloatState.isStopVisible(Dictation.State.RECORDING))
-        assertTrue(FloatState.isStopVisible(Dictation.State.WORKING))
+        assertFalse(FloatState.isStopVisible(Dictation.State.WORKING))
         assertFalse(FloatState.isStopVisible(Dictation.State.IDLE))
     }
 
