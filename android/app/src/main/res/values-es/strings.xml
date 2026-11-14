@@ -392,4 +392,25 @@
     <string name="download_cancel">Cancelar descarga</string>
     <string name="download_complete_title">Descarga completa</string>
     <string name="download_failed_title">Descarga fallida</string>
+    <string name="ux_nav_home">Inicio</string>
+    <string name="ux_nav_voice">Voz</string>
+    <string name="ux_nav_more">Más</string>
+    <string name="ux_home_title">Haz que se te escuche</string>
+    <string name="ux_preferences">Preferencias</string>
+    <string name="ux_back_more">Volver a Más</string>
+    <string name="ux_more_intro">Gestiona tus preferencias, palabras y dispositivos conectados.</string>
+    <string name="ux_devices_sync">Dispositivos y sincronización</string>
+    <string name="ux_ready">Listo para dictar</string>
+    <string name="ux_setup_progress">Primeros pasos · %1$d de 3 listos</string>
+    <string name="ux_keyboard_check">Activa y selecciona el teclado MyWhisper</string>
+    <string name="ux_speech_heading">Reconocimiento de voz</string>
+    <string name="ux_speech_ready">Tu proveedor de voz está configurado.</string>
+    <string name="ux_speech_intro">Elige dónde convertir tu voz en texto: en tu teléfono o con un servidor.</string>
+    <string name="ux_speech_manage">Gestionar reconocimiento de voz</string>
+    <string name="ux_speech_setup">Configurar reconocimiento de voz</string>
+    <string name="ux_keyboard_enable">Activar teclado MyWhisper</string>
+    <string name="ux_keyboard_choose">Elegir teclado</string>
+    <string name="ux_microphone_access">Acceso al micrófono</string>
+    <string name="ux_hide_preferences">Ocultar preferencias</string>
+    <string name="ux_show_preferences">Preferencias · notificaciones, micrófono y apariencia</string>
 </resources>

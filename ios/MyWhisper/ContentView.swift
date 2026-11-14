@@ -7,23 +7,76 @@ import SwiftUI
 /// on tab-appear.
 struct ContentView: View {
     @StateObject private var flow = AppFlow()
+    @State private var voiceCleanup = false
+    @StateObject private var speechStore = SttSettingsStore()
+    @StateObject private var cleanupStore = CleanupSettingsStore()
 
     var body: some View {
         TabView(selection: $flow.selectedTab) {
-            ForEach(AppTab.allCases, id: \.self) { tab in
+            ForEach([AppTab.record, .speech, .history, .setup], id: \.self) { tab in
                 NavigationStack {
-                    tabContent(for: tab)
+                    if tab == .setup {
+                        settingsHub
+                    } else if tab == .speech {
+                        VStack(spacing: 0) {
+                            Picker(tabStrings.speech, selection: $voiceCleanup) {
+                                Text(tabStrings.speech).tag(false)
+                                Text(tabStrings.cleanup).tag(true)
+                            }
+                            .pickerStyle(.segmented)
+                            .padding()
+                            // Keep both editors mounted so changing segments preserves drafts.
+                            ZStack {
+                                SttSettingsView(store: speechStore)
+                                    .opacity(voiceCleanup ? 0 : 1)
+                                    .allowsHitTesting(!voiceCleanup)
+                                    .accessibilityHidden(voiceCleanup)
+                                CleanupSettingsView(store: cleanupStore)
+                                    .opacity(voiceCleanup ? 1 : 0)
+                                    .allowsHitTesting(voiceCleanup)
+                                    .accessibilityHidden(!voiceCleanup)
+                            }
+                        }
+                    } else {
+                        tabContent(for: tab)
+                    }
                 }
-                .tabItem { Label(tab.title(using: tabStrings), systemImage: tab.systemImage) }
+                .tabItem { Label(tab == .setup ? (languageCode == "es" ? "Más" : "More") : tab.title(using: tabStrings), systemImage: tab == .setup ? "ellipsis" : tab.systemImage) }
                 .tag(tab)
             }
         }
+        .tint(Color(red: 0.14, green: 0.36, blue: 0.77))
         .preferredColorScheme(flow.theme.colorScheme)
         .sheet(isPresented: shareVisible) {
             if let text = flow.shareText {
                 ShareSheet(items: [text])
             }
         }
+    }
+
+    private var settingsHub: some View {
+        List {
+            Section {
+                NavigationLink {
+                    tabContent(for: .setup)
+                } label: {
+                    Label(tabStrings.setup, systemImage: "slider.horizontal.3")
+                }
+            }
+            Section {
+                NavigationLink {
+                    DictionaryView()
+                } label: {
+                    Label(tabStrings.dictionary, systemImage: "book")
+                }
+                NavigationLink {
+                    DevicesView()
+                } label: {
+                    Label(tabStrings.devices, systemImage: "antenna.radiowaves.left.and.right")
+                }
+            }
+        }
+        .navigationTitle(languageCode == "es" ? "Más" : "More")
     }
 
     /// Exhaustive: adding an `AppTab` case without a screen is a compile
@@ -50,9 +103,9 @@ struct ContentView: View {
                 onThemeChange: { flow.applyTheme($0) }
             )
         case .speech:
-            SttSettingsView()
+            SttSettingsView(store: speechStore)
         case .cleanup:
-            CleanupSettingsView()
+            CleanupSettingsView(store: cleanupStore)
         case .dictionary:
             DictionaryView()
         case .history:

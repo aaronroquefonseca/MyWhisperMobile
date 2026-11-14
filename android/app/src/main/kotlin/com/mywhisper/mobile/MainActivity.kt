@@ -9,6 +9,7 @@ import android.net.wifi.WifiManager
 import android.os.Bundle
 import android.provider.Settings
 import android.view.inputmethod.InputMethodManager
+import androidx.activity.compose.BackHandler
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -58,8 +59,12 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -68,8 +73,6 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
@@ -78,8 +81,11 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -1402,9 +1408,9 @@ class MainActivity : ComponentActivity() {
         val theme = s?.optJSONObject("preferences")?.optString("theme", "System") ?: "System"
         MaterialTheme(
             colorScheme = when (theme) {
-                "Light" -> lightColorScheme()
-                "Dark" -> darkColorScheme()
-                else -> if (androidx.compose.foundation.isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()
+                "Light" -> WhisperLightColors
+                "Dark" -> WhisperDarkColors
+                else -> if (androidx.compose.foundation.isSystemInDarkTheme()) WhisperDarkColors else WhisperLightColors
             },
         ) {
             var tab by rememberSaveable { mutableIntStateOf(deepLinkTab.value ?: 0) }
@@ -1431,19 +1437,48 @@ class MainActivity : ComponentActivity() {
                                 getString(R.string.tab_history),
                                 getString(R.string.tab_devices),
                             )
-            Scaffold(snackbarHost = { SnackbarHost(snackbarHost) }) { pad ->
+            var voiceTab by rememberSaveable { mutableIntStateOf(1) }
+            val pageState = rememberSaveableStateHolder()
+            BackHandler(enabled = tab in listOf(3, 4, 6, 8)) { tab = 7 }
+            LaunchedEffect(tab) { if (tab == 1 || tab == 2) voiceTab = tab }
+            val primaryTab = when (tab) { 0 -> 0; 1, 2 -> 1; 5 -> 2; else -> 3 }
+            Scaffold(
+                snackbarHost = { SnackbarHost(snackbarHost) },
+                bottomBar = {
+                    NavigationBar {
+                        val labels = listOf(getString(R.string.ux_nav_home), getString(R.string.ux_nav_voice), getString(R.string.tab_history), getString(R.string.ux_nav_more))
+                        val icons = listOf(Icons.Default.Home, Icons.Default.Edit, Icons.Default.List, Icons.Default.MoreVert)
+                        val targets = listOf(0, voiceTab, 5, 7)
+                        labels.forEachIndexed { index, label ->
+                            NavigationBarItem(
+                                selected = primaryTab == index,
+                                onClick = { tab = targets[index] },
+                                icon = { Icon(icons[index], contentDescription = null) },
+                                label = { Text(label) },
+                            )
+                        }
+                    }
+                },
+            ) { pad ->
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(pad),
                 ) {
-                    ScrollableTabRow(selectedTabIndex = tab, edgePadding = 8.dp) {
-                        tabs.forEachIndexed { i, t ->
-                            Tab(
-                                selected = tab == i,
-                                onClick = { tab = i },
-                                text = { Text(t) },
-                            )
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp)) {
+                        Text("MyWhisper", style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary)
+                        Text(if (tab == 7) getString(R.string.ux_nav_more) else if (tab == 0) getString(R.string.ux_home_title) else if (tab == 8) getString(R.string.ux_preferences) else tabs[tab],
+                            style = MaterialTheme.typography.headlineMedium)
+                    }
+                    if (tab in listOf(3, 4, 6, 8)) {
+                        TextButton(onClick = { tab = 7 }, modifier = Modifier.padding(horizontal = 16.dp)) { Text(getString(R.string.ux_back_more)) }
+                    }
+                    if (tab == 1 || tab == 2) {
+                        TabRow(selectedTabIndex = tab - 1) {
+                            listOf(getString(R.string.tab_stt), getString(R.string.tab_cleanup)).forEachIndexed { index, label ->
+                                Tab(selected = tab == index + 1, onClick = { tab = index + 1 }, text = { Text(label) })
+                            }
                         }
                     }
                     if (s == null) {
@@ -1472,14 +1507,25 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     } else {
+                        pageState.SaveableStateProvider(tab) {
                         when (tab) {
-                            0 -> SetupScreen(s)
+                            0 -> SetupScreen(s, onSpeech = { tab = 1 })
                             1 -> SttScreen(s)
                             2 -> CleanupScreen(s)
                             3 -> DictionaryScreen(s)
                             4 -> ActivityScreen()
                             5 -> HistoryScreen(s)
                             6 -> SyncScreen(s)
+                            8 -> SetupScreen(s, onSpeech = { tab = 1 }, preferencesOnly = true)
+                            7 -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
+                                Text(getString(R.string.ux_more_intro), style = MaterialTheme.typography.bodyLarge)
+                                Spacer(Modifier.height(16.dp))
+                                listOf(8 to getString(R.string.ux_preferences), 3 to getString(R.string.tab_dict), 4 to getString(R.string.tab_activity), 6 to getString(R.string.ux_devices_sync)).forEach { (target, label) ->
+                                    OutlinedButton(onClick = { tab = target }, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) { Text(label) }
+                                    Spacer(Modifier.height(8.dp))
+                                }
+                            }
+                        }
                         }
                     }
                 }
@@ -1491,9 +1537,10 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun Section(title: String, body: @Composable () -> Unit) {
-        Card(modifier = Modifier.fillMaxWidth().padding(8.dp)) {
-            Column(modifier = Modifier.padding(12.dp)) {
-                Text(title, style = MaterialTheme.typography.titleMedium)
+        Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+            Column(modifier = Modifier.padding(20.dp)) {
+                Text(title, style = MaterialTheme.typography.titleLarge)
                 Spacer(Modifier.height(8.dp))
                 body()
             }
@@ -1596,6 +1643,7 @@ class MainActivity : ComponentActivity() {
                     )
                 }
                 Switch(
+                    modifier = Modifier.semantics { contentDescription = e.optString("name", LOCAL_ENTRY_NAME) },
                     checked = e.optBoolean("enabled", true),
                     onCheckedChange = onToggle,
                 )
@@ -1841,7 +1889,7 @@ class MainActivity : ComponentActivity() {
                 Text(title)
                 Text(sub, style = MaterialTheme.typography.bodySmall)
             }
-            Switch(checked = checked, onCheckedChange = onChecked)
+            Switch(modifier = Modifier.semantics { contentDescription = title }, checked = checked, onCheckedChange = onChecked)
         }
     }
 
@@ -1963,7 +2011,8 @@ class MainActivity : ComponentActivity() {
     // -- Setup ----------------------------------------------------------
 
     @Composable
-    private fun SetupScreen(s: JSONObject) {
+    private fun SetupScreen(s: JSONObject, onSpeech: () -> Unit, preferencesOnly: Boolean = false) {
+        var showPreferences by rememberSaveable { mutableStateOf(false) }
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -1994,8 +2043,11 @@ class MainActivity : ComponentActivity() {
                 }
             }
             val serverDone = isSpeechConfigured(isServerConfigured(s), localEnabled, localVerified)
-            val doneCount = onboardingDoneCount(imeDone, micDone, serverDone)
-            Section("Setup progress: $doneCount of 3") {
+            val keyboardSelected = Settings.Secure.getString(contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)
+                ?.substringBefore('/') == packageName
+            val doneCount = onboardingDoneCount(imeDone && keyboardSelected, micDone, serverDone)
+            if (!preferencesOnly) {
+            Section(if (doneCount == 3) getString(R.string.ux_ready) else getString(R.string.ux_setup_progress, doneCount)) {
                 if (doneCount == 3) {
                     Text(
                         "You're ready to dictate.",
@@ -2004,7 +2056,7 @@ class MainActivity : ComponentActivity() {
                     Spacer(Modifier.height(4.dp))
                 }
                 Text(
-                    (if (imeDone) "✓ " else "○ ") + "Enable + switch input method",
+                    (if (imeDone && keyboardSelected) "✓ " else "○ ") + getString(R.string.ux_keyboard_check),
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Text(
@@ -2016,15 +2068,12 @@ class MainActivity : ComponentActivity() {
                     style = MaterialTheme.typography.bodyMedium,
                 )
             }
-            Section(stringResource(R.string.setup_status)) {
-                Text(statusState.value, style = MaterialTheme.typography.bodyMedium)
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    stringResource(R.string.setup_server_only),
-                    style = MaterialTheme.typography.bodySmall,
-                )
+            Section(getString(R.string.ux_speech_heading)) {
+                Text(if (serverDone) getString(R.string.ux_speech_ready) else getString(R.string.ux_speech_intro))
+                Spacer(Modifier.height(12.dp))
+                Button(onClick = onSpeech) { Text(if (serverDone) getString(R.string.ux_speech_manage) else getString(R.string.ux_speech_setup)) }
             }
-            Section("1 · Enable the input method") {
+            Section(getString(R.string.ux_keyboard_enable)) {
                 Text(
                     if (imeEnabled()) "MyWhisper is enabled as an input method."
                     else "MyWhisper is not enabled yet.",
@@ -2035,7 +2084,7 @@ class MainActivity : ComponentActivity() {
                     startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
                 }) { Text(stringResource(R.string.setup_open_ime)) }
             }
-            Section("2 · Switch to it") {
+            Section(getString(R.string.ux_keyboard_choose)) {
                 val seen = imeSeenActive()
                 Text(
                     if (seen.isNotEmpty()) getString(R.string.setup_active_now, seen)
@@ -2048,14 +2097,14 @@ class MainActivity : ComponentActivity() {
                         .showInputMethodPicker()
                 }) { Text(stringResource(R.string.setup_pick)) }
             }
-            Section("3 · Microphone") {
+            Section(getString(R.string.ux_microphone_access)) {
                 Text(
                     if (micGranted.value) "Microphone granted."
                     else "Microphone is required for dictation.",
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Spacer(Modifier.height(8.dp))
-                Button(onClick = { micPerm.launch(Manifest.permission.RECORD_AUDIO) }) {
+                Button(enabled = !micGranted.value, onClick = { micPerm.launch(Manifest.permission.RECORD_AUDIO) }) {
                     Text(stringResource(R.string.setup_mic_grant))
                 }
             }
@@ -2095,7 +2144,12 @@ class MainActivity : ComponentActivity() {
                     },
                 )
             }
-            Section("4 · Notifications") {
+            }
+            if (!preferencesOnly) TextButton(onClick = { showPreferences = !showPreferences }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                Text(if (showPreferences) getString(R.string.ux_hide_preferences) else getString(R.string.ux_show_preferences))
+            }
+            if (preferencesOnly || showPreferences) {
+            Section("Notifications") {
                 Text(
                     "Shows the sync status while sync runs.",
                     style = MaterialTheme.typography.bodyMedium,
@@ -2186,6 +2240,7 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                     Switch(
+                        modifier = Modifier.semantics { contentDescription = getString(R.string.setup_pill) },
                         checked = prefs.optBoolean("show_pill", true),
                         onCheckedChange = {
                             prefs.put("show_pill", it)
@@ -2268,7 +2323,7 @@ class MainActivity : ComponentActivity() {
                 Spacer(Modifier.height(8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(stringResource(R.string.setup_float), modifier = Modifier.weight(1f))
-                    Switch(checked = on, onCheckedChange = {
+                    Switch(modifier = Modifier.semantics { contentDescription = getString(R.string.setup_float) }, checked = on, onCheckedChange = {
                         android.util.Log.i("MwFloat", "toggle -> $it")
                         prefs.put("float_enabled", it)
                         s.put("preferences", prefs)
@@ -2289,7 +2344,7 @@ class MainActivity : ComponentActivity() {
                         stringResource(R.string.setup_float_grab),
                         modifier = Modifier.weight(1f),
                     )
-                    Switch(checked = grab, onCheckedChange = {
+                    Switch(modifier = Modifier.semantics { contentDescription = getString(R.string.setup_float_grab) }, checked = grab, onCheckedChange = {
                         grab = it
                         setupPrefs.edit { putBoolean("float_grab", it) }
                         // Rebuild the bubble chrome for the new mode.
@@ -2375,6 +2430,7 @@ class MainActivity : ComponentActivity() {
                         Text(diag, style = MaterialTheme.typography.bodySmall)
                     }
                 }
+            }
             }
         }
     }
@@ -2768,6 +2824,7 @@ class MainActivity : ComponentActivity() {
                                 Text(entrySummary(e), style = MaterialTheme.typography.bodySmall)
                             }
                             Switch(
+                                modifier = Modifier.semantics { contentDescription = e.optString("name", LOCAL_ENTRY_NAME) },
                                 checked = e.optBoolean("enabled", true),
                                 onCheckedChange = {
                                     e.put("enabled", it); save(); version++
@@ -3220,7 +3277,7 @@ class MainActivity : ComponentActivity() {
                 val vad = stt.optBoolean("vad_enabled", false)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(stringResource(R.string.stt_vad), modifier = Modifier.weight(1f))
-                    Switch(checked = vad, onCheckedChange = {
+                    Switch(modifier = Modifier.semantics { contentDescription = getString(R.string.stt_vad) }, checked = vad, onCheckedChange = {
                         stt.put("vad_enabled", it); save(); version++
                     })
                 }
@@ -3585,7 +3642,7 @@ class MainActivity : ComponentActivity() {
                     if (kind == "SelfHosted") {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(stringResource(R.string.stt_streaming), modifier = Modifier.weight(1f))
-                            Switch(checked = streaming, onCheckedChange = { streaming = it })
+                            Switch(modifier = Modifier.semantics { contentDescription = getString(R.string.stt_streaming) }, checked = streaming, onCheckedChange = { streaming = it })
                         }
                         Text(
                             stringResource(R.string.stt_streaming_note),
@@ -3594,7 +3651,7 @@ class MainActivity : ComponentActivity() {
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(stringResource(R.string.stt_enabled), modifier = Modifier.weight(1f))
-                        Switch(checked = enabled, onCheckedChange = { enabled = it })
+                        Switch(modifier = Modifier.semantics { contentDescription = getString(R.string.stt_enabled) }, checked = enabled, onCheckedChange = { enabled = it })
                     }
                     if (!isLocalKind) {
                         // Draft probe: same ONE row pattern (button +
@@ -3898,7 +3955,7 @@ class MainActivity : ComponentActivity() {
                 val on = lm.optBoolean("cleanup_enabled", true)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(stringResource(R.string.cleanup_enable), modifier = Modifier.weight(1f))
-                    Switch(checked = on, onCheckedChange = {
+                    Switch(modifier = Modifier.semantics { contentDescription = getString(R.string.cleanup_enable) }, checked = on, onCheckedChange = {
                         lm.put("cleanup_enabled", it); save(); version++
                     })
                 }
@@ -4149,6 +4206,7 @@ class MainActivity : ComponentActivity() {
                                 )
                             }
                             Switch(
+                                modifier = Modifier.semantics { contentDescription = e.optString("name", LOCAL_ENTRY_NAME) },
                                 checked = e.optBoolean("enabled", true),
                                 onCheckedChange = {
                                     e.put("enabled", it); save(); version++
@@ -4875,7 +4933,7 @@ class MainActivity : ComponentActivity() {
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(stringResource(R.string.stt_enabled), modifier = Modifier.weight(1f))
-                        Switch(checked = enabled, onCheckedChange = { enabled = it })
+                        Switch(modifier = Modifier.semantics { contentDescription = getString(R.string.stt_enabled) }, checked = enabled, onCheckedChange = { enabled = it })
                     }
                     if (!isLocalKind) {
                         // Draft probe: same ONE row pattern (button +
@@ -4936,7 +4994,11 @@ class MainActivity : ComponentActivity() {
         }
         // Words / Snippets segments (desktop Dictionary tabs): one list
         // visible at a time so huge dictionaries stay usable.
-        var dictTab by remember { mutableIntStateOf(0) }
+        var dictTab by rememberSaveable { mutableIntStateOf(0) }
+        var next by rememberSaveable { mutableStateOf("") }
+        var wordQuery by rememberSaveable { mutableStateOf("") }
+        var snippetQuery by rememberSaveable { mutableStateOf("") }
+        var dup by rememberSaveable { mutableStateOf(false) }
         Column(modifier = Modifier.fillMaxSize()) {
             TabRow(selectedTabIndex = dictTab) {
                 Tab(
@@ -4968,9 +5030,6 @@ class MainActivity : ComponentActivity() {
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Spacer(Modifier.height(8.dp))
-                var next by remember { mutableStateOf("") }
-                var dup by remember { mutableStateOf(false) }
-                var query by remember { mutableStateOf("") }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     OutlinedTextField(
                         value = next, onValueChange = { next = it; dup = false },
@@ -5005,14 +5064,14 @@ class MainActivity : ComponentActivity() {
                 }
                 Spacer(Modifier.height(4.dp))
                 OutlinedTextField(
-                    value = query, onValueChange = { query = it },
+                    value = wordQuery, onValueChange = { wordQuery = it },
                     label = { Text(stringResource(R.string.dict_search_words)) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                 )
                 Spacer(Modifier.height(4.dp))
                 val shown = words
-                    .filter { query.isBlank() || it.contains(query, ignoreCase = true) }
+                    .filter { wordQuery.isBlank() || it.contains(wordQuery, ignoreCase = true) }
                 if (words.isEmpty()) {
                     Text(
                         stringResource(R.string.dict_no_words),
@@ -5055,9 +5114,8 @@ class MainActivity : ComponentActivity() {
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Spacer(Modifier.height(8.dp))
-                var query by remember { mutableStateOf("") }
                 OutlinedTextField(
-                    value = query, onValueChange = { query = it },
+                    value = snippetQuery, onValueChange = { snippetQuery = it },
                     label = { Text(stringResource(R.string.dict_search_snippets)) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
@@ -5065,9 +5123,9 @@ class MainActivity : ComponentActivity() {
                 Spacer(Modifier.height(4.dp))
                 val shown = snippets
                     .filter { (trig, repl) ->
-                        query.isBlank() ||
-                            trig.contains(query, ignoreCase = true) ||
-                            repl.contains(query, ignoreCase = true)
+                        snippetQuery.isBlank() ||
+                            trig.contains(snippetQuery, ignoreCase = true) ||
+                            repl.contains(snippetQuery, ignoreCase = true)
                     }
                 if (snippets.isEmpty()) {
                     Text(stringResource(R.string.dict_no_snippets), style = MaterialTheme.typography.bodySmall)
@@ -5627,6 +5685,7 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                         Switch(
+                            modifier = Modifier.semantics { contentDescription = getString(R.string.hist_keep) },
                             checked = priv.optBoolean("history_enabled", true),
                             onCheckedChange = {
                                 priv.put("history_enabled", it); save(); version++
@@ -5642,6 +5701,7 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                         Switch(
+                            modifier = Modifier.semantics { contentDescription = getString(R.string.hist_cancelled) },
                             checked = priv.optBoolean("save_discarded_transcriptions", false),
                             onCheckedChange = {
                                 priv.put("save_discarded_transcriptions", it); save(); version++
@@ -5968,7 +6028,7 @@ getString(R.string.sync_running, shown)
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
-                    Switch(checked = adv, onCheckedChange = {
+                    Switch(modifier = Modifier.semantics { contentDescription = getString(R.string.sync_advertise) }, checked = adv, onCheckedChange = {
                         sync.put("advertise", it); save(); version++
                         restartSyncIfRunning(running)
                     })
@@ -5976,7 +6036,7 @@ getString(R.string.sync_running, shown)
                 val enabled = sync.optBoolean("enabled", true)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(stringResource(R.string.sync_enabled), modifier = Modifier.weight(1f))
-                    Switch(checked = enabled, onCheckedChange = {
+                    Switch(modifier = Modifier.semantics { contentDescription = getString(R.string.sync_enabled) }, checked = enabled, onCheckedChange = {
                         sync.put("enabled", it); save(); version++
                         if (!it && running) {
                             SyncService.stop(this@MainActivity)
@@ -5997,6 +6057,7 @@ getString(R.string.sync_running, shown)
                         )
                     }
                     Switch(
+                        modifier = Modifier.semantics { contentDescription = getString(R.string.sync_boot) },
                         checked = sync.optBoolean("start_on_boot", true),
                         onCheckedChange = {
                             sync.put("start_on_boot", it); save(); version++

@@ -391,4 +391,25 @@
     <string name="download_cancel">Cancel download</string>
     <string name="download_complete_title">Download complete</string>
     <string name="download_failed_title">Download failed</string>
+    <string name="ux_nav_home">Home</string>
+    <string name="ux_nav_voice">Voice</string>
+    <string name="ux_nav_more">More</string>
+    <string name="ux_home_title">Make yourself heard</string>
+    <string name="ux_preferences">Preferences</string>
+    <string name="ux_back_more">Back to More</string>
+    <string name="ux_more_intro">Manage your preferences, words and connected devices.</string>
+    <string name="ux_devices_sync">Devices &amp; sync</string>
+    <string name="ux_ready">Ready to dictate</string>
+    <string name="ux_setup_progress">Get started · %1$d of 3 ready</string>
+    <string name="ux_keyboard_check">Enable and select MyWhisper keyboard</string>
+    <string name="ux_speech_heading">Speech recognition</string>
+    <string name="ux_speech_ready">Your speech provider is configured.</string>
+    <string name="ux_speech_intro">Choose where your voice becomes text: on your phone or with a server.</string>
+    <string name="ux_speech_manage">Manage speech recognition</string>
+    <string name="ux_speech_setup">Set up speech recognition</string>
+    <string name="ux_keyboard_enable">Enable MyWhisper keyboard</string>
+    <string name="ux_keyboard_choose">Choose your keyboard</string>
+    <string name="ux_microphone_access">Microphone access</string>
+    <string name="ux_hide_preferences">Hide preferences</string>
+    <string name="ux_show_preferences">Preferences · notifications, microphone &amp; appearance</string>
 </resources>
