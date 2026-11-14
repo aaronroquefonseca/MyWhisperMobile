@@ -160,6 +160,13 @@ class Dictation(
     }
 
     /** Switch the live capture to hands-free mode without finishing or restarting it. */
+    /** Remaining ambiguity window, measured from the same press as Smart release. */
+    fun holdControlsDelayMs(): Long? {
+        if (state != State.RECORDING) return null
+        val selectedMode = try { mode() } catch (_: Exception) { "Smart" }
+        return holdControlsDelayMs(selectedMode, toggled, System.currentTimeMillis() - downAt, smartTapMs())
+    }
+
     fun lockRecording() {
         if (state != State.RECORDING || toggled) return
         toggled = true
@@ -419,3 +426,11 @@ class Dictation(
         }
     }
 }
+
+/** Null means this recording is toggle-only; zero means hold controls are ready. */
+internal fun holdControlsDelayMs(mode: String, toggled: Boolean, heldMs: Long, ceilingMs: Long): Long? =
+    when {
+        toggled || mode == "Tap" -> null
+        mode == "Push" -> 0L
+        else -> (ceilingMs - heldMs).coerceAtLeast(0L)
+    }

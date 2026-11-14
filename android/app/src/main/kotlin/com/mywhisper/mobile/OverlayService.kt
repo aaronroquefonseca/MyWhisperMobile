@@ -106,12 +106,27 @@ class OverlayService : Service(), Dictation.Listener {
     private var pressStart: Runnable? = null
     /** Recording already opened by this touch (hold or deferred tap). */
     private var pressStarted = false
+    private var holdControlsReady = false
+    private var lastHoldY = 0f
+    private var holdOriginY = 0f
+    private val revealHoldControls = Runnable {
+        if (pressStarted && dictation.current == Dictation.State.RECORDING && !toggleRecording) {
+            holdControlsReady = true
+            holdOriginY = lastHoldY
+            refreshChrome(dictation.current)
+            showLockTarget()
+            stopBtn?.apply { alpha = 0f; animate().alpha(1f).setDuration(85L).start() }
+            lockHolder?.apply { animate().cancel(); alpha = 0f; animate().alpha(1f).setDuration(85L).start() }
+            cancelGuide?.apply { alpha = if (lockHolder != null) 0f else 1f }
+        }
+    }
     /** This touch became a free drag (grip hidden). */
     private var draggingBubble = false
     private var toggleRecording = false
     private var lockTarget: ImageButton? = null
     private var lockTravelDistance = 0f
     private var lockArmed = false
+    private var toggleCollapsing = false
     private var toggleReturnOffset = 0f
     private var toggleReturnAnimator: android.animation.ValueAnimator? = null
     private var lockHolder: FrameLayout? = null
@@ -384,7 +399,7 @@ class OverlayService : Service(), Dictation.Listener {
         val target = snoozeTarget
         if (target == null || !snoozeReady) {
             val lp = params ?: return
-            val bounds = safeBounds(lp.width, lp.height)
+            val bounds = safeBubbleBounds(lp.width, lp.height)
             val free = FloatState.clampBubble(baseX + (x - downRawX).toInt(), baseY + (y - downRawY).toInt(),
                 bounds.minX, bounds.minY, bounds.maxX, bounds.maxY)
             dragTargetX = free.first.toFloat()
@@ -412,7 +427,7 @@ class OverlayService : Service(), Dictation.Listener {
             dragTargetX = capturedX
             dragTargetY = capturedY
         } else {
-            val bounds = safeBounds(lp.width, lp.height)
+            val bounds = safeBubbleBounds(lp.width, lp.height)
             val free = FloatState.clampBubble(baseX + (x - downRawX).toInt(), baseY + (y - downRawY).toInt(),
                 bounds.minX, bounds.minY, bounds.maxX, bounds.maxY)
             dragTargetX = free.first.toFloat()
@@ -896,7 +911,7 @@ class OverlayService : Service(), Dictation.Listener {
             PixelFormat.TRANSLUCENT,
         ).also {
             it.gravity = Gravity.TOP or Gravity.START
-            val b = safeBounds(rootW, rootH)
+            val b = safeBubbleBounds(rootW, rootH)
             val (cx, cy) = FloatState.clampBubble(
                 prefs.getInt(KEY_X, 60), prefs.getInt(KEY_Y, 400),
                 b.minX, b.minY, b.maxX, b.maxY,
@@ -1062,10 +1077,29 @@ class OverlayService : Service(), Dictation.Listener {
         }
     }
 
+    /** Reserve room before capture so Android never refits the hold window under the finger. */
+    private fun safeBubbleBounds(width: Int, height: Int): SafeBounds =
+        safeBounds(width, maxOf(height, dp(FloatState.recordingWindowHeightDp(grabEnabled()))))
+
+    private fun completeBubbleDrag(x: Float, y: Float): Boolean {
+        trackSnooze(x, y)
+        val snooze = snoozeArmed
+        if (!snooze) params?.let { lp ->
+            val bounds = safeBubbleBounds(lp.width, lp.height)
+            val final = FloatState.clampBubble(dragTargetX.toInt(), dragTargetY.toInt(),
+                bounds.minX, bounds.minY, bounds.maxX, bounds.maxY)
+            lp.x = final.first
+            lp.y = final.second
+            try { wm?.updateViewLayout(holder, lp) } catch (_: Exception) { }
+        }
+        hideSnoozeTarget()
+        return snooze
+    }
+
     /** Dock to the nearest horizontal edge, clamp, persist. */
     private fun snapAndPersist() {
         params?.let { lp ->
-            val b = safeBounds(lp.width, lp.height)
+            val b = safeBubbleBounds(lp.width, lp.height)
             val (cx, cy) = FloatState.clampBubble(lp.x, lp.y, b.minX, b.minY, b.maxX, b.maxY)
             lp.x = FloatState.snapToEdge(cx, b.minX, b.maxX)
             lp.y = cy
@@ -1112,6 +1146,8 @@ class OverlayService : Service(), Dictation.Listener {
             MotionEvent.ACTION_DOWN -> {
                 downRawX = ev.rawX
                 downRawY = ev.rawY
+                lastHoldY = ev.rawY
+                holdOriginY = ev.rawY
                 params?.let { baseX = it.x; baseY = it.y }
                 moved = false
                 pressStarted = false
@@ -1137,8 +1173,10 @@ class OverlayService : Service(), Dictation.Listener {
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
+                lastHoldY = ev.rawY
                 if (pressStarted && dictation.current == Dictation.State.RECORDING && !toggleRecording) {
-                    holdTravel(ev.rawY - downRawY)
+                    if (!holdControlsReady) return true
+                    holdTravel(ev.rawY - holdOriginY)
                     return true
                 }
                 if (grab || pressStarted) return true
@@ -1166,8 +1204,7 @@ class OverlayService : Service(), Dictation.Listener {
                 draggingBubble = false
                 moved = false
                 if (dragged) {
-                    val snooze = snoozeArmed
-                    hideSnoozeTarget()
+                    val snooze = completeBubbleDrag(ev.rawX, ev.rawY)
                     if (snooze) { tick(25L, 100); snoozeBubble(); return true }
                     tick(18L, 100)
                     snapAndPersist()
@@ -1189,8 +1226,9 @@ class OverlayService : Service(), Dictation.Listener {
                     return true
                 }
                 pressStarted = false
-                val cancelHold = cancelArmed
-                val lockHold = lockArmed
+                mainHandler.removeCallbacks(revealHoldControls)
+                val cancelHold = holdControlsReady && cancelArmed
+                val lockHold = holdControlsReady && lockArmed
                 if (lockHold) toggleReturnOffset = micBtn?.translationY ?: 0f
                 lockArmed = false
                 resetHoldTravel()
@@ -1199,7 +1237,7 @@ class OverlayService : Service(), Dictation.Listener {
                     dictation.lockRecording()
                     return true
                 }
-                if (cancelHold || droppedOnStop(ev.rawX, ev.rawY)) {
+                if (cancelHold || (holdControlsReady && droppedOnStop(ev.rawX, ev.rawY))) {
                     // Drag-to-X: discard; the session token invalidates
                     // any in-flight finish so no WORKING follows.
                     tick(40L)
@@ -1212,6 +1250,8 @@ class OverlayService : Service(), Dictation.Listener {
             }
             MotionEvent.ACTION_CANCEL -> {
                 cancelPendingPress()
+                mainHandler.removeCallbacks(revealHoldControls)
+                holdControlsReady = false
                 resetHoldTravel()
                 hideSnoozeTarget()
                 draggingBubble = false
@@ -1299,8 +1339,7 @@ class OverlayService : Service(), Dictation.Listener {
             }
             MotionEvent.ACTION_UP -> {
                 if (moved) {
-                    val snooze = snoozeArmed
-                    hideSnoozeTarget()
+                    val snooze = completeBubbleDrag(ev.rawX, ev.rawY)
                     if (snooze) { tick(25L, 100); snoozeBubble(); return true }
                     tick(18L, 100)
                     snapAndPersist()
@@ -1335,6 +1374,10 @@ class OverlayService : Service(), Dictation.Listener {
     }
 
     private fun removeBubble(animate: Boolean = false) {
+        vizMorphAnimator?.cancel()
+        vizMorphAnimator = null
+        mainHandler.removeCallbacks(revealHoldControls)
+        holdControlsReady = false
         hideLockTarget()
         micBtn?.animate()?.withEndAction(null)?.cancel()
         micBtn?.translationY = 0f
@@ -1433,10 +1476,14 @@ class OverlayService : Service(), Dictation.Listener {
                 }
             }
         }
-        cancelGuide?.visibility = if (state == Dictation.State.RECORDING && !toggleRecording) View.VISIBLE else View.GONE
+        cancelGuide?.visibility = if (state == Dictation.State.RECORDING && !toggleRecording) {
+            if (holdControlsReady) View.VISIBLE else View.INVISIBLE
+        } else View.GONE
         if (stateChanged && state != Dictation.State.RECORDING) resetHoldTravel()
         stopBtn?.visibility =
-            if (FloatState.isStopVisible(state) && !toggleRecording) View.VISIBLE else View.GONE
+            if (FloatState.isStopVisible(state) && !toggleRecording) {
+                if (holdControlsReady) View.VISIBLE else View.INVISIBLE
+            } else View.GONE
         params?.let { lp ->
             val height = dp(50 + 8 + (if (builtGrab) 14 else 0) +
                 (if ((state == Dictation.State.RECORDING && !toggleRecording) || holdReturning) 96 else 0))
@@ -1447,140 +1494,168 @@ class OverlayService : Service(), Dictation.Listener {
         }
     }
 
-    /** Recording waveform anchored beside the bubble; toggle adds explicit controls. */
+    private var vizPrimary: ImageButton? = null
+    private var vizCancel: ImageButton? = null
+    private var vizDockedLeft = false
+    private var vizVisibleWidth = 0f
+    private var vizMorphAnimator: android.animation.ValueAnimator? = null
+    private var vizBuiltToggle = false
+
+    /** One persistent window and one width animation for every recording state. */
+    private fun morphRecordingBar(width: Float, finished: (() -> Unit)? = null) {
+        val pill = vizHolder ?: return
+        vizMorphAnimator?.cancel()
+        vizMorphAnimator = android.animation.ValueAnimator.ofFloat(vizVisibleWidth, width).apply {
+            duration = 120L
+            interpolator = android.view.animation.DecelerateInterpolator()
+            addUpdateListener {
+                vizVisibleWidth = it.animatedValue as Float
+                val full = dp(togglePillWidthDp())
+                val visible = vizVisibleWidth.toInt()
+                pill.clipBounds = android.graphics.Rect(if (vizDockedLeft) 0 else full - visible,
+                    0, if (vizDockedLeft) visible else full, dp(52))
+                pill.invalidate()
+            }
+            if (finished != null) addListener(object : android.animation.AnimatorListenerAdapter() {
+                private var cancelled = false
+                override fun onAnimationCancel(animation: android.animation.Animator) { cancelled = true }
+                override fun onAnimationEnd(animation: android.animation.Animator) { if (!cancelled) finished() }
+            })
+            start()
+        }
+    }
+
+    private fun updateRecordingBarMode() {
+        val pill = vizHolder ?: return
+        val primary = vizPrimary ?: return
+        vizBuiltToggle = toggleRecording
+        primary.setImageResource(if (toggleRecording) R.drawable.ic_float_finish else R.drawable.ic_stat_sync)
+        primary.contentDescription = getString(if (toggleRecording) R.string.float_finish else R.string.ime_mic)
+        val padding = dp(if (toggleRecording) 14 else 10)
+        primary.setPadding(padding, padding, padding, padding)
+        primary.isClickable = toggleRecording
+        vizCancel?.apply {
+            isClickable = toggleRecording
+            importantForAccessibility = if (toggleRecording) View.IMPORTANT_FOR_ACCESSIBILITY_YES else View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            animate().alpha(if (toggleRecording) 1f else 0f).setDuration(100L).start()
+        }
+        vizParams?.let { lp ->
+            lp.flags = if (toggleRecording) lp.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+                else lp.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+            try { wm?.updateViewLayout(pill, lp) } catch (_: Exception) { }
+        }
+        morphRecordingBar(dp(if (toggleRecording) togglePillWidthDp() else recordingCommonWidthDp()).toFloat())
+        if (toggleRecording && toggleReturnOffset != 0f) {
+            toggleReturnOffset = 0f
+            val lp = vizParams ?: return
+            val destination = (params?.y ?: lp.y) + (if (builtGrab) dp(14) else 0) + dp(4)
+            toggleReturnAnimator?.cancel()
+            toggleReturnAnimator = android.animation.ValueAnimator.ofInt(lp.y, destination).apply {
+                duration = 120L
+                interpolator = android.view.animation.DecelerateInterpolator()
+                addUpdateListener {
+                    if (vizHolder === pill) {
+                        lp.y = it.animatedValue as Int
+                        try { wm?.updateViewLayout(pill, lp) } catch (_: Exception) { }
+                    }
+                }
+                start()
+            }
+        }
+    }
+
     @SuppressLint("ClickableViewAccessibility")
     private fun ensureVizPill() {
         if (vizHolder != null) {
-            vizHolder?.visibility = View.VISIBLE
+            if (vizBuiltToggle != toggleRecording) updateRecordingBarMode()
             return
         }
-        val margin = dp(VIZ_MARGIN_DP)
-        val lp = WindowManager.LayoutParams(
-            dp(if (toggleRecording) 224 else 172), dp(52),
+        val bubble = params ?: return
+        val bounds = safeBubbleBounds(bubble.width, bubble.height)
+        vizDockedLeft = bubble.x - bounds.minX <= bounds.maxX - bubble.x
+        val width = dp(togglePillWidthDp())
+        val lp = WindowManager.LayoutParams(width, dp(52),
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                (if (toggleRecording) 0 else WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE),
-            PixelFormat.TRANSLUCENT,
-        ).also {
-            it.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-            // Screen-center anchor: x = 0 always, independent of the
-            // bubble dock edge (see vizWindowXForDock). Never inherit an
-            // edge-side offset here.
-            it.x = 0
-            it.y = margin
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE, PixelFormat.TRANSLUCENT).apply {
+            gravity = Gravity.TOP or Gravity.LEFT
+            x = if (vizDockedLeft) bubble.x else bubble.x + bubble.width - width
+            y = bubble.y + (if (builtGrab) dp(14) else 0) + dp(4)
         }
-        val bubble = params
-        val bounds = bubble?.let { safeBounds(it.width, it.height) }
-        val dockedLeft = bubble != null && bounds != null &&
-            bubble.x - bounds.minX <= bounds.maxX - bubble.x
-        if (bubble != null) {
-            lp.gravity = Gravity.TOP or Gravity.LEFT
-            // Expand inward; finish occupies the same screen position as start.
-            val b = safeBounds(lp.width, lp.height)
-            lp.x = (if (dockedLeft) bubble.x else bubble.x + bubble.width - lp.width)
-                .coerceIn(b.minX, maxOf(b.minX, b.maxX))
-            lp.y = (bubble.y + (if (builtGrab) dp(14) else 0) + dp(4))
-                .coerceIn(b.minY, maxOf(b.minY, b.maxY))
-        }
-        vizParams = lp
-        val pill = FrameLayout(this).apply {
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = dp(18).toFloat()
-                setColor(0xCC1D1B20.toInt())
+        val pill = object : FrameLayout(this) {
+            private val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = 0xCC1D1B20.toInt() }
+            init { setWillNotDraw(false) }
+            override fun onDraw(canvas: android.graphics.Canvas) {
+                val left = if (vizDockedLeft) 0f else this.width - vizVisibleWidth
+                val right = if (vizDockedLeft) vizVisibleWidth else this.width.toFloat()
+                canvas.drawRoundRect(left, 0f, right, height.toFloat(), dp(18).toFloat(), dp(18).toFloat(), paint)
+                super.onDraw(canvas)
             }
         }
         val bars = BarsView(this).apply {
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            // Exact strip width, centered: BarsView draws its bar strip
-            // left-aligned from x = 0, so a MATCH_PARENT view leaves the
-            // trailing (stripW..viewW) dead space on the right and the
-            // pill reads off-center with more margin right. Sizing the
-            // view to the strip content and centering it in the pill
-            // gives equal margins on both edges.
-            layoutParams = FrameLayout.LayoutParams(
-                dp(vizBarsContentWidthDp()),
-                dp(VIZ_BARS_H_DP),
-                Gravity.CENTER,
-            )
+            layoutParams = FrameLayout.LayoutParams(dp(vizBarsContentWidthDp()), dp(VIZ_BARS_H_DP),
+                Gravity.LEFT or Gravity.CENTER_VERTICAL).apply { leftMargin = dp(toggleWaveformLeftDp(vizDockedLeft)) }
         }
-        if (!toggleRecording) {
-            bars.layoutParams = FrameLayout.LayoutParams(dp(vizBarsContentWidthDp()), dp(VIZ_BARS_H_DP),
-                (if (dockedLeft) Gravity.RIGHT else Gravity.LEFT) or Gravity.CENTER_VERTICAL).apply {
-                    if (dockedLeft) rightMargin = dp(28) else leftMargin = dp(28)
-                }
-            val heldSymbol = ImageButton(this).apply {
-                setImageResource(R.drawable.ic_stat_sync)
-                imageTintList = android.content.res.ColorStateList.valueOf(Color.BLACK)
-                scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
-                setPadding(dp(10), dp(10), dp(10), dp(10))
-                backgroundTintList = null
-                background = GradientDrawable().apply { cornerRadius = dp(16).toFloat(); setColor(Color.WHITE) }
-                layoutParams = FrameLayout.LayoutParams(dp(52), dp(52),
-                    (if (dockedLeft) Gravity.LEFT else Gravity.RIGHT) or Gravity.CENTER_VERTICAL)
-                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-                isClickable = false
-            }
-            pill.addView(heldSymbol)
-        }
-        vizBars = bars
         pill.addView(bars)
-        if (toggleRecording) {
-            fun control(icon: Int, label: String, gravity: Int, primary: Boolean = false, action: () -> Unit) {
-                val button = ImageButton(this).apply {
-                    setImageResource(icon)
-                    contentDescription = label
-                    imageTintList = android.content.res.ColorStateList.valueOf(if (primary) Color.BLACK else Color.WHITE)
-                    background = if (primary) GradientDrawable().apply {
-                        cornerRadius = dp(16).toFloat()
-                        setColor(Color.WHITE)
-                    } else null
-                    setPadding(dp(14), dp(14), dp(14), dp(14))
-                    layoutParams = FrameLayout.LayoutParams(dp(52), dp(52), gravity)
-                    setOnClickListener { tick(); action() }
-                }
-                pill.addView(button)
-            }
-            pill.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
-            control(R.drawable.ic_float_cancel, getString(R.string.float_stop),
-                (if (dockedLeft) Gravity.RIGHT else Gravity.LEFT) or Gravity.CENTER_VERTICAL) { dictation.cancel() }
-            control(R.drawable.ic_float_finish, getString(R.string.float_finish),
-                (if (dockedLeft) Gravity.LEFT else Gravity.RIGHT) or Gravity.CENTER_VERTICAL, primary = true) {
-                dictation.pressDown()
-                dictation.pressUp()
-            }
+        fun control(icon: Int, primary: Boolean): ImageButton = ImageButton(this).apply {
+            setImageResource(icon)
+            scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+            imageTintList = android.content.res.ColorStateList.valueOf(if (primary) Color.BLACK else Color.WHITE)
+            backgroundTintList = null
+            background = if (primary) GradientDrawable().apply { cornerRadius = dp(16).toFloat(); setColor(Color.WHITE) } else null
+            setPadding(dp(14), dp(14), dp(14), dp(14))
+            val left = if (primary) vizDockedLeft else !vizDockedLeft
+            layoutParams = FrameLayout.LayoutParams(dp(52), dp(52), (if (left) Gravity.LEFT else Gravity.RIGHT) or Gravity.CENTER_VERTICAL)
         }
-        val returnOffset = if (toggleRecording) toggleReturnOffset else 0f
-        toggleReturnOffset = 0f
-        val destinationY = lp.y
-        if (returnOffset != 0f) lp.y = destinationY + returnOffset.toInt()
-        pill.alpha = if (returnOffset != 0f) 1f else 0f
-        pill.scaleX = 0.96f
-        pill.scaleY = 0.96f
+        val cancel = control(R.drawable.ic_float_cancel, false).apply {
+            alpha = 0f
+            contentDescription = getString(R.string.float_stop)
+            setOnClickListener { tick(); dictation.cancel() }
+        }
+        val primary = control(R.drawable.ic_stat_sync, true).apply {
+            setOnClickListener { if (toggleRecording) { tick(); dictation.pressDown(); dictation.pressUp() } }
+        }
+        pill.addView(cancel)
+        pill.addView(primary)
         vizHolder = pill
-        try {
-            wm?.addView(pill, lp)
-            if (returnOffset != 0f) {
-                pill.scaleX = 1f
-                pill.scaleY = 1f
-                toggleReturnAnimator?.cancel()
-                toggleReturnAnimator = android.animation.ValueAnimator.ofInt(lp.y, destinationY).apply {
-                    duration = 120L
-                    interpolator = android.view.animation.DecelerateInterpolator()
-                    addUpdateListener { animation ->
-                        if (vizHolder === pill) {
-                            lp.y = animation.animatedValue as Int
-                            try { wm?.updateViewLayout(pill, lp) } catch (_: Exception) { cancel() }
-                        }
-                    }
-                    start()
+        vizParams = lp
+        vizBars = bars
+        vizPrimary = primary
+        vizCancel = cancel
+        vizVisibleWidth = dp(52).toFloat()
+        pill.clipBounds = android.graphics.Rect(if (vizDockedLeft) 0 else width - dp(52), 0,
+            if (vizDockedLeft) dp(52) else width, dp(52))
+        try { wm?.addView(pill, lp); updateRecordingBarMode() }
+        catch (_: Exception) { vizHolder = null; vizBars = null }
+    }
+
+    private fun collapseToggleToBubble() {
+        val outgoing = vizHolder ?: return
+        val normal = holder ?: return
+        toggleReturnAnimator?.cancel()
+        toggleCollapsing = true
+        vizParams?.let { lp ->
+            lp.flags = (lp.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE) and WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON.inv()
+            try { wm?.updateViewLayout(outgoing, lp) } catch (_: Exception) { }
+        }
+        vizCancel?.animate()?.alpha(0f)?.setDuration(80L)?.start()
+        vizBars?.animate()?.alpha(0f)?.setDuration(100L)?.start()
+        morphRecordingBar(dp(52).toFloat()) {
+            try { wm?.removeView(outgoing) } catch (_: Exception) { }
+            if (vizHolder === outgoing) { vizHolder = null; vizBars = null; vizPrimary = null; vizCancel = null }
+            toggleCollapsing = false
+            if (holder === normal && !toggleRecording) {
+                normal.animate().cancel()
+                normal.alpha = 1f
+                normal.scaleX = 1f
+                normal.scaleY = 1f
+                normal.visibility = View.VISIBLE
+                params?.let { lp ->
+                    lp.flags = lp.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+                    try { wm?.updateViewLayout(normal, lp) } catch (_: Exception) { }
                 }
             }
-            pill.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(85L).start()
-        } catch (_: Exception) {
-            vizHolder = null
-            vizBars = null
         }
     }
 
@@ -1595,6 +1670,9 @@ class OverlayService : Service(), Dictation.Listener {
     }
 
     private fun hideVizPill() {
+        vizMorphAnimator?.cancel()
+        vizMorphAnimator = null
+        toggleCollapsing = false
         toggleReturnAnimator?.cancel()
         toggleReturnAnimator = null
         try {
@@ -1605,7 +1683,8 @@ class OverlayService : Service(), Dictation.Listener {
             vizHolder?.let { outgoing ->
                 outgoing.animate().cancel()
                 vizParams?.let { lp ->
-                    lp.flags = lp.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                    lp.flags = (lp.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE) and
+                        WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON.inv()
                     wm?.updateViewLayout(outgoing, lp)
                 }
                 outgoing.animate().alpha(0f).setDuration(65L).withEndAction {
@@ -1734,10 +1813,15 @@ class OverlayService : Service(), Dictation.Listener {
     override fun onState(s: Dictation.State, toggled: Boolean) {
         micBtn?.post {
             val nextToggle = s == Dictation.State.RECORDING && toggled
-            if (nextToggle != toggleRecording) hideVizPill()
+            val leavingRecording = vizHolder != null && s != Dictation.State.RECORDING
+            if (leavingRecording && !toggleCollapsing) collapseToggleToBubble()
             toggleRecording = nextToggle
+            mainHandler.removeCallbacks(revealHoldControls)
+            val holdDelay = if (s == Dictation.State.RECORDING && !nextToggle) dictation.holdControlsDelayMs() else null
+            holdControlsReady = holdDelay == 0L
+            if (holdDelay != null && holdDelay > 0L) mainHandler.postDelayed(revealHoldControls, holdDelay)
             holder?.let { root ->
-                if (toggleRecording) root.visibility = View.INVISIBLE
+                if (toggleRecording || toggleCollapsing) root.visibility = View.INVISIBLE
                 else if (root.visibility != View.VISIBLE) {
                     root.animate().cancel()
                     root.scaleX = 1f
@@ -1748,16 +1832,21 @@ class OverlayService : Service(), Dictation.Listener {
                 }
             }
             params?.let { lp ->
-                lp.flags = if (toggleRecording) lp.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                lp.flags = if (toggleRecording || toggleCollapsing) lp.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
                     else lp.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+                lp.flags = if (FloatState.keepsScreenOn(s)) lp.flags or WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+                    else lp.flags and WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON.inv()
                 try { wm?.updateViewLayout(holder, lp) } catch (_: Exception) { }
             }
             refreshChrome(s)
             if (s == Dictation.State.RECORDING && holder != null) {
-                if (!toggleRecording) showLockTarget()
+                if (!toggleRecording && holdDelay != null) {
+                    showLockTarget()
+                    lockHolder?.alpha = if (holdControlsReady) 1f else 0f
+                }
                 ensureVizPill()
-            } else hideVizPill()
-            if (s != Dictation.State.RECORDING || toggleRecording) hideLockTarget()
+            } else if (!toggleCollapsing) hideVizPill()
+            if (s != Dictation.State.RECORDING || toggleRecording || holdDelay == null) hideLockTarget()
         }
         refreshNotif(s)
     }
@@ -2007,3 +2096,15 @@ internal fun floatTeardownPlan(syncActive: Boolean): FloatTeardown =
         removeSharedRow = true,
         recomposeSync = syncActive,
     )
+
+/** Cancel has no visible box: trim its empty inner inset to balance optical gaps. */
+internal const val TOGGLE_CONTROL_DP = 52
+internal const val TOGGLE_WAVE_GAP_DP = 12
+internal const val TOGGLE_CANCEL_INNER_INSET_DP = 19
+internal fun togglePillWidthDp(): Int = TOGGLE_CONTROL_DP * 2 +
+    TOGGLE_WAVE_GAP_DP * 2 + vizBarsContentWidthDp() - TOGGLE_CANCEL_INNER_INSET_DP
+internal fun toggleWaveformLeftDp(dockedLeft: Boolean): Int = TOGGLE_CONTROL_DP +
+    TOGGLE_WAVE_GAP_DP - if (dockedLeft) 0 else TOGGLE_CANCEL_INNER_INSET_DP
+
+/** Common recording stage is waveform plus the primary symbol, before toggle's cancel extension. */
+internal fun recordingCommonWidthDp(): Int = TOGGLE_CONTROL_DP + TOGGLE_WAVE_GAP_DP * 2 + vizBarsContentWidthDp()

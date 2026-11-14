@@ -174,6 +174,12 @@ object FloatState {
         if (stored in PRESS_DELAY_OPTIONS_MS) stored else PRESS_DELAY_DEFAULT_MS
 
 
+    /** Idle positioning reserves the complete hold-control frame, including optional grip. */
+    fun recordingWindowHeightDp(grab: Boolean): Int = 50 + 8 + 96 + if (grab) 14 else 0
+
+    /** Screen wakefulness belongs to live capture, never idle/processing. */
+    fun keepsScreenOn(state: Dictation.State): Boolean = state == Dictation.State.RECORDING
+
     /** Recording shows a separate cancel target; processing cancels via the main button. */
     fun isStopVisible(state: Dictation.State): Boolean =
         state == Dictation.State.RECORDING

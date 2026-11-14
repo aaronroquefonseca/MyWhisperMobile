@@ -22,6 +22,56 @@ import java.util.concurrent.TimeUnit
  */
 class FloatBubbleTest {
     @Test
+    fun idlePosition_leavesRoomForHoldControlsAtBottomEdge() {
+        for (grab in listOf(false, true)) {
+            val fullHeight = FloatState.recordingWindowHeightDp(grab)
+            val bottom = 1000 - fullHeight
+            val clamped = FloatState.clampBubble(100, 999, 0, 0, 500, bottom)
+            assertEquals(1000, clamped.second + fullHeight)
+            assertTrue(clamped.second < 1000 - 58)
+        }
+    }
+
+    @Test
+    fun recordingStages_expandFromSymbolToWaveformThenCancel() {
+        assertEquals(139, recordingCommonWidthDp())
+        assertEquals(172, togglePillWidthDp())
+        assertEquals(33, togglePillWidthDp() - recordingCommonWidthDp())
+        assertTrue(recordingCommonWidthDp() > TOGGLE_CONTROL_DP)
+    }
+
+    @Test
+    fun screenStaysOnOnlyWhileListening() {
+        assertTrue(FloatState.keepsScreenOn(Dictation.State.RECORDING))
+        assertFalse(FloatState.keepsScreenOn(Dictation.State.WORKING))
+        assertFalse(FloatState.keepsScreenOn(Dictation.State.IDLE))
+    }
+
+    @Test
+    fun toggleWaveform_balancesCancelGlyphAgainstAcceptBox_onBothEdges() {
+        // Cancel path + stroke ends at roughly 33dp in its 52dp touch cell.
+        val rightDockWave = toggleWaveformLeftDp(false)
+        assertEquals(12, rightDockWave - 33)
+        assertEquals(12, togglePillWidthDp() - 52 - rightDockWave - vizBarsContentWidthDp())
+        val leftDockWave = toggleWaveformLeftDp(true)
+        assertEquals(12, leftDockWave - 52)
+        assertEquals(12, togglePillWidthDp() - 33 - leftDockWave - vizBarsContentWidthDp())
+        assertEquals(172, togglePillWidthDp())
+    }
+
+    @Test
+    fun smartHoldControls_shareTheReleaseCeiling() {
+        assertEquals(150L, holdControlsDelayMs("Smart", false, 0, 150))
+        assertEquals(1L, holdControlsDelayMs("Smart", false, 149, 150))
+        assertEquals(0L, holdControlsDelayMs("Smart", false, 150, 150))
+        assertEquals(0L, holdControlsDelayMs("Smart", false, 151, 150))
+        assertEquals(350L, holdControlsDelayMs("Smart", false, 50, 400))
+        assertEquals(null, holdControlsDelayMs("Smart", true, 50, 150))
+        assertEquals(null, holdControlsDelayMs("Tap", false, 1000, 150))
+        assertEquals(0L, holdControlsDelayMs("Push", false, 0, 150))
+    }
+
+    @Test
     fun disabledLock_upwardMotionNeverBecomesCancelTravel() {
         assertEquals(0f, FloatState.holdGestureDistance(-100f, false), 0f)
         assertEquals(0f, FloatState.holdGestureDistance(0f, false), 0f)
