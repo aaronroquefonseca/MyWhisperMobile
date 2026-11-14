@@ -80,7 +80,7 @@
     <string name="setup_float_delay">Retardo de pulsación</string>
     <string name="setup_float_delay_sub">Cuánto debe quedarse quieta la burbuja antes de grabar; un movimiento pequeño cuenta como arrastre.</string>
     <string name="setup_float_old_warn">En Android 12 y versiones anteriores, el botón flotante puede incluir el texto de ayuda en algunas apps. Ahí se recomienda el teclado MyWhisper.</string>
-    <string name="unified_notif_channel">Estado del servicio en segundo plano</string>
+    <string name="unified_notif_channel">Estado del dictado y la sincronización</string>
     <string name="float_notif_title">Burbuja MyWhisper</string>
     <string name="float_notif_text">Dictado flotante activo</string>
     <string name="float_notif_rec_text">Grabando… toca ✕ para cancelar</string>
@@ -501,11 +501,20 @@
     <string name="ux_notification_drawer">Panel de notificaciones</string>
     <string name="ux_notifications_hidden">Ocultas. El dictado y la sincronización siguen funcionando.</string>
     <string name="ux_float_controls_channel">Controles del botón flotante</string>
-    <string name="ux_background_status_help">Estado de disponibilidad, grabación y sincronización. Oculta esta categoría para reducir notificaciones; los servicios siguen funcionando.</string>
-    <string name="ux_float_controls_help">Mantén esta categoría activada para los recordatorios y la acción Reanudar.</string>
+    <string name="ux_background_status_help">Novedades de grabación y sincronización.</string>
+    <string name="ux_float_controls_help">Reanuda el botón flotante después de posponerlo.</string>
     <string name="ux_quiet_notifications_title">Opcional: menos notificaciones</string>
-    <string name="ux_quiet_notifications_help">Para reducir notificaciones, permite las notificaciones de la app, oculta Estado del servicio en segundo plano y mantén Controles del botón flotante para Posponer/Reanudar. Las notificaciones no bloquean el dictado ni la sincronización.</string>
-    <string name="ux_notification_choices">Elige qué categorías se muestran</string>
+    <string name="ux_quiet_notifications_help">¿Quieres un acceso para reanudar después de posponer? Permite las notificaciones y mantén Controles del botón flotante activado. Para reducir avisos, puedes desactivar Estado del dictado y la sincronización.</string>
+    <string name="ux_notification_choices">Elegir notificaciones</string>
     <string name="ux_status_options_help">Las opciones siguientes afectan solo a las notificaciones de estado visibles. Mantén activada Estado del servicio en segundo plano para verlas.</string>
     <string name="ux_read_prompt">Leer instrucciones completas</string>
+    <string name="ux_notifications_intro">Mantén un acceso para reanudar el botón flotante después de posponerlo, u oculta los avisos permanentes para reducir distracciones.</string>
+    <string name="ux_resume_shortcut_title">Reanudar desde una notificación</string>
+    <string name="ux_resume_shortcut_help">Opcional: permite las notificaciones para recuperar el botón flotante sin abrir MyWhisper.</string>
+    <string name="ux_snooze_reminder_title">Recordatorio al posponer</string>
+    <string name="ux_snooze_reminder_help">En los ajustes de Android, mantén Controles del botón flotante activado para reanudarlo después de posponer.</string>
+    <string name="ux_hide_updates_title">Ocultar avisos permanentes</string>
+    <string name="ux_hide_updates_help">Opcional: desactiva Estado del dictado y la sincronización en los ajustes de Android. El botón flotante y la sincronización siguen funcionando.</string>
+    <string name="ux_black_theme_help">Usa negro en lugar de gris en el modo oscuro. También funciona con el tema del sistema.</string>
+    <string name="ux_black_background">Fondo negro puro</string>
 </resources>

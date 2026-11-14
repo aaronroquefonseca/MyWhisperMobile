@@ -80,7 +80,7 @@
     <string name="setup_float_delay">Hold delay</string>
     <string name="setup_float_delay_sub">How long the bubble must stay still before recording; a small move counts as a drag.</string>
     <string name="setup_float_old_warn">On Android 12 and below the floating button may pick up placeholder text in some apps. The MyWhisper keyboard is recommended there.</string>
-    <string name="unified_notif_channel">Background service status</string>
+    <string name="unified_notif_channel">Dictation and sync status</string>
     <string name="float_notif_title">MyWhisper bubble</string>
     <string name="float_notif_text">Floating dictation active</string>
     <string name="float_notif_rec_text">Recording… tap ✕ to cancel</string>
@@ -500,11 +500,20 @@
     <string name="ux_notification_drawer">Notification drawer</string>
     <string name="ux_notifications_hidden">Hidden. Dictation and sync can still run.</string>
     <string name="ux_float_controls_channel">Floating button controls</string>
-    <string name="ux_background_status_help">Ongoing readiness, recording, and sync status. Hide this category for fewer notifications; services keep running.</string>
-    <string name="ux_float_controls_help">Keep enabled for snooze reminders and the Resume action.</string>
-    <string name="ux_quiet_notifications_title">Optional: quieter notifications</string>
-    <string name="ux_quiet_notifications_help">For fewer notifications, keep app notifications allowed, hide Background service status, and leave Floating button controls enabled for Snooze/Resume. Notifications never block dictation or sync.</string>
-    <string name="ux_notification_choices">Choose which categories appear</string>
+    <string name="ux_background_status_help">Recording and sync updates.</string>
+    <string name="ux_float_controls_help">Resume the floating button after snoozing.</string>
+    <string name="ux_quiet_notifications_title">Optional: fewer notifications</string>
+    <string name="ux_quiet_notifications_help">Want a Resume shortcut after snoozing? Allow notifications and leave Floating button controls on. For less clutter, you can turn Dictation and sync status off.</string>
+    <string name="ux_notification_choices">Choose notifications</string>
     <string name="ux_status_options_help">Options below affect visible status notifications only. Keep Background service status enabled to see them.</string>
     <string name="ux_read_prompt">Read full instructions</string>
+    <string name="ux_notifications_intro">Keep a Resume shortcut when you snooze the floating button, or hide ongoing updates for less clutter.</string>
+    <string name="ux_resume_shortcut_title">Resume from a notification</string>
+    <string name="ux_resume_shortcut_help">Optional: allow notifications to bring the floating button back without opening MyWhisper.</string>
+    <string name="ux_snooze_reminder_title">Snooze reminder</string>
+    <string name="ux_snooze_reminder_help">In Android settings, leave Floating button controls on for a Resume shortcut after snoozing.</string>
+    <string name="ux_hide_updates_title">Hide ongoing updates</string>
+    <string name="ux_hide_updates_help">Optional: turn Dictation and sync status off in Android settings. Your floating button and sync keep working.</string>
+    <string name="ux_black_theme_help">Use black instead of grey in dark mode. Also works with System theme.</string>
+    <string name="ux_black_background">Pure black background</string>
 </resources>

@@ -67,6 +67,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.List
@@ -82,6 +83,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
@@ -107,6 +109,8 @@ import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.HapticFeedbackConstantsCompat
 import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.rememberTextMeasurer
@@ -1439,13 +1443,27 @@ class MainActivity : ComponentActivity() {
     private fun Root() {
         val s = settingsState.value
         val theme = s?.optJSONObject("preferences")?.optString("theme", "System") ?: "System"
-        MaterialTheme(
-            colorScheme = whisperColorScheme(when (theme) {
-                "Light" -> false
-                "Dark" -> true
-                else -> androidx.compose.foundation.isSystemInDarkTheme()
-            }),
-        ) {
+        val dark = when (theme) {
+            "Light" -> false
+            "Dark" -> true
+            else -> androidx.compose.foundation.isSystemInDarkTheme()
+        }
+        val colors = whisperColorScheme(dark, black = s?.optJSONObject("preferences")?.optBoolean("black_background", false) == true)
+        SideEffect {
+            WindowCompat.getInsetsController(window, window.decorView).apply {
+                isAppearanceLightStatusBars = !dark
+                isAppearanceLightNavigationBars = !dark
+            }
+            // Android 15+ draws these bars transparently over the app.
+            // Older versions need matching colors as well as matching icons.
+            if (android.os.Build.VERSION.SDK_INT < 35) {
+                @Suppress("DEPRECATION")
+                window.statusBarColor = colors.background.toArgb()
+                @Suppress("DEPRECATION")
+                window.navigationBarColor = colors.background.toArgb()
+            }
+        }
+        MaterialTheme(colorScheme = colors) {
             val uiPrefs = getSharedPreferences("mw_state", MODE_PRIVATE)
             var backStack by rememberSaveable { mutableStateOf(intArrayOf()) }
             var tab by rememberSaveable {
@@ -1508,14 +1526,25 @@ class MainActivity : ComponentActivity() {
                 },
                 snackbarHost = { SnackbarHost(snackbarHost) },
                 bottomBar = {
-                    if (tab != 16 && !backStack.contains(16)) NavigationBar() {
+                    if (isRoot && !backStack.contains(16)) NavigationBar(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                        tonalElevation = 0.dp,
+                    ) {
                         val labels = listOf(getString(R.string.task_dictation), getString(R.string.ux_nav_voice), getString(R.string.task_library))
                         val targets = listOf(0, 14, 15)
                         labels.forEachIndexed { index, label ->
                             NavigationBarItem(
                                 selected = selectedTask == targets[index],
                                 onClick = { backStack = intArrayOf(); tab = targets[index] },
-                                icon = { Icon(painterResource(listOf(R.drawable.ic_mic, R.drawable.ic_voice, R.drawable.ic_library)[index]), contentDescription = null) },
+                                icon = { Icon(painterResource(listOf(R.drawable.ic_nav_dictation, R.drawable.ic_voice, R.drawable.ic_library)[index]),
+                                    contentDescription = null, modifier = Modifier.size(24.dp)) },
+                                colors = NavigationBarItemDefaults.colors(
+                                    selectedIconColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    selectedTextColor = MaterialTheme.colorScheme.onSurface,
+                                    indicatorColor = MaterialTheme.colorScheme.secondaryContainer,
+                                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                ),
                                 label = { Text(label) },
                             )
                         }
@@ -1566,7 +1595,7 @@ class MainActivity : ComponentActivity() {
                             4 -> ActivityScreen()
                             5 -> HistoryScreen(s)
                             6 -> SyncScreen(s)
-                            8 -> NotificationSettings(s)
+                            8 -> NotificationSettings()
                             10 -> MicrophoneSettings(s)
                             11 -> AppearanceSettings(s)
                             12 -> KeyboardSettings()
@@ -1915,16 +1944,6 @@ class MainActivity : ComponentActivity() {
         }
 
     @Composable
-    private fun NotifToggle(
-        title: String,
-        sub: String,
-        checked: Boolean,
-        onChecked: (Boolean) -> Unit,
-    ) {
-        ToggleSetting(title, sub, checked, onChecked)
-    }
-
-    @Composable
     private fun DropDown(
         label: String,
         value: String,
@@ -2045,7 +2064,7 @@ class MainActivity : ComponentActivity() {
             if (remaining > 0) { delay(remaining); snoozedUntil = 0 }
         }
         TaskPage {
-            Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.primaryContainer) {
+            Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainerHigh) {
                 Column(Modifier.fillMaxWidth().padding(16.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(getString(R.string.setup_float), Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
@@ -2388,78 +2407,27 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun NotificationSettings(s: JSONObject) {
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-            Section(getString(R.string.new_notifications)) {
-                Text(
-                    getString(R.string.material_notifications_description),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Spacer(Modifier.height(8.dp))
-                DestinationRow(getString(R.string.ux_notification_drawer),
-                    getString(if (notificationsAllowed.value) R.string.new_notifications_enabled else R.string.ux_notifications_hidden)) {
-                    if (notificationsAllowed.value) {
-                        startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
-                    } else requestNotificationPermission()
+    private fun NotificationSettings() {
+        TaskPage {
+            Text(getString(R.string.ux_notifications_intro), style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (!notificationsAllowed.value) {
+                SettingsGroup(getString(R.string.ux_resume_shortcut_title)) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text(getString(R.string.ux_resume_shortcut_help), style = MaterialTheme.typography.bodyMedium)
+                        Spacer(Modifier.height(12.dp))
+                        Button(onClick = { requestNotificationPermission() }) {
+                            Text(getString(R.string.new_enable_notifications))
+                        }
+                    }
                 }
-                Spacer(Modifier.height(8.dp))
-                Text(getString(R.string.ux_quiet_notifications_help), Modifier.padding(vertical = 8.dp), style = MaterialTheme.typography.bodyMedium)
-                DestinationRow(getString(R.string.unified_notif_channel), getString(R.string.ux_background_status_help)) {
-                    openNotificationChannel(NotifPolicy.UNIFIED_CHANNEL)
-                }
-                DestinationRow(getString(R.string.ux_float_controls_channel), getString(R.string.ux_float_controls_help)) {
+            }
+            SettingsGroup(getString(R.string.ux_notification_choices)) {
+                DestinationRow(getString(R.string.ux_snooze_reminder_title), getString(R.string.ux_snooze_reminder_help)) {
                     openNotificationChannel(AppNotificationChannels.FLOAT_CONTROLS)
                 }
-                Spacer(Modifier.height(16.dp))
-                Text(getString(R.string.ux_status_options_help), style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-                // Per-mode notification policy: each toggle rebuilds
-                // the live foreground notifications (no restart).
-                val nprefs = s.optJSONObject("preferences") ?: JSONObject()
-                NotifToggle(
-                    title = getString(R.string.notif_pref_idle),
-                    sub = getString(R.string.notif_pref_idle_sub),
-                    checked = nprefs.optBoolean(NotifPolicy.KEY_IDLE_ONGOING, true),
-                ) {
-                    nprefs.put(NotifPolicy.KEY_IDLE_ONGOING, it)
-                    s.put("preferences", nprefs)
-                    save()
-                }
-                NotifToggle(
-                    title = getString(R.string.notif_pref_rec),
-                    sub = getString(R.string.notif_pref_rec_sub),
-                    checked = nprefs.optBoolean(NotifPolicy.KEY_REC_ONGOING, true),
-                ) {
-                    nprefs.put(NotifPolicy.KEY_REC_ONGOING, it)
-                    s.put("preferences", nprefs)
-                    save()
-                }
-                NotifToggle(
-                    title = getString(R.string.notif_pref_work),
-                    sub = getString(R.string.notif_pref_work_sub),
-                    checked = nprefs.optBoolean(NotifPolicy.KEY_WORK_PROGRESS, true),
-                ) {
-                    nprefs.put(NotifPolicy.KEY_WORK_PROGRESS, it)
-                    s.put("preferences", nprefs)
-                    save()
-                }
-                NotifToggle(
-                    title = getString(R.string.notif_pref_sync),
-                    sub = getString(R.string.notif_pref_sync_sub),
-                    checked = nprefs.optBoolean(NotifPolicy.KEY_SYNC_PROGRESS, true),
-                ) {
-                    nprefs.put(NotifPolicy.KEY_SYNC_PROGRESS, it)
-                    s.put("preferences", nprefs)
-                    save()
-                }
-                NotifToggle(
-                    title = getString(R.string.notif_pref_sync_ongoing),
-                    sub = getString(R.string.notif_pref_sync_ongoing_sub),
-                    checked = nprefs.optBoolean(NotifPolicy.KEY_SYNC_ONGOING, true),
-                ) {
-                    nprefs.put(NotifPolicy.KEY_SYNC_ONGOING, it)
-                    s.put("preferences", nprefs)
-                    save()
+                DestinationRow(getString(R.string.ux_hide_updates_title), getString(R.string.ux_hide_updates_help)) {
+                    openNotificationChannel(NotifPolicy.UNIFIED_CHANNEL)
                 }
             }
         }
@@ -2535,6 +2503,12 @@ class MainActivity : ComponentActivity() {
                 val labels = listOf(getString(R.string.control_system), getString(R.string.control_light), getString(R.string.control_dark))
                 ChoiceSetting(getString(R.string.setup_theme), labels[themes.indexOf(prefs.optString("theme", "System")).coerceAtLeast(0)], labels) { selected ->
                     prefs.put("theme", themes[labels.indexOf(selected)])
+                    s.put("preferences", prefs)
+                    save()
+                }
+                ToggleSetting(getString(R.string.ux_black_background), getString(R.string.ux_black_theme_help),
+                    prefs.optBoolean("black_background", false)) {
+                    prefs.put("black_background", it)
                     s.put("preferences", prefs)
                     save()
                 }

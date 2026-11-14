@@ -148,6 +148,9 @@ impl Default for PillPrefs {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Preferences {
     pub theme: Theme,
+    /// Android's optional black background whenever Dark or System uses dark mode.
+    #[serde(default)]
+    pub black_background: bool,
     pub dictation_sounds: bool,
     pub pause_media_on_dictation: bool,
     pub auto_paste: bool,
@@ -198,6 +201,7 @@ impl Default for Preferences {
     fn default() -> Self {
         Self {
             theme: Theme::System,
+            black_background: false,
             dictation_sounds: true,
             pause_media_on_dictation: false,
             auto_paste: true,
@@ -873,6 +877,19 @@ pub struct HistoryEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn black_background_preserves_compatible_theme_and_defaults_off_for_older_settings() {
+        let mut prefs = Preferences::default();
+        prefs.theme = Theme::System;
+        prefs.black_background = true;
+        let value = serde_json::to_value(&prefs).unwrap();
+        assert_eq!(value["theme"], "System");
+        assert!(serde_json::from_value::<Preferences>(value.clone()).unwrap().black_background);
+        let mut old = value;
+        old.as_object_mut().unwrap().remove("black_background");
+        assert!(!serde_json::from_value::<Preferences>(old).unwrap().black_background);
+    }
 
     #[test]
     fn floating_button_defaults_on_without_overriding_explicit_off() {

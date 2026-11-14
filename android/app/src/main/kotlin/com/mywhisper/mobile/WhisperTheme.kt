@@ -42,9 +42,47 @@ internal val WhisperDarkColors = darkColorScheme(
 
 /** Follow the device palette on Android 12+, retaining a fallback for older devices. */
 @Composable
-internal fun whisperColorScheme(dark: Boolean) = when {
-    Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && dark -> dynamicDarkColorScheme(LocalContext.current)
-    Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> dynamicLightColorScheme(LocalContext.current)
-    dark -> WhisperDarkColors
-    else -> WhisperLightColors
+internal fun whisperColorScheme(dark: Boolean, black: Boolean = false): androidx.compose.material3.ColorScheme {
+    val colors = when {
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && dark -> dynamicDarkColorScheme(LocalContext.current)
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> dynamicLightColorScheme(LocalContext.current)
+        dark -> WhisperDarkColors
+        else -> WhisperLightColors
+    }
+    // Wallpaper colors remain the accents. Neutral dark surfaces keep dense
+    // settings readable and avoid tinting every nested panel the accent color.
+    if (dark && black) return colors.copy(
+        background = Color.Black,
+        surface = Color.Black,
+        surfaceDim = Color.Black,
+        surfaceBright = Color(0xFF303030),
+        surfaceContainerLowest = Color.Black,
+        surfaceContainerLow = Color(0xFF0D0D0D),
+        surfaceContainer = Color(0xFF141414),
+        surfaceContainerHigh = Color(0xFF1B1B1B),
+        surfaceContainerHighest = Color(0xFF242424),
+        surfaceVariant = Color(0xFF242424),
+        onBackground = Color(0xFFE8E8E8),
+        onSurface = Color(0xFFE8E8E8),
+        onSurfaceVariant = Color(0xFFBDBDBD),
+        outline = Color(0xFF929292),
+        outlineVariant = Color(0xFF424242),
+    )
+    return if (dark) colors.copy(
+        background = Color(0xFF121416),
+        surface = Color(0xFF121416),
+        surfaceDim = Color(0xFF121416),
+        surfaceBright = Color(0xFF353A3F),
+        surfaceContainerLowest = Color(0xFF0D0F11),
+        surfaceContainerLow = Color(0xFF1B1E21),
+        surfaceContainer = Color(0xFF202428),
+        surfaceContainerHigh = Color(0xFF272C30),
+        surfaceContainerHighest = Color(0xFF30363B),
+        surfaceVariant = Color(0xFF2B3035),
+        onBackground = Color(0xFFE7E9EC),
+        onSurface = Color(0xFFE7E9EC),
+        onSurfaceVariant = Color(0xFFBAC1C8),
+        outline = Color(0xFF89939C),
+        outlineVariant = Color(0xFF424B53),
+    ) else colors
 }
