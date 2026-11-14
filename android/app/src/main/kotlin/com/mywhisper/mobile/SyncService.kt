@@ -571,7 +571,7 @@ class BootReceiver : BroadcastReceiver() {
                     }
                 }
                 val floatEnabled =
-                    s.optJSONObject("preferences")?.optBoolean("float_enabled", false) == true
+                    s.optJSONObject("preferences")?.optBoolean("float_enabled", true) == true
                 val canOverlay = try {
                     android.provider.Settings.canDrawOverlays(app)
                 } catch (_: Exception) {

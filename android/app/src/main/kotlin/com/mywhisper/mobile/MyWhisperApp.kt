@@ -34,7 +34,7 @@ class MyWhisperApp : Application() {
             // Keep the bubble alive across process death when enabled.
             try {
                 val s = CoreBridge.getSettings().getOrThrow()
-                if (s.optJSONObject("preferences")?.optBoolean("float_enabled", false) == true) {
+                if (s.optJSONObject("preferences")?.optBoolean("float_enabled", true) == true) {
                     OverlayService.start(this)
                 }
             } catch (_: Exception) {

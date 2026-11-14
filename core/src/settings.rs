@@ -185,8 +185,8 @@ pub struct Preferences {
     #[serde(default = "default_true")]
     pub show_pill: bool,
     /// ANDROID PORT: floating bubble dictation (overlay +
-    /// accessibility commit) as an alternative to the IME.
-    #[serde(default)]
+    /// accessibility commit) as the primary Android input path.
+    #[serde(default = "default_true")]
     pub float_enabled: bool,
 }
 
@@ -215,7 +215,7 @@ impl Default for Preferences {
             auto_learn_dictionary: false,
             mic_mode: ActivationMode::Smart,
             show_pill: true,
-            float_enabled: false,
+            float_enabled: true,
         }
     }
 }
@@ -887,6 +887,17 @@ pub struct HistoryEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn floating_button_defaults_on_without_overriding_explicit_off() {
+        assert!(Preferences::default().float_enabled);
+        let mut legacy = serde_json::to_value(Preferences::default()).unwrap();
+        legacy.as_object_mut().unwrap().remove("float_enabled");
+        assert!(serde_json::from_value::<Preferences>(legacy).unwrap().float_enabled);
+        let mut explicit_off = serde_json::to_value(Preferences::default()).unwrap();
+        explicit_off["float_enabled"] = serde_json::json!(false);
+        assert!(!serde_json::from_value::<Preferences>(explicit_off).unwrap().float_enabled);
+    }
 
     #[test]
     fn chain_respects_order_and_enabled() {

@@ -55,19 +55,21 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.List
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
@@ -86,6 +88,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.stateDescription
+import kotlin.math.roundToInt
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -94,6 +98,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.drawText
@@ -120,11 +125,9 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * Config app mirroring the desktop Settings screens: Setup (IME +
- * mic behavior), Speech to Text (server/cloud chain), Text Cleanup
- * (LLM chain), Dictionary, Activity (usage), History (+ privacy),
- * Sync (desktop-compatible device sync). All edits round-trip through
- * the core's settings JSON, so the schema stays identical to desktop.
+ * Dictation owns floating-button setup and preferences; Voice groups
+ * recognition and cleanup; Library owns words, history, and device sync.
+ * Settings round-trip through the core JSON shared with the desktop app.
  */
 class MainActivity : ComponentActivity() {
 
@@ -140,6 +143,7 @@ class MainActivity : ComponentActivity() {
     private val syncGen = AtomicLong(0)
     private val micGranted = mutableStateOf(false)
     private val overlayGranted = mutableStateOf(false)
+    private val notificationsAllowed = mutableStateOf(false)
     private val a11yOn = mutableStateOf(false)
     private val micRationale = mutableStateOf(false)
     private val micBlocked = mutableStateOf(false)
@@ -185,7 +189,7 @@ class MainActivity : ComponentActivity() {
         /**
          * True when at least one enabled, non-Local STT entry has a model
          * (SelfHosted additionally needs a URL; Cloud allows blank URL =
-         * vendor default). Pure for unit tests.
+         * vendor default, which requires an API key). Pure for unit tests.
          */
         @JvmStatic
         internal fun isServerConfigured(s: JSONObject?): Boolean {
@@ -196,6 +200,7 @@ class MainActivity : ComponentActivity() {
                 if (e.optString("kind") == "Local") continue
                 if (e.optString("model").isBlank()) continue
                 if (e.optString("kind") == "SelfHosted" && e.optString("url").isBlank()) continue
+                if (cloudCredentialsMissing(e.optString("kind"), e.optString("url"), e.optString("api_key"))) continue
                 return true
             }
             return false
@@ -952,6 +957,7 @@ class MainActivity : ComponentActivity() {
     private val notifPerm = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
+        refreshPermStates()
         if (!granted) toast(getString(R.string.setup_notif_denied))
     }
 
@@ -1003,6 +1009,7 @@ class MainActivity : ComponentActivity() {
 
     /** Re-read runtime grants that can change in system Settings. */
     private fun refreshPermStates() {
+        notificationsAllowed.value = androidx.core.app.NotificationManagerCompat.from(this).areNotificationsEnabled()
         micGranted.value = ContextCompat.checkSelfPermission(
             this, Manifest.permission.RECORD_AUDIO,
         ) == PackageManager.PERMISSION_GRANTED
@@ -1046,6 +1053,9 @@ class MainActivity : ComponentActivity() {
                 runOnUiThread {
                     if (!jobApplies(settingsGen.get(), gen)) return@runOnUiThread
                     settingsState.value = committed
+                    if (committed.optJSONObject("preferences")?.optBoolean("float_enabled", true) == true) {
+                        try { OverlayService.start(this@MainActivity) } catch (_: Exception) { }
+                    }
                     statusState.value = status
                     settingsError.value = ""
                     settingsBusy.value = false
@@ -1061,7 +1071,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun save() {
+    private fun save(onCommitted: () -> Unit = {}) {
         // Async save with committed-state reflection: persist the
         // snapshot, then re-read the committed settings and apply
         // them (desktop reset Snapshot parity). Stale generations
@@ -1078,6 +1088,7 @@ class MainActivity : ComponentActivity() {
                     settingsState.value = committed
                     settingsError.value = ""
                     settingsBusy.value = false
+                    onCommitted()
                     // Prefs toggle: rebuild live foreground notifications,
                     // no process restart needed.
                     try {
@@ -1413,13 +1424,28 @@ class MainActivity : ComponentActivity() {
                 else -> if (androidx.compose.foundation.isSystemInDarkTheme()) WhisperDarkColors else WhisperLightColors
             },
         ) {
-            var tab by rememberSaveable { mutableIntStateOf(deepLinkTab.value ?: 0) }
+            val uiPrefs = getSharedPreferences("mw_state", MODE_PRIVATE)
+            var backStack by rememberSaveable { mutableStateOf(intArrayOf()) }
+            var tab by rememberSaveable {
+                mutableIntStateOf(deepLinkTab.value ?: if (uiPrefs.getBoolean("bubble_onboarding_seen", false)) 0 else 16)
+            }
+            fun navigate(target: Int) { backStack = backStack + tab; tab = target }
+            fun finishOnboarding() {
+                uiPrefs.edit { putBoolean("bubble_onboarding_seen", true) }
+                backStack = intArrayOf(); tab = 0
+            }
+            fun goBack() {
+                if (backStack.isNotEmpty()) {
+                    tab = backStack.last(); backStack = backStack.dropLast(1).toIntArray()
+                } else if (tab == 16) finishOnboarding()
+            }
             // Notification deep-link: a warm tap re-routes the open app.
             // Consumed after routing (set null): without this a re-tap
             // on the same target is a no-op key change and gets ignored.
             LaunchedEffect(deepLinkTab.value) {
                 val pending = deepLinkTab.value
                 if (pending != null) {
+                    backStack = intArrayOf(14)
                     tab = deepLinkTargetTab(pending, tab)
                     deepLinkTab.value = null
                 }
@@ -1428,32 +1454,33 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(Unit) {
                 snackbarEvents.collect { snackbarHost.showSnackbar(it) }
             }
-            val tabs = listOf(
-                                getString(R.string.tab_setup),
-                                getString(R.string.tab_stt),
-                                getString(R.string.tab_cleanup),
-                                getString(R.string.tab_dict),
-                                getString(R.string.tab_activity),
-                                getString(R.string.tab_history),
-                                getString(R.string.tab_devices),
-                            )
-            var voiceTab by rememberSaveable { mutableIntStateOf(1) }
+            val titles = mapOf(
+                0 to getString(R.string.task_dictation), 1 to getString(R.string.tab_stt),
+                2 to getString(R.string.tab_cleanup), 3 to getString(R.string.tab_dict),
+                4 to getString(R.string.tab_activity), 5 to getString(R.string.tab_history),
+                6 to getString(R.string.tab_devices),
+                9 to getString(R.string.setup_float),
+                8 to getString(R.string.new_notifications), 10 to getString(R.string.setup_mic_button),
+                11 to getString(R.string.new_appearance), 12 to getString(R.string.new_keyboard),
+                13 to getString(R.string.diag_title),
+                14 to getString(R.string.ux_nav_voice), 15 to getString(R.string.task_library),
+                16 to getString(R.string.task_welcome),
+            )
             val pageState = rememberSaveableStateHolder()
-            BackHandler(enabled = tab in listOf(3, 4, 6, 8, 9)) { tab = 7 }
-            LaunchedEffect(tab) { if (tab == 1 || tab == 2) voiceTab = tab }
-            val primaryTab = when (tab) { 0 -> 0; 1, 2 -> 1; 5 -> 2; else -> 3 }
+            val isRoot = tab in listOf(0, 14, 15)
+            val selectedTask = when (tab) { 1, 2, 14 -> 14; 3, 4, 5, 6, 15 -> 15; else -> 0 }
+            BackHandler(enabled = backStack.isNotEmpty() || tab == 16) { goBack() }
             Scaffold(
                 snackbarHost = { SnackbarHost(snackbarHost) },
                 bottomBar = {
-                    NavigationBar {
-                        val labels = listOf(getString(R.string.ux_nav_home), getString(R.string.ux_nav_voice), getString(R.string.tab_history), getString(R.string.ux_nav_more))
-                        val icons = listOf(Icons.Default.Home, Icons.Default.Edit, Icons.Default.List, Icons.Default.MoreVert)
-                        val targets = listOf(0, voiceTab, 5, 7)
+                    if (tab != 16 && !backStack.contains(16)) NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
+                        val labels = listOf(getString(R.string.task_dictation), getString(R.string.ux_nav_voice), getString(R.string.task_library))
+                        val targets = listOf(0, 14, 15)
                         labels.forEachIndexed { index, label ->
                             NavigationBarItem(
-                                selected = primaryTab == index,
-                                onClick = { tab = targets[index] },
-                                icon = { Icon(icons[index], contentDescription = null) },
+                                selected = selectedTask == targets[index],
+                                onClick = { backStack = intArrayOf(); tab = targets[index] },
+                                icon = { Icon(painterResource(listOf(R.drawable.ic_mic, R.drawable.ic_voice, R.drawable.ic_library)[index]), contentDescription = null) },
                                 label = { Text(label) },
                             )
                         }
@@ -1465,21 +1492,12 @@ class MainActivity : ComponentActivity() {
                         .fillMaxSize()
                         .padding(pad),
                 ) {
-                    Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp)) {
-                        Text("MyWhisper", style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.primary)
-                        Text(if (tab == 7) getString(R.string.ux_nav_more) else if (tab == 0) getString(R.string.ux_home_title) else if (tab == 8) getString(R.string.ux_preferences) else if (tab == 9) getString(R.string.setup_float) else tabs[tab],
-                            style = MaterialTheme.typography.headlineMedium)
-                    }
-                    if (tab in listOf(3, 4, 6, 8, 9)) {
-                        TextButton(onClick = { tab = 7 }, modifier = Modifier.padding(horizontal = 16.dp)) { Text(getString(R.string.ux_back_more)) }
-                    }
-                    if (tab == 1 || tab == 2) {
-                        TabRow(selectedTabIndex = tab - 1) {
-                            listOf(getString(R.string.tab_stt), getString(R.string.tab_cleanup)).forEachIndexed { index, label ->
-                                Tab(selected = tab == index + 1, onClick = { tab = index + 1 }, text = { Text(label) })
-                            }
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        if (!isRoot && tab != 16) {
+                            TextButton(onClick = { goBack() }) { Text(getString(R.string.new_back)) }
                         }
+                        Text(titles[tab] ?: getString(R.string.setup_float), modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
+
                     }
                     if (s == null) {
                         // Explicit recovery UI: boot/load failures keep
@@ -1509,23 +1527,23 @@ class MainActivity : ComponentActivity() {
                     } else {
                         pageState.SaveableStateProvider(tab) {
                         when (tab) {
-                            0 -> SetupScreen(s, onSpeech = { tab = 1 })
+                            0 -> DictationHome(s, onNavigate = ::navigate)
+                            9 -> BubbleScreen(s, onBehavior = { navigate(10) })
+                            14 -> VoiceHome(s, onNavigate = ::navigate)
+                            15 -> LibraryHome(onNavigate = ::navigate)
+                            16 -> OnboardingScreen(s, onSpeech = { navigate(1) }, onDone = ::finishOnboarding)
                             1 -> SttScreen(s)
                             2 -> CleanupScreen(s)
                             3 -> DictionaryScreen(s)
                             4 -> ActivityScreen()
                             5 -> HistoryScreen(s)
                             6 -> SyncScreen(s)
-                            9 -> SetupScreen(s, onSpeech = { tab = 1 }, preferencesOnly = true, floatingOnly = true)
-                            8 -> SetupScreen(s, onSpeech = { tab = 1 }, preferencesOnly = true)
-                            7 -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
-                                Text(getString(R.string.ux_more_intro), style = MaterialTheme.typography.bodyLarge)
-                                Spacer(Modifier.height(16.dp))
-                                listOf(9 to getString(R.string.setup_float), 8 to getString(R.string.ux_preferences), 3 to getString(R.string.tab_dict), 4 to getString(R.string.tab_activity), 6 to getString(R.string.ux_devices_sync)).forEach { (target, label) ->
-                                    OutlinedButton(onClick = { tab = target }, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) { Text(label) }
-                                    Spacer(Modifier.height(8.dp))
-                                }
-                            }
+                            8 -> NotificationSettings(s)
+                            10 -> MicrophoneSettings(s)
+                            11 -> AppearanceSettings(s)
+                            12 -> KeyboardSettings()
+                            13 -> DiagnosticsSettings()
+
                         }
                         }
                     }
@@ -1540,8 +1558,8 @@ class MainActivity : ComponentActivity() {
     private fun Section(title: String, body: @Composable () -> Unit) {
         Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-            Column(modifier = Modifier.padding(20.dp)) {
-                Text(title, style = MaterialTheme.typography.titleLarge)
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(title, style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(8.dp))
                 body()
             }
@@ -1894,6 +1912,24 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    @OptIn(ExperimentalLayoutApi::class)
+    @Composable
+    private fun ChoiceSetting(label: String, value: String, options: List<String>, onPick: (String) -> Unit) {
+        Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+            Text(label, style = MaterialTheme.typography.bodyMedium)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                options.forEach { option ->
+                    FilterChip(
+                        selected = option == value,
+                        onClick = { onPick(option) },
+                        label = { Text(option) },
+                        modifier = Modifier.semantics { contentDescription = "$label: $option" },
+                    )
+                }
+            }
+        }
+    }
+
     @Composable
     private fun DropDown(
         label: String,
@@ -1902,17 +1938,19 @@ class MainActivity : ComponentActivity() {
         onPick: (String) -> Unit,
     ) {
         var open by remember { mutableStateOf(false) }
-        Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-            Text("$label: $value", style = MaterialTheme.typography.bodyMedium)
-            Row {
-                OutlinedButton(modifier = Modifier.semantics { contentDescription = "$label: $value" }, onClick = { open = true }) { Text(stringResource(R.string.action_change)) }
-                DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-                    options.forEach { o ->
-                        DropdownMenuItem(
-                            text = { Text(o) },
-                            onClick = { open = false; onPick(o) },
-                        )
-                    }
+        Box(modifier = Modifier.fillMaxWidth()) {
+            ListItem(
+                headlineContent = { Text(label) },
+                supportingContent = { Text(value, color = MaterialTheme.colorScheme.onSurfaceVariant) },
+                trailingContent = { Text("⌄") },
+                modifier = Modifier.clickable { open = true },
+            )
+            DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                options.forEach { option ->
+                    DropdownMenuItem(
+                        text = { Text(option) },
+                        onClick = { open = false; onPick(option) },
+                    )
                 }
             }
         }
@@ -2012,103 +2050,194 @@ class MainActivity : ComponentActivity() {
     // -- Setup ----------------------------------------------------------
 
     @Composable
-    private fun SetupScreen(s: JSONObject, onSpeech: () -> Unit, preferencesOnly: Boolean = false, floatingOnly: Boolean = false) {
-        var showPreferences by rememberSaveable { mutableStateOf(false) }
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState()),
-        ) {
-            val imeDone = imeEnabled()
-            val micDone = micGranted.value
-            // A verified on-device pack counts as configured:
-            // Local-only setups must not report "no speech configured".
-            val setupPrefs = getSharedPreferences("mw_state", MODE_PRIVATE)
-            val localEnabled = remember(s) {
-                val arr = s.optJSONObject("stt")?.optJSONArray("entries") ?: JSONArray()
-                var found = false
-                for (i in 0 until arr.length()) {
-                    val en = arr.optJSONObject(i) ?: continue
-                    if (en.optString("kind") == "Local" && en.optBoolean("enabled", true)) {
-                        found = true
-                        break
+    private fun DictationHome(s: JSONObject, onNavigate: (Int) -> Unit) {
+        val setup = bubbleSetupState(s)
+        val enabled = s.optJSONObject("preferences")?.optBoolean("float_enabled", true) ?: true
+        val prefs = getSharedPreferences("mw_state", MODE_PRIVATE)
+        var snoozedUntil by remember { mutableStateOf(prefs.getLong("float_snoozed_until", 0)) }
+        androidx.compose.runtime.DisposableEffect(prefs) {
+            val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { changed, key ->
+                if (key == "float_snoozed_until") snoozedUntil = changed.getLong(key, 0)
+            }
+            prefs.registerOnSharedPreferenceChangeListener(listener)
+            onDispose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
+        }
+        LaunchedEffect(snoozedUntil) {
+            val remaining = snoozedUntil - System.currentTimeMillis()
+            if (remaining > 0) { delay(remaining); snoozedUntil = 0 }
+        }
+        TaskPage {
+            Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.primaryContainer) {
+                Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(getString(R.string.setup_float), Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                        Switch(checked = enabled, enabled = !settingsBusy.value,
+                            modifier = Modifier.semantics { contentDescription = getString(R.string.setup_float) },
+                            onCheckedChange = { setFloatingEnabled(s, it) })
+                    }
+                    Text(getString(when {
+                        !enabled -> R.string.setup_float_off
+                        setup.next != BubbleSetupState.Step.COMPLETE -> R.string.task_setup_needed
+                        snoozedUntil > System.currentTimeMillis() -> R.string.task_snoozed
+                        else -> R.string.task_ready_status
+                    }), style = MaterialTheme.typography.bodyMedium)
+                    if (setup.next != BubbleSetupState.Step.COMPLETE) {
+                        TextButton(onClick = { onNavigate(16) }) { Text(getString(R.string.task_resume_setup)) }
+                    } else if (snoozedUntil > System.currentTimeMillis()) {
+                        TextButton(onClick = {
+                            startService(Intent(this@MainActivity, OverlayService::class.java).setAction(OverlayService.ACTION_UNSNOOZE))
+                        }) { Text(getString(R.string.float_resume)) }
                     }
                 }
-                found
             }
-            val localVerified = remember(s) {
-                try {
-                    sttModelPackState(LocalStt.selectedEntry(setupPrefs)) == LocalPackState.PRESENT
-                } catch (_: Exception) {
-                    false
+            SettingsGroup(getString(R.string.setup_float)) {
+                DestinationRow(getString(R.string.task_button_controls), getString(R.string.task_button_description), { onNavigate(9) })
+                DestinationRow(getString(R.string.setup_mic_button), getString(R.string.new_behavior_description), { onNavigate(10) })
+            }
+            SettingsGroup(getString(R.string.task_app)) {
+                DestinationRow(getString(R.string.new_notifications), getString(if (notificationsAllowed.value) R.string.new_notifications_enabled else R.string.new_notifications_description), { onNavigate(8) })
+                DestinationRow(getString(R.string.new_appearance), getString(R.string.new_appearance_description), { onNavigate(11) })
+                DestinationRow(getString(R.string.new_keyboard), getString(R.string.new_keyboard_description), { onNavigate(12) })
+                DestinationRow(getString(R.string.diag_title), getString(R.string.new_diagnostics_description), { onNavigate(13) })
+            }
+        }
+    }
+
+    private fun providerNames(s: JSONObject, key: String): String {
+        val entries = s.optJSONObject(key)?.optJSONArray("entries") ?: return getString(R.string.task_no_provider)
+        val names = (0 until entries.length()).mapNotNull { entries.optJSONObject(it) }
+            .filter { it.optBoolean("enabled", true) }.map { it.optString("name").ifBlank { it.optString("model") } }
+        return names.filter { it.isNotBlank() }.joinToString(" → ").ifBlank { getString(R.string.task_no_provider) }
+    }
+
+    @Composable
+    private fun VoiceHome(s: JSONObject, onNavigate: (Int) -> Unit) {
+        val stt = sttObj(s)
+        val cleanup = s.optJSONObject("language_models") ?: JSONObject().also { s.put("language_models", it) }
+        val cleanupEnabled = cleanup.optBoolean("cleanup_enabled", true)
+        val language = stt.optString("language", "auto")
+        TaskPage {
+            Text(getString(R.string.task_voice_intro), style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            SettingsGroup(getString(R.string.ux_speech_heading)) {
+                DestinationRow(getString(R.string.task_speech_providers), providerNames(s, "stt"), { onNavigate(1) })
+                Column(Modifier.padding(horizontal = 16.dp)) {
+                    DropDown(getString(R.string.stt_language), langs.firstOrNull { it.first == language }?.second ?: language,
+                        langs.map { it.second }) { label ->
+                        stt.put("language", langs.first { it.second == label }.first); save()
+                    }
                 }
             }
-            val serverDone = isSpeechConfigured(isServerConfigured(s), localEnabled, localVerified)
-            val keyboardSelected = Settings.Secure.getString(contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)
-                ?.substringBefore('/') == packageName
-            val doneCount = onboardingDoneCount(imeDone && keyboardSelected, micDone, serverDone)
-            if (!preferencesOnly) {
-            Section(if (doneCount == 3) getString(R.string.ux_ready) else getString(R.string.ux_setup_progress, doneCount)) {
-                if (doneCount == 3) {
-                    Text(
-                        "You're ready to dictate.",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    Spacer(Modifier.height(4.dp))
+            SettingsGroup(getString(R.string.tab_cleanup)) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(getString(R.string.task_cleanup_toggle))
+                        Text(getString(R.string.task_cleanup_description), style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Switch(checked = cleanupEnabled, enabled = !settingsBusy.value,
+                        modifier = Modifier.semantics { contentDescription = getString(R.string.task_cleanup_toggle) },
+                        onCheckedChange = { cleanup.put("cleanup_enabled", it); save() })
                 }
-                Text(
-                    (if (imeDone && keyboardSelected) "✓ " else "○ ") + getString(R.string.ux_keyboard_check),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Text(
-                    (if (micDone) "✓ " else "○ ") + "Microphone granted",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Text(
-                    (if (serverDone) "✓ " else "○ ") + stringResource(R.string.setup_speech_configured),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
+                DestinationRow(getString(R.string.task_cleanup_providers), providerNames(s, "language_models"), { onNavigate(2) })
             }
-            Section(getString(R.string.ux_speech_heading)) {
-                Text(if (serverDone) getString(R.string.ux_speech_ready) else getString(R.string.ux_speech_intro))
-                Spacer(Modifier.height(12.dp))
-                Button(onClick = onSpeech) { Text(if (serverDone) getString(R.string.ux_speech_manage) else getString(R.string.ux_speech_setup)) }
+        }
+    }
+
+    @Composable
+    private fun LibraryHome(onNavigate: (Int) -> Unit) {
+        TaskPage {
+            SettingsGroup(getString(R.string.task_your_words)) {
+                DestinationRow(getString(R.string.tab_dict), getString(R.string.task_dictionary_description), { onNavigate(3) })
+                DestinationRow(getString(R.string.tab_history), getString(R.string.task_history_description), { onNavigate(5) })
+                DestinationRow(getString(R.string.tab_activity), getString(R.string.new_activity_description), { onNavigate(4) })
             }
-            Section(getString(R.string.ux_keyboard_enable)) {
-                Text(
-                    if (imeEnabled()) "MyWhisper is enabled as an input method."
-                    else "MyWhisper is not enabled yet.",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Spacer(Modifier.height(8.dp))
-                Button(onClick = {
-                    startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
-                }) { Text(stringResource(R.string.setup_open_ime)) }
+            SettingsGroup(getString(R.string.task_library_sync)) {
+                DestinationRow(getString(R.string.ux_devices_sync), getString(R.string.task_sync_description), { onNavigate(6) })
             }
-            Section(getString(R.string.ux_keyboard_choose)) {
-                val seen = imeSeenActive()
-                Text(
-                    if (seen.isNotEmpty()) getString(R.string.setup_active_now, seen)
-                    else getString(R.string.setup_active_how),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Spacer(Modifier.height(8.dp))
-                Button(onClick = {
-                    (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager)
-                        .showInputMethodPicker()
-                }) { Text(stringResource(R.string.setup_pick)) }
+        }
+    }
+
+    @Composable
+    private fun bubbleSetupState(s: JSONObject): BubbleSetupState {
+        val prefs = getSharedPreferences("mw_state", MODE_PRIVATE)
+        val entries = s.optJSONObject("stt")?.optJSONArray("entries")
+        val localEnabled = entries?.let {
+            (0 until it.length()).any { i ->
+                val entry = it.optJSONObject(i)
+                entry?.optString("kind") == "Local" && entry.optBoolean("enabled", true)
             }
-            Section(getString(R.string.ux_microphone_access)) {
-                Text(
-                    if (micGranted.value) "Microphone granted."
-                    else "Microphone is required for dictation.",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Spacer(Modifier.height(8.dp))
-                Button(enabled = !micGranted.value, onClick = { micPerm.launch(Manifest.permission.RECORD_AUDIO) }) {
-                    Text(stringResource(R.string.setup_mic_grant))
+        } ?: false
+        val localVerified = remember(s) {
+            try {
+                sttModelPackState(LocalStt.selectedEntry(prefs)) == LocalPackState.PRESENT
+            } catch (_: Exception) {
+                false
+            }
+        }
+        return BubbleSetupState(micGranted.value, overlayGranted.value, a11yOn.value,
+            isSpeechConfigured(isServerConfigured(s), localEnabled, localVerified))
+    }
+
+    private fun setFloatingEnabled(s: JSONObject, enabled: Boolean) {
+        val prefs = s.optJSONObject("preferences") ?: JSONObject()
+        prefs.put("float_enabled", enabled); s.put("preferences", prefs)
+        save {
+            try {
+                if (enabled) OverlayService.start(this@MainActivity) else OverlayService.stop(this@MainActivity)
+            } catch (e: Exception) { toast(e.message ?: getString(R.string.task_service_failed)) }
+        }
+    }
+
+    @Composable
+    private fun OnboardingScreen(s: JSONObject, onSpeech: () -> Unit, onDone: () -> Unit) {
+        var started by rememberSaveable { mutableStateOf(getSharedPreferences("mw_state", MODE_PRIVATE).getBoolean("bubble_onboarding_seen", false)) }
+        val setup = bubbleSetupState(s)
+        TaskPage {
+            Text(getString(R.string.task_onboarding_title), style = MaterialTheme.typography.headlineMedium,
+                modifier = Modifier.padding(vertical = 16.dp))
+            Text(getString(R.string.task_onboarding_intro), style = MaterialTheme.typography.bodyLarge)
+            if (!started && setup.next != BubbleSetupState.Step.COMPLETE) {
+                Spacer(Modifier.height(24.dp))
+                Button(onClick = { started = true }) { Text(getString(R.string.task_get_started)) }
+            } else {
+                SettingsGroup(getString(R.string.task_setup_progress, setup.completed)) {
+                    Column(Modifier.padding(16.dp)) {
+                        listOf(setup.microphone to R.string.ux_microphone_access, setup.overlay to R.string.setup_float_overlay,
+                            setup.dictationService to R.string.setup_float_a11y, setup.speech to R.string.ux_speech_heading
+                        ).forEach { (done, label) ->
+                            Text((if (done) "✓ " else "○ ") + getString(label), Modifier.padding(vertical = 6.dp))
+                        }
+                        Spacer(Modifier.height(16.dp))
+                        when (setup.next) {
+                            BubbleSetupState.Step.MICROPHONE -> {
+                                Text(getString(R.string.task_mic_reason))
+                                Button(onClick = { if (micBlocked.value) openAppSettings() else micPerm.launch(Manifest.permission.RECORD_AUDIO) }) { Text(getString(R.string.setup_mic_grant)) }
+                            }
+                            BubbleSetupState.Step.OVERLAY -> {
+                                Text(getString(R.string.task_overlay_reason))
+                                Button(onClick = { startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))) }) { Text(getString(R.string.setup_float_overlay)) }
+                            }
+                            BubbleSetupState.Step.DICTATION_SERVICE -> {
+                                Text(getString(R.string.control_service_help))
+                                Button(onClick = { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }) { Text(getString(R.string.setup_float_a11y)) }
+                            }
+                            BubbleSetupState.Step.SPEECH -> {
+                                Text(getString(R.string.task_speech_reason))
+                                Button(onClick = onSpeech) { Text(getString(R.string.ux_speech_setup)) }
+                            }
+                            BubbleSetupState.Step.COMPLETE -> {
+                                Text(getString(if (s.optJSONObject("preferences")?.optBoolean("float_enabled", true) == true) R.string.control_bubble_on_help else R.string.new_bubble_ready_help))
+                                Button(onClick = onDone) { Text(getString(R.string.task_finish_setup)) }
+                            }
+                        }
+                    }
                 }
             }
+            Spacer(Modifier.height(16.dp))
+            if (setup.next != BubbleSetupState.Step.COMPLETE) TextButton(onClick = onDone) { Text(getString(R.string.task_later)) }
+            Text(getString(R.string.task_keyboard_optional), style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 12.dp))
             if (micRationale.value) {
                 AlertDialog(
                     onDismissRequest = { micRationale.value = false },
@@ -2127,44 +2256,167 @@ class MainActivity : ComponentActivity() {
                     },
                 )
             }
-            if (micBlocked.value) {
-                AlertDialog(
-                    onDismissRequest = { micBlocked.value = false },
-                    title = { Text(stringResource(R.string.setup_step3)) },
-                    text = { Text(stringResource(R.string.setup_mic_denied)) },
-                    confirmButton = {
-                        TextButton(onClick = {
-                            micBlocked.value = false
-                            openAppSettings()
-                        }) { Text(stringResource(R.string.action_change)) }
-                    },
-                    dismissButton = {
-                        TextButton(onClick = { micBlocked.value = false }) {
-                            Text(stringResource(R.string.action_cancel))
-                        }
+        }
+    }
+
+    @Composable
+    private fun BubbleScreen(s: JSONObject, onBehavior: () -> Unit) {
+        val setupPrefs = getSharedPreferences("mw_state", MODE_PRIVATE)
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+            if (android.os.Build.VERSION.SDK_INT < 33) {
+                Text(getString(R.string.setup_float_old_warn), modifier = Modifier.padding(16.dp), color = MaterialTheme.colorScheme.error)
+            }
+            Section(stringResource(R.string.setup_float)) {
+                val prefs = s.optJSONObject("preferences") ?: JSONObject()
+                val on = prefs.optBoolean("float_enabled", true)
+                Text(
+                    stringResource(R.string.setup_float_sub),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(stringResource(R.string.setup_float), modifier = Modifier.weight(1f))
+                    Switch(modifier = Modifier.semantics { contentDescription = getString(R.string.setup_float) }, checked = on, onCheckedChange = {
+                        setFloatingEnabled(s, it)
+                    })
+                }
+                TextButton(onClick = onBehavior) { Text(getString(R.string.setup_mic_button)) }
+                // Optional grip (default off): the mic drags itself.
+                var grab by remember {
+                    mutableStateOf(setupPrefs.getBoolean("float_grab", false))
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        stringResource(R.string.setup_float_grab),
+                        modifier = Modifier.weight(1f),
+                    )
+                    Switch(modifier = Modifier.semantics { contentDescription = getString(R.string.setup_float_grab) }, checked = grab, onCheckedChange = {
+                        grab = it
+                        setupPrefs.edit { putBoolean("float_grab", it) }
+                        // Rebuild the bubble chrome for the new mode.
+                        OverlayService.start(this@MainActivity)
+                    })
+                }
+                Text(
+                    stringResource(R.string.setup_float_grab_sub),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                var upperLock by remember { mutableStateOf(setupPrefs.getBoolean("float_lock_enabled", true)) }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(stringResource(R.string.float_lock_enabled), modifier = Modifier.weight(1f))
+                    Switch(modifier = Modifier.semantics { contentDescription = getString(R.string.float_lock_enabled) }, checked = upperLock, onCheckedChange = {
+                        upperLock = it
+                        setupPrefs.edit { putBoolean("float_lock_enabled", it) }
+                        OverlayService.start(this@MainActivity)
+                    })
+                }
+                var followKeyboard by remember { mutableStateOf(setupPrefs.getBoolean("float_follow_keyboard", true)) }
+                ChoiceSetting(getString(R.string.float_visibility),
+                    getString(if (followKeyboard) R.string.float_follow_keyboard else R.string.float_follow_focus),
+                    listOf(getString(R.string.float_follow_keyboard), getString(R.string.float_follow_focus))) { picked ->
+                    followKeyboard = picked == getString(R.string.float_follow_keyboard)
+                    setupPrefs.edit { putBoolean("float_follow_keyboard", followKeyboard) }
+                    OverlayService.start(this@MainActivity)
+                }
+                var snoozeMinutes by remember { mutableIntStateOf(setupPrefs.getInt("float_snooze_minutes", 10)) }
+                ChoiceSetting(getString(R.string.float_snooze_duration), "$snoozeMinutes min",
+                    listOf("5 min", "10 min", "15 min", "30 min", "60 min")) { picked ->
+                    snoozeMinutes = picked.substringBefore(" ").toInt()
+                    setupPrefs.edit { putInt("float_snooze_minutes", snoozeMinutes) }
+                }
+                var snoozedUntil by remember { mutableStateOf(setupPrefs.getLong("float_snoozed_until", 0)) }
+                androidx.compose.runtime.DisposableEffect(setupPrefs) {
+                    val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { prefs, key ->
+                        if (key == "float_snoozed_until") snoozedUntil = prefs.getLong(key, 0)
+                    }
+                    setupPrefs.registerOnSharedPreferenceChangeListener(listener)
+                    onDispose { setupPrefs.unregisterOnSharedPreferenceChangeListener(listener) }
+                }
+                LaunchedEffect(snoozedUntil) {
+                    val remaining = snoozedUntil - System.currentTimeMillis()
+                    if (remaining > 0) {
+                        kotlinx.coroutines.delay(remaining)
+                        snoozedUntil = 0
+                    }
+                }
+                if (snoozedUntil > System.currentTimeMillis()) {
+                    TextButton(onClick = {
+                        startService(Intent(this@MainActivity, OverlayService::class.java)
+                            .setAction(OverlayService.ACTION_UNSNOOZE))
+                    }) { Text(stringResource(R.string.float_resume)) }
+                }
+                var bubbleOpacity by remember { mutableIntStateOf(setupPrefs.getInt("float_opacity", 65).coerceIn(30, 100)) }
+                Text(getString(R.string.setup_float_opacity), style = MaterialTheme.typography.bodyMedium)
+                Text("$bubbleOpacity%", style = MaterialTheme.typography.bodySmall)
+                Slider(
+                    value = bubbleOpacity.toFloat(),
+                    onValueChange = { bubbleOpacity = it.roundToInt() },
+                    valueRange = 30f..100f,
+                    modifier = Modifier.semantics { contentDescription = getString(R.string.setup_float_opacity); stateDescription = "$bubbleOpacity%" },
+                    onValueChangeFinished = {
+                        setupPrefs.edit { putInt("float_opacity", bubbleOpacity) }
+                        OverlayService.start(this@MainActivity)
                     },
                 )
+                if (!grab) {
+                    // No grip: a finger that stays put this long records;
+                    // moving sooner means a drag (never a dictation).
+                    var delayMs by remember {
+                        mutableIntStateOf(
+                            FloatState.pressDelayMs(
+                                setupPrefs.getInt(
+                                    "float_press_delay",
+                                    FloatState.PRESS_DELAY_DEFAULT_MS,
+                                ),
+                            ),
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    val delayOptions = FloatState.PRESS_DELAY_OPTIONS_MS
+                    Text(getString(R.string.setup_float_delay), style = MaterialTheme.typography.bodyMedium)
+                    Text("$delayMs ms", style = MaterialTheme.typography.bodySmall)
+                    Slider(
+                        value = delayOptions.indexOf(delayMs).coerceAtLeast(0).toFloat(),
+                        valueRange = 0f..delayOptions.lastIndex.toFloat(),
+                        steps = delayOptions.size - 2,
+                        onValueChange = { delayMs = delayOptions[it.roundToInt().coerceIn(delayOptions.indices)] },
+                        modifier = Modifier.semantics { contentDescription = getString(R.string.setup_float_delay); stateDescription = "$delayMs ms" },
+                        onValueChangeFinished = {
+                            setupPrefs.edit { putInt("float_press_delay", delayMs) }
+                            OverlayService.start(this@MainActivity)
+                        },
+                    )
+                    Text(
+                        stringResource(R.string.setup_float_delay_sub),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
-            }
-            if (!preferencesOnly) TextButton(onClick = { showPreferences = !showPreferences }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
-                Text(if (showPreferences) getString(R.string.ux_hide_preferences) else getString(R.string.ux_show_preferences))
-            }
-            if (preferencesOnly || showPreferences) {
-            if (!floatingOnly) {
-            Section("Notifications") {
+        }
+    }
+
+    @Composable
+    private fun NotificationSettings(s: JSONObject) {
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+            Section(getString(R.string.new_notifications)) {
                 Text(
                     "Shows the sync status while sync runs.",
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Spacer(Modifier.height(8.dp))
-                Button(onClick = {
-                    if (android.os.Build.VERSION.SDK_INT >= 33) {
-                        notifPerm.launch(Manifest.permission.POST_NOTIFICATIONS)
-                    } else {
-                        toast(getString(R.string.setup_notif_old))
-                    }
-                }) {
-                    Text(stringResource(R.string.setup_notif_allow))
+                if (notificationsAllowed.value) {
+                    Text(getString(R.string.new_notifications_enabled), color = MaterialTheme.colorScheme.primary)
+                } else {
+                    Button(onClick = {
+                        val state = getSharedPreferences("mw_state", MODE_PRIVATE)
+                        if (android.os.Build.VERSION.SDK_INT >= 33 && !state.getBoolean("notification_requested", false)) {
+                            state.edit { putBoolean("notification_requested", true) }
+                            notifPerm.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        } else {
+                            startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
+                        }
+                    }) { Text(getString(R.string.new_enable_notifications)) }
                 }
                 Spacer(Modifier.height(8.dp))
                 // Per-mode notification policy: each toggle rebuilds
@@ -2216,6 +2468,12 @@ class MainActivity : ComponentActivity() {
                     save()
                 }
             }
+        }
+    }
+
+    @Composable
+    private fun MicrophoneSettings(s: JSONObject) {
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
             Section(stringResource(R.string.setup_mic_button)) {
                 val prefs = s.optJSONObject("preferences") ?: JSONObject()
                 val mode = prefs.optString("mic_mode", "Smart")
@@ -2227,8 +2485,10 @@ class MainActivity : ComponentActivity() {
                     },
                     style = MaterialTheme.typography.bodyMedium,
                 )
-                DropDown(getString(R.string.setup_behavior_label), mode, listOf("Smart", "Push", "Tap")) {
-                    prefs.put("mic_mode", it)
+                val modes = listOf("Smart", "Push", "Tap")
+                val modeLabels = listOf(getString(R.string.control_smart), getString(R.string.control_hold), getString(R.string.control_toggle))
+                ChoiceSetting(getString(R.string.setup_behavior_label), modeLabels[modes.indexOf(mode).coerceAtLeast(0)], modeLabels) { selected ->
+                    prefs.put("mic_mode", modes[modeLabels.indexOf(selected)])
                     s.put("preferences", prefs)
                     // save() already reflects the committed state.
                     save()
@@ -2252,7 +2512,7 @@ class MainActivity : ComponentActivity() {
                     )
                 }
                 val hotkeys = s.optJSONObject("hotkeys") ?: JSONObject()
-                var tapMs by remember {
+                var tapMs by rememberSaveable {
                     mutableStateOf(hotkeys.optLong("smart_tap_ms", 150L).toString())
                 }
                 OutlinedTextField(
@@ -2269,194 +2529,59 @@ class MainActivity : ComponentActivity() {
                     save()
                 }) { Text(stringResource(R.string.setup_tap_save)) }
             }
-            }
-            Section(stringResource(R.string.setup_float)) {
-                val prefs = s.optJSONObject("preferences") ?: JSONObject()
-                val on = prefs.optBoolean("float_enabled", false)
-                Text(
-                    stringResource(R.string.setup_float_sub),
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                // Old-Android caveat: hint leaks into node.text on some
-                // fields there (stripped in commit, but the IME stays
-                // the safer path) — red note, gated on SDK < 33, so it
-                // never shows on current devices.
-                if (android.os.Build.VERSION.SDK_INT < 33) {
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        stringResource(R.string.setup_float_old_warn),
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    if (on) stringResource(R.string.setup_float_on)
-                    else stringResource(R.string.setup_float_off),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Spacer(Modifier.height(8.dp))
-                val overlayOk = overlayGranted.value
-                val a11yOk = a11yOn.value
-                Text(
-                    (if (overlayOk) "✓ " else "○ ") + stringResource(R.string.setup_float_overlay),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Text(
-                    (if (a11yOk) "✓ " else "○ ") + stringResource(R.string.setup_float_a11y),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Spacer(Modifier.height(8.dp))
-                when (overlayCta(overlayOk, a11yOk)) {
-                    OverlayCta.OVERLAY -> Button(onClick = {
-                        startActivity(Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION))
-                    }) { Text(stringResource(R.string.setup_float_overlay)) }
-                    OverlayCta.A11Y -> Button(onClick = {
-                        startActivity(Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                    }) { Text(stringResource(R.string.setup_float_a11y)) }
-                    OverlayCta.READY -> Text(
-                        stringResource(R.string.setup_float_on),
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
-                Text(
-                    stringResource(R.string.setup_float_a11y_sub),
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                Spacer(Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(stringResource(R.string.setup_float), modifier = Modifier.weight(1f))
-                    Switch(modifier = Modifier.semantics { contentDescription = getString(R.string.setup_float) }, checked = on, onCheckedChange = {
-                        android.util.Log.i("MwFloat", "toggle -> $it")
-                        prefs.put("float_enabled", it)
-                        s.put("preferences", prefs)
-                        save()
-                        if (it) {
-                            OverlayService.start(this@MainActivity)
-                        } else {
-                            OverlayService.stop(this@MainActivity)
-                        }
-                    })
-                }
-                // Optional grip (default off): the mic drags itself.
-                var grab by remember {
-                    mutableStateOf(setupPrefs.getBoolean("float_grab", false))
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        stringResource(R.string.setup_float_grab),
-                        modifier = Modifier.weight(1f),
-                    )
-                    Switch(modifier = Modifier.semantics { contentDescription = getString(R.string.setup_float_grab) }, checked = grab, onCheckedChange = {
-                        grab = it
-                        setupPrefs.edit { putBoolean("float_grab", it) }
-                        // Rebuild the bubble chrome for the new mode.
-                        OverlayService.start(this@MainActivity)
-                    })
-                }
-                Text(
-                    stringResource(R.string.setup_float_grab_sub),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                var upperLock by remember { mutableStateOf(setupPrefs.getBoolean("float_lock_enabled", true)) }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(stringResource(R.string.float_lock_enabled), modifier = Modifier.weight(1f))
-                    Switch(modifier = Modifier.semantics { contentDescription = getString(R.string.float_lock_enabled) }, checked = upperLock, onCheckedChange = {
-                        upperLock = it
-                        setupPrefs.edit { putBoolean("float_lock_enabled", it) }
-                        OverlayService.start(this@MainActivity)
-                    })
-                }
-                var followKeyboard by remember { mutableStateOf(setupPrefs.getBoolean("float_follow_keyboard", true)) }
-                DropDown(getString(R.string.float_visibility),
-                    getString(if (followKeyboard) R.string.float_follow_keyboard else R.string.float_follow_focus),
-                    listOf(getString(R.string.float_follow_keyboard), getString(R.string.float_follow_focus))) { picked ->
-                    followKeyboard = picked == getString(R.string.float_follow_keyboard)
-                    setupPrefs.edit { putBoolean("float_follow_keyboard", followKeyboard) }
-                    OverlayService.start(this@MainActivity)
-                }
-                var snoozeMinutes by remember { mutableIntStateOf(setupPrefs.getInt("float_snooze_minutes", 10)) }
-                DropDown(getString(R.string.float_snooze_duration), "$snoozeMinutes min",
-                    listOf("5 min", "10 min", "15 min", "30 min", "60 min")) { picked ->
-                    snoozeMinutes = picked.substringBefore(" ").toInt()
-                    setupPrefs.edit { putInt("float_snooze_minutes", snoozeMinutes) }
-                }
-                var snoozedUntil by remember { mutableStateOf(setupPrefs.getLong("float_snoozed_until", 0)) }
-                androidx.compose.runtime.DisposableEffect(setupPrefs) {
-                    val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { prefs, key ->
-                        if (key == "float_snoozed_until") snoozedUntil = prefs.getLong(key, 0)
-                    }
-                    setupPrefs.registerOnSharedPreferenceChangeListener(listener)
-                    onDispose { setupPrefs.unregisterOnSharedPreferenceChangeListener(listener) }
-                }
-                LaunchedEffect(snoozedUntil) {
-                    val remaining = snoozedUntil - System.currentTimeMillis()
-                    if (remaining > 0) {
-                        kotlinx.coroutines.delay(remaining)
-                        snoozedUntil = 0
-                    }
-                }
-                if (snoozedUntil > System.currentTimeMillis()) {
-                    TextButton(onClick = {
-                        startService(Intent(this@MainActivity, OverlayService::class.java)
-                            .setAction(OverlayService.ACTION_UNSNOOZE))
-                    }) { Text(stringResource(R.string.float_resume)) }
-                }
-                var bubbleOpacity by remember { mutableIntStateOf(setupPrefs.getInt("float_opacity", 65)) }
-                DropDown(
-                    getString(R.string.setup_float_opacity), "$bubbleOpacity%",
-                    listOf("30%", "45%", "65%", "80%", "100%"),
-                ) { picked ->
-                    bubbleOpacity = picked.removeSuffix("%").toInt()
-                    setupPrefs.edit { putInt("float_opacity", bubbleOpacity) }
-                    OverlayService.start(this@MainActivity)
-                }
-                if (!grab) {
-                    // No grip: a finger that stays put this long records;
-                    // moving sooner means a drag (never a dictation).
-                    var delayMs by remember {
-                        mutableIntStateOf(
-                            FloatState.pressDelayMs(
-                                setupPrefs.getInt(
-                                    "float_press_delay",
-                                    FloatState.PRESS_DELAY_DEFAULT_MS,
-                                ),
-                            ),
-                        )
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    val delayOptions = FloatState.PRESS_DELAY_OPTIONS_MS.map { "$it ms" }
-                    DropDown(
-                        getString(R.string.setup_float_delay),
-                        "$delayMs ms",
-                        delayOptions,
-                    ) { picked ->
-                        delayMs = picked.substringBefore(" ").toIntOrNull()
-                            ?.let { FloatState.pressDelayMs(it) }
-                            ?: FloatState.PRESS_DELAY_DEFAULT_MS
-                        setupPrefs.edit { putInt("float_press_delay", delayMs) }
-                        OverlayService.start(this@MainActivity)
-                    }
-                    Text(
-                        stringResource(R.string.setup_float_delay_sub),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            if (!floatingOnly) {
+        }
+    }
+
+    @Composable
+    private fun AppearanceSettings(s: JSONObject) {
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
             Section(stringResource(R.string.setup_prefs)) {
                 val prefs = s.optJSONObject("preferences") ?: JSONObject()
-                DropDown(
-                    getString(R.string.setup_theme), prefs.optString("theme", "System"),
-                    listOf("System", "Light", "Dark"),
-                ) {
-                    prefs.put("theme", it)
+                val themes = listOf("System", "Light", "Dark")
+                val labels = listOf(getString(R.string.control_system), getString(R.string.control_light), getString(R.string.control_dark))
+                ChoiceSetting(getString(R.string.setup_theme), labels[themes.indexOf(prefs.optString("theme", "System")).coerceAtLeast(0)], labels) { selected ->
+                    prefs.put("theme", themes[labels.indexOf(selected)])
                     s.put("preferences", prefs)
                     save()
                 }
             }
+        }
+    }
+
+    @Composable
+    private fun KeyboardSettings() {
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+            Text(getString(R.string.new_keyboard_description), modifier = Modifier.padding(16.dp))
+            Section(getString(R.string.ux_keyboard_enable)) {
+                Text(
+                    if (imeEnabled()) "MyWhisper is enabled as an input method."
+                    else "MyWhisper is not enabled yet.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Spacer(Modifier.height(8.dp))
+                Button(onClick = {
+                    startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
+                }) { Text(stringResource(R.string.setup_open_ime)) }
+            }
+            Section(getString(R.string.ux_keyboard_choose)) {
+                val seen = imeSeenActive()
+                Text(
+                    if (seen.isNotEmpty()) getString(R.string.setup_active_now, seen)
+                    else getString(R.string.setup_active_how),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Spacer(Modifier.height(8.dp))
+                Button(onClick = {
+                    (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager)
+                        .showInputMethodPicker()
+                }) { Text(stringResource(R.string.setup_pick)) }
+            }
+        }
+    }
+
+    @Composable
+    private fun DiagnosticsSettings() {
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
             Section(stringResource(R.string.diag_title)) {
                 var diag by remember { mutableStateOf("") }
                 var diagOpen by remember { mutableStateOf(false) }
@@ -2487,8 +2612,6 @@ class MainActivity : ComponentActivity() {
                         Text(diag, style = MaterialTheme.typography.bodySmall)
                     }
                 }
-            }
-            }
             }
         }
     }
@@ -3351,23 +3474,14 @@ class MainActivity : ComponentActivity() {
                 Spacer(Modifier.height(4.dp))
                 val delayOptions = listOf(0L to getString(R.string.stt_delay_off), 100L to "100 ms", 250L to "250 ms", 500L to "500 ms", 1000L to "1 s")
                 var delayMs by remember { mutableStateOf(stt.optLong("release_delay_ms", 0L)) }
-                Text(stringResource(R.string.stt_delay), style = MaterialTheme.typography.bodyMedium)
                 Text(stringResource(R.string.stt_delay_sub), style = MaterialTheme.typography.bodySmall)
-                var delayOpen by remember { mutableStateOf(false) }
-                OutlinedButton(onClick = { delayOpen = true }, modifier = Modifier.fillMaxWidth()) {
-                    Text(delayOptions.firstOrNull { it.first == delayMs }?.second ?: "$delayMs ms")
-                }
-                DropdownMenu(expanded = delayOpen, onDismissRequest = { delayOpen = false }) {
-                    delayOptions.forEach { (ms, label) ->
-                        DropdownMenuItem(
-                            text = { Text(label) },
-                            onClick = {
-                                delayOpen = false
-                                delayMs = ms
-                                stt.put("release_delay_ms", ms); save(); version++
-                            },
-                        )
-                    }
+                ChoiceSetting(
+                    getString(R.string.stt_delay),
+                    delayOptions.firstOrNull { it.first == delayMs }?.second ?: "$delayMs ms",
+                    delayOptions.map { it.second },
+                ) { picked ->
+                    delayMs = delayOptions.first { it.second == picked }.first
+                    stt.put("release_delay_ms", delayMs); save(); version++
                 }
                 Spacer(Modifier.height(4.dp))
                 Button(onClick = {
@@ -3569,7 +3683,8 @@ class MainActivity : ComponentActivity() {
         val urlRequired = kind == "SelfHosted"
         val urlBlank = url.isBlank() && urlRequired
         val modelBlank = model.isBlank() && !isLocalKind
-        val canSave = !urlBlank && !modelBlank && !singletonBlocked
+        val keyMissing = enabled && cloudCredentialsMissing(kind, url, key)
+        val canSave = !urlBlank && !modelBlank && !singletonBlocked && !keyMissing
         fun startDraftTest() {
             if (!sttServerTestAllowed(kind, url, model) || draftBusy) return
             draftBusy = true
@@ -3608,7 +3723,7 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier.fillMaxWidth(),
                     )
                     if (!isLocalEdit) {
-                        DropDown(getString(R.string.llm_kind), kind, listOf("SelfHosted", "Cloud", "Local")) {
+                        ChoiceSetting(getString(R.string.llm_kind), kind, listOf("SelfHosted", "Cloud", "Local")) {
                             kind = it
                             if (it == "Local") name = LOCAL_ENTRY_NAME
                             draftResult = null
@@ -3678,6 +3793,8 @@ class MainActivity : ComponentActivity() {
                         OutlinedTextField(
                             value = key, onValueChange = { key = it; draftResult = null },
                             label = { Text(stringResource(R.string.stt_apikey)) },
+                            isError = keyMissing,
+                            supportingText = { if (keyMissing) Text(getString(R.string.task_api_key_required)) },
                             visualTransformation = if (showKey) VisualTransformation.None
                             else PasswordVisualTransformation(),
                             trailingIcon = {
@@ -4928,7 +5045,7 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier.fillMaxWidth(),
                     )
                     if (!isLocalEdit) {
-                        DropDown(getString(R.string.llm_kind), kind, listOf("Ollama", "Local", "Cloud")) {
+                        ChoiceSetting(getString(R.string.llm_kind), kind, listOf("Ollama", "Local", "Cloud")) {
                             kind = it
                             if (it == "Local") name = LOCAL_ENTRY_NAME
                             draftResult = null
@@ -4985,7 +5102,7 @@ class MainActivity : ComponentActivity() {
                         OutlinedTextField(value = keepAlive, onValueChange = { keepAlive = it },
                             label = { Text(stringResource(R.string.llm_keepalive)) },
                             modifier = Modifier.fillMaxWidth())
-                        DropDown(getString(R.string.llm_thinking), thinkLabels[thinking] ?: thinking, thinkLabels.values.toList()) { picked ->
+                        ChoiceSetting(getString(R.string.llm_thinking), thinkLabels[thinking] ?: thinking, thinkLabels.values.toList()) { picked ->
                             thinking = thinkLabels.entries.firstOrNull { e -> e.value == picked }?.key ?: thinking
                         }
                     }

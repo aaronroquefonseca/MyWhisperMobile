@@ -51,6 +51,13 @@ class OverlayService : Service(), Dictation.Listener {
         private const val KEY_PRESS_DELAY = "float_press_delay"
 
         fun start(ctx: Context) {
+            // Enabled by default; first-run setup owns permission requests.
+            // Avoid launching system settings or a microphone foreground service
+            // until the user has granted the required permissions.
+            if (!android.provider.Settings.canDrawOverlays(ctx) ||
+                !MyWhisperAccessibility.isOn(ctx) ||
+                androidx.core.content.ContextCompat.checkSelfPermission(ctx, android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) return
             val i = Intent(ctx, OverlayService::class.java).setAction(ACTION_START)
             androidx.core.content.ContextCompat.startForegroundService(ctx, i)
         }
@@ -848,7 +855,7 @@ class OverlayService : Service(), Dictation.Listener {
     private fun applyVisibility() {
         val on = try {
             val s = CoreBridge.getSettings().getOrThrow()
-            s.optJSONObject("preferences")?.optBoolean("float_enabled", false) == true
+            s.optJSONObject("preferences")?.optBoolean("float_enabled", true) == true
         } catch (_: Exception) {
             false
         }
