@@ -80,7 +80,7 @@
     <string name="setup_float_delay">Hold delay</string>
     <string name="setup_float_delay_sub">How long the bubble must stay still before recording; a small move counts as a drag.</string>
     <string name="setup_float_old_warn">On Android 12 and below the floating button may pick up placeholder text in some apps. The MyWhisper keyboard is recommended there.</string>
-    <string name="unified_notif_channel">MyWhisper status</string>
+    <string name="unified_notif_channel">Background service status</string>
     <string name="float_notif_title">MyWhisper bubble</string>
     <string name="float_notif_text">Floating dictation active</string>
     <string name="float_notif_rec_text">Recording… tap ✕ to cancel</string>
@@ -474,11 +474,11 @@
     <string name="task_button_description">Opacity, visibility, lock gesture, and snooze</string>
     <string name="task_app">App</string>
     <string name="task_no_provider">No enabled provider</string>
-    <string name="task_voice_intro">Choose how speech becomes text, then how it is cleaned up.</string>
-    <string name="task_speech_providers">Speech provider chain</string>
+    <string name="task_voice_intro">Speech recognition and optional text cleanup.</string>
+    <string name="task_speech_providers">Speech providers</string>
     <string name="task_cleanup_toggle">Clean up my dictation</string>
     <string name="task_cleanup_description">Correct punctuation and remove hesitations</string>
-    <string name="task_cleanup_providers">Cleanup providers &amp; instructions</string>
+    <string name="task_cleanup_providers">Cleanup providers</string>
     <string name="task_your_words">Your words</string>
     <string name="task_dictionary_description">Words, spellings, and reusable snippets</string>
     <string name="task_history_description">Find and reuse previous dictations</string>
@@ -492,5 +492,19 @@
     <string name="material_not_now">Not now</string>
     <string name="material_notification_dictation">Allow notifications to see recording status and controls in the notification drawer.</string>
     <string name="material_notification_sync">Allow notifications to see sync-server status in the notification drawer.</string>
-    <string name="material_notifications_description">Show recording controls, processing progress, and sync status.</string>
+    <string name="material_notifications_description">Drawer notifications are optional. Dictation and sync work without notification permission. Android still requires an internal foreground-service notification; required service notifications are silent.</string>
+    <string name="ux_search_options">Search</string>
+    <string name="ux_no_matches">No matches</string>
+    <string name="ux_provider_actions">Options for %1$s</string>
+    <string name="ux_provider_empty">Add a provider to get started.</string>
+    <string name="ux_notification_drawer">Notification drawer</string>
+    <string name="ux_notifications_hidden">Hidden. Dictation and sync can still run.</string>
+    <string name="ux_float_controls_channel">Floating button controls</string>
+    <string name="ux_background_status_help">Ongoing readiness, recording, and sync status. Hide this category for fewer notifications; services keep running.</string>
+    <string name="ux_float_controls_help">Keep enabled for snooze reminders and the Resume action.</string>
+    <string name="ux_quiet_notifications_title">Optional: quieter notifications</string>
+    <string name="ux_quiet_notifications_help">For fewer notifications, keep app notifications allowed, hide Background service status, and leave Floating button controls enabled for Snooze/Resume. Notifications never block dictation or sync.</string>
+    <string name="ux_notification_choices">Choose which categories appear</string>
+    <string name="ux_status_options_help">Options below affect visible status notifications only. Keep Background service status enabled to see them.</string>
+    <string name="ux_read_prompt">Read full instructions</string>
 </resources>

@@ -80,7 +80,7 @@
     <string name="setup_float_delay">Retardo de pulsación</string>
     <string name="setup_float_delay_sub">Cuánto debe quedarse quieta la burbuja antes de grabar; un movimiento pequeño cuenta como arrastre.</string>
     <string name="setup_float_old_warn">En Android 12 y versiones anteriores, el botón flotante puede incluir el texto de ayuda en algunas apps. Ahí se recomienda el teclado MyWhisper.</string>
-    <string name="unified_notif_channel">Estado de MyWhisper</string>
+    <string name="unified_notif_channel">Estado del servicio en segundo plano</string>
     <string name="float_notif_title">Burbuja MyWhisper</string>
     <string name="float_notif_text">Dictado flotante activo</string>
     <string name="float_notif_rec_text">Grabando… toca ✕ para cancelar</string>
@@ -475,11 +475,11 @@
     <string name="task_button_description">Opacidad, visibilidad, gesto de bloqueo y pausa</string>
     <string name="task_app">App</string>
     <string name="task_no_provider">Ningún proveedor activado</string>
-    <string name="task_voice_intro">Elige cómo convertir voz en texto y cómo mejorarlo después.</string>
-    <string name="task_speech_providers">Proveedores de reconocimiento de voz</string>
+    <string name="task_voice_intro">Reconocimiento de voz y limpieza de texto opcional.</string>
+    <string name="task_speech_providers">Proveedores de voz</string>
     <string name="task_cleanup_toggle">Mejorar mi dictado</string>
     <string name="task_cleanup_description">Corregir puntuación y eliminar vacilaciones</string>
-    <string name="task_cleanup_providers">Proveedores e instrucciones de limpieza</string>
+    <string name="task_cleanup_providers">Proveedores de limpieza</string>
     <string name="task_your_words">Tus palabras</string>
     <string name="task_dictionary_description">Palabras, grafías y fragmentos reutilizables</string>
     <string name="task_history_description">Buscar y reutilizar dictados anteriores</string>
@@ -493,5 +493,19 @@
     <string name="material_not_now">Ahora no</string>
     <string name="material_notification_dictation">Permite las notificaciones para ver el estado y los controles de grabación en el panel de notificaciones.</string>
     <string name="material_notification_sync">Permite las notificaciones para ver el estado del servidor de sincronización en el panel de notificaciones.</string>
-    <string name="material_notifications_description">Muestra controles de grabación, progreso del procesamiento y estado de sincronización.</string>
+    <string name="material_notifications_description">Las notificaciones del panel son opcionales. El dictado y la sincronización funcionan sin este permiso. Android sigue exigiendo una notificación interna de servicio; estas notificaciones son silenciosas.</string>
+    <string name="ux_search_options">Buscar</string>
+    <string name="ux_no_matches">Sin resultados</string>
+    <string name="ux_provider_actions">Opciones de %1$s</string>
+    <string name="ux_provider_empty">Añade un proveedor para empezar.</string>
+    <string name="ux_notification_drawer">Panel de notificaciones</string>
+    <string name="ux_notifications_hidden">Ocultas. El dictado y la sincronización siguen funcionando.</string>
+    <string name="ux_float_controls_channel">Controles del botón flotante</string>
+    <string name="ux_background_status_help">Estado de disponibilidad, grabación y sincronización. Oculta esta categoría para reducir notificaciones; los servicios siguen funcionando.</string>
+    <string name="ux_float_controls_help">Mantén esta categoría activada para los recordatorios y la acción Reanudar.</string>
+    <string name="ux_quiet_notifications_title">Opcional: menos notificaciones</string>
+    <string name="ux_quiet_notifications_help">Para reducir notificaciones, permite las notificaciones de la app, oculta Estado del servicio en segundo plano y mantén Controles del botón flotante para Posponer/Reanudar. Las notificaciones no bloquean el dictado ni la sincronización.</string>
+    <string name="ux_notification_choices">Elige qué categorías se muestran</string>
+    <string name="ux_status_options_help">Las opciones siguientes afectan solo a las notificaciones de estado visibles. Mantén activada Estado del servicio en segundo plano para verlas.</string>
+    <string name="ux_read_prompt">Leer instrucciones completas</string>
 </resources>

@@ -1,7 +1,6 @@
 package com.mywhisper.mobile
 
 import android.app.Notification
-import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
@@ -103,9 +102,7 @@ class SyncService : Service() {
     override fun onCreate() {
         super.onCreate()
         val mgr = getSystemService(NotificationManager::class.java)
-        mgr.createNotificationChannel(
-            NotificationChannel(CHANNEL, getString(R.string.unified_notif_channel), NotificationManager.IMPORTANCE_LOW),
-        )
+        AppNotificationChannels.ensure(this)
         // Drop the retired solo channels (pre-unification installs).
         try {
             for (id in NotifPolicy.LEGACY_CHANNEL_IDS) mgr?.deleteNotificationChannel(id)
@@ -315,6 +312,9 @@ class SyncService : Service() {
             .setSmallIcon(R.drawable.ic_stat_sync)
             .setContentIntent(openIntent)
             .setOngoing(spec.ongoing)
+            .setSilent(true)
+            .setOnlyAlertOnce(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, getString(R.string.notif_stop), stopIntent)
         if (spec.showSyncNow) {
             b.addAction(android.R.drawable.ic_popup_sync, getString(R.string.notif_sync_now), nowIntent)
@@ -409,16 +409,8 @@ internal object BootPolicy {
         (isFgsDenied(e) || HardeningGuards.isKeystoreLocked(e)) &&
             HardeningGuards.bootAttemptWithinLimit(attempt, maxRetries)
 
-    /**
-     * Direct FGS start from a BOOT_COMPLETED receiver is allowed only
-     * below API 31. On 31+ a dataSync start while backgrounded always
-     * throws ForegroundServiceStartNotAllowedException (no exemption),
-     * so boot skips the doomed start and goes straight to
-     * pending + bounded retry + first-foreground promote. Literal 31
-     * (not Build.VERSION_CODES.S) keeps this JVM-testable without an
-     * android.os.Build class load.
-     */
-    fun directStartAllowedAtBoot(sdkInt: Int): Boolean = sdkInt < 31
+    /** Android 15+ forbids dataSync FGS from BOOT_COMPLETED; earlier versions allow it. */
+    fun directStartAllowedAtBoot(sdkInt: Int): Boolean = sdkInt < 35
 
     /**
      * First-foreground promote gate: parked boot-pending intent turns
@@ -523,7 +515,7 @@ class BootReceiver : BroadcastReceiver() {
 
         /**
          * Shared boot/update/unlock/retry entry. [isBoot] skips the
-         * doomed direct start on API 31+ (see
+         * doomed direct start on API 35+ (see
          * [BootPolicy.directStartAllowedAtBoot]): the denial is certain
          * there, so boot parks pending and goes straight to the fast
          * retry (15s alarm + expedited work) instead of burning a

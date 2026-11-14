@@ -169,15 +169,17 @@ class FloatBubbleTest {
 
     @Test
     fun pressDelay_presetsAndFallback() {
-        assertEquals(listOf(20, 35, 50, 80, 100, 150), FloatState.PRESS_DELAY_OPTIONS_MS)
-        assertEquals(50, FloatState.PRESS_DELAY_DEFAULT_MS)
+        assertEquals(listOf(50, 65, 80, 100, 125, 150), FloatState.PRESS_DELAY_OPTIONS_MS)
+        assertEquals(80, FloatState.PRESS_DELAY_DEFAULT_MS)
         for (ms in FloatState.PRESS_DELAY_OPTIONS_MS) {
             assertEquals(ms, FloatState.pressDelayMs(ms))
         }
         // Unknown / corrupt stored values fall back to the default.
-        assertEquals(50, FloatState.pressDelayMs(0))
-        assertEquals(50, FloatState.pressDelayMs(999))
-        assertEquals(50, FloatState.pressDelayMs(-5))
+        assertEquals(80, FloatState.pressDelayMs(20))
+        assertEquals(80, FloatState.pressDelayMs(35))
+        assertEquals(80, FloatState.pressDelayMs(0))
+        assertEquals(80, FloatState.pressDelayMs(999))
+        assertEquals(80, FloatState.pressDelayMs(-5))
     }
 
     @Test

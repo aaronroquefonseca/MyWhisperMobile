@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -45,6 +46,8 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.ui.semantics.Role
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
@@ -150,7 +153,6 @@ class MainActivity : ComponentActivity() {
     private val micGranted = mutableStateOf(false)
     private val overlayGranted = mutableStateOf(false)
     private val notificationsAllowed = mutableStateOf(false)
-    private val notificationOffer = mutableStateOf<Int?>(null)
     private val a11yOn = mutableStateOf(false)
     private val micRationale = mutableStateOf(false)
     private val micBlocked = mutableStateOf(false)
@@ -1032,18 +1034,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** One app-wide contextual offer; declining never prevents foreground services. */
-    private fun offerNotificationPermission(reason: Int) {
-        val prefs = getSharedPreferences("mw_state", MODE_PRIVATE)
-        if (!NotificationPermissionPolicy.shouldOffer(
-                android.os.Build.VERSION.SDK_INT, notificationsAllowed.value,
-                prefs.getBoolean("notification_requested", false),
-                prefs.getBoolean("notification_guidance_seen", false),
-            )) return
-        prefs.edit { putBoolean("notification_guidance_seen", true) }
-        notificationOffer.value = reason
-    }
-
     private fun requestNotificationPermission() {
         refreshPermStates()
         if (notificationsAllowed.value) return
@@ -1054,24 +1044,6 @@ class MainActivity : ComponentActivity() {
         } else {
             startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
         }
-    }
-
-    @Composable
-    private fun NotificationPermissionOffer() {
-        val reason = notificationOffer.value ?: return
-        AlertDialog(
-            onDismissRequest = { notificationOffer.value = null },
-            title = { Text(getString(R.string.material_notification_title)) },
-            text = { Text(getString(reason) + "\n\n" + getString(R.string.material_notifications_optional)) },
-            confirmButton = {
-                TextButton(onClick = { notificationOffer.value = null; requestNotificationPermission() }) {
-                    Text(getString(R.string.new_enable_notifications))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { notificationOffer.value = null }) { Text(getString(R.string.material_not_now)) }
-            },
-        )
     }
 
     private fun openAppSettings() {
@@ -1468,11 +1440,11 @@ class MainActivity : ComponentActivity() {
         val s = settingsState.value
         val theme = s?.optJSONObject("preferences")?.optString("theme", "System") ?: "System"
         MaterialTheme(
-            colorScheme = when (theme) {
-                "Light" -> WhisperLightColors
-                "Dark" -> WhisperDarkColors
-                else -> if (androidx.compose.foundation.isSystemInDarkTheme()) WhisperDarkColors else WhisperLightColors
-            },
+            colorScheme = whisperColorScheme(when (theme) {
+                "Light" -> false
+                "Dark" -> true
+                else -> androidx.compose.foundation.isSystemInDarkTheme()
+            }),
         ) {
             val uiPrefs = getSharedPreferences("mw_state", MODE_PRIVATE)
             var backStack by rememberSaveable { mutableStateOf(intArrayOf()) }
@@ -1536,7 +1508,7 @@ class MainActivity : ComponentActivity() {
                 },
                 snackbarHost = { SnackbarHost(snackbarHost) },
                 bottomBar = {
-                    if (tab != 16 && !backStack.contains(16)) NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
+                    if (tab != 16 && !backStack.contains(16)) NavigationBar() {
                         val labels = listOf(getString(R.string.task_dictation), getString(R.string.ux_nav_voice), getString(R.string.task_library))
                         val targets = listOf(0, 14, 15)
                         labels.forEachIndexed { index, label ->
@@ -1587,12 +1559,7 @@ class MainActivity : ComponentActivity() {
                             9 -> BubbleScreen(s, onBehavior = { navigate(10) })
                             14 -> VoiceHome(s, onNavigate = ::navigate)
                             15 -> LibraryHome(onNavigate = ::navigate)
-                            16 -> OnboardingScreen(s, onSpeech = { navigate(1) }, onDone = ::finishOnboarding, onComplete = {
-                                finishOnboarding()
-                                if (s.optJSONObject("preferences")?.optBoolean("float_enabled", true) == true) {
-                                    offerNotificationPermission(R.string.material_notification_dictation)
-                                }
-                            })
+                            16 -> OnboardingScreen(s, onSpeech = { navigate(1) }, onDone = ::finishOnboarding, onComplete = ::finishOnboarding, onNotifications = { navigate(8) })
                             1 -> SttScreen(s)
                             2 -> CleanupScreen(s)
                             3 -> DictionaryScreen(s)
@@ -1610,7 +1577,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-            NotificationPermissionOffer()
         }
     }
 
@@ -1619,7 +1585,7 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun Section(title: String, body: @Composable () -> Unit) {
         Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text(title, style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(8.dp))
@@ -1664,7 +1630,7 @@ class MainActivity : ComponentActivity() {
                     IconButton(onClick = { toggle() }) {
                         // Text chevron (icons-core has no expand glyphs):
                         // TalkBack reads the expanded/collapsed state.
-                        Text(if (expanded) "▲" else "▼")
+                        Icon(Icons.Default.ArrowDropDown, contentDescription = title, modifier = Modifier.graphicsLayer { rotationZ = if (expanded) 180f else 0f })
                     }
                 }
                 if (expanded) {
@@ -1675,75 +1641,66 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /**
-     * The ONE Local chain-row pattern ([localChainRowBlocks] order):
-     * title, summary, pack status, using-model line, then the enable
-     * toggle, Why? explainer and delete. Used identically by the STT
-     * and LLM chains; download / progress / delete-confirm live in
-     * the collapsible on-device section, never in the row.
-     */
+    /** Provider identity edits; enable and overflow are independent 48dp targets. */
     @Composable
-    private fun LocalChainRow(
-        e: JSONObject,
+    private fun ProviderEntryCard(
+        entry: JSONObject,
         summary: String,
-        statusText: String,
-        statusOk: Boolean,
-        usingModelText: String,
+        onEdit: () -> Unit,
         onToggle: (Boolean) -> Unit,
-        onWhy: () -> Unit,
         onDelete: () -> Unit,
         handle: @Composable () -> Unit,
+        busy: Boolean,
+        result: ProviderTest.Result?,
+        testEnabled: Boolean,
+        onTest: () -> Unit,
+        disabledReason: String? = null,
+        status: String? = null,
+        usingModel: String? = null,
+        toggleEnabled: Boolean = true,
     ) {
+        var menuOpen by remember { mutableStateOf(false) }
+        val name = entry.optString("name").ifBlank { entry.optString("kind") }
         Card(
             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant,
-            ),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(modifier = Modifier.padding(end = 4.dp)) { handle() }
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(e.optString("name", "entry"))
-                    Text(summary, style = MaterialTheme.typography.bodySmall)
-                    Text(
-                        statusText,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (statusOk) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.error
-                        },
-                    )
-                    Text(
-                        usingModelText,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+            Row(Modifier.fillMaxWidth().padding(start = 8.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.width(48.dp).heightIn(min = 48.dp), contentAlignment = Alignment.Center) { handle() }
+                Column(Modifier.weight(1f).clickable(role = Role.Button, onClick = onEdit).heightIn(min = 64.dp)
+                    .padding(horizontal = 8.dp, vertical = 12.dp)) {
+                    Text(name, style = MaterialTheme.typography.titleSmall)
+                    Text(summary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                FeedbackSwitch(
-                    modifier = Modifier.semantics { contentDescription = e.optString("name", LOCAL_ENTRY_NAME) },
-                    checked = e.optBoolean("enabled", true),
-                    onCheckedChange = onToggle,
-                )
-                TextButton(onClick = onWhy) { Text(stringResource(R.string.stt_local_why)) }
-                IconButton(onClick = onDelete) {
-                    Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.action_delete))
+                FeedbackSwitch(checked = entry.optBoolean("enabled", true), onCheckedChange = onToggle,
+                    enabled = toggleEnabled,
+                    modifier = Modifier.semantics { contentDescription = name })
+                Box {
+                    IconButton(onClick = { menuOpen = true }) {
+                        Icon(Icons.Filled.MoreVert, contentDescription = stringResource(R.string.ux_provider_actions, name))
+                    }
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        DropdownMenuItem(text = { Text(stringResource(if (entry.optString("kind") == "Local") R.string.stt_local_why else R.string.action_edit)) }, onClick = { menuOpen = false; onEdit() })
+                        DropdownMenuItem(text = { Text(stringResource(R.string.provider_test_run)) }, enabled = testEnabled && !busy,
+                            onClick = { menuOpen = false; onTest() })
+                        DropdownMenuItem(text = { Text(stringResource(R.string.action_delete)) }, onClick = { menuOpen = false; onDelete() })
+                    }
+                }
+            }
+            if (status != null || usingModel != null || busy || result != null || disabledReason != null) {
+                Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 12.dp)) {
+                    status?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    usingModel?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    ProviderTestRow(busy, result, testEnabled, onTest, disabledReason, showButton = false)
                 }
             }
         }
     }
 
     /**
-     * THE provider-test affordance: one button, same placement
-     * under every chain row (STT + LLM, local + remote) and under
-     * every add/edit dialog form, same inline reporting (`latency +
-     * excerpt/status`). Disabled fail-closed via [enabled]; busy shows
-     * the testing copy; a disabled button shows [disabledReason] so
-     * the blocker stays explicit even under a stale result
-     * ([ProviderTest.showDisabledReason]).
+     * Shared test feedback for provider cards and editor forms.
+     * Cards launch tests from overflow; forms show an explicit button.
+     * Disabled reasons remain visible even after a stale test result.
      */
     @Composable
     private fun ProviderTestRow(
@@ -1752,6 +1709,7 @@ class MainActivity : ComponentActivity() {
         enabled: Boolean,
         onTest: () -> Unit,
         disabledReason: String? = null,
+        showButton: Boolean = true,
     ) {
         // Result visibility: a probe finishes seconds later, and on a long
         // settings screen the inline PASS/FAIL can land off-screen (owner
@@ -1772,12 +1730,10 @@ class MainActivity : ComponentActivity() {
                 // ONE shared test-button style (min height + padding
                 // identical to the Add buttons): every chain row,
                 // dialog, and self-test renders through here.
-                ProviderTestButton(
-                    enabled = enabled,
-                    busy = busy,
-                    onTest = onTest,
-                )
-                Spacer(Modifier.width(8.dp))
+                if (showButton) {
+                    ProviderTestButton(enabled = enabled, busy = busy, onTest = onTest)
+                    Spacer(Modifier.width(8.dp))
+                }
                 if (busy && result == null) {
                     Text(
                         stringResource(R.string.provider_test_testing),
@@ -1975,23 +1931,7 @@ class MainActivity : ComponentActivity() {
         options: List<String>,
         onPick: (String) -> Unit,
     ) {
-        var open by remember { mutableStateOf(false) }
-        Box(modifier = Modifier.fillMaxWidth()) {
-            ListItem(
-                headlineContent = { Text(label) },
-                supportingContent = { Text(value, color = MaterialTheme.colorScheme.onSurfaceVariant) },
-                trailingContent = { Icon(Icons.Default.ArrowDropDown, contentDescription = null) },
-                modifier = Modifier.clickable { open = true },
-            )
-            DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-                options.forEach { option ->
-                    DropdownMenuItem(
-                        text = { Text(option) },
-                        onClick = { open = false; onPick(option) },
-                    )
-                }
-            }
-        }
+        SearchableChoiceSetting(label, value, options, onPick)
     }
 
     /**
@@ -2046,7 +1986,7 @@ class MainActivity : ComponentActivity() {
                             Icons.Filled.Menu,
                             contentDescription = stringResource(R.string.drag_reorder),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.pointerInput(id) {
+                            modifier = Modifier.size(48.dp).pointerInput(id) {
                                 detectDragGestures(
                                     onDragStart = {
                                         if (dragging != null) return@detectDragGestures
@@ -2077,7 +2017,7 @@ class MainActivity : ComponentActivity() {
                                         }
                                     },
                                 )
-                            },
+                            }.padding(12.dp),
                         )
                     }
                 }
@@ -2159,23 +2099,14 @@ class MainActivity : ComponentActivity() {
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
             SettingsGroup(getString(R.string.ux_speech_heading)) {
                 DestinationRow(getString(R.string.task_speech_providers), providerNames(s, "stt"), { onNavigate(1) })
-                Column(Modifier.padding(horizontal = 16.dp)) {
-                    DropDown(getString(R.string.stt_language), langs.firstOrNull { it.first == language }?.second ?: language,
-                        langs.map { it.second }) { label ->
-                        stt.put("language", langs.first { it.second == label }.first); save()
-                    }
+                DropDown(getString(R.string.stt_language), langs.firstOrNull { it.first == language }?.second ?: language,
+                    langs.map { it.second }) { label ->
+                    stt.put("language", langs.first { it.second == label }.first); save()
                 }
             }
             SettingsGroup(getString(R.string.tab_cleanup)) {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(getString(R.string.task_cleanup_toggle))
-                        Text(getString(R.string.task_cleanup_description), style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    FeedbackSwitch(checked = cleanupEnabled, enabled = !settingsBusy.value,
-                        modifier = Modifier.semantics { contentDescription = getString(R.string.task_cleanup_toggle) },
-                        onCheckedChange = { cleanup.put("cleanup_enabled", it); save() })
+                ToggleSetting(getString(R.string.task_cleanup_toggle), getString(R.string.task_cleanup_description), cleanupEnabled) {
+                    cleanup.put("cleanup_enabled", it); save()
                 }
                 DestinationRow(getString(R.string.task_cleanup_providers), providerNames(s, "language_models"), { onNavigate(2) })
             }
@@ -2224,16 +2155,13 @@ class MainActivity : ComponentActivity() {
             try {
                 if (enabled) {
                     OverlayService.start(this@MainActivity)
-                    if (micGranted.value && overlayGranted.value && a11yOn.value) {
-                        offerNotificationPermission(R.string.material_notification_dictation)
-                    }
                 } else OverlayService.stop(this@MainActivity)
             } catch (e: Exception) { toast(e.message ?: getString(R.string.task_service_failed)) }
         }
     }
 
     @Composable
-    private fun OnboardingScreen(s: JSONObject, onSpeech: () -> Unit, onDone: () -> Unit, onComplete: () -> Unit) {
+    private fun OnboardingScreen(s: JSONObject, onSpeech: () -> Unit, onDone: () -> Unit, onComplete: () -> Unit, onNotifications: () -> Unit) {
         var started by rememberSaveable { mutableStateOf(getSharedPreferences("mw_state", MODE_PRIVATE).getBoolean("bubble_onboarding_seen", false)) }
         val setup = bubbleSetupState(s)
         TaskPage {
@@ -2281,6 +2209,12 @@ class MainActivity : ComponentActivity() {
             if (setup.next != BubbleSetupState.Step.COMPLETE) TextButton(onClick = onDone) { Text(getString(R.string.task_later)) }
             Text(getString(R.string.task_keyboard_optional), style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 12.dp))
+            if (started || setup.next == BubbleSetupState.Step.COMPLETE) {
+                SettingsGroup(getString(R.string.ux_quiet_notifications_title)) {
+                    Text(getString(R.string.ux_quiet_notifications_help), Modifier.padding(16.dp), style = MaterialTheme.typography.bodyMedium)
+                    DestinationRow(getString(R.string.new_notifications), getString(R.string.ux_notification_choices), onNotifications)
+                }
+            }
             if (micRationale.value) {
                 AlertDialog(
                     onDismissRequest = { micRationale.value = false },
@@ -2446,6 +2380,13 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun openNotificationChannel(channel: String) {
+        AppNotificationChannels.ensure(this)
+        startActivity(Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+            .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+            .putExtra(Settings.EXTRA_CHANNEL_ID, channel))
+    }
+
     @Composable
     private fun NotificationSettings(s: JSONObject) {
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
@@ -2455,12 +2396,23 @@ class MainActivity : ComponentActivity() {
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Spacer(Modifier.height(8.dp))
-                if (notificationsAllowed.value) {
-                    Text(getString(R.string.new_notifications_enabled), color = MaterialTheme.colorScheme.primary)
-                } else {
-                    Button(onClick = { requestNotificationPermission() }) { Text(getString(R.string.new_enable_notifications)) }
+                DestinationRow(getString(R.string.ux_notification_drawer),
+                    getString(if (notificationsAllowed.value) R.string.new_notifications_enabled else R.string.ux_notifications_hidden)) {
+                    if (notificationsAllowed.value) {
+                        startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
+                    } else requestNotificationPermission()
                 }
                 Spacer(Modifier.height(8.dp))
+                Text(getString(R.string.ux_quiet_notifications_help), Modifier.padding(vertical = 8.dp), style = MaterialTheme.typography.bodyMedium)
+                DestinationRow(getString(R.string.unified_notif_channel), getString(R.string.ux_background_status_help)) {
+                    openNotificationChannel(NotifPolicy.UNIFIED_CHANNEL)
+                }
+                DestinationRow(getString(R.string.ux_float_controls_channel), getString(R.string.ux_float_controls_help)) {
+                    openNotificationChannel(AppNotificationChannels.FLOAT_CONTROLS)
+                }
+                Spacer(Modifier.height(16.dp))
+                Text(getString(R.string.ux_status_options_help), style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
                 // Per-mode notification policy: each toggle rebuilds
                 // the live foreground notifications (no restart).
                 val nprefs = s.optJSONObject("preferences") ?: JSONObject()
@@ -2957,139 +2909,42 @@ class MainActivity : ComponentActivity() {
                         moveEntry(entries, from, to); save(); version++
                     },
                 ) { e, handle ->
-                    val isLocal = e.optString("kind") == "Local"
-                    if (isLocal) {
-                        // Box stacks un-wrapped children: card + test
-                        // row need this Column (the server branch below
-                        // already has one) — without it the Test button
-                        // draws on top of the card (owner photo).
-                        Column(modifier = Modifier.fillMaxWidth()) {
-                        // Local follows the ONE chain-row pattern
-                        // ([localChainRowBlocks]): title, summary, pack
-                        // status, using-model line, toggle, Why?,
-                        // delete. Downloads live in the collapsible
-                        // on-device section below, never in the row.
-                        // Lite flavor (no runner): full-APK pointer
-                        // instead of pack status.
-                        val localStatus = if (!sttRunner) {
-                            getString(R.string.local_need_full)
-                        } else {
-                            when (selPack) {
-                                LocalPackState.PRESENT ->
-                                    getString(R.string.local_pack_present)
-                                LocalPackState.MISSING ->
-                                    getString(R.string.local_pack_missing)
-                                LocalPackState.MISMATCH ->
-                                    getString(R.string.local_pack_mismatch)
-                                LocalPackState.INCOMPLETE ->
-                                    getString(
-                                        R.string.local_downloading,
-                                        selectedModel.name,
-                                    )
-                            }
+                    val local = e.optString("kind") == "Local"
+                    val id = e.optString("id")
+                    val localStatus = if (!sttRunner) getString(R.string.local_need_full) else when (selPack) {
+                            LocalPackState.PRESENT -> getString(R.string.local_pack_present)
+                            LocalPackState.MISSING -> getString(R.string.local_pack_missing)
+                            LocalPackState.MISMATCH -> getString(R.string.local_pack_mismatch)
+                            LocalPackState.INCOMPLETE -> getString(R.string.local_downloading, selectedModel.name)
                         }
-                        LocalChainRow(
-                            e = e,
-                            summary = entrySummary(e),
-                            statusText = localStatus,
-                            statusOk = sttRunner && selPack == LocalPackState.PRESENT,
-                            usingModelText = getString(
-                                R.string.stt_using_model,
-                                selectedModel.name,
-                            ),
-                            onToggle = {
-                                onLocalToggle(e, it, selPack, { version++ }, sttRunner)
-                            },
-                            onWhy = { localInfo = true },
-                            onDelete = {
-                                val next = JSONArray()
-                                for (j in 0 until entries.length()) {
-                                    if (entries.optJSONObject(j)?.optString("id") != e.optString("id")) {
-                                        next.put(entries.get(j))
-                                    }
-                                }
-                                stt.put("entries", next); save(); version++
-                            },
-                            handle = handle,
-                        )
-                        // Local STT test (decode sample), same ONE
-                        // row pattern as every provider row. Lite (no
-                        // runner): no second copy of the full-APK
-                        // pointer — the row card's own status line
-                        // directly above already shows it.
-                        ProviderTestRow(
-                            busy = sttLocalBusy,
-                            result = sttLocalResult,
-                            enabled = sttLocalTestAllowed(sttRunner, selPack),
-                            onTest = { startSttLocalTest() },
-                            disabledReason = if (sttLocalTestShowsReason(sttRunner)) {
-                                localTestDisabledReason(
-                                    sttRunner,
-                                    selPack == LocalPackState.PRESENT,
-                                )
-                            } else {
-                                null
-                            },
-                        )
-                        }
-                    } else {
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                    Card(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Box(modifier = Modifier.padding(end = 4.dp)) { handle() }
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(e.optString("name", "entry"))
-                                Text(entrySummary(e), style = MaterialTheme.typography.bodySmall)
+                    ProviderEntryCard(
+                        entry = e,
+                        summary = entrySummary(e),
+                        onEdit = { if (local) localInfo = true else dialog = JSONObject(e.toString()) },
+                        onToggle = { next ->
+                            if (local) onLocalToggle(e, next, selPack, { version++ }, sttRunner)
+                            else { e.put("enabled", next); save(); version++ }
+                        },
+                        toggleEnabled = !local || sttRunner || e.optBoolean("enabled", true),
+                        onDelete = {
+                            val next = JSONArray()
+                            for (j in 0 until entries.length()) {
+                                if (entries.optJSONObject(j)?.optString("id") != id) next.put(entries.get(j))
                             }
-                            FeedbackSwitch(
-                                modifier = Modifier.semantics { contentDescription = e.optString("name", LOCAL_ENTRY_NAME) },
-                                checked = e.optBoolean("enabled", true),
-                                onCheckedChange = {
-                                    e.put("enabled", it); save(); version++
-                                },
-                            )
-                            IconButton(onClick = { dialog = JSONObject(e.toString()) }) {
-                                Icon(Icons.Filled.Edit, contentDescription = stringResource(R.string.action_edit))
-                            }
-                            IconButton(onClick = {
-                                val next = JSONArray()
-                                for (j in 0 until entries.length()) {
-                                    if (entries.optJSONObject(j)?.optString("id") != e.optString("id")) {
-                                        next.put(entries.get(j))
-                                    }
-                                }
-                                stt.put("entries", next); save(); version++
-                            }) {
-                                Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.action_delete))
-                            }
-                        }
-                    }
-                        // Server STT test (lightweight endpoint
-                        // check, no transcribe), same ONE pattern.
-                        val sttId = e.optString("id")
-                        ProviderTestRow(
-                            busy = sttBusy.contains(sttId),
-                            result = sttResults[sttId],
-                            enabled = sttServerTestAllowed(
-                                e.optString("kind"),
-                                e.optString("url"),
-                                e.optString("model"),
-                            ),
-                            onTest = { startSttServerTest(e) },
-                            disabledReason = sttTestDisabledReason(
-                                e.optString("kind"),
-                                e.optString("url"),
-                                e.optString("model"),
-                            ),
-                        )
-                    }
-                    }
+                            stt.put("entries", next); save(); version++
+                        },
+                        handle = handle,
+                        busy = if (local) sttLocalBusy else sttBusy.contains(id),
+                        result = if (local) sttLocalResult else sttResults[id],
+                        testEnabled = if (local) sttLocalTestAllowed(sttRunner, selPack) else sttServerTestAllowed(e.optString("kind"), e.optString("url"), e.optString("model")),
+                        onTest = { if (local) startSttLocalTest() else startSttServerTest(e) },
+                        disabledReason = if (local) { if (sttRunner) localTestDisabledReason(true, selPack == LocalPackState.PRESENT) else null } else sttTestDisabledReason(e.optString("kind"), e.optString("url"), e.optString("model")),
+                        status = if (local) localStatus else null,
+                        usingModel = if (local && sttRunner) getString(R.string.stt_using_model, selectedModel.name) else null,
+                    )
                 }
+                if (entries.length() == 0) Text(stringResource(R.string.ux_provider_empty),
+                    Modifier.padding(vertical = 16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
                 OutlinedButton(onClick = {
                     dialog = newSttEntry("SelfHosted")
                 }) {
@@ -3112,7 +2967,7 @@ class MainActivity : ComponentActivity() {
                 }
                 on
             }
-            CollapsibleModelsSection(
+            if (!sttRunner) LocalUnavailableNote() else CollapsibleModelsSection(
                 title = stringResource(R.string.stt_models_title),
                 summary = localSectionSummary(
                     selectedModel.name,
@@ -3483,19 +3338,10 @@ class MainActivity : ComponentActivity() {
             }
             Section(stringResource(R.string.stt_capture)) {
                 var lang by remember { mutableStateOf(stt.optString("language", "auto")) }
-                Text(stringResource(R.string.stt_language), style = MaterialTheme.typography.bodyMedium)
-                var langOpen by remember { mutableStateOf(false) }
-                val langLabel = langs.firstOrNull { it.first == lang }?.second ?: lang
-                OutlinedButton(onClick = { langOpen = true }, modifier = Modifier.fillMaxWidth()) {
-                    Text(langLabel)
-                }
-                DropdownMenu(expanded = langOpen, onDismissRequest = { langOpen = false }) {
-                    langs.forEach { (code, label) ->
-                        DropdownMenuItem(
-                            text = { Text(label) },
-                            onClick = { langOpen = false; lang = code },
-                        )
-                    }
+                DropDown(getString(R.string.stt_language), langs.firstOrNull { it.first == lang }?.second ?: lang,
+                    langs.map { it.second }) { label ->
+                    lang = langs.first { it.second == label }.first
+                    stt.put("language", lang); save()
                 }
                 val vad = stt.optBoolean("vad_enabled", false)
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -3525,10 +3371,6 @@ class MainActivity : ComponentActivity() {
                     delayMs = delayOptions.first { it.second == picked }.first
                     stt.put("release_delay_ms", delayMs); save(); version++
                 }
-                Spacer(Modifier.height(4.dp))
-                Button(onClick = {
-                    stt.put("language", lang.ifBlank { "auto" }); save()
-                }) { Text(stringResource(R.string.stt_save_capture)) }
             }
         }
         if (localInfo) {
@@ -3726,7 +3568,7 @@ class MainActivity : ComponentActivity() {
         val urlBlank = url.isBlank() && urlRequired
         val modelBlank = model.isBlank() && !isLocalKind
         val keyMissing = enabled && cloudCredentialsMissing(kind, url, key)
-        val canSave = !urlBlank && !modelBlank && !singletonBlocked && !keyMissing
+        val canSave = !urlBlank && !modelBlank && !singletonBlocked && !keyMissing && providerKindAvailable(kind, sttRunnerSupported())
         fun startDraftTest() {
             if (!sttServerTestAllowed(kind, url, model) || draftBusy) return
             draftBusy = true
@@ -3765,7 +3607,7 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier.fillMaxWidth(),
                     )
                     if (!isLocalEdit) {
-                        ChoiceSetting(getString(R.string.llm_kind), kind, listOf("SelfHosted", "Cloud", "Local")) {
+                        ChoiceSetting(getString(R.string.llm_kind), kind, availableProviderKinds(listOf("SelfHosted", "Cloud", "Local"), sttRunnerSupported())) {
                             kind = it
                             if (it == "Local") name = LOCAL_ENTRY_NAME
                             draftResult = null
@@ -3783,7 +3625,7 @@ class MainActivity : ComponentActivity() {
                     }
                     if (isLocalKind) {
                         Text(
-                            stringResource(R.string.stt_local_note),
+                            stringResource(if (sttRunnerSupported()) R.string.stt_local_note else R.string.local_need_full),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.error,
                         )
@@ -4230,27 +4072,28 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Column(modifier = Modifier.padding(10.dp)) {
-                        val lines = effective.lines()
-                        val shown = if (expanded) lines else lines.take(6)
+                        var overflows by remember(effective) { mutableStateOf(false) }
                         Text(
-                            shown.joinToString("\n").ifEmpty { "…" },
+                            effective.ifEmpty { "…" },
                             style = MaterialTheme.typography.bodySmall,
+                            maxLines = if (expanded) Int.MAX_VALUE else 3,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            onTextLayout = { if (!expanded) overflows = it.hasVisualOverflow },
                         )
-                        if (lines.size > 6) {
+                        if (expanded || overflows) {
                             TextButton(onClick = { expanded = !expanded }) {
-                                Text(if (expanded) stringResource(R.string.action_show_less) else stringResource(R.string.cleanup_show_all, lines.size))
+                                Text(stringResource(if (expanded) R.string.action_show_less else R.string.ux_read_prompt))
                             }
                         }
                     }
                 }
                 Spacer(Modifier.height(4.dp))
                 Row {
-                    Button(onClick = { editor = true }) {
+                    TextButton(onClick = { editor = true }) {
                         Text(if (isDefault) stringResource(R.string.cleanup_customize) else stringResource(R.string.cleanup_edit))
                     }
                     Spacer(Modifier.width(8.dp))
-                    OutlinedButton(
-                        enabled = !isDefault,
+                    if (!isDefault) TextButton(
                         onClick = { lm.put("cleanup_prompt", ""); save(); version++ },
                     ) {
                         Text(stringResource(R.string.cleanup_reset))
@@ -4303,18 +4146,6 @@ class MainActivity : ComponentActivity() {
                     stringResource(R.string.cleanup_models_sub),
                     style = MaterialTheme.typography.bodySmall,
                 )
-                Text(
-                    stringResource(R.string.local_arm64_note),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                if (!llmRunner) {
-                    Text(
-                        stringResource(R.string.local_need_full),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
                 val entries = entriesOf(lm, "entries")
                 ReorderableEntries(
                     items = entryList(entries),
@@ -4323,149 +4154,42 @@ class MainActivity : ComponentActivity() {
                         moveEntry(entries, from, to); save(); version++
                     },
                 ) { e, handle ->
-                    val isLocal = e.optString("kind") == "Local"
-                    if (isLocal) {
-                        // Box stacks un-wrapped children: card + test
-                        // row need this Column (the server branch below
-                        // already has one) — without it they draw on
-                        // top of each other (owner photo).
-                        Column(modifier = Modifier.fillMaxWidth()) {
-                        // Same ONE chain-row pattern as STT
-                        // ([localChainRowBlocks]): title, summary, pack
-                        // status, using-model line, toggle, Why?,
-                        // delete. Download / progress / delete-confirm
-                        // live in the collapsible on-device section
-                        // below, never in the row. Lite flavor (no
-                        // runner): full-APK pointer instead of status.
-                        val llmStatus = if (!llmRunner) {
-                            getString(R.string.local_need_full)
-                        } else {
-                            when (llmSelPack) {
-                                LocalPackState.PRESENT ->
-                                    getString(R.string.local_pack_present)
-                                LocalPackState.MISSING ->
-                                    getString(R.string.local_pack_missing)
-                                LocalPackState.MISMATCH ->
-                                    getString(R.string.local_pack_mismatch)
-                                LocalPackState.INCOMPLETE ->
-                                    getString(
-                                        R.string.local_downloading,
-                                        llmSelId ?: "",
-                                    )
-                            }
+                    val local = e.optString("kind") == "Local"
+                    val id = e.optString("id")
+                    val localStatus = if (!llmRunner) getString(R.string.local_need_full) else when (llmSelPack) {
+                            LocalPackState.PRESENT -> getString(R.string.local_pack_present)
+                            LocalPackState.MISSING -> getString(R.string.local_pack_missing)
+                            LocalPackState.MISMATCH -> getString(R.string.local_pack_mismatch)
+                            LocalPackState.INCOMPLETE -> getString(R.string.local_downloading, llmSelId ?: "")
                         }
-                        LocalChainRow(
-                            e = e,
-                            summary = getString(R.string.cleanup_local_summary),
-                            statusText = llmStatus,
-                            statusOk = llmRunner && llmSelPack == LocalPackState.PRESENT,
-                            usingModelText = getString(
-                                R.string.stt_using_model,
-                                llmSelId ?: "",
-                            ),
-                            onToggle = {
-                                onLocalToggle(e, it, llmSelPack, { version++ }, llmRunner)
-                            },
-                            onWhy = { localInfo = true },
-                            onDelete = {
-                                val next = JSONArray()
-                                for (j in 0 until entries.length()) {
-                                    if (entries.optJSONObject(j)?.optString("id") != e.optString("id")) {
-                                        next.put(entries.get(j))
-                                    }
-                                }
-                                lm.put("entries", next); save(); version++
-                            },
-                            handle = handle,
-                        )
-                        // Local LLM self-test (existing self-test: fixed prompt
-                        // + "this is a test" via generate(), never
-                        // Ollama/cloud), same ONE row pattern as every
-                        // provider row. Disabled unless the SELECTED pack
-                        // verifies (multi-pack: one active model). With no
-                        // on-device bridge the test cannot pass, so it is
-                        // not offered at all — the honest reason shows
-                        // instead of a button that only ever FAILs.
-                        if (!llmSelfTestOffered(llmRunner)) {
-                            Text(
-                                stringResource(R.string.llm_selftest_unavailable),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        } else {
-                            ProviderTestRow(
-                                busy = llmTestBusy,
-                                result = llmTestResult,
-                                enabled = llmSelfTestAllowed(llmRunner, llmSelPack),
-                                onTest = { startLlmSelfTest() },
-                                disabledReason = localTestDisabledReason(
-                                    llmRunner,
-                                    llmSelPack == LocalPackState.PRESENT,
-                                ),
-                            )
-                        }
-                        }
-                    } else {
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                    Card(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Box(modifier = Modifier.padding(end = 4.dp)) { handle() }
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(e.optString("name", "model"))
-                                Text(
-                                    "${e.optString("kind")} · ${e.optString("model")}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
+                    ProviderEntryCard(
+                        entry = e,
+                        summary = if (local) getString(R.string.cleanup_local_summary) else "${e.optString("kind")} · ${e.optString("model")}",
+                        onEdit = { if (local) localInfo = true else dialog = JSONObject(e.toString()) },
+                        onToggle = { next ->
+                            if (local) onLocalToggle(e, next, llmSelPack, { version++ }, llmRunner)
+                            else { e.put("enabled", next); save(); version++ }
+                        },
+                        toggleEnabled = !local || llmRunner || e.optBoolean("enabled", true),
+                        onDelete = {
+                            val next = JSONArray()
+                            for (j in 0 until entries.length()) {
+                                if (entries.optJSONObject(j)?.optString("id") != id) next.put(entries.get(j))
                             }
-                            FeedbackSwitch(
-                                modifier = Modifier.semantics { contentDescription = e.optString("name", LOCAL_ENTRY_NAME) },
-                                checked = e.optBoolean("enabled", true),
-                                onCheckedChange = {
-                                    e.put("enabled", it); save(); version++
-                                },
-                            )
-                            IconButton(onClick = { dialog = JSONObject(e.toString()) }) {
-                                Icon(Icons.Filled.Edit, contentDescription = stringResource(R.string.action_edit))
-                            }
-                            IconButton(onClick = {
-                                val next = JSONArray()
-                                for (j in 0 until entries.length()) {
-                                    if (entries.optJSONObject(j)?.optString("id") != e.optString("id")) {
-                                        next.put(entries.get(j))
-                                    }
-                                }
-                                lm.put("entries", next); save(); version++
-                            }) {
-                                Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.action_delete))
-                            }
-                        }
-                    }
-                        // Remote LLM test (minimal ping, no heavy
-                        // generate), same ONE pattern.
-                        val llmId = e.optString("id")
-                        ProviderTestRow(
-                            busy = llmBusy.contains(llmId),
-                            result = llmResults[llmId],
-                            enabled = llmRemoteTestAllowed(
-                                e.optString("kind"),
-                                e.optString("url"),
-                                e.optString("model"),
-                            ),
-                            onTest = { startLlmRemoteTest(e) },
-                            disabledReason = llmTestDisabledReason(
-                                e.optString("kind"),
-                                e.optString("url"),
-                                e.optString("model"),
-                            ),
-                        )
-                    }
-                    }
+                            lm.put("entries", next); save(); version++
+                        },
+                        handle = handle,
+                        busy = if (local) llmTestBusy else llmBusy.contains(id),
+                        result = if (local) llmTestResult else llmResults[id],
+                        testEnabled = if (local) llmSelfTestAllowed(llmRunner, llmSelPack) else llmRemoteTestAllowed(e.optString("kind"), e.optString("url"), e.optString("model")),
+                        onTest = { if (local) startLlmSelfTest() else startLlmRemoteTest(e) },
+                        disabledReason = if (local) { if (llmRunner) localTestDisabledReason(true, llmSelPack == LocalPackState.PRESENT) else null } else llmTestDisabledReason(e.optString("kind"), e.optString("url"), e.optString("model")),
+                        status = if (local) localStatus else null,
+                        usingModel = if (local && llmRunner) getString(R.string.stt_using_model, llmSelId ?: "") else null,
+                    )
                 }
+                if (entries.length() == 0) Text(stringResource(R.string.ux_provider_empty),
+                    Modifier.padding(vertical = 16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
                 OutlinedButton(onClick = {
                     dialog = JSONObject()
                         .put("id", "llm-${UUID.randomUUID()}")
@@ -4500,7 +4224,7 @@ class MainActivity : ComponentActivity() {
                 }
                 on
             }
-            CollapsibleModelsSection(
+            if (!llmRunner) LocalUnavailableNote() else CollapsibleModelsSection(
                 title = stringResource(R.string.llm_local_models_title),
                 summary = localSectionSummary(
                     llmSelId ?: "",
@@ -5042,6 +4766,10 @@ class MainActivity : ComponentActivity() {
             )
         }
         var enabled by remember { mutableStateOf(e.optBoolean("enabled", true)) }
+        val urlMissing = kind == "Ollama" && url.isBlank()
+        val modelMissing = !isLocalKind && model.isBlank()
+        val keyMissing = enabled && cloudCredentialsMissing(kind, url, key)
+        val canSave = !singletonBlocked && providerKindAvailable(kind, llmRunnerSupported()) && !urlMissing && !modelMissing && !keyMissing
         // Draft test: same ONE ProviderTestRow pattern as the chain
         // rows (same button + latency/excerpt inline), run against the
         // unsaved draft values. Local-kind rows have no endpoint to
@@ -5087,7 +4815,7 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier.fillMaxWidth(),
                     )
                     if (!isLocalEdit) {
-                        ChoiceSetting(getString(R.string.llm_kind), kind, listOf("Ollama", "Local", "Cloud")) {
+                        ChoiceSetting(getString(R.string.llm_kind), kind, availableProviderKinds(listOf("Ollama", "Cloud", "Local"), llmRunnerSupported())) {
                             kind = it
                             if (it == "Local") name = LOCAL_ENTRY_NAME
                             draftResult = null
@@ -5105,7 +4833,7 @@ class MainActivity : ComponentActivity() {
                     }
                     if (kind == "Local") {
                         Text(
-                            stringResource(R.string.llm_local_note),
+                            stringResource(if (llmRunnerSupported()) R.string.llm_local_note else R.string.local_need_full),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.error,
                         )
@@ -5119,14 +4847,21 @@ class MainActivity : ComponentActivity() {
                     if (kind != "Local") {
                         OutlinedTextField(value = url, onValueChange = { url = it; draftResult = null },
                             label = { Text(if (kind == "Cloud") stringResource(R.string.llm_url_cloud) else stringResource(R.string.llm_url)) },
+                            isError = urlMissing,
+                            supportingText = { if (urlMissing) Text(stringResource(R.string.provider_test_server_url_required)) },
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                             modifier = Modifier.fillMaxWidth())
                         OutlinedTextField(value = model, onValueChange = { model = it; draftResult = null },
-                            label = { Text(stringResource(R.string.stt_model)) }, modifier = Modifier.fillMaxWidth())
+                            label = { Text(stringResource(R.string.stt_model)) },
+                            isError = modelMissing,
+                            supportingText = { if (modelMissing) Text(stringResource(R.string.provider_test_model_required)) },
+                            modifier = Modifier.fillMaxWidth())
                     }
                     if (kind == "Cloud") {
                         OutlinedTextField(value = key, onValueChange = { key = it; draftResult = null },
                             label = { Text(stringResource(R.string.stt_apikey)) },
+                            isError = keyMissing,
+                            supportingText = { if (keyMissing) Text(stringResource(R.string.task_api_key_required)) },
                             visualTransformation = PasswordVisualTransformation(),
                             modifier = Modifier.fillMaxWidth())
                     }
@@ -5167,7 +4902,7 @@ class MainActivity : ComponentActivity() {
             },
             confirmButton = {
                 TextButton(
-                    enabled = !singletonBlocked,
+                    enabled = canSave,
                     onClick = {
                     // New Local entries always start off (default-off):
                     // the list toggle enables them only with a verified pack.
@@ -6164,10 +5899,6 @@ class MainActivity : ComponentActivity() {
                 .verticalScroll(rememberScrollState()),
         ) {
             Section(stringResource(R.string.sync_this)) {
-                if (!notificationsAllowed.value) {
-                    Text(getString(R.string.material_notification_sync), style = MaterialTheme.typography.bodyMedium)
-                    TextButton(onClick = { requestNotificationPermission() }) { Text(getString(R.string.new_enable_notifications)) }
-                }
                 val running = status?.optBoolean("running", false) == true
                 // First-foreground promote: a boot-parked sync starts
                 // here (activity visible = FGS exemption holds), then the
@@ -6305,7 +6036,6 @@ getString(R.string.sync_running, shown)
                             // CoreBridge.syncStart() here; just refresh
                             // status once the service promotes.
                             SyncService.start(this@MainActivity)
-                            offerNotificationPermission(R.string.material_notification_sync)
                             workers.execute {
                                 try {
                                     Thread.sleep(1_000)

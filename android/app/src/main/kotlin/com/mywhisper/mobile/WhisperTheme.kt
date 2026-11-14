@@ -1,5 +1,10 @@
 package com.mywhisper.mobile
 
+import android.os.Build
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.ui.graphics.Color
@@ -34,3 +39,12 @@ internal val WhisperDarkColors = darkColorScheme(
     onSurface = Color(0xFFEFF4F3),
     onSurfaceVariant = Color(0xFFA5B5B7),
 )
+
+/** Follow the device palette on Android 12+, retaining a fallback for older devices. */
+@Composable
+internal fun whisperColorScheme(dark: Boolean) = when {
+    Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && dark -> dynamicDarkColorScheme(LocalContext.current)
+    Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> dynamicLightColorScheme(LocalContext.current)
+    dark -> WhisperDarkColors
+    else -> WhisperLightColors
+}

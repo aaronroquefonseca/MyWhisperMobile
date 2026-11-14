@@ -6,12 +6,16 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
@@ -35,7 +39,7 @@ internal fun TaskPage(content: @Composable ColumnScope.() -> Unit) {
 internal fun SettingsGroup(title: String, content: @Composable ColumnScope.() -> Unit) {
     Text(title, Modifier.padding(top = 20.dp, bottom = 8.dp),
         style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surface) {
+    Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainerLow) {
         Column(Modifier.fillMaxWidth(), content = content)
     }
 }
@@ -46,7 +50,7 @@ internal fun DestinationRow(title: String, summary: String, onClick: () -> Unit)
         headlineContent = { Text(title) },
         supportingContent = { Text(summary) },
         trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
-        colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surface),
+        colors = ListItemDefaults.colors(containerColor = androidx.compose.ui.graphics.Color.Transparent),
         modifier = Modifier.clickable(role = Role.Button, onClick = onClick),
     )
 }
@@ -72,6 +76,63 @@ internal data class BubbleSetupState(
 /** Default cloud endpoints require credentials; custom endpoints may be keyless. */
 internal fun cloudCredentialsMissing(kind: String, url: String, apiKey: String): Boolean =
     kind == "Cloud" && url.isBlank() && apiKey.isBlank()
+
+internal fun providerKindAvailable(kind: String, localSupported: Boolean): Boolean = kind != "Local" || localSupported
+
+internal fun availableProviderKinds(kinds: List<String>, localSupported: Boolean): List<String> =
+    kinds.filter { providerKindAvailable(it, localSupported) }
+
+@Composable
+internal fun LocalUnavailableNote() {
+    ListItem(
+        headlineContent = { Text(stringResource(R.string.stt_models_title)) },
+        supportingContent = { Text(stringResource(R.string.local_need_full)) },
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+    )
+}
+
+/** Long lists stay inside a bounded, searchable dialog, clear of system bars. */
+@Composable
+internal fun SearchableChoiceSetting(label: String, value: String, options: List<String>, onPick: (String) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    var query by remember { mutableStateOf("") }
+    DestinationRow(label, value) { query = ""; open = true }
+    if (open) {
+        val maxHeight = (LocalConfiguration.current.screenHeightDp * 0.40f).dp.coerceAtMost(320.dp)
+        AlertDialog(
+            onDismissRequest = { open = false },
+            title = { Text(label) },
+            text = {
+                Column(Modifier.fillMaxWidth()) {
+                    if (options.size > 8) {
+                        OutlinedTextField(query, { query = it }, singleLine = true,
+                            label = { Text(stringResource(R.string.ux_search_options)) }, modifier = Modifier.fillMaxWidth())
+                        Spacer(Modifier.height(8.dp))
+                    }
+                    val filtered = options.filter { it.contains(query.trim(), ignoreCase = true) }
+                    val listState = rememberLazyListState()
+                    LaunchedEffect(query) {
+                        listState.scrollToItem(if (query.isBlank()) options.indexOf(value).coerceAtLeast(0) else 0)
+                    }
+                    LazyColumn(Modifier.fillMaxWidth().heightIn(max = maxHeight).selectableGroup(), state = listState) {
+                        if (filtered.isEmpty()) item { Text(stringResource(R.string.ux_no_matches), Modifier.padding(vertical = 16.dp)) }
+                        items(filtered) { option ->
+                            Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                                .selectable(value == option, role = Role.RadioButton, onClick = { open = false; onPick(option) })
+                                .padding(vertical = 8.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                                RadioButton(selected = value == option, onClick = null)
+                                Spacer(Modifier.width(8.dp))
+                                Text(option, style = MaterialTheme.typography.bodyLarge)
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { open = false }) { Text(stringResource(android.R.string.cancel)) } },
+        )
+    }
+}
 
 /** Use Android's semantic effects and compatibility fallback, respecting system settings. */
 @Composable
@@ -176,6 +237,7 @@ internal fun ToggleSetting(title: String, summary: String, checked: Boolean, onC
         headlineContent = { Text(title) },
         supportingContent = { Text(summary) },
         trailingContent = { Switch(checked = checked, onCheckedChange = null) },
+        colors = ListItemDefaults.colors(containerColor = androidx.compose.ui.graphics.Color.Transparent),
         modifier = Modifier.toggleable(value = checked, role = Role.Switch, onValueChange = { next ->
             if (next != checked) {
                 ViewCompat.performHapticFeedback(view, if (next) HapticFeedbackConstantsCompat.TOGGLE_ON else HapticFeedbackConstantsCompat.TOGGLE_OFF)
@@ -183,9 +245,4 @@ internal fun ToggleSetting(title: String, summary: String, checked: Boolean, onC
             }
         }),
     )
-}
-
-internal object NotificationPermissionPolicy {
-    fun shouldOffer(sdk: Int, allowed: Boolean, requested: Boolean, offered: Boolean): Boolean =
-        sdk >= 33 && !allowed && !requested && !offered
 }

@@ -502,17 +502,7 @@ impl Default for SttSettings {
     fn default() -> Self {
         Self {
             mode: SttMode::Local,
-            entries: vec![SttChainEntry {
-                id: "stt-local".to_string(),
-                name: "Local".to_string(),
-                kind: SttEntryKind::Local,
-                enabled: true,
-                provider: String::new(),
-                url: String::new(),
-                model: String::new(),
-                api_key: String::new(),
-                streaming: true,
-            }],
+            entries: vec![],
             local_provider: LocalSttProvider::OpenAi,
             whisper_model: "base".to_string(),
             parakeet_model: "parakeet-tdt-0.6b-v3".to_string(),
@@ -677,9 +667,9 @@ pub struct LanguageModelSettings {
 impl Default for LanguageModelSettings {
     fn default() -> Self {
         Self {
-            entries: vec![LlmEntry::ollama("http://127.0.0.1:11434", "gemma4:e4b")],
-            ollama_url: "http://127.0.0.1:11434".to_string(),
-            ollama_model: "gemma4:e4b".to_string(),
+            entries: vec![],
+            ollama_url: String::new(),
+            ollama_model: String::new(),
             local_model: String::new(),
             keep_loaded: true,
             cloud_provider: "OpenAI".to_string(),
@@ -749,8 +739,7 @@ impl SttSettings {
 }
 
 impl LanguageModelSettings {
-    /// One-time seed for pre-list configs: convert legacy fields, or
-    /// fall back to the default Ollama entry. Idempotent.
+    /// One-time seed for pre-list configs with a configured legacy endpoint.
     pub fn ensure_seed(&mut self) {
         if !self.entries.is_empty() {
             return;
@@ -767,9 +756,6 @@ impl LanguageModelSettings {
                 self.ollama_model.clone()
             };
             self.entries.push(LlmEntry::ollama(&url, &model));
-        } else {
-            self.entries
-                .push(LlmEntry::ollama("http://127.0.0.1:11434", "gemma4:e4b"));
         }
         // Legacy localhost form canonicalized to 127.0.0.1.
         for e in &mut self.entries {
@@ -893,17 +879,27 @@ mod tests {
         assert!(Preferences::default().float_enabled);
         let mut legacy = serde_json::to_value(Preferences::default()).unwrap();
         legacy.as_object_mut().unwrap().remove("float_enabled");
-        assert!(serde_json::from_value::<Preferences>(legacy).unwrap().float_enabled);
+        assert!(
+            serde_json::from_value::<Preferences>(legacy)
+                .unwrap()
+                .float_enabled
+        );
         let mut explicit_off = serde_json::to_value(Preferences::default()).unwrap();
         explicit_off["float_enabled"] = serde_json::json!(false);
-        assert!(!serde_json::from_value::<Preferences>(explicit_off).unwrap().float_enabled);
+        assert!(
+            !serde_json::from_value::<Preferences>(explicit_off)
+                .unwrap()
+                .float_enabled
+        );
     }
 
     #[test]
     fn chain_respects_order_and_enabled() {
         let mut lm = LanguageModelSettings::default();
-        assert_eq!(lm.chain().len(), 1); // seeded ollama
-        lm.entries[0].enabled = false;
+        assert!(lm.chain().is_empty());
+        let mut first = LlmEntry::ollama("http://127.0.0.1:11434", "gemma4:e4b");
+        first.enabled = false;
+        lm.entries.push(first);
         assert!(lm.chain().is_empty());
         let mut second = LlmEntry::ollama("http://192.168.1.10:11434", "llama3.1");
         second.id = "lm-2".to_string();

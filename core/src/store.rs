@@ -632,12 +632,28 @@ impl Store {
                 row.get(0)
             })
             .ok();
-        let mut settings: AppSettings = json
-            .and_then(|j| serde_json::from_str(&j).ok())
+        let stored = json.and_then(|j| serde_json::from_str::<serde_json::Value>(&j).ok());
+        let mut settings: AppSettings = stored
+            .clone()
+            .and_then(|value| serde_json::from_value(value).ok())
             .unwrap_or_default();
-        // Pre-list configs seed one entry from legacy fields.
-        settings.language_models.ensure_seed();
-        settings.stt.ensure_seed();
+        // Only pre-chain configs need migration. An explicit empty list is
+        // intentional (including deletion of the last provider), and a fresh
+        // install must not fabricate Local or localhost Ollama providers.
+        if let Some(value) = stored {
+            if value
+                .get("language_models")
+                .is_some_and(|lm| lm.get("entries").is_none())
+            {
+                settings.language_models.ensure_seed();
+            }
+            if value
+                .get("stt")
+                .is_some_and(|stt| stt.get("entries").is_none())
+            {
+                settings.stt.ensure_seed();
+            }
+        }
         // Old default left Ollama thinking unset: force off (new
         // default). Runs every load, so existing installs migrate.
         for e in &mut settings.language_models.entries {
@@ -2022,6 +2038,50 @@ mod tests {
     use super::*;
 
     #[test]
+    fn provider_chains_start_empty_and_stay_empty_after_reload() {
+        let store = Store::open_memory().unwrap();
+        let mut settings = store.load_settings();
+        assert!(settings.stt.entries.is_empty());
+        assert!(settings.language_models.entries.is_empty());
+        // Legacy values may still exist after a user deletes their last row.
+        settings.language_models.ollama_url = "http://192.168.1.2:11434".into();
+        settings.language_models.ollama_model = "configured-model".into();
+        settings.stt.mode = crate::settings::SttMode::Cloud;
+        settings.stt.cloud_api_key = "test-key".into();
+        store.save_settings(&settings).unwrap();
+        let reloaded = store.load_settings();
+        assert!(reloaded.stt.entries.is_empty());
+        assert!(reloaded.language_models.entries.is_empty());
+    }
+
+    #[test]
+    fn legacy_provider_fields_migrate_only_when_chain_is_absent() {
+        let store = Store::open_memory().unwrap();
+        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
+        let lm = value["language_models"].as_object_mut().unwrap();
+        lm.remove("entries");
+        lm.insert("ollama_url".into(), "http://192.168.1.2:11434".into());
+        lm.insert("ollama_model".into(), "configured-model".into());
+        let stt = value["stt"].as_object_mut().unwrap();
+        stt.remove("entries");
+        stt.insert("mode".into(), "Cloud".into());
+        stt.insert("cloud_api_key".into(), "test-key".into());
+        store
+            .conn
+            .execute(
+                "INSERT INTO kv (key, value) VALUES ('settings', ?1)",
+                [value.to_string()],
+            )
+            .unwrap();
+        let reloaded = store.load_settings();
+        assert_eq!(
+            reloaded.language_models.entries[0].url,
+            "http://192.168.1.2:11434"
+        );
+        assert_eq!(reloaded.stt.entries[0].api_key, "test-key");
+    }
+
+    #[test]
     fn activity_counts_all_history_and_only_measured_speed() {
         let store = Store::open_memory().unwrap();
         for _ in 0..205 {
@@ -2089,8 +2149,18 @@ mod tests {
         use crate::settings::LocalSttProvider;
         let store = Store::open_memory().unwrap();
         let mut s = store.load_settings();
-        // Scoped mutation, then a separate persist read (never nested
-        // borrows). Seeded chain survives the round trip.
+        // A configured chain survives changing the local engine.
+        s.stt.entries.push(crate::settings::SttChainEntry {
+            id: "configured-local".into(),
+            name: "Local".into(),
+            kind: crate::settings::SttEntryKind::Local,
+            enabled: true,
+            provider: String::new(),
+            url: String::new(),
+            model: String::new(),
+            api_key: String::new(),
+            streaming: true,
+        });
         {
             s.stt.local_provider = LocalSttProvider::Nvidia;
         }
