@@ -1,25 +1,32 @@
-# MyWhisperMobile
+<div align="center">
+  <img src="assets/icons/readme-icon.png" alt="MyWhisperMobile icon" width="112" />
+  <h1>MyWhisperMobile</h1>
+  <p>Voice typing for Android, powered by the MyWhisper engine.</p>
+</div>
 
-MyWhisper for Android. Same engine ideas as desktop MyWhisper, same
-settings schema — different shell: no pill, the app is an **input
-method** with a mic button.
+Dictate into other apps using a floating microphone button or the
+MyWhisper input method. Configure speech recognition, text cleanup, and
+other settings from the app.
 
-- **Config app**: status/IME setup, Speech to Text, Text Cleanup,
-  Dictionary, History, Preferences. Mirrors the desktop Settings
-  screens (server-relevant subset).
-- **IME** (`MyWhisperIME`): a mic bar, not a keyboard. The button is
-  **Smart by default** — hold and release stops, a quick tap toggles
-  (second tap finishes) — using the desktop `smart_tap_ms` setting.
-  Results commit through the `InputConnection` (the Android equivalent
-  of desktop auto-paste).
+## Dictation at a glance
 
-## Scope (v1)
+- **Floating button** — keep a microphone available over other apps and
+  dictate into a focused text field. Setup guides you through microphone,
+  display-over-apps, and dictation-service permissions.
+- **MyWhisper keyboard** — an alternative input method with a mic bar.
+  Hold and release to stop, or tap to start and tap again to finish.
+- **Listening indicator** — an optional floating level meter shows audio
+  activity while recording.
+- **Your setup** — manage speech providers, text cleanup, dictionary,
+  history, preferences, and sync from the app.
 
-**Server functionality only**: the STT chain supports Self-hosted
-(OpenAI-compatible HTTP, sherpa-protocol WS) and Cloud entries.
-`Local` entries are skipped — on-device inference lands later (see
-`core/README.md`). Sync UI is not included yet; the store schema
-already carries the sync columns.
+## Speech recognition
+
+The supported default is server-based speech recognition, including
+self-hosted OpenAI-compatible HTTP and sherpa-protocol WebSocket servers,
+and cloud providers. On-device speech recognition and text cleanup are
+experimental and off by default; they require verified model files. See
+[core/README.md](core/README.md) for engine details.
 
 ## Layout
 
@@ -43,8 +50,9 @@ cd android
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Then: open the app → enable the input method → switch to it →
-grant mic → configure a server under Speech.
+Then open the app and follow setup to configure speech recognition and
+enable the floating button. To use the keyboard instead, enable and switch
+to the MyWhisper input method and grant microphone access.
 
 ## Bringing desktop updates over
 
