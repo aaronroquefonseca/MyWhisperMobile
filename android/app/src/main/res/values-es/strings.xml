@@ -69,7 +69,7 @@
     <string name="setup_pill">Pastilla de escucha</string>
     <string name="setup_pill_sub">Medidor de nivel flotante al grabar.</string>
     <string name="setup_float">Botón flotante</string>
-    <string name="setup_float_sub">Dicta en cualquier app sin cambiar de teclado. Usa tu comportamiento del micrófono. Aparece solo cuando hay un campo de texto activo y se oculta mientras el teclado MyWhisper está visible.</string>
+    <string name="setup_float_sub">Dicta en cualquier app sin cambiar de teclado. Se muestra con el teclado en pantalla de forma predeterminada; puedes elegir el enfoque del campo de texto en visibilidad. Se oculta mientras usas el teclado MyWhisper.</string>
     <string name="setup_float_on">El botón flotante está activado.</string>
     <string name="setup_float_off">El botón flotante está desactivado.</string>
     <string name="setup_float_overlay">Permitir mostrar sobre apps</string>

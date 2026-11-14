@@ -1627,7 +1627,15 @@ class OverlayService : Service(), Dictation.Listener {
         pill.clipBounds = android.graphics.Rect(if (vizDockedLeft) 0 else width - dp(52), 0,
             if (vizDockedLeft) dp(52) else width, dp(52))
         try { wm?.addView(pill, lp); updateRecordingBarMode() }
-        catch (_: Exception) { vizHolder = null; vizBars = null }
+        catch (_: Exception) {
+            vizMorphAnimator?.cancel()
+            vizHolder = null
+            vizBars = null
+            vizPrimary = null
+            vizCancel = null
+            // Losing the interactive recording window must never strand live capture.
+            dictation.cancel()
+        }
     }
 
     private fun collapseToggleToBubble() {
