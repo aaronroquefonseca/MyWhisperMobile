@@ -16,6 +16,11 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- Read system accent resources even when an OEM gives apps a separate palette. -->
+    <queries>
+        <package android:name="com.android.systemui" />
+    </queries>
+
     <application
         android:name=".MyWhisperApp"
         android:label="MyWhisper"
