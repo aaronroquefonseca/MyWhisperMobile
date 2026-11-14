@@ -1905,7 +1905,7 @@ class MainActivity : ComponentActivity() {
         Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
             Text("$label: $value", style = MaterialTheme.typography.bodyMedium)
             Row {
-                OutlinedButton(onClick = { open = true }) { Text(stringResource(R.string.action_change)) }
+                OutlinedButton(modifier = Modifier.semantics { contentDescription = "$label: $value" }, onClick = { open = true }) { Text(stringResource(R.string.action_change)) }
                 DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
                     options.forEach { o ->
                         DropdownMenuItem(

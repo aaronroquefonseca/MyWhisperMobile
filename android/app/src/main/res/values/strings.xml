@@ -69,7 +69,7 @@
     <string name="setup_pill">Listening pill</string>
     <string name="setup_pill_sub">Floating level meter while recording.</string>
     <string name="setup_float">Floating button</string>
-    <string name="setup_float_sub">Dictate in any app without switching input methods. Uses your mic-button behavior. Shows automatically when a text field is focused, and hides while the MyWhisper keyboard is up.</string>
+    <string name="setup_float_sub">Dictate in any app without switching keyboards. Uses your microphone behavior. Choose whether the button follows keyboard visibility or a focused text field. It hides while the MyWhisper keyboard is open.</string>
     <string name="setup_float_on">Floating button is on.</string>
     <string name="setup_float_off">Floating button is off.</string>
     <string name="setup_float_overlay">Allow display over apps</string>
