@@ -164,10 +164,10 @@ object FloatState {
      * Hold-delay presets (ms): the pause a finger must stay put on
      * the bubble before recording starts when no grip is shown. A
      * quick move inside that window means the touch was a drag, so
-     * dictation never opens. Default 50 ms.
+     * dictation never opens. Default 80 ms.
      */
-    val PRESS_DELAY_OPTIONS_MS: List<Int> = listOf(20, 35, 50, 80, 100, 150)
-    const val PRESS_DELAY_DEFAULT_MS: Int = 50
+    val PRESS_DELAY_OPTIONS_MS: List<Int> = listOf(50, 65, 80, 100, 125, 150)
+    const val PRESS_DELAY_DEFAULT_MS: Int = 80
 
     /** Stored hold delay, falling back to the default for unknown values. */
     fun pressDelayMs(stored: Int): Int =

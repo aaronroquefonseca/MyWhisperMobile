@@ -2,13 +2,11 @@ package com.mywhisper.mobile
 
 import android.annotation.SuppressLint
 import android.app.Notification
-import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.content.pm.ServiceInfo
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
@@ -51,6 +49,20 @@ class OverlayService : Service(), Dictation.Listener {
         private const val KEY_PRESS_DELAY = "float_press_delay"
 
         fun start(ctx: Context) {
+            // Behavior controls may refresh while disabled. Do not create a
+            // service unless the persisted setting currently enables it.
+            val enabled = try {
+                CoreBridge.getSettings().getOrThrow().optJSONObject("preferences")
+                    ?.optBoolean("float_enabled", true) == true
+            } catch (_: Exception) { false }
+            if (!enabled) return
+            // Enabled by default; first-run setup owns permission requests.
+            // Avoid launching system settings or a microphone foreground service
+            // until the user has granted the required permissions.
+            if (!android.provider.Settings.canDrawOverlays(ctx) ||
+                !MyWhisperAccessibility.isOn(ctx) ||
+                androidx.core.content.ContextCompat.checkSelfPermission(ctx, android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) return
             val i = Intent(ctx, OverlayService::class.java).setAction(ACTION_START)
             androidx.core.content.ContextCompat.startForegroundService(ctx, i)
         }
@@ -153,7 +165,7 @@ class OverlayService : Service(), Dictation.Listener {
     private fun resumeBubble() {
         getSharedPreferences(PREFS, MODE_PRIVATE).edit { remove("float_snoozed_until") }
         mainHandler.removeCallbacks(snoozeEnd)
-        getSystemService(NotificationManager::class.java)?.cancel(45)
+        getSystemService(NotificationManager::class.java)?.cancel(AppNotificationChannels.SNOOZE_NOTIFICATION_ID)
         applyVisibility()
     }
 
@@ -164,13 +176,22 @@ class OverlayService : Service(), Dictation.Listener {
         mainHandler.removeCallbacks(snoozeEnd)
         mainHandler.postDelayed(snoozeEnd, minutes * 60000L)
         removeBubble(animate = true)
-        val resume = PendingIntent.getService(this, 45,
+        showSnoozeNotification()
+    }
+
+    private fun showSnoozeNotification() {
+        val remaining = getSharedPreferences(PREFS, MODE_PRIVATE)
+            .getLong("float_snoozed_until", 0) - System.currentTimeMillis()
+        if (remaining <= 0) return
+        val minutes = ((remaining + 59_999L) / 60_000L).toInt()
+        val resume = PendingIntent.getService(this, AppNotificationChannels.SNOOZE_NOTIFICATION_ID,
             Intent(this, OverlayService::class.java).setAction(ACTION_UNSNOOZE),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        getSystemService(NotificationManager::class.java)?.notify(45,
-            NotificationCompat.Builder(this, CHANNEL).setSmallIcon(R.drawable.ic_stat_sync)
+        getSystemService(NotificationManager::class.java)?.notify(AppNotificationChannels.SNOOZE_NOTIFICATION_ID,
+            NotificationCompat.Builder(this, AppNotificationChannels.FLOAT_CONTROLS).setSmallIcon(R.drawable.ic_stat_sync)
                 .setContentTitle(getString(R.string.float_snoozed, minutes))
                 .setContentText(getString(R.string.float_resume)).setContentIntent(resume)
+                .setSilent(true).setOnlyAlertOnce(true).setTimeoutAfter(remaining)
                 .addAction(R.drawable.ic_mic, getString(R.string.float_resume), resume).build())
     }
 
@@ -475,7 +496,7 @@ class OverlayService : Service(), Dictation.Listener {
     /**
      * Visibility watchdog: accessibility events miss focus loss
      * (tapping dead space, keyboard dismiss, app switch), leaving
-     * the bubble stuck. Window events handle normal changes; re-check every 250 ms as fallback.
+     * the bubble stuck. Window events handle normal changes; re-check every 100 ms as fallback.
      */
     private val watchTick = object : Runnable {
         override fun run() {
@@ -499,9 +520,7 @@ class OverlayService : Service(), Dictation.Listener {
     override fun onCreate() {
         super.onCreate()
         android.util.Log.i("MwFloat", "service onCreate")
-        getSystemService(NotificationManager::class.java)?.createNotificationChannel(
-            NotificationChannel(CHANNEL, getString(R.string.unified_notif_channel), NotificationManager.IMPORTANCE_LOW),
-        )
+        AppNotificationChannels.ensure(this)
         // Drop the retired solo channels (pre-unification installs).
         try {
             val nm = getSystemService(NotificationManager::class.java)
@@ -512,6 +531,26 @@ class OverlayService : Service(), Dictation.Listener {
             smartTapMs = { readLong("hotkeys", "smart_tap_ms", 150L) },
             mode = { readMode() },
             releaseDelayMs = { readLong("stt", "release_delay_ms", 0L) },
+            startCapture = { onPcm, onError, onLevel ->
+                try {
+                    // Promote synchronously from the user's visible bubble gesture,
+                    // before AudioRecord starts. Idle boot readiness needs no mic type.
+                    startForegroundWithType(microphone = true)
+                    val cap = AudioCapture(onPcm = onPcm, onError = onError, onLevel = onLevel)
+                    if (cap.start()) object : Dictation.Capture {
+                        override fun stop() {
+                            cap.stop()
+                            if (foregrounded) try { startForegroundWithType(microphone = false) } catch (_: Exception) { }
+                        }
+                    } else {
+                        startForegroundWithType(microphone = false)
+                        null
+                    }
+                } catch (e: Exception) {
+                    onError(e.message ?: getString(R.string.setup_mic_denied))
+                    null
+                }
+            },
             // On-device first (moonshine-v2 pack, VAD-chunked); miss or
             // throw → server chain. Pack-gated: null without the pack.
             localTranscribe = { pcm -> LocalStt.transcribeIfEnabled(this, pcm) },
@@ -597,6 +636,12 @@ class OverlayService : Service(), Dictation.Listener {
                 return START_STICKY
             }
             else -> {
+                ensureCore()
+                if (readPrefsObj()?.optBoolean("float_enabled", true) == false) {
+                    teardownFloat()
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
                 if (!android.provider.Settings.canDrawOverlays(this)) {
                     // Permission recovery flow: latch the denial (Setup
                     // tells first-run apart from revoked), explain, and
@@ -636,6 +681,7 @@ class OverlayService : Service(), Dictation.Listener {
                 dictation.listener = this
                 foregrounded = true
                 FloatState.onChange = { applyVisibility() }
+                if (snoozed()) showSnoozeNotification()
                 applyVisibility()
                 mainHandler.removeCallbacks(watchTick)
                 mainHandler.postDelayed(watchTick, 100)
@@ -652,7 +698,7 @@ class OverlayService : Service(), Dictation.Listener {
         }
     }
 
-    private fun startForegroundWithType() {
+    private fun startForegroundWithType(microphone: Boolean = ::dictation.isInitialized && dictation.current == Dictation.State.RECORDING) {
         val s = if (::dictation.isInitialized) dictation.current else Dictation.State.IDLE
         NotifPolicy.UnifiedState.floatState = s
         val notif = buildNotif(s)
@@ -661,11 +707,8 @@ class OverlayService : Service(), Dictation.Listener {
             getSystemService(NotificationManager::class.java)?.cancel(NotifPolicy.LEGACY_FLOAT_NOTIF_ID)
         } catch (_: Exception) {
         }
+        val types = OverlayForegroundPolicy.types(Build.VERSION.SDK_INT, microphone)
         if (Build.VERSION.SDK_INT >= 29) {
-            var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-            if (Build.VERSION.SDK_INT >= 29) {
-                types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-            }
             startForeground(NOTIF_ID, notif, types)
         } else {
             @Suppress("DEPRECATION")
@@ -735,6 +778,9 @@ class OverlayService : Service(), Dictation.Listener {
             .setSmallIcon(R.drawable.ic_stat_sync)
             .setContentIntent(openIntent)
             .setOngoing(spec.ongoing)
+            .setSilent(true)
+            .setOnlyAlertOnce(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, getString(R.string.notif_stop), stopIntent)
         if (spec.showSyncNow) {
             b.addAction(android.R.drawable.ic_popup_sync, getString(R.string.notif_sync_now), nowIntent)
@@ -792,6 +838,7 @@ class OverlayService : Service(), Dictation.Listener {
      * Executes [floatTeardownPlan] field by field (JVM-tested matrix).
      */
     private fun teardownFloat() {
+        getSystemService(NotificationManager::class.java)?.cancel(AppNotificationChannels.SNOOZE_NOTIFICATION_ID)
         val plan = floatTeardownPlan(NotifPolicy.UnifiedState.syncActive)
         if (plan.detachListener) {
             try {
@@ -848,7 +895,7 @@ class OverlayService : Service(), Dictation.Listener {
     private fun applyVisibility() {
         val on = try {
             val s = CoreBridge.getSettings().getOrThrow()
-            s.optJSONObject("preferences")?.optBoolean("float_enabled", false) == true
+            s.optJSONObject("preferences")?.optBoolean("float_enabled", true) == true
         } catch (_: Exception) {
             false
         }

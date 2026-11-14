@@ -265,6 +265,16 @@ class MyWhisperAccessibility : AccessibilityService() {
 
     override fun onServiceConnected() {
         live = this
+        syncFocus()
+        // The system reconnects accessibility after boot/process recovery. Restore
+        // enabled readiness even if the boot receiver ran before this binding.
+        try {
+            val enabled = CoreBridge.getSettings().getOrThrow().optJSONObject("preferences")
+                ?.optBoolean("float_enabled", true) == true
+            if (enabled) OverlayService.start(this)
+        } catch (e: Exception) {
+            android.util.Log.i("MwFloat", "accessibility restore deferred: ${e.message}")
+        }
     }
 
     override fun onUnbind(intent: android.content.Intent?): Boolean {

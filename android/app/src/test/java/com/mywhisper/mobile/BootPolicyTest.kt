@@ -106,11 +106,12 @@ class BootPolicyTest {
         assertEquals(BootReceiver.MAX_RETRIES, attempt)
     }
 
-    @Test fun directStartAllowedBelowApi31Only() {
+    @Test fun directDataSyncStartAllowedBelowApi35Only() {
         assertTrue(BootPolicy.directStartAllowedAtBoot(29))
         assertTrue(BootPolicy.directStartAllowedAtBoot(30))
-        assertFalse(BootPolicy.directStartAllowedAtBoot(31))
-        assertFalse(BootPolicy.directStartAllowedAtBoot(34))
+        assertTrue(BootPolicy.directStartAllowedAtBoot(31))
+        assertTrue(BootPolicy.directStartAllowedAtBoot(34))
+        assertFalse(BootPolicy.directStartAllowedAtBoot(35))
         assertFalse(BootPolicy.directStartAllowedAtBoot(36))
     }
 
