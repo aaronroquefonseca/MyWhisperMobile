@@ -40,6 +40,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
@@ -71,7 +72,6 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
@@ -101,6 +101,9 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.HapticFeedbackConstantsCompat
+import androidx.core.view.ViewCompat
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.rememberTextMeasurer
@@ -147,6 +150,7 @@ class MainActivity : ComponentActivity() {
     private val micGranted = mutableStateOf(false)
     private val overlayGranted = mutableStateOf(false)
     private val notificationsAllowed = mutableStateOf(false)
+    private val notificationOffer = mutableStateOf<Int?>(null)
     private val a11yOn = mutableStateOf(false)
     private val micRationale = mutableStateOf(false)
     private val micBlocked = mutableStateOf(false)
@@ -1028,6 +1032,48 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** One app-wide contextual offer; declining never prevents foreground services. */
+    private fun offerNotificationPermission(reason: Int) {
+        val prefs = getSharedPreferences("mw_state", MODE_PRIVATE)
+        if (!NotificationPermissionPolicy.shouldOffer(
+                android.os.Build.VERSION.SDK_INT, notificationsAllowed.value,
+                prefs.getBoolean("notification_requested", false),
+                prefs.getBoolean("notification_guidance_seen", false),
+            )) return
+        prefs.edit { putBoolean("notification_guidance_seen", true) }
+        notificationOffer.value = reason
+    }
+
+    private fun requestNotificationPermission() {
+        refreshPermStates()
+        if (notificationsAllowed.value) return
+        val prefs = getSharedPreferences("mw_state", MODE_PRIVATE)
+        if (android.os.Build.VERSION.SDK_INT >= 33 && !prefs.getBoolean("notification_requested", false)) {
+            prefs.edit { putBoolean("notification_requested", true) }
+            notifPerm.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
+        }
+    }
+
+    @Composable
+    private fun NotificationPermissionOffer() {
+        val reason = notificationOffer.value ?: return
+        AlertDialog(
+            onDismissRequest = { notificationOffer.value = null },
+            title = { Text(getString(R.string.material_notification_title)) },
+            text = { Text(getString(reason) + "\n\n" + getString(R.string.material_notifications_optional)) },
+            confirmButton = {
+                TextButton(onClick = { notificationOffer.value = null; requestNotificationPermission() }) {
+                    Text(getString(R.string.new_enable_notifications))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { notificationOffer.value = null }) { Text(getString(R.string.material_not_now)) }
+            },
+        )
+    }
+
     private fun openAppSettings() {
         try {
             startActivity(
@@ -1541,7 +1587,12 @@ class MainActivity : ComponentActivity() {
                             9 -> BubbleScreen(s, onBehavior = { navigate(10) })
                             14 -> VoiceHome(s, onNavigate = ::navigate)
                             15 -> LibraryHome(onNavigate = ::navigate)
-                            16 -> OnboardingScreen(s, onSpeech = { navigate(1) }, onDone = ::finishOnboarding)
+                            16 -> OnboardingScreen(s, onSpeech = { navigate(1) }, onDone = ::finishOnboarding, onComplete = {
+                                finishOnboarding()
+                                if (s.optJSONObject("preferences")?.optBoolean("float_enabled", true) == true) {
+                                    offerNotificationPermission(R.string.material_notification_dictation)
+                                }
+                            })
                             1 -> SttScreen(s)
                             2 -> CleanupScreen(s)
                             3 -> DictionaryScreen(s)
@@ -1559,6 +1610,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+            NotificationPermissionOffer()
         }
     }
 
@@ -1671,7 +1723,7 @@ class MainActivity : ComponentActivity() {
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                Switch(
+                FeedbackSwitch(
                     modifier = Modifier.semantics { contentDescription = e.optString("name", LOCAL_ENTRY_NAME) },
                     checked = e.optBoolean("enabled", true),
                     onCheckedChange = onToggle,
@@ -1913,31 +1965,7 @@ class MainActivity : ComponentActivity() {
         checked: Boolean,
         onChecked: (Boolean) -> Unit,
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(title)
-                Text(sub, style = MaterialTheme.typography.bodySmall)
-            }
-            Switch(modifier = Modifier.semantics { contentDescription = title }, checked = checked, onCheckedChange = onChecked)
-        }
-    }
-
-    @OptIn(ExperimentalLayoutApi::class)
-    @Composable
-    private fun ChoiceSetting(label: String, value: String, options: List<String>, onPick: (String) -> Unit) {
-        Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-            Text(label, style = MaterialTheme.typography.bodyMedium)
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                options.forEach { option ->
-                    FilterChip(
-                        selected = option == value,
-                        onClick = { onPick(option) },
-                        label = { Text(option) },
-                        modifier = Modifier.semantics { contentDescription = "$label: $option" },
-                    )
-                }
-            }
-        }
+        ToggleSetting(title, sub, checked, onChecked)
     }
 
     @Composable
@@ -1952,7 +1980,7 @@ class MainActivity : ComponentActivity() {
             ListItem(
                 headlineContent = { Text(label) },
                 supportingContent = { Text(value, color = MaterialTheme.colorScheme.onSurfaceVariant) },
-                trailingContent = { Text("⌄") },
+                trailingContent = { Icon(Icons.Default.ArrowDropDown, contentDescription = null) },
                 modifier = Modifier.clickable { open = true },
             )
             DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
@@ -2081,7 +2109,7 @@ class MainActivity : ComponentActivity() {
                 Column(Modifier.fillMaxWidth().padding(16.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(getString(R.string.setup_float), Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
-                        Switch(checked = enabled, enabled = !settingsBusy.value,
+                        FeedbackSwitch(checked = enabled, enabled = !settingsBusy.value,
                             modifier = Modifier.semantics { contentDescription = getString(R.string.setup_float) },
                             onCheckedChange = { setFloatingEnabled(s, it) })
                     }
@@ -2145,7 +2173,7 @@ class MainActivity : ComponentActivity() {
                         Text(getString(R.string.task_cleanup_description), style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    Switch(checked = cleanupEnabled, enabled = !settingsBusy.value,
+                    FeedbackSwitch(checked = cleanupEnabled, enabled = !settingsBusy.value,
                         modifier = Modifier.semantics { contentDescription = getString(R.string.task_cleanup_toggle) },
                         onCheckedChange = { cleanup.put("cleanup_enabled", it); save() })
                 }
@@ -2194,13 +2222,18 @@ class MainActivity : ComponentActivity() {
         prefs.put("float_enabled", enabled); s.put("preferences", prefs)
         save {
             try {
-                if (enabled) OverlayService.start(this@MainActivity) else OverlayService.stop(this@MainActivity)
+                if (enabled) {
+                    OverlayService.start(this@MainActivity)
+                    if (micGranted.value && overlayGranted.value && a11yOn.value) {
+                        offerNotificationPermission(R.string.material_notification_dictation)
+                    }
+                } else OverlayService.stop(this@MainActivity)
             } catch (e: Exception) { toast(e.message ?: getString(R.string.task_service_failed)) }
         }
     }
 
     @Composable
-    private fun OnboardingScreen(s: JSONObject, onSpeech: () -> Unit, onDone: () -> Unit) {
+    private fun OnboardingScreen(s: JSONObject, onSpeech: () -> Unit, onDone: () -> Unit, onComplete: () -> Unit) {
         var started by rememberSaveable { mutableStateOf(getSharedPreferences("mw_state", MODE_PRIVATE).getBoolean("bubble_onboarding_seen", false)) }
         val setup = bubbleSetupState(s)
         TaskPage {
@@ -2238,7 +2271,7 @@ class MainActivity : ComponentActivity() {
                             }
                             BubbleSetupState.Step.COMPLETE -> {
                                 Text(getString(if (s.optJSONObject("preferences")?.optBoolean("float_enabled", true) == true) R.string.control_bubble_on_help else R.string.new_bubble_ready_help))
-                                Button(onClick = onDone) { Text(getString(R.string.task_finish_setup)) }
+                                Button(onClick = onComplete) { Text(getString(R.string.task_finish_setup)) }
                             }
                         }
                     }
@@ -2272,6 +2305,7 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun BubbleScreen(s: JSONObject, onBehavior: () -> Unit) {
         val setupPrefs = getSharedPreferences("mw_state", MODE_PRIVATE)
+        val hapticView = LocalView.current
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
             if (android.os.Build.VERSION.SDK_INT < 33) {
                 Text(getString(R.string.setup_float_old_warn), modifier = Modifier.padding(16.dp), color = MaterialTheme.colorScheme.error)
@@ -2285,7 +2319,7 @@ class MainActivity : ComponentActivity() {
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(stringResource(R.string.setup_float), modifier = Modifier.weight(1f))
-                    Switch(modifier = Modifier.semantics { contentDescription = getString(R.string.setup_float) }, checked = on, onCheckedChange = {
+                    FeedbackSwitch(modifier = Modifier.semantics { contentDescription = getString(R.string.setup_float) }, checked = on, onCheckedChange = {
                         setFloatingEnabled(s, it)
                     })
                 }
@@ -2299,7 +2333,7 @@ class MainActivity : ComponentActivity() {
                         stringResource(R.string.setup_float_grab),
                         modifier = Modifier.weight(1f),
                     )
-                    Switch(modifier = Modifier.semantics { contentDescription = getString(R.string.setup_float_grab) }, checked = grab, onCheckedChange = {
+                    FeedbackSwitch(modifier = Modifier.semantics { contentDescription = getString(R.string.setup_float_grab) }, checked = grab, onCheckedChange = {
                         grab = it
                         setupPrefs.edit { putBoolean("float_grab", it) }
                         // Rebuild the bubble chrome for the new mode.
@@ -2314,7 +2348,7 @@ class MainActivity : ComponentActivity() {
                 var upperLock by remember { mutableStateOf(setupPrefs.getBoolean("float_lock_enabled", true)) }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(stringResource(R.string.float_lock_enabled), modifier = Modifier.weight(1f))
-                    Switch(modifier = Modifier.semantics { contentDescription = getString(R.string.float_lock_enabled) }, checked = upperLock, onCheckedChange = {
+                    FeedbackSwitch(modifier = Modifier.semantics { contentDescription = getString(R.string.float_lock_enabled) }, checked = upperLock, onCheckedChange = {
                         upperLock = it
                         setupPrefs.edit { putBoolean("float_lock_enabled", it) }
                         OverlayService.start(this@MainActivity)
@@ -2389,7 +2423,13 @@ class MainActivity : ComponentActivity() {
                         value = delayOptions.indexOf(delayMs).coerceAtLeast(0).toFloat(),
                         valueRange = 0f..delayOptions.lastIndex.toFloat(),
                         steps = delayOptions.size - 2,
-                        onValueChange = { delayMs = delayOptions[it.roundToInt().coerceIn(delayOptions.indices)] },
+                        onValueChange = {
+                            val next = delayOptions[it.roundToInt().coerceIn(delayOptions.indices)]
+                            if (next != delayMs) {
+                                delayMs = next
+                                ViewCompat.performHapticFeedback(hapticView, HapticFeedbackConstantsCompat.SEGMENT_TICK)
+                            }
+                        },
                         modifier = Modifier.semantics { contentDescription = getString(R.string.setup_float_delay); stateDescription = "$delayMs ms" },
                         onValueChangeFinished = {
                             setupPrefs.edit { putInt("float_press_delay", delayMs) }
@@ -2411,22 +2451,14 @@ class MainActivity : ComponentActivity() {
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
             Section(getString(R.string.new_notifications)) {
                 Text(
-                    "Shows the sync status while sync runs.",
+                    getString(R.string.material_notifications_description),
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Spacer(Modifier.height(8.dp))
                 if (notificationsAllowed.value) {
                     Text(getString(R.string.new_notifications_enabled), color = MaterialTheme.colorScheme.primary)
                 } else {
-                    Button(onClick = {
-                        val state = getSharedPreferences("mw_state", MODE_PRIVATE)
-                        if (android.os.Build.VERSION.SDK_INT >= 33 && !state.getBoolean("notification_requested", false)) {
-                            state.edit { putBoolean("notification_requested", true) }
-                            notifPerm.launch(Manifest.permission.POST_NOTIFICATIONS)
-                        } else {
-                            startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
-                        }
-                    }) { Text(getString(R.string.new_enable_notifications)) }
+                    Button(onClick = { requestNotificationPermission() }) { Text(getString(R.string.new_enable_notifications)) }
                 }
                 Spacer(Modifier.height(8.dp))
                 // Per-mode notification policy: each toggle rebuilds
@@ -2511,7 +2543,7 @@ class MainActivity : ComponentActivity() {
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
-                    Switch(
+                    FeedbackSwitch(
                         modifier = Modifier.semantics { contentDescription = getString(R.string.setup_pill) },
                         checked = prefs.optBoolean("show_pill", true),
                         onCheckedChange = {
@@ -3014,7 +3046,7 @@ class MainActivity : ComponentActivity() {
                                 Text(e.optString("name", "entry"))
                                 Text(entrySummary(e), style = MaterialTheme.typography.bodySmall)
                             }
-                            Switch(
+                            FeedbackSwitch(
                                 modifier = Modifier.semantics { contentDescription = e.optString("name", LOCAL_ENTRY_NAME) },
                                 checked = e.optBoolean("enabled", true),
                                 onCheckedChange = {
@@ -3468,7 +3500,7 @@ class MainActivity : ComponentActivity() {
                 val vad = stt.optBoolean("vad_enabled", false)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(stringResource(R.string.stt_vad), modifier = Modifier.weight(1f))
-                    Switch(modifier = Modifier.semantics { contentDescription = getString(R.string.stt_vad) }, checked = vad, onCheckedChange = {
+                    FeedbackSwitch(modifier = Modifier.semantics { contentDescription = getString(R.string.stt_vad) }, checked = vad, onCheckedChange = {
                         stt.put("vad_enabled", it); save(); version++
                     })
                 }
@@ -3827,7 +3859,7 @@ class MainActivity : ComponentActivity() {
                     if (kind == "SelfHosted") {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(stringResource(R.string.stt_streaming), modifier = Modifier.weight(1f))
-                            Switch(modifier = Modifier.semantics { contentDescription = getString(R.string.stt_streaming) }, checked = streaming, onCheckedChange = { streaming = it })
+                            FeedbackSwitch(modifier = Modifier.semantics { contentDescription = getString(R.string.stt_streaming) }, checked = streaming, onCheckedChange = { streaming = it })
                         }
                         Text(
                             stringResource(R.string.stt_streaming_note),
@@ -3836,7 +3868,7 @@ class MainActivity : ComponentActivity() {
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(stringResource(R.string.stt_enabled), modifier = Modifier.weight(1f))
-                        Switch(modifier = Modifier.semantics { contentDescription = getString(R.string.stt_enabled) }, checked = enabled, onCheckedChange = { enabled = it })
+                        FeedbackSwitch(modifier = Modifier.semantics { contentDescription = getString(R.string.stt_enabled) }, checked = enabled, onCheckedChange = { enabled = it })
                     }
                     if (!isLocalKind) {
                         // Draft probe: same ONE row pattern (button +
@@ -4140,7 +4172,7 @@ class MainActivity : ComponentActivity() {
                 val on = lm.optBoolean("cleanup_enabled", true)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(stringResource(R.string.cleanup_enable), modifier = Modifier.weight(1f))
-                    Switch(modifier = Modifier.semantics { contentDescription = getString(R.string.cleanup_enable) }, checked = on, onCheckedChange = {
+                    FeedbackSwitch(modifier = Modifier.semantics { contentDescription = getString(R.string.cleanup_enable) }, checked = on, onCheckedChange = {
                         lm.put("cleanup_enabled", it); save(); version++
                     })
                 }
@@ -4390,7 +4422,7 @@ class MainActivity : ComponentActivity() {
                                     style = MaterialTheme.typography.bodySmall,
                                 )
                             }
-                            Switch(
+                            FeedbackSwitch(
                                 modifier = Modifier.semantics { contentDescription = e.optString("name", LOCAL_ENTRY_NAME) },
                                 checked = e.optBoolean("enabled", true),
                                 onCheckedChange = {
@@ -5118,7 +5150,7 @@ class MainActivity : ComponentActivity() {
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(stringResource(R.string.stt_enabled), modifier = Modifier.weight(1f))
-                        Switch(modifier = Modifier.semantics { contentDescription = getString(R.string.stt_enabled) }, checked = enabled, onCheckedChange = { enabled = it })
+                        FeedbackSwitch(modifier = Modifier.semantics { contentDescription = getString(R.string.stt_enabled) }, checked = enabled, onCheckedChange = { enabled = it })
                     }
                     if (!isLocalKind) {
                         // Draft probe: same ONE row pattern (button +
@@ -5869,7 +5901,7 @@ class MainActivity : ComponentActivity() {
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         }
-                        Switch(
+                        FeedbackSwitch(
                             modifier = Modifier.semantics { contentDescription = getString(R.string.hist_keep) },
                             checked = priv.optBoolean("history_enabled", true),
                             onCheckedChange = {
@@ -5885,7 +5917,7 @@ class MainActivity : ComponentActivity() {
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         }
-                        Switch(
+                        FeedbackSwitch(
                             modifier = Modifier.semantics { contentDescription = getString(R.string.hist_cancelled) },
                             checked = priv.optBoolean("save_discarded_transcriptions", false),
                             onCheckedChange = {
@@ -6132,6 +6164,10 @@ class MainActivity : ComponentActivity() {
                 .verticalScroll(rememberScrollState()),
         ) {
             Section(stringResource(R.string.sync_this)) {
+                if (!notificationsAllowed.value) {
+                    Text(getString(R.string.material_notification_sync), style = MaterialTheme.typography.bodyMedium)
+                    TextButton(onClick = { requestNotificationPermission() }) { Text(getString(R.string.new_enable_notifications)) }
+                }
                 val running = status?.optBoolean("running", false) == true
                 // First-foreground promote: a boot-parked sync starts
                 // here (activity visible = FGS exemption holds), then the
@@ -6213,7 +6249,7 @@ getString(R.string.sync_running, shown)
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
-                    Switch(modifier = Modifier.semantics { contentDescription = getString(R.string.sync_advertise) }, checked = adv, onCheckedChange = {
+                    FeedbackSwitch(modifier = Modifier.semantics { contentDescription = getString(R.string.sync_advertise) }, checked = adv, onCheckedChange = {
                         sync.put("advertise", it); save(); version++
                         restartSyncIfRunning(running)
                     })
@@ -6221,7 +6257,7 @@ getString(R.string.sync_running, shown)
                 val enabled = sync.optBoolean("enabled", true)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(stringResource(R.string.sync_enabled), modifier = Modifier.weight(1f))
-                    Switch(modifier = Modifier.semantics { contentDescription = getString(R.string.sync_enabled) }, checked = enabled, onCheckedChange = {
+                    FeedbackSwitch(modifier = Modifier.semantics { contentDescription = getString(R.string.sync_enabled) }, checked = enabled, onCheckedChange = {
                         sync.put("enabled", it); save(); version++
                         if (!it && running) {
                             SyncService.stop(this@MainActivity)
@@ -6241,7 +6277,7 @@ getString(R.string.sync_running, shown)
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
-                    Switch(
+                    FeedbackSwitch(
                         modifier = Modifier.semantics { contentDescription = getString(R.string.sync_boot) },
                         checked = sync.optBoolean("start_on_boot", true),
                         onCheckedChange = {
@@ -6269,6 +6305,7 @@ getString(R.string.sync_running, shown)
                             // CoreBridge.syncStart() here; just refresh
                             // status once the service promotes.
                             SyncService.start(this@MainActivity)
+                            offerNotificationPermission(R.string.material_notification_sync)
                             workers.execute {
                                 try {
                                     Thread.sleep(1_000)

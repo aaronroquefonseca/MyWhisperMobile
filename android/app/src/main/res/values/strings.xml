@@ -57,7 +57,7 @@
     <string name="setup_step4">4 · Notifications</string>
     <string name="setup_notif_body">Shows the sync status while sync runs.</string>
     <string name="setup_notif_allow">Allow notifications</string>
-    <string name="setup_notif_denied">Without notifications the sync status icon stays hidden</string>
+    <string name="setup_notif_denied">Notifications are off. Dictation and sync can still run.</string>
     <string name="setup_notif_old">Notifications are always on below Android 13</string>
     <string name="setup_mic_button">Microphone behavior</string>
     <string name="setup_mode_push">Hold to talk: press and hold, release to stop.</string>
@@ -487,4 +487,10 @@
     <string name="task_service_failed">Could not update the floating button. Check permissions.</string>
     <string name="task_keyboard_optional">The MyWhisper keyboard is optional. Keep using the keyboard you already like.</string>
     <string name="task_api_key_required">Add an API key for the default cloud endpoint.</string>
+    <string name="material_notification_title">Allow notifications?</string>
+    <string name="material_notifications_optional">This permission is shared by the app. Dictation and sync can still run if you decline.</string>
+    <string name="material_not_now">Not now</string>
+    <string name="material_notification_dictation">Allow notifications to see recording status and controls in the notification drawer.</string>
+    <string name="material_notification_sync">Allow notifications to see sync-server status in the notification drawer.</string>
+    <string name="material_notifications_description">Show recording controls, processing progress, and sync status.</string>
 </resources>

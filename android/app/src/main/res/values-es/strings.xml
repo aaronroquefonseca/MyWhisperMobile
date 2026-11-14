@@ -57,7 +57,7 @@
     <string name="setup_step4">4 · Notificaciones</string>
     <string name="setup_notif_body">Muestra el estado de sincronización mientras está activa.</string>
     <string name="setup_notif_allow">Permitir notificaciones</string>
-    <string name="setup_notif_denied">Sin notificaciones el icono de estado queda oculto</string>
+    <string name="setup_notif_denied">Las notificaciones están desactivadas. El dictado y la sincronización pueden seguir funcionando.</string>
     <string name="setup_notif_old">Las notificaciones siempre están activas antes de Android 13</string>
     <string name="setup_mic_button">Comportamiento del micrófono</string>
     <string name="setup_mode_push">Mantén para hablar: pulsa, mantén y suelta para parar.</string>
@@ -488,4 +488,10 @@
     <string name="task_service_failed">No se pudo actualizar el botón flotante. Comprueba los permisos.</string>
     <string name="task_keyboard_optional">El teclado MyWhisper es opcional. Puedes seguir usando el teclado que prefieras.</string>
     <string name="task_api_key_required">Añade una clave API para el endpoint predeterminado del proveedor.</string>
+    <string name="material_notification_title">¿Permitir notificaciones?</string>
+    <string name="material_notifications_optional">Este permiso se comparte en toda la app. El dictado y la sincronización pueden seguir funcionando si lo rechazas.</string>
+    <string name="material_not_now">Ahora no</string>
+    <string name="material_notification_dictation">Permite las notificaciones para ver el estado y los controles de grabación en el panel de notificaciones.</string>
+    <string name="material_notification_sync">Permite las notificaciones para ver el estado del servidor de sincronización en el panel de notificaciones.</string>
+    <string name="material_notifications_description">Muestra controles de grabación, progreso del procesamiento y estado de sincronización.</string>
 </resources>
