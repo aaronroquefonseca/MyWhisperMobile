@@ -11,23 +11,9 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 
 /**
- * Text commit path for the floating bubble (which has no
- * InputConnection): pastes dictation results into the focused
- * editable field via the clipboard + ACTION_PASTE, mirroring the
- * desktop flow. The APP inserts at its own cursor — we never
- * read-replace the whole field, so duplicating its text is
- * impossible by construction (the SET_TEXT-splice approach is gone).
- *
- * History-leak guard: on API 33+ the clip carries
- * ClipDescription.EXTRA_IS_SENSITIVE, excluding the transcription
- * from the keyboard clipboard history/suggestions; below 33 the
- * flag does not exist and commit proceeds without it.
- *
- * Virtual-input-device alternative (VirtualDeviceManager +
- * companion-device association) was rejected: it needs
- * CREATE_VIRTUAL_DEVICE + a virtual display/session for key
- * injection, while the accessibility service already holds a direct
- * paste path with no extra privilege.
+ * Bubble text insertion uses the accessibility input connection on Android 13+.
+ * Older devices and unavailable connections retain clipboard paste compatibility.
+ * Sensitive clipboard metadata hides previews; it cannot guarantee history exclusion.
  */
 class MyWhisperAccessibility : AccessibilityService() {
 
@@ -63,17 +49,23 @@ class MyWhisperAccessibility : AccessibilityService() {
             } catch (_: Exception) {
                 false
             }
-            if (focused != FloatState.hasTextFocus) {
+            val keyboard = try {
+                live?.windows?.any { window ->
+                    val bounds = android.graphics.Rect()
+                    window.getBoundsInScreen(bounds)
+                    window.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_INPUT_METHOD && !bounds.isEmpty
+                } == true
+            } catch (_: Exception) { false }
+            if (focused != FloatState.hasTextFocus || keyboard != FloatState.keyboardVisible) {
                 FloatState.hasTextFocus = focused
+                FloatState.keyboardVisible = keyboard
                 FloatState.refresh()
             }
         }
 
         /**
-         * True on API 33+, where ClipDescription.EXTRA_IS_SENSITIVE
-         * exists and keeps the transcription out of the keyboard
-         * clipboard history/suggestions. Pure (sdkInt param) for JVM
-         * tests; production passes Build.VERSION.SDK_INT.
+         * API gate for sensitive clipboard preview metadata.
+         * This metadata does not guarantee exclusion from clipboard history.
          */
         fun shouldMarkSensitive(sdkInt: Int): Boolean = sdkInt >= 33
 
@@ -121,7 +113,8 @@ class MyWhisperAccessibility : AccessibilityService() {
          * clipboard (nothing to restore — clearPrimaryClip is API 28+,
          * minSdk 29 is safe). The transcription must never survive as
          * the live clip: it would overwrite the user's clipboard and
-         * persist in keyboard history below API 33.
+         * remain available to other clipboard consumers. History consumers may
+         * already have captured it; restoration cannot remove their entries.
          *
          * Exceptions route to a clear fallback so a mid-round-trip
          * failure cannot leak the transcription — except when publish
@@ -169,11 +162,7 @@ class MyWhisperAccessibility : AccessibilityService() {
          * Returns false when there is no service, no focus, the field
          * is not editable, or the paste fails (caller surfaces a hint).
          *
-         * Bubble-commit trace (repro aid): logs the exact field bytes
-         * before, the exact payload pasted, and the exact bytes after,
-         * so a logcat capture discriminates deliver-twice vs
-         * app-side echo. Logcat is on-device local; the repro uses
-         * synthetic reference text.
+         * Diagnostics record lengths and delivery path only, never field or transcript text.
          */
         // InlinedApi: EXTRA_IS_SENSITIVE is API 33+ (min 29) — safe
         // because shouldMarkSensitive gates on SDK_INT >= 33 first.
@@ -216,8 +205,23 @@ class MyWhisperAccessibility : AccessibilityService() {
                     "MwCommit",
                     "commit before len=${existing.length} sel=($selS,$selE) " +
                         "insertLen=${text.length} payloadLen=${payload.length} " +
-                        "before=<$existing> insert=<$text> payload=<$payload> hint=<$hint>",
+                        "path=resolve",
                 )
+                if (Build.VERSION.SDK_INT >= 33) {
+                    val input = s.inputMethod
+                    val connection = input?.currentInputConnection
+                    val editor = input?.currentInputEditorInfo
+                    // A live connection inserts at the app's cursor without publishing a clip.
+                    // Never retry after dispatch: commitText has no success acknowledgment,
+                    // and a paste retry could duplicate the utterance.
+                    if (input?.currentInputStarted == true && connection != null &&
+                        editor?.packageName == node.packageName?.toString()
+                    ) {
+                        connection.commitText(payload, 1, null)
+                        android.util.Log.i("MwCommit", "commit direct insertLen=${payload.length}")
+                        return true
+                    }
+                }
                 val ok = try {
                     val cm = s.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                     val clip = ClipData.newPlainText("mw-transcription", payload)
@@ -247,7 +251,7 @@ class MyWhisperAccessibility : AccessibilityService() {
                 android.util.Log.i(
                     "MwCommit",
                     "commit result ok=$ok afterLen=${after?.length} " +
-                        "after=<$after>",
+                        "path=clipboard",
                 )
                 ok
             } catch (_: Exception) {
@@ -256,12 +260,21 @@ class MyWhisperAccessibility : AccessibilityService() {
         }
     }
 
+    private val focusHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val contentFocusCheck = Runnable { syncFocus() }
+
     override fun onServiceConnected() {
         live = this
     }
 
     override fun onUnbind(intent: android.content.Intent?): Boolean {
-        if (live === this) live = null
+        focusHandler.removeCallbacks(contentFocusCheck)
+        if (live === this) {
+            live = null
+            FloatState.keyboardVisible = false
+            FloatState.hasTextFocus = false
+            FloatState.refresh()
+        }
         return super.onUnbind(intent)
     }
 
@@ -271,9 +284,15 @@ class MyWhisperAccessibility : AccessibilityService() {
         // that half lives in the IME via FloatState).
         val e = event ?: return
         when (e.eventType) {
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
+                focusHandler.removeCallbacks(contentFocusCheck)
+                focusHandler.postDelayed(contentFocusCheck, 32L)
+            }
             AccessibilityEvent.TYPE_VIEW_FOCUSED,
             AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED,
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
+            AccessibilityEvent.TYPE_WINDOWS_CHANGED,
+            AccessibilityEvent.TYPE_VIEW_CLICKED,
             -> syncFocus()
             else -> Unit
         }

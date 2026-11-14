@@ -2301,6 +2301,59 @@ class MainActivity : ComponentActivity() {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                var upperLock by remember { mutableStateOf(setupPrefs.getBoolean("float_lock_enabled", true)) }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(stringResource(R.string.float_lock_enabled), modifier = Modifier.weight(1f))
+                    Switch(checked = upperLock, onCheckedChange = {
+                        upperLock = it
+                        setupPrefs.edit { putBoolean("float_lock_enabled", it) }
+                        OverlayService.start(this@MainActivity)
+                    })
+                }
+                var followKeyboard by remember { mutableStateOf(setupPrefs.getBoolean("float_follow_keyboard", true)) }
+                DropDown(getString(R.string.float_visibility),
+                    getString(if (followKeyboard) R.string.float_follow_keyboard else R.string.float_follow_focus),
+                    listOf(getString(R.string.float_follow_keyboard), getString(R.string.float_follow_focus))) { picked ->
+                    followKeyboard = picked == getString(R.string.float_follow_keyboard)
+                    setupPrefs.edit { putBoolean("float_follow_keyboard", followKeyboard) }
+                    OverlayService.start(this@MainActivity)
+                }
+                var snoozeMinutes by remember { mutableIntStateOf(setupPrefs.getInt("float_snooze_minutes", 10)) }
+                DropDown(getString(R.string.float_snooze_duration), "$snoozeMinutes min",
+                    listOf("5 min", "10 min", "15 min", "30 min", "60 min")) { picked ->
+                    snoozeMinutes = picked.substringBefore(" ").toInt()
+                    setupPrefs.edit { putInt("float_snooze_minutes", snoozeMinutes) }
+                }
+                var snoozedUntil by remember { mutableStateOf(setupPrefs.getLong("float_snoozed_until", 0)) }
+                androidx.compose.runtime.DisposableEffect(setupPrefs) {
+                    val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { prefs, key ->
+                        if (key == "float_snoozed_until") snoozedUntil = prefs.getLong(key, 0)
+                    }
+                    setupPrefs.registerOnSharedPreferenceChangeListener(listener)
+                    onDispose { setupPrefs.unregisterOnSharedPreferenceChangeListener(listener) }
+                }
+                LaunchedEffect(snoozedUntil) {
+                    val remaining = snoozedUntil - System.currentTimeMillis()
+                    if (remaining > 0) {
+                        kotlinx.coroutines.delay(remaining)
+                        snoozedUntil = 0
+                    }
+                }
+                if (snoozedUntil > System.currentTimeMillis()) {
+                    TextButton(onClick = {
+                        startService(Intent(this@MainActivity, OverlayService::class.java)
+                            .setAction(OverlayService.ACTION_UNSNOOZE))
+                    }) { Text(stringResource(R.string.float_resume)) }
+                }
+                var bubbleOpacity by remember { mutableIntStateOf(setupPrefs.getInt("float_opacity", 65)) }
+                DropDown(
+                    getString(R.string.setup_float_opacity), "$bubbleOpacity%",
+                    listOf("30%", "45%", "65%", "80%", "100%"),
+                ) { picked ->
+                    bubbleOpacity = picked.removeSuffix("%").toInt()
+                    setupPrefs.edit { putInt("float_opacity", bubbleOpacity) }
+                    OverlayService.start(this@MainActivity)
+                }
                 if (!grab) {
                     // No grip: a finger that stays put this long records;
                     // moving sooner means a drag (never a dictation).

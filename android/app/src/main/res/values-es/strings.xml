@@ -69,7 +69,7 @@
     <string name="setup_pill">Pastilla de escucha</string>
     <string name="setup_pill_sub">Medidor de nivel flotante al grabar.</string>
     <string name="setup_float">Botón flotante</string>
-    <string name="setup_float_sub">Dicta en cualquier app sin cambiar de teclado. Usa tu comportamiento del micrófono. Aparece solo cuando hay un campo de texto activo y se oculta mientras el teclado MyWhisper está visible.</string>
+    <string name="setup_float_sub">Dicta en cualquier app sin cambiar de teclado. Se muestra con el teclado en pantalla de forma predeterminada; puedes elegir el enfoque del campo de texto en visibilidad. Se oculta mientras usas el teclado MyWhisper.</string>
     <string name="setup_float_on">El botón flotante está activado.</string>
     <string name="setup_float_off">El botón flotante está desactivado.</string>
     <string name="setup_float_overlay">Permitir mostrar sobre apps</string>
@@ -392,4 +392,17 @@
     <string name="download_cancel">Cancelar descarga</string>
     <string name="download_complete_title">Descarga completa</string>
     <string name="download_failed_title">Descarga fallida</string>
+    <string name="setup_float_opacity">Opacidad del botón</string>
+    <string name="setup_float_logo">Usar logo de MyWhisper</string>
+    <string name="float_finish">Finalizar dictado</string>
+    <string name="float_snooze_target">Suelta para pausar</string>
+    <string name="float_snoozed">Botón pausado durante %1$d min</string>
+    <string name="float_resume">Reanudar botón flotante</string>
+    <string name="float_snooze_duration">Duración de la pausa</string>
+    <string name="float_cancel_processing">Cancelar procesamiento</string>
+    <string name="float_visibility">Mostrar botón flotante con</string>
+    <string name="float_follow_keyboard">Teclado</string>
+    <string name="float_follow_focus">Campo de texto enfocado</string>
+    <string name="float_lock">Desliza arriba para bloquear la grabación</string>
+    <string name="float_lock_enabled">Deslizar arriba para bloquear</string>
 </resources>

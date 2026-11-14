@@ -69,7 +69,7 @@
     <string name="setup_pill">Listening pill</string>
     <string name="setup_pill_sub">Floating level meter while recording.</string>
     <string name="setup_float">Floating button</string>
-    <string name="setup_float_sub">Dictate in any app without switching input methods. Uses your mic-button behavior. Shows automatically when a text field is focused, and hides while the MyWhisper keyboard is up.</string>
+    <string name="setup_float_sub">Dictate in any app without switching input methods. Shows with the on-screen keyboard by default; text-field focus is available in the visibility setting. Hides while the MyWhisper keyboard is up.</string>
     <string name="setup_float_on">Floating button is on.</string>
     <string name="setup_float_off">Floating button is off.</string>
     <string name="setup_float_overlay">Allow display over apps</string>
@@ -391,4 +391,17 @@
     <string name="download_cancel">Cancel download</string>
     <string name="download_complete_title">Download complete</string>
     <string name="download_failed_title">Download failed</string>
+    <string name="setup_float_opacity">Bubble opacity</string>
+    <string name="setup_float_logo">Use MyWhisper logo</string>
+    <string name="float_finish">Finish dictation</string>
+    <string name="float_snooze_target">Release to snooze</string>
+    <string name="float_snoozed">Bubble snoozed for %1$d min</string>
+    <string name="float_resume">Resume floating button</string>
+    <string name="float_snooze_duration">Snooze duration</string>
+    <string name="float_cancel_processing">Cancel processing</string>
+    <string name="float_visibility">Show floating button with</string>
+    <string name="float_follow_keyboard">Keyboard</string>
+    <string name="float_follow_focus">Focused text field</string>
+    <string name="float_lock">Slide up to lock recording</string>
+    <string name="float_lock_enabled">Slide up to lock</string>
 </resources>

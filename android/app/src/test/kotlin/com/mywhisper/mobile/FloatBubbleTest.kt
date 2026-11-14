@@ -21,6 +21,115 @@ import java.util.concurrent.TimeUnit
  * (tap never destroys a recording), overlay-denial latch.
  */
 class FloatBubbleTest {
+    @Test
+    fun idlePosition_leavesRoomForHoldControlsAtBottomEdge() {
+        for (grab in listOf(false, true)) {
+            val fullHeight = FloatState.recordingWindowHeightDp(grab)
+            val bottom = 1000 - fullHeight
+            val clamped = FloatState.clampBubble(100, 999, 0, 0, 500, bottom)
+            assertEquals(1000, clamped.second + fullHeight)
+            assertTrue(clamped.second < 1000 - 58)
+        }
+    }
+
+    @Test
+    fun recordingStages_expandFromSymbolToWaveformThenCancel() {
+        assertEquals(139, recordingCommonWidthDp())
+        assertEquals(172, togglePillWidthDp())
+        assertEquals(33, togglePillWidthDp() - recordingCommonWidthDp())
+        assertTrue(recordingCommonWidthDp() > TOGGLE_CONTROL_DP)
+    }
+
+    @Test
+    fun screenStaysOnOnlyWhileListening() {
+        assertTrue(FloatState.keepsScreenOn(Dictation.State.RECORDING))
+        assertFalse(FloatState.keepsScreenOn(Dictation.State.WORKING))
+        assertFalse(FloatState.keepsScreenOn(Dictation.State.IDLE))
+    }
+
+    @Test
+    fun toggleWaveform_balancesCancelGlyphAgainstAcceptBox_onBothEdges() {
+        // Cancel path + stroke ends at roughly 33dp in its 52dp touch cell.
+        val rightDockWave = toggleWaveformLeftDp(false)
+        assertEquals(12, rightDockWave - 33)
+        assertEquals(12, togglePillWidthDp() - 52 - rightDockWave - vizBarsContentWidthDp())
+        val leftDockWave = toggleWaveformLeftDp(true)
+        assertEquals(12, leftDockWave - 52)
+        assertEquals(12, togglePillWidthDp() - 33 - leftDockWave - vizBarsContentWidthDp())
+        assertEquals(172, togglePillWidthDp())
+    }
+
+    @Test
+    fun smartHoldControls_shareTheReleaseCeiling() {
+        assertEquals(150L, holdControlsDelayMs("Smart", false, 0, 150))
+        assertEquals(1L, holdControlsDelayMs("Smart", false, 149, 150))
+        assertEquals(0L, holdControlsDelayMs("Smart", false, 150, 150))
+        assertEquals(0L, holdControlsDelayMs("Smart", false, 151, 150))
+        assertEquals(350L, holdControlsDelayMs("Smart", false, 50, 400))
+        assertEquals(null, holdControlsDelayMs("Smart", true, 50, 150))
+        assertEquals(null, holdControlsDelayMs("Tap", false, 1000, 150))
+        assertEquals(0L, holdControlsDelayMs("Push", false, 0, 150))
+    }
+
+    @Test
+    fun disabledLock_upwardMotionNeverBecomesCancelTravel() {
+        assertEquals(0f, FloatState.holdGestureDistance(-100f, false), 0f)
+        assertEquals(0f, FloatState.holdGestureDistance(0f, false), 0f)
+        assertEquals(60f, FloatState.holdGestureDistance(60f, false), 0f)
+        assertEquals(60f, FloatState.holdGestureDistance(-60f, true), 0f)
+    }
+
+    @Test
+    fun lockRecording_keepsCaptureRunningAfterRelease() {
+        val (dictation, results, executor) = dictationForStopTap("Push")
+        try {
+            dictation.lockRecording() // Idle is a no-op.
+            assertEquals(Dictation.State.IDLE, dictation.current)
+            dictation.pressDown()
+            dictation.lockRecording()
+            dictation.lockRecording() // Idempotent.
+            dictation.pressUp()
+            assertEquals(Dictation.State.RECORDING, dictation.current)
+            assertTrue(results.isEmpty())
+            dictation.cancel()
+            assertEquals(Dictation.State.IDLE, dictation.current)
+        } finally { executor.shutdownNow() }
+    }
+
+    @Test
+    fun keyboardVisibility_doesNotWaitForStaleTextFocus() {
+        assertFalse(FloatState.shouldShowBubble(true, false, true, true, true, false))
+        assertTrue(FloatState.shouldShowBubble(true, false, true, false, true, true))
+        assertFalse(FloatState.shouldShowBubble(true, true, true, true, true, true))
+        assertFalse(FloatState.shouldShowBubble(true, false, false, true, true, true))
+        assertTrue(FloatState.shouldShowBubble(true, false, true, true, false, false))
+    }
+
+    @Test
+    fun magnets_haveSeparateCaptureAndReleaseBoundaries() {
+        assertFalse(FloatState.magnetReleased(18f, false, 18f, 10f))
+        assertTrue(FloatState.magnetReleased(19f, false, 18f, 10f))
+        assertTrue(FloatState.magnetReleased(12f, true, 18f, 10f))
+        assertFalse(FloatState.magnetReleased(10f, true, 18f, 10f))
+        assertTrue(FloatState.magnetCaptured(20f, false, 20f, 34f))
+        assertFalse(FloatState.magnetCaptured(21f, false, 20f, 34f))
+        assertTrue(FloatState.magnetCaptured(30f, true, 20f, 34f))
+        assertFalse(FloatState.magnetCaptured(35f, true, 20f, 34f))
+        assertTrue(FloatState.magnetCaptured(60f, false, 64f, 96f))
+        assertTrue(FloatState.magnetCaptured(90f, true, 64f, 96f))
+        assertFalse(FloatState.magnetCaptured(97f, true, 64f, 96f))
+    }
+
+    @Test
+    fun holdCancel_tracksDownwardTravel_andDisarmsOnReturn() {
+        assertEquals(0f, FloatState.holdCancelTravel(-30f, 89f), 0f)
+        assertEquals(40f, FloatState.holdCancelTravel(40f, 89f), 0f)
+        assertEquals(89f, FloatState.holdCancelTravel(130f, 89f), 0f)
+        assertFalse(FloatState.holdCancelArmed(71f, 72f))
+        assertTrue(FloatState.holdCancelArmed(72f, 72f))
+        assertFalse(FloatState.holdCancelArmed(20f, 72f))
+    }
+
 
     // -- Auto-show rule --------------------------------------------
 
@@ -138,7 +247,7 @@ class FloatBubbleTest {
     @Test
     fun stop_visibleWhileActive_hiddenIdle() {
         assertTrue(FloatState.isStopVisible(Dictation.State.RECORDING))
-        assertTrue(FloatState.isStopVisible(Dictation.State.WORKING))
+        assertFalse(FloatState.isStopVisible(Dictation.State.WORKING))
         assertFalse(FloatState.isStopVisible(Dictation.State.IDLE))
     }
 

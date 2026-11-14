@@ -17,6 +17,7 @@ import android.content.Context
 object FloatState {
     @Volatile var imeActive: Boolean = false
     @Volatile var hasTextFocus: Boolean = false
+    @Volatile var keyboardVisible: Boolean = false
 
     /**
      * Overlay-permission denial latch for the recovery flow: set when
@@ -87,8 +88,10 @@ object FloatState {
         imeActive: Boolean,
         a11yOn: Boolean,
         hasTextFocus: Boolean,
+        followKeyboard: Boolean = false,
+        keyboardVisible: Boolean = false,
     ): Boolean =
-        floatEnabled && !imeActive && a11yOn && hasTextFocus
+        floatEnabled && !imeActive && a11yOn && (if (followKeyboard) keyboardVisible else hasTextFocus)
 
     /**
      * Edge snap: nearest horizontal safe bound. Ties go right (most
@@ -139,6 +142,22 @@ object FloatState {
      * never starts a drag; past it the bubble follows the finger.
      * Pure so the deadzone is pinned by tests.
      */
+    /** Without an upper target, upward motion stays at the origin. */
+    fun holdGestureDistance(dy: Float, lockEnabled: Boolean): Float =
+        if (lockEnabled) kotlin.math.abs(dy) else dy.coerceAtLeast(0f)
+
+    /** Hysteresis prevents chatter at magnetic capture/release boundaries. */
+    fun magnetCaptured(distance: Float, captured: Boolean, captureRadius: Float, releaseRadius: Float): Boolean =
+        distance <= if (captured) releaseRadius else captureRadius
+
+    fun magnetReleased(travel: Float, released: Boolean, releaseThreshold: Float, recaptureThreshold: Float): Boolean =
+        travel > if (released) recaptureThreshold else releaseThreshold
+
+    /** Hold cancellation never moves sideways or above the starting point. */
+    fun holdCancelTravel(dy: Float, maximum: Float): Float = dy.coerceIn(0f, maximum)
+
+    fun holdCancelArmed(travel: Float, threshold: Float): Boolean = travel >= threshold
+
     fun shouldArmFreeMove(movedPx: Float, slopPx: Float): Boolean = movedPx > slopPx
 
     /**
@@ -155,9 +174,15 @@ object FloatState {
         if (stored in PRESS_DELAY_OPTIONS_MS) stored else PRESS_DELAY_DEFAULT_MS
 
 
-    /** Stop affordance: always visible while active (RECORDING or WORKING). */
+    /** Idle positioning reserves the complete hold-control frame, including optional grip. */
+    fun recordingWindowHeightDp(grab: Boolean): Int = 50 + 8 + 96 + if (grab) 14 else 0
+
+    /** Screen wakefulness belongs to live capture, never idle/processing. */
+    fun keepsScreenOn(state: Dictation.State): Boolean = state == Dictation.State.RECORDING
+
+    /** Recording shows a separate cancel target; processing cancels via the main button. */
     fun isStopVisible(state: Dictation.State): Boolean =
-        state != Dictation.State.IDLE
+        state == Dictation.State.RECORDING
 
     /** Calm processing treatment (spinner + dim, no pulse) while WORKING. */
     fun isProcessing(state: Dictation.State): Boolean =
