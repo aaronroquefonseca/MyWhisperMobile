@@ -153,6 +153,136 @@ class LocalDownloadTest {
     }
 
     @Test
+    fun cacheReadDoesNotWaitForVerifierAndDeduplicates() {
+        val cache = LocalModelDownload.PackVerifyCache()
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val calls = java.util.concurrent.atomic.AtomicInteger()
+        val executor = java.util.concurrent.Executors.newFixedThreadPool(2)
+        try {
+            val first = executor.submit<String> {
+                cache.getOrPut("model", "fingerprint") {
+                    calls.incrementAndGet()
+                    entered.countDown()
+                    check(release.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                    "verified"
+                }
+            }
+            assertTrue(entered.await(5, java.util.concurrent.TimeUnit.SECONDS))
+            val second = executor.submit<String> {
+                cache.getOrPut("model", "fingerprint") { calls.incrementAndGet(); "duplicate" }
+            }
+            assertFalse(cache.has("model", "fingerprint"))
+            release.countDown()
+            assertEquals("verified", first.get(5, java.util.concurrent.TimeUnit.SECONDS))
+            assertEquals("verified", second.get(5, java.util.concurrent.TimeUnit.SECONDS))
+            assertEquals(1, calls.get())
+        } finally {
+            release.countDown()
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun changedPackCannotPublishHeldVerification() {
+        for (replace in listOf(false, true)) {
+            val dir = Files.createTempDirectory("held-pack").toFile()
+            val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
+            val entered = java.util.concurrent.CountDownLatch(1)
+            val release = java.util.concurrent.CountDownLatch(1)
+            try {
+                val file = File(dir, "model").apply { writeText("old") }
+                fun fingerprint() = LocalModelDownload.packFingerprint(listOf(file))
+                val before = fingerprint()
+                val cache = LocalModelDownload.PackVerifyCache()
+                val result = executor.submit<Boolean> {
+                    try {
+                        cache.getStable("model", before, { fingerprint() }) {
+                            entered.countDown()
+                            check(release.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                            true
+                        } ?: false
+                    } catch (_: Exception) { false }
+                }
+                assertTrue(entered.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                if (replace) {
+                    val next = File(dir, "next").apply { writeText("new"); setLastModified(file.lastModified()) }
+                    Files.move(next.toPath(), file.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                } else assertTrue(file.delete())
+                release.countDown()
+                assertFalse(result.get(5, java.util.concurrent.TimeUnit.SECONDS))
+                assertFalse(cache.has("model", before))
+            } finally {
+                release.countDown()
+                executor.shutdownNow()
+                dir.deleteRecursively()
+            }
+        }
+    }
+
+    @Test
+    fun selectionChangeRejectsHeldVerdict() {
+        val cache = LocalModelDownload.PackVerifyCache()
+        val selection = java.util.concurrent.atomic.AtomicReference("first")
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
+        try {
+            val result = executor.submit<Boolean?> {
+                cache.getStable("first", "fp", { "fp" }, { selection.get() == "first" }) {
+                    entered.countDown()
+                    check(release.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                    true
+                }
+            }
+            assertTrue(entered.await(5, java.util.concurrent.TimeUnit.SECONDS))
+            selection.set("second")
+            release.countDown()
+            assertEquals(null, result.get(5, java.util.concurrent.TimeUnit.SECONDS))
+        } finally {
+            release.countDown()
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun cancelledVerifierDoesNotPoisonCache() {
+        val cache = LocalModelDownload.PackVerifyCache()
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val thread = Thread {
+            try {
+                cache.getOrPut("model", "fp") {
+                    entered.countDown()
+                    java.util.concurrent.CountDownLatch(1).await()
+                    true
+                }
+            } catch (_: Exception) { }
+        }
+        thread.start()
+        assertTrue(entered.await(5, java.util.concurrent.TimeUnit.SECONDS))
+        thread.interrupt()
+        thread.join(5000)
+        assertFalse(thread.isAlive)
+        assertFalse(cache.has("model", "fp"))
+        assertTrue(cache.getOrPut("model", "fp") { true })
+    }
+
+    @Test
+    fun fingerprintChangesWhenFileReplacedWithSameSizeAndTimestamp() {
+        val dir = Files.createTempDirectory("replacement").toFile()
+        try {
+            val file = File(dir, "model").apply { writeText("one") }
+            val timestamp = file.lastModified()
+            val before = LocalModelDownload.packFingerprint(listOf(file))
+            val replacement = File(dir, "replacement").apply { writeText("two"); setLastModified(timestamp) }
+            Files.move(replacement.toPath(), file.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+            assertTrue(before != LocalModelDownload.packFingerprint(listOf(file)))
+            assertTrue(file.delete())
+            assertTrue(before != LocalModelDownload.packFingerprint(listOf(file)))
+        } finally { dir.deleteRecursively() }
+    }
+
+    @Test
     fun packVerifyCache_hitMissAndStale() {
         val cache = LocalModelDownload.PackVerifyCache()
         var calls = 0

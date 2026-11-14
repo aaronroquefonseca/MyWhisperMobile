@@ -126,6 +126,8 @@ import androidx.core.app.ActivityCompat
 import androidx.lifecycle.Observer
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import org.json.JSONArray
@@ -162,6 +164,7 @@ class MainActivity : ComponentActivity() {
     private val micBlocked = mutableStateOf(false)
     private var micDeniedBefore = false
     private val workers = Executors.newSingleThreadExecutor()
+    private val sttVerifyCache = LocalModelDownload.PackVerifyCache()
     private var multicastLock: WifiManager.MulticastLock? = null
     /** Active background-download WorkInfo observers, keyed by unique work name. */
     private val dlWorkObservers = mutableMapOf<String, Observer<List<WorkInfo>>>()
@@ -2161,6 +2164,9 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun safePackFingerprint(files: () -> List<File>): String? =
+        try { LocalModelDownload.packFingerprint(files()) } catch (_: Exception) { null }
+
     @Composable
     private fun bubbleSetupState(s: JSONObject): BubbleSetupState {
         val prefs = getSharedPreferences("mw_state", MODE_PRIVATE)
@@ -2171,13 +2177,25 @@ class MainActivity : ComponentActivity() {
                 entry?.optString("kind") == "Local" && entry.optBoolean("enabled", true)
             }
         } ?: false
-        val localVerified = remember(s) {
-            try {
-                sttModelPackState(LocalStt.selectedEntry(prefs)) == LocalPackState.PRESENT
-            } catch (_: Exception) {
-                false
+        var selectedId by remember { mutableStateOf(LocalStt.selectedEntry(prefs).id) }
+        androidx.compose.runtime.DisposableEffect(prefs) {
+            val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+                if (key == LocalSttModels.PREF_SELECTED_MODEL) selectedId = LocalStt.selectedEntry(prefs).id
             }
+            prefs.registerOnSharedPreferenceChangeListener(listener)
+            onDispose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
         }
+        val selected = LocalSttModels.findById(selectedId)
+        val changes = rememberPackChanges(filesDir, listOf(LocalSttModels.dirFor(filesDir, selected)))
+        val fingerprint = safePackFingerprint { sttPackFiles(filesDir, selected) }
+        val localVerified = rememberVerifiedPack(
+            selected.id, fingerprint, changes, sttVerifyCache,
+            currentFingerprint = { safePackFingerprint { sttPackFiles(filesDir, selected) } },
+            stillSelected = { LocalStt.selectedEntry(prefs).id == selected.id },
+            isVerified = { it.state == LocalModelDownload.RowState.PRESENT },
+            verify = { LocalSttModels.inspect(filesDir, selected) },
+        )
+
         return BubbleSetupState(micGranted.value, overlayGranted.value, a11yOn.value,
             isSpeechConfigured(isServerConfigured(s), localEnabled, localVerified))
     }
@@ -2646,14 +2664,6 @@ class MainActivity : ComponentActivity() {
             else -> LocalPackState.MISSING
         }
 
-    /** Pack state for one catalog model (SHA-verified, single-pass). */
-    private fun sttModelPackState(model: LocalSttModels.Entry): LocalPackState =
-        try {
-            packStateForRow(LocalSttModels.stateFor(filesDir, model))
-        } catch (_: Exception) {
-            LocalPackState.MISSING
-        }
-
     /** Total device RAM in MB (selector warning only; 0 when unreadable). */
     private fun totalRamMb(): Long =
         try {
@@ -2704,25 +2714,41 @@ class MainActivity : ComponentActivity() {
         // computed OFF the composition thread: pack hashes (up to GBs)
         // on the UI thread ANR the app and drop input. Rows read
         // missing until the first pass lands.
-        val sttPackCache = remember { LocalModelDownload.PackVerifyCache() }
+        val sttPackCache = sttVerifyCache
         var modelInspects by remember {
             mutableStateOf<Map<String, LocalSttModels.PackInspect>>(emptyMap())
         }
-        LaunchedEffect(version) {
-            workers.execute {
-                val fresh = LocalSttModels.MODELS.associate { m ->
-                    m.id to try {
-                        val fp = LocalModelDownload.packFingerprint(sttPackFiles(filesDir, m))
-                        sttPackCache.getOrPut(m.id, fp) { LocalSttModels.inspect(filesDir, m) }
-                    } catch (_: Exception) {
-                        LocalSttModels.PackInspect(LocalModelDownload.RowState.MISSING, 0L)
-                    }
+        val sttChanges = rememberPackChanges(filesDir, LocalSttModels.MODELS.map { LocalSttModels.dirFor(filesDir, it) })
+        var sttFingerprints by remember(sttChanges) { mutableStateOf<Map<String, String>>(emptyMap()) }
+        var lastSttChanges by remember { mutableIntStateOf(sttChanges) }
+        LaunchedEffect(version, sttChanges) {
+            if (lastSttChanges != sttChanges) sttPackCache.invalidateAll()
+            lastSttChanges = sttChanges
+            modelInspects = emptyMap()
+            sttFingerprints = emptyMap()
+            for (m in LocalSttModels.MODELS) {
+                val fp = safePackFingerprint { sttPackFiles(filesDir, m) } ?: continue
+                val result = runInterruptible(Dispatchers.IO) {
+                    try {
+                        sttPackCache.getStable(m.id, fp, { safePackFingerprint { sttPackFiles(filesDir, m) } }) {
+                            LocalSttModels.inspect(filesDir, m)
+                        }
+                    } catch (_: Exception) { null }
                 }
-                runOnUiThread { modelInspects = fresh }
+                if (fp != safePackFingerprint { sttPackFiles(filesDir, m) }) {
+                    version++
+                    break
+                }
+                sttFingerprints = sttFingerprints + (m.id to fp)
+                modelInspects = modelInspects + (m.id to (result ?: LocalSttModels.PackInspect(LocalModelDownload.RowState.MISSING, 0L)))
             }
         }
-        fun packOf(id: String): LocalPackState =
-            modelInspects[id]?.let { packStateForRow(it.state) } ?: LocalPackState.MISSING
+        fun packOf(id: String): LocalPackState {
+            val model = LocalSttModels.MODELS.firstOrNull { it.id == id } ?: return LocalPackState.MISSING
+            val fp = safePackFingerprint { sttPackFiles(filesDir, model) } ?: return LocalPackState.MISSING
+            if (sttFingerprints[id] != fp) return LocalPackState.MISSING
+            return modelInspects[id]?.let { packStateForRow(it.state) } ?: LocalPackState.MISSING
+        }
         fun bytesOf(id: String): Long =
             modelInspects[id]?.verifiedBytes ?: 0L
         val selPack = packOf(selectedModel.id)
@@ -2737,10 +2763,7 @@ class MainActivity : ComponentActivity() {
         var deleteConfirm by remember { mutableStateOf<String?>(null) }
         fun rowOf(m: LocalSttModels.Entry): LocalModelDownload.RowState {
             val checking = try {
-                !sttPackCache.has(
-                    m.id,
-                    LocalModelDownload.packFingerprint(sttPackFiles(filesDir, m)),
-                )
+                sttFingerprints[m.id] != LocalModelDownload.packFingerprint(sttPackFiles(filesDir, m))
             } catch (_: Exception) {
                 false
             }
@@ -3755,21 +3778,37 @@ class MainActivity : ComponentActivity() {
         // until the first pass lands, then flip as verified.
         val packCache = remember { LocalModelDownload.PackVerifyCache() }
         var llmInspects by remember { mutableStateOf<Map<String, LlmInspect>>(emptyMap()) }
-        LaunchedEffect(version) {
-            workers.execute {
-                val fresh = assets.associate { a ->
-                    a.id to try {
-                        val fp = LocalModelDownload.packFingerprint(llmPackFiles(filesDir, a))
-                        packCache.getOrPut(a.id, fp) { llmInspect(filesDir, a) }
-                    } catch (_: Exception) {
-                        LlmInspect(LocalPackState.MISSING, 0L)
-                    }
+        val llmChanges = rememberPackChanges(filesDir, listOf(File(filesDir, "models")))
+        var llmFingerprints by remember(llmChanges) { mutableStateOf<Map<String, String>>(emptyMap()) }
+        var lastLlmChanges by remember { mutableIntStateOf(llmChanges) }
+        LaunchedEffect(version, llmChanges) {
+            if (lastLlmChanges != llmChanges) packCache.invalidateAll()
+            lastLlmChanges = llmChanges
+            llmInspects = emptyMap()
+            llmFingerprints = emptyMap()
+            for (a in assets) {
+                val fp = safePackFingerprint { llmPackFiles(filesDir, a) } ?: continue
+                val result = runInterruptible(Dispatchers.IO) {
+                    try {
+                        packCache.getStable(a.id, fp, { safePackFingerprint { llmPackFiles(filesDir, a) } }) {
+                            llmInspect(filesDir, a)
+                        }
+                    } catch (_: Exception) { null }
                 }
-                runOnUiThread { llmInspects = fresh }
+                if (fp != safePackFingerprint { llmPackFiles(filesDir, a) }) {
+                    version++
+                    break
+                }
+                llmFingerprints = llmFingerprints + (a.id to fp)
+                llmInspects = llmInspects + (a.id to (result ?: LlmInspect(LocalPackState.MISSING, 0L)))
             }
         }
-        fun llmPackOf(id: String): LocalPackState =
-            llmInspects[id]?.state ?: LocalPackState.MISSING
+        fun llmPackOf(id: String): LocalPackState {
+            val asset = assets.firstOrNull { it.id == id } ?: return LocalPackState.MISSING
+            val fp = safePackFingerprint { llmPackFiles(filesDir, asset) } ?: return LocalPackState.MISSING
+            if (llmFingerprints[id] != fp) return LocalPackState.MISSING
+            return llmInspects[id]?.state ?: LocalPackState.MISSING
+        }
         fun llmBytesOf(id: String): Long =
             llmInspects[id]?.verifiedBytes ?: 0L
         val llmSelId = llmSelected?.id
@@ -3797,10 +3836,7 @@ class MainActivity : ComponentActivity() {
             // Background verify still running for these exact bytes:
             // show CHECKING, never a stale MISSING.
             val checking = try {
-                !packCache.has(
-                    a.id,
-                    LocalModelDownload.packFingerprint(llmPackFiles(filesDir, a)),
-                )
+                llmFingerprints[a.id] != LocalModelDownload.packFingerprint(llmPackFiles(filesDir, a))
             } catch (_: Exception) {
                 false
             }

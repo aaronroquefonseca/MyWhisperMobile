@@ -256,6 +256,7 @@ object LocalLlmManager {
         file.inputStream().buffered().use { ins ->
             val buf = ByteArray(65536)
             while (true) {
+                if (Thread.currentThread().isInterrupted) throw InterruptedException("Verification cancelled")
                 val n = ins.read(buf)
                 if (n <= 0) break
                 md.update(buf, 0, n)
