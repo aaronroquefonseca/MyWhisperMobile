@@ -2,7 +2,7 @@ name: release
 
 # Stable: tag push (v*) builds signed Full + Lite APKs, creates the GitHub
 # release with the CHANGELOG section, and hands the Full APK to the F-Droid
-# repo (aaronroquefonseca/fdroid picks up R2 incoming/ every few hours).
+# repo (uploads to R2 incoming/, then starts aaronroquefonseca/fdroid's publish).
 # Nightly: every push to main does the same with the `nightly` build type,
 # replaces the rolling `nightly` GitHub prerelease, and syncs the F-Droid
 # listing (fastlane/metadata/android). F-Droid marks nightlies as Beta.
@@ -178,3 +178,8 @@ jobs:
           fi
           # fdroid's canonical file name; the repo treats versionCode % 1000 != 0 as nightly.
           aws s3 cp "dist/MyWhisper-${VERSION_NAME}.apk" "s3://${R2_BUCKET}/incoming/${PACKAGE}_${VERSION_CODE}.apk" "${R2[@]}"
+      - name: Publish the F-Droid repo
+        env:
+          # Fine-grained token: aaronroquefonseca/fdroid only, Actions read/write.
+          GH_TOKEN: ${{ secrets.FDROID_DISPATCH_TOKEN }}
+        run: gh workflow run publish.yml -R aaronroquefonseca/fdroid
