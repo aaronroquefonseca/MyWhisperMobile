@@ -38,6 +38,10 @@ def main():
         foreground = Image.new("RGBA", (size, size), FOREGROUND)
         foreground.putalpha(alpha.resize((size, size), Image.Resampling.LANCZOS))
         foreground.save(destination / "ic_launcher_foreground.png")
+        for name, color in {"white": "#FFFFFF", "ink": "#24342F"}.items():
+            variant = Image.new("RGBA", (size, size), color)
+            variant.putalpha(foreground.getchannel("A"))
+            variant.save(destination / f"ic_launcher_foreground_{name}.png")
         Image.new("RGB", (size, size), BACKGROUND).save(
             destination / "ic_launcher_background.png"
         )

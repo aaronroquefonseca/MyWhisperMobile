@@ -435,7 +435,7 @@
     <string name="new_cleanup_tab">Cleanup</string>
     <string name="new_behavior_description">Tap, hold, and recording behavior</string>
     <string name="new_notifications_description">Permission and recording or sync notifications</string>
-    <string name="new_appearance_description">Light, dark, or system theme</string>
+    <string name="new_appearance_description">Theme, background &amp; app icon</string>
     <string name="new_devices_description">Pair devices and manage sync</string>
     <string name="new_activity_description">Review dictation usage</string>
     <string name="new_keyboard_description">Alternative input method. Not required for the floating button.</string>

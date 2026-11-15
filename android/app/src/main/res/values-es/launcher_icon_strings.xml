@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="icon_style_title">Icono de la app</string>
+    <string name="icon_style_help">Elige el icono de la app. La forma depende del lanzador de tu teléfono.</string>
+    <string name="icon_style_default">Predeterminado</string>
+    <string name="icon_style_navy">Azul marino / cian</string>
+    <string name="icon_style_cobalt">Cobalto / blanco</string>
+    <string name="icon_style_cream">Crema / tinta</string>
+    <string name="icon_style_charcoal">Carbón / blanco</string>
+    <string name="icon_style_stable_default">Predeterminado estable: %1$s</string>
+    <string name="icon_style_nightly_default">Predeterminado nightly: %1$s</string>
+    <string name="icon_style_applied">Icono actualizado. El lanzador puede tardar un momento en mostrarlo.</string>
+    <string name="icon_style_error">No se pudo actualizar el icono. Inténtalo de nuevo.</string>
+</resources>

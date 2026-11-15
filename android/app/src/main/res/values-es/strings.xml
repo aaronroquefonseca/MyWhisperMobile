@@ -436,7 +436,7 @@
     <string name="new_cleanup_tab">Limpieza</string>
     <string name="new_behavior_description">Toques, pulsación y comportamiento al grabar</string>
     <string name="new_notifications_description">Permiso y avisos de grabación o sincronización</string>
-    <string name="new_appearance_description">Tema claro, oscuro o del sistema</string>
+    <string name="new_appearance_description">Tema, fondo e icono de la app</string>
     <string name="new_devices_description">Vincular dispositivos y gestionar sincronización</string>
     <string name="new_activity_description">Consultar el uso del dictado</string>
     <string name="new_keyboard_description">Método de entrada alternativo. No es necesario para el botón flotante.</string>

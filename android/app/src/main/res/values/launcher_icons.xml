@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <bool name="launcher_default_cobalt">false</bool>
+    <color name="launcher_navy">#142234</color>
+    <color name="launcher_cobalt">#3158CA</color>
+    <color name="launcher_cream">#F2EBDD</color>
+    <color name="launcher_charcoal">#24272C</color>
+</resources>

@@ -5,6 +5,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.Collections
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
@@ -377,13 +378,16 @@ class FloatBubbleTest {
         }
     }
 
-    private fun dictationForStopTap(mode: String): Triple<Dictation, MutableList<String>, java.util.concurrent.ExecutorService> {
+    private fun dictationForStopTap(
+        mode: String,
+        finishTranscription: () -> Pair<String, String> = { "hello world" to "test-engine" },
+    ): Triple<Dictation, MutableList<String>, java.util.concurrent.ExecutorService> {
         val ex = Executors.newSingleThreadExecutor()
         val results: MutableList<String> = Collections.synchronizedList(mutableListOf())
         val d = Dictation(
             mode = { mode },
             startCapture = { _, _, _ -> object : Dictation.Capture { override fun stop() {} } },
-            finishTranscription = { "hello world" to "test-engine" },
+            finishTranscription = finishTranscription,
             cancelTranscription = {},
             log = {},
             workers = ex,
@@ -428,16 +432,27 @@ class FloatBubbleTest {
 
     @Test
     fun stopTap_cancelsWorking_discards() {
-        val (d, results, ex) = dictationForStopTap("Push")
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val (d, results, ex) = dictationForStopTap("Push") {
+            entered.countDown()
+            check(release.await(10, TimeUnit.SECONDS)) { "transcription was not released" }
+            "hello world" to "test-engine"
+        }
         try {
             d.pressDown()
             d.pressUp() // WORKING (Push finishes on release)
+            // Hold transcription in flight: an immediate fake result can win the race
+            // and return to IDLE before this test has a chance to cancel it.
+            assertTrue("transcription must start", entered.await(10, TimeUnit.SECONDS))
             assertEquals(Dictation.State.WORKING, d.current)
             stopTap(d) // explicit stop while transcribing: discard
+            release.countDown()
             ex.submit {}.get(10, TimeUnit.SECONDS)
             assertTrue("WORKING stop must discard", results.isEmpty())
             assertEquals(Dictation.State.IDLE, d.current)
         } finally {
+            release.countDown()
             ex.shutdownNow()
         }
     }
