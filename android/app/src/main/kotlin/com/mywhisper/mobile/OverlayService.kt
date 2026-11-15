@@ -477,6 +477,19 @@ class OverlayService : Service(), Dictation.Listener {
     }
 
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var showPending = false
+    private var showDelayElapsed = false
+    private val delayedShow = Runnable {
+        showPending = false
+        showDelayElapsed = true
+        applyVisibility()
+    }
+
+    private fun cancelDelayedShow() {
+        mainHandler.removeCallbacks(delayedShow)
+        showPending = false
+        showDelayElapsed = false
+    }
 
     /** Short haptic tick (press / release / toggle). */
     private fun tick(ms: Long = 25L, amplitude: Int = android.os.VibrationEffect.DEFAULT_AMPLITUDE) {
@@ -902,6 +915,7 @@ class OverlayService : Service(), Dictation.Listener {
         }
         android.util.Log.i("MwFloat", "apply on=$on ime=${FloatState.imeActive} focus=${FloatState.hasTextFocus}")
         if (!on || snoozed()) {
+            cancelDelayedShow()
             if (snoozed()) {
                 mainHandler.removeCallbacks(snoozeEnd)
                 mainHandler.postDelayed(snoozeEnd, (getSharedPreferences(PREFS, MODE_PRIVATE)
@@ -925,8 +939,18 @@ class OverlayService : Service(), Dictation.Listener {
             removeBubble()
         }
         if (show) {
-            if (holder == null) showBubble() else refreshChrome(dictation.current)
+            if (holder != null) {
+                refreshChrome(dictation.current)
+            } else if (showDelayElapsed) {
+                showDelayElapsed = false
+                showBubble()
+            } else if (!showPending) {
+                // IME windows can briefly reappear in accessibility snapshots while closing.
+                showPending = true
+                mainHandler.postDelayed(delayedShow, 250L)
+            }
         } else {
+            cancelDelayedShow()
             removeBubble(animate = true)
         }
     }
@@ -1993,6 +2017,7 @@ class OverlayService : Service(), Dictation.Listener {
     }
 
     override fun onDestroy() {
+        cancelDelayedShow()
         mainHandler.removeCallbacks(snoozeEnd)
         foregrounded = false
         NotifPolicy.UnifiedState.floatActive = false
