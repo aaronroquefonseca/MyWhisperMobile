@@ -11,6 +11,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -82,6 +83,42 @@ class PackVerificationUiTest {
         } finally {
             root.deleteRecursively()
         }
+    }
+
+    @Test
+    fun burstAcrossDirectoriesKeepsOtherObserverAndQueuedEvents() {
+        val root = java.nio.file.Files.createTempDirectory("watch-burst").toFile()
+        val first = java.io.File(root, "first").apply { mkdir() }
+        val second = java.io.File(root, "second").apply { mkdir() }
+        val listeners = mutableMapOf<String, (java.io.File) -> Unit>()
+        val changes = mutableListOf<java.io.File>()
+        var secondStarts = 0
+        try {
+            compose.setContent {
+                rememberPackChanges(root, listOf(first, second), onChange = { changes.add(it) }) { file, callback ->
+                    if (file == second) secondStarts++
+                    listeners[file.path] = callback
+                    java.io.Closeable { listeners.remove(file.path) }
+                }
+            }
+            lateinit var oldFirst: (java.io.File) -> Unit
+            compose.runOnIdle {
+                oldFirst = listeners.getValue(first.path)
+                assertTrue(first.delete())
+                assertTrue(first.mkdir())
+                oldFirst(first)
+            }
+            compose.runOnIdle {
+                assertEquals(1, secondStarts)
+                oldFirst(java.io.File(first, "queued"))
+                listeners.getValue(second.path).invoke(java.io.File(second, "changed"))
+            }
+            compose.runOnIdle {
+                assertTrue(changes.contains(java.io.File(first, "queued")))
+                assertTrue(changes.contains(java.io.File(second, "changed")))
+                assertEquals(1, secondStarts)
+            }
+        } finally { root.deleteRecursively() }
     }
 
     @Test

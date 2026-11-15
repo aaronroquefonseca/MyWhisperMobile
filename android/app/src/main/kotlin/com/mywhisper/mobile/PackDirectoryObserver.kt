@@ -5,6 +5,7 @@ import android.os.Handler
 import android.os.Looper
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
@@ -14,15 +15,14 @@ import java.io.File
 
 private fun observeDirectory(directory: File, onChange: (File) -> Unit): Closeable {
     val handler = Handler(Looper.getMainLooper())
-    var active = true
     val observer = object : FileObserver(directory, ATTRIB or CLOSE_WRITE or MOVED_TO or MOVED_FROM or DELETE or CREATE or DELETE_SELF or MOVE_SELF) {
         override fun onEvent(event: Int, path: String?) {
             val changed = if (path == null) directory else File(directory, path)
-            handler.post { if (active) onChange(changed) }
+            handler.post { onChange(changed) }
         }
     }
     observer.startWatching()
-    return Closeable { active = false; observer.stopWatching() }
+    return Closeable { observer.stopWatching() }
 }
 
 /** Watch existing ancestors too, so newly created model directories become observable. */
@@ -34,12 +34,32 @@ internal fun rememberPackChanges(
     observe: (File, (File) -> Unit) -> Closeable = ::observeDirectory,
 ): Int {
     var generation by remember { mutableIntStateOf(0) }
+    val lifetime = remember { booleanArrayOf(true) }
+    val attached = remember { mutableSetOf<String>() }
+    DisposableEffect(Unit) {
+        lifetime[0] = true
+        onDispose { lifetime[0] = false }
+    }
     val watched = directories.flatMap { directory ->
         generateSequence(directory) { it.parentFile }.takeWhile { it.path.startsWith(root.path) }.toList()
     }.filter { it.isDirectory }.distinctBy { it.absolutePath }.sortedBy { it.absolutePath }
-    DisposableEffect(watched, generation) {
-        val observers = watched.map { directory -> observe(directory) { changed -> onChange(changed); generation++ } }
-        onDispose { observers.forEach { it.close() } }
+    for (directory in watched) {
+        key(directory.absolutePath) {
+            val identity = try {
+                val attributes = java.nio.file.Files.readAttributes(
+                    directory.toPath(), java.nio.file.attribute.BasicFileAttributes::class.java,
+                )
+                attributes.fileKey() to attributes.creationTime()
+            } catch (_: Exception) { null }
+            DisposableEffect(identity) {
+                val observer = observe(directory) { changed ->
+                    if (lifetime[0]) { onChange(changed); generation++ }
+                }
+                // Reconcile the directory after reattachment, covering the small watch gap.
+                if (!attached.add(directory.absolutePath)) onChange(directory)
+                onDispose { observer.close() }
+            }
+        }
     }
     return generation
 }
