@@ -880,15 +880,25 @@ mod tests {
 
     #[test]
     fn black_background_preserves_compatible_theme_and_defaults_off_for_older_settings() {
-        let mut prefs = Preferences::default();
-        prefs.theme = Theme::System;
-        prefs.black_background = true;
+        let prefs = Preferences {
+            theme: Theme::System,
+            black_background: true,
+            ..Default::default()
+        };
         let value = serde_json::to_value(&prefs).unwrap();
         assert_eq!(value["theme"], "System");
-        assert!(serde_json::from_value::<Preferences>(value.clone()).unwrap().black_background);
+        assert!(
+            serde_json::from_value::<Preferences>(value.clone())
+                .unwrap()
+                .black_background
+        );
         let mut old = value;
         old.as_object_mut().unwrap().remove("black_background");
-        assert!(!serde_json::from_value::<Preferences>(old).unwrap().black_background);
+        assert!(
+            !serde_json::from_value::<Preferences>(old)
+                .unwrap()
+                .black_background
+        );
     }
 
     #[test]
