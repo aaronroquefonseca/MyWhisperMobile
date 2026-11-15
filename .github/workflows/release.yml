@@ -1,8 +1,8 @@
 name: release
 
-# Tag push (v*) produces a changelogged APK release. Manual re-run via
-# workflow_dispatch with an existing tag. Signing secrets out of scope:
-# :app:assembleRelease builds UNSIGNED; wiring signing comes later.
+# Tag push (v*) produces a changelogged, signed APK release and hands the APK
+# to the F-Droid repo (R2 incoming/, picked up by aaronroquefonseca/fdroid).
+# Manual re-run via workflow_dispatch with an existing tag.
 on:
   push:
     tags: ["v*"]
@@ -68,12 +68,21 @@ jobs:
         working-directory: .
         run: bash scripts/fetch-sherpa-aar.sh
       - uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d # v4
-      - name: Assemble unsigned release APK
-        # No signingConfig wired: produces app-full-release-unsigned.apk-style
-        # unsigned artifact. Release signing via secrets is out of scope.
+      - name: Restore release keystore
+        env:
+          MYWHISPER_KEYSTORE_B64: ${{ secrets.MYWHISPER_KEYSTORE_B64 }}
+        run: echo "$MYWHISPER_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+      - name: Assemble signed release APK
         # APK-slim default: FULL flavor (on-device STT+LLM). Lite publishes
         # no release artifact; see PR body for the lite size note.
-        run: ./gradlew :app:assembleFullRelease
+        env:
+          MYWHISPER_KEYSTORE_PASSWORD: ${{ secrets.MYWHISPER_KEYSTORE_PASSWORD }}
+          MYWHISPER_KEY_ALIAS: ${{ secrets.MYWHISPER_KEY_ALIAS }}
+          MYWHISPER_KEY_PASSWORD: ${{ secrets.MYWHISPER_KEY_PASSWORD }}
+        run: MYWHISPER_KEYSTORE_PATH="$RUNNER_TEMP/release.keystore" ./gradlew :app:assembleFullRelease
+      - name: Remove release keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.keystore"
       - name: Create GitHub Release with changelog notes + APK
         working-directory: ${{ github.workspace }}
         env:
@@ -85,10 +94,28 @@ jobs:
           VERSION="${TAG#v}"
           awk -v ver="$VERSION" 'index($0, "## [" ver "]") == 1 {flag=1; next} /^## / {flag=0} flag' CHANGELOG.md | sed -e '/^[[:space:]]*$/d' > notes.md
           test -s notes.md || { echo "empty notes for $TAG" >&2; exit 1; }
-          APK=android/app/build/outputs/apk/full/release/app-full-release-unsigned.apk
+          APK="android/app/build/outputs/apk/full/release/MyWhisper-${VERSION}.apk"
+          mv android/app/build/outputs/apk/full/release/app-full-release.apk "$APK"
           META=android/app/build/outputs/apk/full/release/output-metadata.json
           test -f "$APK" || { echo "missing $APK" >&2; exit 1; }
           ARGS=(--title "$TAG" --notes-file notes.md)
           [[ "$TAG" == *-* ]] && ARGS+=(--prerelease)
           [[ -f "$META" ]] && ARGS+=("$META")
           gh release create "$TAG" "$APK" "${ARGS[@]}" --repo "$GH_REPO"
+      - name: Hand APK to the F-Droid repo
+        working-directory: ${{ github.workspace }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          aws s3 cp "android/app/build/outputs/apk/full/release/MyWhisper-${VERSION}.apk" \
+            "s3://${R2_BUCKET}/incoming/com.mywhisper.mobile-${VERSION}.apk" \
+            --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" --only-show-errors

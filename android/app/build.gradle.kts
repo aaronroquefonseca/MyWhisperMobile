@@ -18,14 +18,17 @@ android {
         versionName = providers.gradleProperty("mywhisper.versionName").getOrElse("0.1.0")
     }
 
-    // Release signing (docs only, unsigned build by default):
-    // Provide via env/gradle.properties, never commit keystore:
-    //   signingConfigs { create("release") {
-    //     storeFile = file(System.getenv("MYWHISPER_KEYSTORE_PATH") ?: "release.keystore")
-    //     storePassword = System.getenv("MYWHISPER_KEYSTORE_PASSWORD")
-    //     keyAlias = System.getenv("MYWHISPER_KEY_ALIAS")
-    //     keyPassword = System.getenv("MYWHISPER_KEY_PASSWORD") } }
-    //   buildTypes.release.signingConfig = signingConfigs.getByName("release")
+    // Release signing from env (CI secrets); without MYWHISPER_KEYSTORE_PATH
+    // release builds stay unsigned. Never commit the keystore.
+    val releaseKeystore = System.getenv("MYWHISPER_KEYSTORE_PATH")
+    if (releaseKeystore != null) {
+        signingConfigs.create("release") {
+            storeFile = file(releaseKeystore)
+            storePassword = System.getenv("MYWHISPER_KEYSTORE_PASSWORD")
+            keyAlias = System.getenv("MYWHISPER_KEY_ALIAS")
+            keyPassword = System.getenv("MYWHISPER_KEY_PASSWORD")
+        }
+    }
     buildTypes {
         debug {
             // Emulator (x86_64) + physical arm64 debug installs.
@@ -36,6 +39,7 @@ android {
             // (~149MB of native .so outside arm64); Play + physical devices
             // are arm64. x86_64 stays available in debug for the emulator.
             ndk { abiFilters += "arm64-v8a" }
+            signingConfigs.findByName("release")?.let { signingConfig = it }
             // APK SLIM: R8 + shrinkResources in release (rules in
             // proguard-rules.pro: Tink -dontwarn/-keep, CoreBridge
             // native keeps, sherpa/MediaPipe reflection keeps).
