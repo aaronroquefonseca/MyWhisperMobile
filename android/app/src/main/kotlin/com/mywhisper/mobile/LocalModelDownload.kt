@@ -122,24 +122,40 @@ object LocalModelDownload {
      * Thread-safe. Pure JVM-testable with fakes.
      */
     class PackVerifyCache {
-        private data class Work(val fingerprint: String, val task: java.util.concurrent.FutureTask<Any>)
+        private data class Work(
+            val fingerprint: String,
+            val task: java.util.concurrent.FutureTask<Any>,
+            val owner: java.util.concurrent.atomic.AtomicReference<Thread>,
+        )
         private val lock = Any()
         private val map = mutableMapOf<String, Work>()
 
         @Suppress("UNCHECKED_CAST")
         fun <T : Any> getOrPut(id: String, fingerprint: String, compute: () -> T): T {
-            val work = synchronized(lock) {
-                map[id]?.takeIf { it.fingerprint == fingerprint } ?: Work(
-                    fingerprint, java.util.concurrent.FutureTask { compute() as Any },
-                ).also { map[id] = it }
-            }
-            // FutureTask runs once even when multiple callers race. Never hash under lock.
-            work.task.run()
-            return try {
-                work.task.get() as T
-            } catch (e: Exception) {
-                synchronized(lock) { if (work.task.isDone && map[id] === work) map.remove(id) }
-                throw e
+            while (true) {
+                val work = synchronized(lock) {
+                    map[id]?.takeIf { it.fingerprint == fingerprint } ?: run {
+                        val owner = java.util.concurrent.atomic.AtomicReference<Thread>()
+                        Work(fingerprint, java.util.concurrent.FutureTask {
+                            owner.set(Thread.currentThread())
+                            compute() as Any
+                        }, owner).also { map[id] = it }
+                    }
+                }
+                // FutureTask runs once even when multiple callers race. Never hash under lock.
+                work.task.run()
+                try {
+                    return work.task.get() as T
+                } catch (e: java.util.concurrent.ExecutionException) {
+                    synchronized(lock) { if (map[id] === work) map.remove(id) }
+                    // The owner may have left composition while another caller still needs it.
+                    if (e.cause is InterruptedException && work.owner.get() !== Thread.currentThread() &&
+                        !Thread.currentThread().isInterrupted) continue
+                    throw e
+                } catch (e: Exception) {
+                    synchronized(lock) { if (work.task.isDone && map[id] === work) map.remove(id) }
+                    throw e
+                }
             }
         }
 

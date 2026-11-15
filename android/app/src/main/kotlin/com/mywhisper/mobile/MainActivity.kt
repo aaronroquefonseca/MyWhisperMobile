@@ -165,6 +165,8 @@ class MainActivity : ComponentActivity() {
     private var micDeniedBefore = false
     private val workers = Executors.newSingleThreadExecutor()
     private val sttVerifyCache = LocalModelDownload.PackVerifyCache()
+    private val llmVerifyCache = LocalModelDownload.PackVerifyCache()
+    private val packChanges = mutableIntStateOf(0)
     private var multicastLock: WifiManager.MulticastLock? = null
     /** Active background-download WorkInfo observers, keyed by unique work name. */
     private val dlWorkObservers = mutableMapOf<String, Observer<List<WorkInfo>>>()
@@ -1459,6 +1461,15 @@ class MainActivity : ComponentActivity() {
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable
     private fun Root() {
+        rememberPackChanges(
+            filesDir,
+            LocalSttModels.MODELS.map { LocalSttModels.dirFor(filesDir, it) } + File(filesDir, "models"),
+            onChange = {
+                sttVerifyCache.invalidateAll()
+                llmVerifyCache.invalidateAll()
+                packChanges.intValue++
+            },
+        )
         val s = settingsState.value
         val theme = s?.optJSONObject("preferences")?.optString("theme", "System") ?: "System"
         val dark = when (theme) {
@@ -2186,7 +2197,7 @@ class MainActivity : ComponentActivity() {
             onDispose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
         }
         val selected = LocalSttModels.findById(selectedId)
-        val changes = rememberPackChanges(filesDir, listOf(LocalSttModels.dirFor(filesDir, selected)))
+        val changes = packChanges.intValue
         val fingerprint = safePackFingerprint { sttPackFiles(filesDir, selected) }
         val localVerified = rememberVerifiedPack(
             selected.id, fingerprint, changes, sttVerifyCache,
@@ -2718,12 +2729,9 @@ class MainActivity : ComponentActivity() {
         var modelInspects by remember {
             mutableStateOf<Map<String, LocalSttModels.PackInspect>>(emptyMap())
         }
-        val sttChanges = rememberPackChanges(filesDir, LocalSttModels.MODELS.map { LocalSttModels.dirFor(filesDir, it) })
+        val sttChanges = packChanges.intValue
         var sttFingerprints by remember(sttChanges) { mutableStateOf<Map<String, String>>(emptyMap()) }
-        var lastSttChanges by remember { mutableIntStateOf(sttChanges) }
         LaunchedEffect(version, sttChanges) {
-            if (lastSttChanges != sttChanges) sttPackCache.invalidateAll()
-            lastSttChanges = sttChanges
             modelInspects = emptyMap()
             sttFingerprints = emptyMap()
             for (m in LocalSttModels.MODELS) {
@@ -3776,14 +3784,11 @@ class MainActivity : ComponentActivity() {
         // hashes (up to GBs) on the UI thread ANR the app and drop
         // input (owner repro on a 2.6GB pack). Rows read missing
         // until the first pass lands, then flip as verified.
-        val packCache = remember { LocalModelDownload.PackVerifyCache() }
+        val packCache = llmVerifyCache
         var llmInspects by remember { mutableStateOf<Map<String, LlmInspect>>(emptyMap()) }
-        val llmChanges = rememberPackChanges(filesDir, listOf(File(filesDir, "models")))
+        val llmChanges = packChanges.intValue
         var llmFingerprints by remember(llmChanges) { mutableStateOf<Map<String, String>>(emptyMap()) }
-        var lastLlmChanges by remember { mutableIntStateOf(llmChanges) }
         LaunchedEffect(version, llmChanges) {
-            if (lastLlmChanges != llmChanges) packCache.invalidateAll()
-            lastLlmChanges = llmChanges
             llmInspects = emptyMap()
             llmFingerprints = emptyMap()
             for (a in assets) {

@@ -3,7 +3,6 @@ package com.mywhisper.mobile
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -23,10 +22,7 @@ internal fun <T : Any> rememberVerifiedPack(
     verify: () -> T,
 ): Boolean {
     var verifiedFingerprint by remember(id, changes) { mutableStateOf<String?>(null) }
-    var lastChanges by remember { mutableIntStateOf(changes) }
     LaunchedEffect(id, fingerprint, changes) {
-        if (lastChanges != changes) cache.invalidateAll()
-        lastChanges = changes
         verifiedFingerprint = null
         if (fingerprint == null) return@LaunchedEffect
         val verified = runInterruptible(Dispatchers.IO) {

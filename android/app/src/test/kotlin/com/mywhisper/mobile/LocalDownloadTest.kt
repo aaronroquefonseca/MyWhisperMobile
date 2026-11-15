@@ -246,6 +246,47 @@ class LocalDownloadTest {
     }
 
     @Test
+    fun waitingConsumerRetriesWhenVerifierOwnerIsCancelled() {
+        val cache = LocalModelDownload.PackVerifyCache()
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val waiting = java.util.concurrent.CountDownLatch(1)
+        val waiterThread = java.util.concurrent.atomic.AtomicReference<Thread>()
+        val owner = Thread {
+            try {
+                cache.getOrPut("model", "fp") {
+                    entered.countDown()
+                    java.util.concurrent.CountDownLatch(1).await()
+                    false
+                }
+            } catch (_: Exception) { }
+        }
+        val pool = java.util.concurrent.Executors.newSingleThreadExecutor()
+        try {
+            owner.start()
+            assertTrue(entered.await(5, java.util.concurrent.TimeUnit.SECONDS))
+            val survivor = pool.submit<Boolean> {
+                waiterThread.set(Thread.currentThread())
+                waiting.countDown()
+                cache.getOrPut("model", "fp") { true }
+            }
+            assertTrue(waiting.await(5, java.util.concurrent.TimeUnit.SECONDS))
+            val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5)
+            while (waiterThread.get().state != Thread.State.WAITING && System.nanoTime() < deadline) {
+                Thread.yield()
+            }
+            assertEquals(Thread.State.WAITING, waiterThread.get().state)
+            owner.interrupt()
+            assertTrue(survivor.get(5, java.util.concurrent.TimeUnit.SECONDS))
+            owner.join(5000)
+            assertFalse(owner.isAlive)
+            assertTrue(cache.has("model", "fp"))
+        } finally {
+            owner.interrupt()
+            pool.shutdownNow()
+        }
+    }
+
+    @Test
     fun cancelledVerifierDoesNotPoisonCache() {
         val cache = LocalModelDownload.PackVerifyCache()
         val entered = java.util.concurrent.CountDownLatch(1)
