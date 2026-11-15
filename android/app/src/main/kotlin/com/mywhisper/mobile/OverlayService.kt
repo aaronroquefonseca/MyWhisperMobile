@@ -90,6 +90,7 @@ class OverlayService : Service(), Dictation.Listener {
     @Volatile private var foregrounded = false
     private var wm: WindowManager? = null
     private var holder: ViewGroup? = null
+    private var exitingHolder: ViewGroup? = null
     private var haloView: View? = null
     private var micBtn: ImageButton? = null
     private var dragHandle: View? = null
@@ -933,6 +934,7 @@ class OverlayService : Service(), Dictation.Listener {
     /** Compact monochrome squircle with an optional full-width grip. */
     @SuppressLint("ClickableViewAccessibility")
     private fun showBubble() {
+        removeExitingBubble()
         if (holder != null) {
             refreshChrome(Dictation.State.IDLE)
             return
@@ -1421,7 +1423,16 @@ class OverlayService : Service(), Dictation.Listener {
         }
     }
 
+    private fun removeExitingBubble() {
+        exitingHolder?.let { outgoing ->
+            outgoing.animate().withEndAction(null).cancel()
+            try { wm?.removeView(outgoing) } catch (_: Exception) { }
+        }
+        exitingHolder = null
+    }
+
     private fun removeBubble(animate: Boolean = false) {
+        if (!animate) removeExitingBubble()
         vizMorphAnimator?.cancel()
         vizMorphAnimator = null
         mainHandler.removeCallbacks(revealHoldControls)
@@ -1452,10 +1463,13 @@ class OverlayService : Service(), Dictation.Listener {
                     lp.flags = lp.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
                     try { wm?.updateViewLayout(outgoing, lp) } catch (_: Exception) { }
                 }
+                removeExitingBubble()
+                exitingHolder = outgoing
                 outgoing.animate().alpha(0f).scaleX(0.97f).scaleY(0.97f)
                     .setDuration(60L)
                     .withEndAction {
                         try { wm?.removeView(outgoing) } catch (_: Exception) { }
+                        if (exitingHolder === outgoing) exitingHolder = null
                     }.start()
             } else {
                 try { wm?.removeView(outgoing) } catch (_: Exception) { }
