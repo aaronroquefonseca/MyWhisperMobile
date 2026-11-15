@@ -10,21 +10,25 @@ other settings from the app.
 
 ## Floating button
 
-Focus any text field and the floating button appears over the app. Tap to
-start dictating, then tap ✓ to transcribe and insert the text, or ✕ to
-discard it.
-It follows the keyboard, snaps to the screen edge, and can be dragged,
-faded, locked, or snoozed.
+Focus any text field and the floating button appears over the app. A quick
+tap starts dictation; tap ✓ to transcribe and insert the text, or ✕ to
+discard it. Or press and hold to talk, release to send, slide up to lock
+recording, or slide down to cancel. It follows the keyboard, snaps to the
+screen edge, and can be dragged, faded, locked, or snoozed.
 
 <table>
   <tr>
-    <td align="center" width="50%">
-      <img src="docs/screenshots/pill-ready.png" alt="Floating button resting above the keyboard in Messages" width="270" /><br />
-      <sub><b>Ready</b> — rests just above the keyboard</sub>
+    <td align="center" width="33%">
+      <img src="docs/screenshots/pill-ready.png" alt="Floating button resting above the keyboard in Messages" width="220" /><br />
+      <sub><b>Ready</b><br />rests above the keyboard</sub>
     </td>
-    <td align="center" width="50%">
-      <img src="docs/screenshots/pill-recording.png" alt="Floating button expanded while listening, with confirm and cancel controls" width="270" /><br />
-      <sub><b>Listening</b> — tap once to start; ✓ inserts, ✕ cancels</sub>
+    <td align="center" width="33%">
+      <img src="docs/screenshots/pill-recording.png" alt="Floating button after a tap, listening with live audio levels and confirm and cancel controls" width="220" /><br />
+      <sub><b>Tap to dictate</b><br />✓ inserts · ✕ cancels</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/screenshots/pill-hold.png" alt="Floating button held down, listening with live audio levels, a lock target above and a cancel target below" width="220" /><br />
+      <sub><b>Hold to talk</b><br />release sends · ↑ lock · ↓ cancel</sub>
     </td>
   </tr>
 </table>
