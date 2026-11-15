@@ -105,7 +105,12 @@ object LocalModelDownload {
     @JvmStatic
     fun packFingerprint(files: List<File>): String =
         files.sortedBy { it.name }.joinToString("|") { f ->
-            if (f.isFile) "${f.name}=${f.length()}@${f.lastModified()}" else "${f.name}:-"
+            try {
+                val a = java.nio.file.Files.readAttributes(f.toPath(), java.nio.file.attribute.BasicFileAttributes::class.java)
+                "${f.name}=${a.size()}@${a.lastModifiedTime()}@${a.creationTime()}@${a.fileKey()}"
+            } catch (_: java.nio.file.NoSuchFileException) {
+                "${f.name}:-"
+            }
         }
 
     /**
@@ -117,23 +122,68 @@ object LocalModelDownload {
      * Thread-safe. Pure JVM-testable with fakes.
      */
     class PackVerifyCache {
+        private data class Work(
+            val fingerprint: String,
+            val task: java.util.concurrent.FutureTask<Any>,
+            val owner: java.util.concurrent.atomic.AtomicReference<Thread>,
+        )
         private val lock = Any()
-        private val map = mutableMapOf<String, Pair<String, Any>>()
+        private val map = mutableMapOf<String, Work>()
 
-        /** Cached verdict when [fingerprint] matches, else compute + store. */
         @Suppress("UNCHECKED_CAST")
-        fun <T : Any> getOrPut(id: String, fingerprint: String, compute: () -> T): T =
-            synchronized(lock) {
-                val hit = map[id]
-                if (hit != null && hit.first == fingerprint) return hit.second as T
-                val fresh = compute()
-                map[id] = fingerprint to fresh
-                return fresh
+        fun <T : Any> getOrPut(id: String, fingerprint: String, compute: () -> T): T {
+            while (true) {
+                val work = synchronized(lock) {
+                    map[id]?.takeIf { it.fingerprint == fingerprint } ?: run {
+                        val owner = java.util.concurrent.atomic.AtomicReference<Thread>()
+                        Work(fingerprint, java.util.concurrent.FutureTask {
+                            owner.set(Thread.currentThread())
+                            compute() as Any
+                        }, owner).also { map[id] = it }
+                    }
+                }
+                // FutureTask runs once even when multiple callers race. Never hash under lock.
+                work.task.run()
+                try {
+                    return work.task.get() as T
+                } catch (e: java.util.concurrent.ExecutionException) {
+                    synchronized(lock) { if (map[id] === work) map.remove(id) }
+                    // The owner may have left composition while another caller still needs it.
+                    if (e.cause is InterruptedException && work.owner.get() !== Thread.currentThread() &&
+                        !Thread.currentThread().isInterrupted) continue
+                    throw e
+                } catch (e: Exception) {
+                    synchronized(lock) { if (work.task.isDone && map[id] === work) map.remove(id) }
+                    throw e
+                }
             }
+        }
 
-        /** True when [id] holds a verdict for [fingerprint]. */
+        /** Never return a verdict for a fingerprint that changed while verification ran. */
+        fun <T : Any> getStable(
+            id: String,
+            fingerprint: String,
+            currentFingerprint: () -> String?,
+            stillCurrent: () -> Boolean = { true },
+            compute: () -> T,
+        ): T? {
+            if (!stillCurrent() || currentFingerprint() != fingerprint) return null
+            val result = getOrPut(id, fingerprint) {
+                val value = compute()
+                check(currentFingerprint() == fingerprint) { "Pack changed during verification" }
+                value
+            }
+            return result.takeIf { stillCurrent() && currentFingerprint() == fingerprint }
+        }
+
+        fun invalidate(id: String) = synchronized(lock) { map.remove(id); Unit }
+
+        fun invalidateAll() = synchronized(lock) { map.clear() }
+
         fun has(id: String, fingerprint: String): Boolean = synchronized(lock) {
-            fingerprint.isNotEmpty() && map[id]?.first == fingerprint
+            val work = map[id]
+            fingerprint.isNotEmpty() && work?.fingerprint == fingerprint &&
+                work.task.isDone && !work.task.isCancelled
         }
     }
 
