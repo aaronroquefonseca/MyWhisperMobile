@@ -1,26 +1,38 @@
 name: release
 
-# Tag push (v*) produces a changelogged APK release. Manual re-run via
-# workflow_dispatch with an existing tag. Signing secrets out of scope:
-# :app:assembleRelease builds UNSIGNED; wiring signing comes later.
+# Stable: tag push (v*) builds signed Full + Lite APKs, creates the GitHub
+# release with the CHANGELOG section, and hands the Full APK to the F-Droid
+# repo (aaronroquefonseca/fdroid picks up R2 incoming/ every few hours).
+# Nightly: every push to main does the same with the `nightly` build type,
+# replaces the rolling `nightly` GitHub prerelease, and syncs the F-Droid
+# listing (fastlane/metadata/android). F-Droid marks nightlies as Beta.
+# Manual re-run of a stable release via workflow_dispatch with an existing tag.
 on:
   push:
     tags: ["v*"]
+    branches: [main]
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing version tag to release (e.g. v0.1.0)
+        description: Existing version tag to release (e.g. v1.0.0)
         type: string
-        required: false
-        default: ""
+        required: true
 
 permissions:
-  contents: write # create GitHub Releases + upload APK only
+  contents: write # create GitHub Releases, upload APKs, move the nightly tag
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref }}
+  # A newer push to main supersedes a running nightly; never cancel a stable.
+  cancel-in-progress: ${{ github.ref == 'refs/heads/main' && !inputs.tag }}
+
+env:
+  PACKAGE: com.mywhisper.mobile
 
 jobs:
   release:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: android
@@ -30,21 +42,33 @@ jobs:
           ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Verify tag matches gradle versionName + CHANGELOG section
+      - name: Resolve channel and version
         working-directory: ${{ github.workspace }}
+        env:
+          REF_TYPE: ${{ inputs.tag && 'tag' || github.ref_type }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
-          TAG="${{ inputs.tag || github.ref_name }}"
-          VERSION="${TAG#v}"
           GRADLE_VERSION="$(grep '^mywhisper\.versionName=' android/gradle.properties | cut -d= -f2 | tr -d ' ')"
           test -n "$GRADLE_VERSION"
-          if [[ "$GRADLE_VERSION" != "$VERSION" ]]; then
-            echo "tag $TAG != gradle versionName $GRADLE_VERSION" >&2; exit 1
+          if [[ "$REF_TYPE" == tag ]]; then
+            VERSION="${TAG#v}"
+            if [[ "$GRADLE_VERSION" != "$VERSION" ]]; then
+              echo "tag $TAG != gradle versionName $GRADLE_VERSION" >&2; exit 1
+            fi
+            if ! grep -q "^## \\[$VERSION\\]" CHANGELOG.md; then
+              echo "CHANGELOG.md lacks a [${VERSION}] section (only Unreleased?)" >&2; exit 1
+            fi
+            awk -v ver="$VERSION" 'index($0, "## [" ver "]") == 1 {flag=1; next} /^## / {flag=0} flag' CHANGELOG.md | sed -e '/^[[:space:]]*$/d' > notes.md
+            test -s notes.md || { echo "empty notes for $TAG" >&2; exit 1; }
+            { echo "CHANNEL=stable"; echo "BUILD_TYPE=Release"; echo "NIGHTLY_NUMBER=0"; } >> "$GITHUB_ENV"
+          else
+            # Nightly number = commits since the release number was last bumped,
+            # +1 so a nightly never equals the stable build of the same release.
+            BUMP="$(git log -1 --format=%H -G'^mywhisper\.versionCode=' -- android/gradle.properties)"
+            NIGHTLY_NUMBER=$(( $(git rev-list --count "$BUMP..HEAD") + 1 ))
+            { echo "CHANNEL=nightly"; echo "BUILD_TYPE=Nightly"; echo "NIGHTLY_NUMBER=$NIGHTLY_NUMBER"; } >> "$GITHUB_ENV"
           fi
-          if ! grep -q "^## \\[$VERSION\\]" CHANGELOG.md; then
-            echo "CHANGELOG.md lacks a [${VERSION}] section (only Unreleased?)" >&2; exit 1
-          fi
-          echo "TAG=$TAG VERSION=$VERSION OK"
       - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           distribution: temurin
@@ -68,13 +92,38 @@ jobs:
         working-directory: .
         run: bash scripts/fetch-sherpa-aar.sh
       - uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d # v4
-      - name: Assemble unsigned release APK
-        # No signingConfig wired: produces app-full-release-unsigned.apk-style
-        # unsigned artifact. Release signing via secrets is out of scope.
-        # APK-slim default: FULL flavor (on-device STT+LLM). Lite publishes
-        # no release artifact; see PR body for the lite size note.
-        run: ./gradlew :app:assembleFullRelease
-      - name: Create GitHub Release with changelog notes + APK
+      - name: Restore release keystore
+        env:
+          MYWHISPER_KEYSTORE_B64: ${{ secrets.MYWHISPER_KEYSTORE_B64 }}
+        run: echo "$MYWHISPER_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+      - name: Assemble signed Full + Lite APKs
+        env:
+          MYWHISPER_KEYSTORE_PASSWORD: ${{ secrets.MYWHISPER_KEYSTORE_PASSWORD }}
+          MYWHISPER_KEY_ALIAS: ${{ secrets.MYWHISPER_KEY_ALIAS }}
+          MYWHISPER_KEY_PASSWORD: ${{ secrets.MYWHISPER_KEY_PASSWORD }}
+        run: |
+          MYWHISPER_KEYSTORE_PATH="$RUNNER_TEMP/release.keystore" ./gradlew \
+            ":app:assembleFull${BUILD_TYPE}" ":app:assembleLite${BUILD_TYPE}" \
+            "-Pmywhisper.nightlyNumber=${NIGHTLY_NUMBER}"
+      - name: Remove release keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.keystore"
+      - name: Collect APKs
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          BT="${BUILD_TYPE,}"
+          OUT=android/app/build/outputs/apk
+          META="$OUT/full/$BT/output-metadata.json"
+          VERSION_NAME="$(jq -r '.elements[0].versionName' "$META")"
+          VERSION_CODE="$(jq -r '.elements[0].versionCode' "$META")"
+          mkdir -p dist
+          mv "$OUT/full/$BT/app-full-$BT.apk" "dist/MyWhisper-${VERSION_NAME}.apk"
+          mv "$OUT/lite/$BT/app-lite-$BT.apk" "dist/MyWhisper-Lite-${VERSION_NAME}.apk"
+          { echo "VERSION_NAME=$VERSION_NAME"; echo "VERSION_CODE=$VERSION_CODE"; } >> "$GITHUB_ENV"
+          ls -l dist
+      - name: Create GitHub Release
+        if: env.CHANNEL == 'stable'
         working-directory: ${{ github.workspace }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -82,13 +131,50 @@ jobs:
           TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
-          VERSION="${TAG#v}"
-          awk -v ver="$VERSION" 'index($0, "## [" ver "]") == 1 {flag=1; next} /^## / {flag=0} flag' CHANGELOG.md | sed -e '/^[[:space:]]*$/d' > notes.md
-          test -s notes.md || { echo "empty notes for $TAG" >&2; exit 1; }
-          APK=android/app/build/outputs/apk/full/release/app-full-release-unsigned.apk
-          META=android/app/build/outputs/apk/full/release/output-metadata.json
-          test -f "$APK" || { echo "missing $APK" >&2; exit 1; }
           ARGS=(--title "$TAG" --notes-file notes.md)
           [[ "$TAG" == *-* ]] && ARGS+=(--prerelease)
-          [[ -f "$META" ]] && ARGS+=("$META")
-          gh release create "$TAG" "$APK" "${ARGS[@]}" --repo "$GH_REPO"
+          gh release create "$TAG" dist/*.apk "${ARGS[@]}"
+      - name: Replace rolling nightly prerelease
+        if: env.CHANNEL == 'nightly'
+        working-directory: ${{ github.workspace }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          LAST_TAG="$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)"
+          {
+            echo "Nightly build ${VERSION_NAME} (versionCode ${VERSION_CODE}) from ${GITHUB_SHA::7}."
+            echo
+            echo "Installs over the stable app (same package) and keeps your settings."
+            echo "Full includes on-device models; Lite is server-only."
+            echo
+            echo "Changes since ${LAST_TAG:-the first commit}:"
+            git log --format='- %s' --no-merges ${LAST_TAG:+"$LAST_TAG..HEAD"} | head -50
+          } > nightly-notes.md
+          gh release delete nightly --cleanup-tag --yes 2>/dev/null || true
+          gh release create nightly dist/*.apk --prerelease --target "$GITHUB_SHA" \
+            --title "Nightly ${VERSION_NAME}" --notes-file nightly-notes.md
+      - name: Hand Full APK and listing to the F-Droid repo
+        working-directory: ${{ github.workspace }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          set -euo pipefail
+          R2=(--endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" --only-show-errors)
+          LISTING="s3://${R2_BUCKET}/listings/${PACKAGE}"
+          if [[ "$CHANNEL" == nightly ]]; then
+            # Store text, icon, screenshots; symlinks are followed. changelogs/
+            # holds per-release "What's new" written on stable; keep it.
+            aws s3 sync fastlane/metadata/android "$LISTING" --delete --exclude '*/changelogs/*' "${R2[@]}"
+          else
+            aws s3 cp notes.md "$LISTING/en-US/changelogs/${VERSION_CODE}.txt" "${R2[@]}"
+          fi
+          # fdroid's canonical file name; the repo treats versionCode % 1000 != 0 as nightly.
+          aws s3 cp "dist/MyWhisper-${VERSION_NAME}.apk" "s3://${R2_BUCKET}/incoming/${PACKAGE}_${VERSION_CODE}.apk" "${R2[@]}"

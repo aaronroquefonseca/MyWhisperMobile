@@ -8,6 +8,25 @@ Dictate into other apps using a floating microphone button or the
 MyWhisper input method. Configure speech recognition, text cleanup, and
 other settings from the app.
 
+## Install
+
+MyWhisper is also available on my own F-Droid repository, with automatic
+updates: [**add it here**](https://f-droid.aaronroque.biz), then install
+MyWhisper from F-Droid.
+
+Or download an APK from [GitHub Releases](https://github.com/aaronroquefonseca/MyWhisperMobile/releases):
+
+- **MyWhisper**: full app, including on-device speech recognition and cleanup.
+- **MyWhisper Lite**: server-only, much smaller.
+- **Nightly**: built from every change on `main`
+  ([rolling prerelease](https://github.com/aaronroquefonseca/MyWhisperMobile/releases/tag/nightly)).
+  On F-Droid, enable beta updates for MyWhisper to get them.
+
+All builds are the same app, so you can switch between them by installing
+another APK over it, keeping your settings. Android only installs an equal
+or newer version, so going from a nightly back to stable waits for the next
+release.
+
 ## Floating button
 
 Focus any text field and the floating button appears over the app. A quick
@@ -108,6 +127,27 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 Then open the app and follow setup to configure speech recognition and
 enable the floating button. To use the keyboard instead, enable and switch
 to the MyWhisper input method and grant microphone access.
+
+## F-Droid listing
+
+The F-Droid store text, icon and screenshots live in
+[`fastlane/metadata/android/en-US`](fastlane/metadata/android/en-US):
+edit `title.txt`, `short_description.txt` and `full_description.txt`, and
+pick screenshots by adding or removing symlinks in `images/phoneScreenshots`
+(shown in file-name order). Merging to `main` publishes the listing; each
+release adds its CHANGELOG section as the "What's new" text.
+
+## Releasing
+
+1. In `android/gradle.properties`, bump `mywhisper.versionCode` by 1 and set
+   `mywhisper.versionName`; add a matching `## [x.y.z]` section to
+   `CHANGELOG.md`.
+2. Merge to `main`, then push the tag `vx.y.z`. The release workflow signs
+   Full and Lite, creates the GitHub release, and sends Full to F-Droid.
+
+The real versionCode is `mywhisper.versionCode × 1000`. Every push to `main`
+builds a nightly numbered from the last bump (e.g. 51003), so nightlies sit
+between one release and the next.
 
 ## Bringing desktop updates over
 

@@ -4,28 +4,39 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val releaseNumber = providers.gradleProperty("mywhisper.versionCode").getOrElse("4").toInt()
+// Commits since the last release tag; set by CI for nightly builds only.
+val nightlyNumber = providers.gradleProperty("mywhisper.nightlyNumber").getOrElse("0").toInt()
+require(nightlyNumber in 0..999) { "mywhisper.nightlyNumber must be 0..999, got $nightlyNumber" }
+
 android {
     namespace = "com.mywhisper.mobile"
     compileSdk = 36
 
-    // Version scheme: versionCode monotonic (+1/release), versionName SemVer.
-    // Source of truth: gradle.properties (mywhisper.versionCode/Name).
+    // Version scheme: gradle.properties holds the release number
+    // (mywhisper.versionCode, +1 per release) and SemVer versionName.
+    // Real versionCode = release number * 1000, leaving room for nightlies
+    // (see androidComponents below) between one release and the next.
     defaultConfig {
         applicationId = "com.mywhisper.mobile"
         minSdk = 29
         targetSdk = 36
-        versionCode = providers.gradleProperty("mywhisper.versionCode").getOrElse("4").toInt()
+        versionCode = releaseNumber * 1000
         versionName = providers.gradleProperty("mywhisper.versionName").getOrElse("0.1.0")
+        manifestPlaceholders["appLabel"] = "MyWhisper"
     }
 
-    // Release signing (docs only, unsigned build by default):
-    // Provide via env/gradle.properties, never commit keystore:
-    //   signingConfigs { create("release") {
-    //     storeFile = file(System.getenv("MYWHISPER_KEYSTORE_PATH") ?: "release.keystore")
-    //     storePassword = System.getenv("MYWHISPER_KEYSTORE_PASSWORD")
-    //     keyAlias = System.getenv("MYWHISPER_KEY_ALIAS")
-    //     keyPassword = System.getenv("MYWHISPER_KEY_PASSWORD") } }
-    //   buildTypes.release.signingConfig = signingConfigs.getByName("release")
+    // Release signing from env (CI secrets); without MYWHISPER_KEYSTORE_PATH
+    // release builds stay unsigned. Never commit the keystore.
+    val releaseKeystore = System.getenv("MYWHISPER_KEYSTORE_PATH")
+    if (releaseKeystore != null) {
+        signingConfigs.create("release") {
+            storeFile = file(releaseKeystore)
+            storePassword = System.getenv("MYWHISPER_KEYSTORE_PASSWORD")
+            keyAlias = System.getenv("MYWHISPER_KEY_ALIAS")
+            keyPassword = System.getenv("MYWHISPER_KEY_PASSWORD")
+        }
+    }
     buildTypes {
         debug {
             // Emulator (x86_64) + physical arm64 debug installs.
@@ -36,6 +47,7 @@ android {
             // (~149MB of native .so outside arm64); Play + physical devices
             // are arm64. x86_64 stays available in debug for the emulator.
             ndk { abiFilters += "arm64-v8a" }
+            signingConfigs.findByName("release")?.let { signingConfig = it }
             // APK SLIM: R8 + shrinkResources in release (rules in
             // proguard-rules.pro: Tink -dontwarn/-keep, CoreBridge
             // native keeps, sherpa/MediaPipe reflection keeps).
@@ -45,6 +57,12 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+        }
+        // Built from every push to main: release config, own label and icon
+        // (src/nightly), versionCode between this release and the next.
+        create("nightly") {
+            initWith(getByName("release"))
+            matchingFallbacks += "release"
         }
     }
 
@@ -77,6 +95,27 @@ android {
         // for that dep. Scoped justification; revisit on the
         // project-wide Kotlin upgrade.
         freeCompilerArgs += "-Xskip-metadata-version-check"
+    }
+}
+
+// Same applicationId for every variant so users can switch between lite/full
+// and stable/nightly without losing settings; the label tells them apart.
+androidComponents {
+    onVariants { variant ->
+        val nightly = variant.buildType == "nightly"
+        val label = buildString {
+            append("MyWhisper")
+            if (variant.flavorName == "lite") append(" Lite")
+            if (nightly) append(" Nightly")
+        }
+        variant.manifestPlaceholders.put("appLabel", label)
+        if (nightly) {
+            val baseName = providers.gradleProperty("mywhisper.versionName").getOrElse("0.1.0")
+            variant.outputs.forEach { output ->
+                output.versionCode.set(releaseNumber * 1000 + nightlyNumber)
+                output.versionName.set("$baseName-nightly.$nightlyNumber")
+            }
+        }
     }
 }
 
