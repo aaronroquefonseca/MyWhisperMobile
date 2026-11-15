@@ -19,12 +19,12 @@ faded, locked, or snoozed.
 <table>
   <tr>
     <td align="center" width="50%">
-      <img src="docs/screenshots/pill-ready.png" alt="Floating button ready next to a Messages text field" width="270" /><br />
-      <sub><b>Ready</b> — appears when a text field has focus</sub>
+      <img src="docs/screenshots/pill-ready.png" alt="Floating button resting above the keyboard in Messages" width="270" /><br />
+      <sub><b>Ready</b> — rests just above the keyboard</sub>
     </td>
     <td align="center" width="50%">
-      <img src="docs/screenshots/pill-recording.png" alt="Floating button expanded while recording, with confirm and cancel controls" width="270" /><br />
-      <sub><b>Listening</b> — ✓ inserts the text, ✕ cancels</sub>
+      <img src="docs/screenshots/pill-recording.png" alt="Floating button expanded while listening, with confirm and cancel controls" width="270" /><br />
+      <sub><b>Listening</b> — tap once to start; ✓ inserts, ✕ cancels</sub>
     </td>
   </tr>
 </table>
