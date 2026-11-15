@@ -14,9 +14,12 @@ F-Droid repository at https://f-droid.aaronroque.biz.
 - Background model downloads via WorkManager with progress notification, resume over HTTP Range, and explicit cancel.
 - On-device diagnostics card with step logs and in-app log tail.
 - F-Droid listing (description, icon, screenshots) maintained in `fastlane/metadata/android`.
+- Nightly builds from every push to `main`: "MyWhisper Nightly" with a purple icon, published as a rolling GitHub prerelease and as F-Droid Beta updates.
+- MyWhisper Lite (server-only) APK attached to releases; all variants share one package so you can switch without losing settings.
 
 ### Changed
-- Release APKs are signed; release workflow also hands the APK and listing to the F-Droid repo.
+- Release APKs are signed and published to the F-Droid repo.
+- versionCode is now the release number × 1000, leaving room for nightlies in between.
 - Flattened launcher icon colors.
 - Bubble commits text via clipboard + paste and restores the user's clipboard afterwards.
 
