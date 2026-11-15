@@ -2564,6 +2564,9 @@ class MainActivity : ComponentActivity() {
                     save()
                 }
             }
+            Section(stringResource(R.string.icon_style_title)) {
+                LauncherIconSettings()
+            }
         }
     }
 

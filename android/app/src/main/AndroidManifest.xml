@@ -31,11 +31,48 @@
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTop">
+        </activity>
+
+        <!-- A separate, no-affinity launcher trampoline keeps alias changes from
+             removing the active settings task. Legacy MainActivity shortcuts still work. -->
+        <activity android:name=".LauncherActivity" android:exported="false"
+            android:theme="@android:style/Theme.NoDisplay" android:taskAffinity=""
+            android:noHistory="true" android:excludeFromRecents="true" />
+        <activity-alias android:name=".LauncherDefault" android:targetActivity=".LauncherActivity"
+            android:enabled="true" android:exported="true" android:icon="@mipmap/ic_launcher">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-        </activity>
+        </activity-alias>
+        <activity-alias android:name=".LauncherNavy" android:targetActivity=".LauncherActivity"
+            android:enabled="false" android:exported="true" android:icon="@mipmap/ic_launcher_navy">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias android:name=".LauncherCobalt" android:targetActivity=".LauncherActivity"
+            android:enabled="false" android:exported="true" android:icon="@mipmap/ic_launcher_cobalt">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias android:name=".LauncherCream" android:targetActivity=".LauncherActivity"
+            android:enabled="false" android:exported="true" android:icon="@mipmap/ic_launcher_cream">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias android:name=".LauncherCharcoal" android:targetActivity=".LauncherActivity"
+            android:enabled="false" android:exported="true" android:icon="@mipmap/ic_launcher_charcoal">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
 
         <service
             android:name=".SyncService"

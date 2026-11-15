@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="icon_style_title">App icon</string>
+    <string name="icon_style_help">Choose your launcher icon. The shape follows your phone’s launcher.</string>
+    <string name="icon_style_default">Default</string>
+    <string name="icon_style_navy">Navy / cyan</string>
+    <string name="icon_style_cobalt">Cobalt / white</string>
+    <string name="icon_style_cream">Cream / ink</string>
+    <string name="icon_style_charcoal">Charcoal / white</string>
+    <string name="icon_style_stable_default">Stable default: %1$s</string>
+    <string name="icon_style_nightly_default">Nightly default: %1$s</string>
+    <string name="icon_style_applied">Icon updated. Your launcher may take a moment to refresh.</string>
+    <string name="icon_style_error">Could not update the icon. Try again.</string>
+</resources>
