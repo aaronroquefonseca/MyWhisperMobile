@@ -478,15 +478,17 @@ class OverlayService : Service(), Dictation.Listener {
 
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private var showPending = false
-    private var suppressShowUntil = 0L
+    private var showDelayElapsed = false
     private val delayedShow = Runnable {
         showPending = false
+        showDelayElapsed = true
         applyVisibility()
     }
 
     private fun cancelDelayedShow() {
         mainHandler.removeCallbacks(delayedShow)
         showPending = false
+        showDelayElapsed = false
     }
 
     /** Short haptic tick (press / release / toggle). */
@@ -939,16 +941,13 @@ class OverlayService : Service(), Dictation.Listener {
         if (show) {
             if (holder != null) {
                 refreshChrome(dictation.current)
-            } else {
-                val remaining = suppressShowUntil - android.os.SystemClock.uptimeMillis()
-                if (remaining <= 0L) {
-                    cancelDelayedShow()
-                    showBubble()
-                } else if (!showPending) {
-                    // Ignore transient IME visibility during dismissal, then recheck.
-                    showPending = true
-                    mainHandler.postDelayed(delayedShow, remaining)
-                }
+            } else if (showDelayElapsed) {
+                showDelayElapsed = false
+                showBubble()
+            } else if (!showPending) {
+                // IME windows can briefly reappear in accessibility snapshots while closing.
+                showPending = true
+                mainHandler.postDelayed(delayedShow, 250L)
             }
         } else {
             cancelDelayedShow()
@@ -1483,7 +1482,6 @@ class OverlayService : Service(), Dictation.Listener {
         holder?.let { outgoing ->
             outgoing.animate().cancel()
             if (animate) {
-                suppressShowUntil = android.os.SystemClock.uptimeMillis() + 250L
                 // Focus is gone: stop intercepting touches before the exit finishes.
                 params?.let { lp ->
                     lp.flags = lp.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
