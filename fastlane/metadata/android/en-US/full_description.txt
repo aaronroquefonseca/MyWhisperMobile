@@ -1,0 +1,21 @@
+Dictate into any app using a floating microphone button or the MyWhisper keyboard.
+
+<b>Floating button</b>
+<ul>
+<li>Appears over any focused text field and follows the keyboard.</li>
+<li>Tap to dictate, then tap ✓ to insert or ✕ to discard.</li>
+<li>Or press and hold to talk: release to send, slide up to lock, slide down to cancel.</li>
+<li>Drag it, snap it to the edge, fade it, lock it, or snooze it.</li>
+</ul>
+
+<b>MyWhisper keyboard</b>
+<ul>
+<li>An input method with a mic bar: hold and release, or tap to start and tap again to finish.</li>
+</ul>
+
+<b>Speech recognition</b>
+<ul>
+<li>Self-hosted OpenAI-compatible HTTP and sherpa-protocol WebSocket servers, or cloud providers.</li>
+<li>Experimental on-device speech recognition and text cleanup, off by default.</li>
+<li>Text cleanup, custom dictionary, transcript history, and sync, all managed from the app.</li>
+</ul>

@@ -1,0 +1,39 @@
+name: fdroid-listing
+
+# Pushes the store listing in fastlane/metadata/android (text, icon,
+# screenshots; symlinks are followed) to the F-Droid repo's R2 bucket.
+# The repo picks it up on its next publish run (every 3 hours).
+on:
+  push:
+    branches: [main]
+    paths:
+      - fastlane/**
+      - docs/screenshots/**
+      - assets/icons/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Sync listing to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        # changelogs/ is written by release.yml per version; keep it.
+        run: |
+          aws s3 sync fastlane/metadata/android "s3://${R2_BUCKET}/listings/com.mywhisper.mobile" \
+            --delete --exclude '*/changelogs/*' --only-show-errors \
+            --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"

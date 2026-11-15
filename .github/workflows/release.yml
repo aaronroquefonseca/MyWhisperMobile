@@ -1,7 +1,8 @@
 name: release
 
 # Tag push (v*) produces a changelogged, signed APK release and hands the APK
-# to the F-Droid repo (R2 incoming/, picked up by aaronroquefonseca/fdroid).
+# to the F-Droid repo (R2 incoming/ + this version's changelog in listings/,
+# picked up by aaronroquefonseca/fdroid).
 # Manual re-run via workflow_dispatch with an existing tag.
 on:
   push:
@@ -116,6 +117,9 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${TAG#v}"
+          VERSION_CODE="$(grep '^mywhisper\.versionCode=' android/gradle.properties | cut -d= -f2 | tr -d ' ')"
+          R2=(--endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" --only-show-errors)
+          # "What's new" in F-Droid clients = this release's CHANGELOG section.
+          aws s3 cp notes.md "s3://${R2_BUCKET}/listings/com.mywhisper.mobile/en-US/changelogs/${VERSION_CODE}.txt" "${R2[@]}"
           aws s3 cp "android/app/build/outputs/apk/full/release/MyWhisper-${VERSION}.apk" \
-            "s3://${R2_BUCKET}/incoming/com.mywhisper.mobile-${VERSION}.apk" \
-            --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" --only-show-errors
+            "s3://${R2_BUCKET}/incoming/com.mywhisper.mobile-${VERSION}.apk" "${R2[@]}"

@@ -8,6 +8,13 @@ Dictate into other apps using a floating microphone button or the
 MyWhisper input method. Configure speech recognition, text cleanup, and
 other settings from the app.
 
+## Install
+
+Download the APK from [GitHub Releases](https://github.com/aaronroquefonseca/MyWhisperMobile/releases),
+or get it with automatic updates from my F-Droid repository:
+[**add it here**](https://f-droid.aaronroque.biz), then install MyWhisper
+from F-Droid.
+
 ## Floating button
 
 Focus any text field and the floating button appears over the app. A quick
@@ -108,6 +115,15 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 Then open the app and follow setup to configure speech recognition and
 enable the floating button. To use the keyboard instead, enable and switch
 to the MyWhisper input method and grant microphone access.
+
+## F-Droid listing
+
+The F-Droid store text, icon and screenshots live in
+[`fastlane/metadata/android/en-US`](fastlane/metadata/android/en-US):
+edit `title.txt`, `short_description.txt` and `full_description.txt`, and
+pick screenshots by adding or removing symlinks in `images/phoneScreenshots`
+(shown in file-name order). Merging to `main` publishes the listing; each
+release adds its CHANGELOG section as the "What's new" text.
 
 ## Bringing desktop updates over
 

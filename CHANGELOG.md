@@ -2,6 +2,30 @@
 
 All notable changes to this project are documented here.
 
+## [1.0.0] - 2026-11-15
+
+First stable release. Signed APKs are published to GitHub Releases and to the
+F-Droid repository at https://f-droid.aaronroque.biz.
+
+### Added
+- Floating button: grip-free drag with hold delay, refined recording gestures (tap, hold, slide to lock or cancel), snooze, and transparency control.
+- Dictation, Voice, and Library sections reorganize the app.
+- On-device models: provider pills, Whisper large/turbo, Nemotron streaming, LiteRT-LM runner with Gemma 4, per-model keep-warm and thinking budgets.
+- Background model downloads via WorkManager with progress notification, resume over HTTP Range, and explicit cancel.
+- On-device diagnostics card with step logs and in-app log tail.
+- F-Droid listing (description, icon, screenshots) maintained in `fastlane/metadata/android`.
+
+### Changed
+- Release APKs are signed; release workflow also hands the APK and listing to the F-Droid repo.
+- Flattened launcher icon colors.
+- Bubble commits text via clipboard + paste and restores the user's clipboard afterwards.
+
+### Fixed
+- Model verification no longer freezes the UI.
+- Bubble transparency applied at window composition; hidden when the dictation service is off.
+- Outbound HTTPS uses bundled roots; provider Test probes require 2xx and send trimmed bearer tokens.
+- Faster, explicit sync startup after reboot.
+
 ## [0.2.0-beta.1] - 2026-10-15
 
 First beta. Server-first voice typing (shared Rust core + Android IME)
