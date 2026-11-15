@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here.
 
+## [1.1.0] - 2026-11-15
+
+### Added
+- Appearance → App icon: choose a launcher icon palette (Navy / cyan, Cobalt / white, Cream / ink, Charcoal / white) or Default, which follows the installed channel. Your choice persists across updates.
+
+### Changed
+- Nightly builds default to the Cobalt / white icon instead of purple.
+- F-Droid repo updates are published as soon as a release or nightly is built, instead of on a schedule.
+
 ## [1.0.0] - 2026-11-15
 
 First stable release. Signed APKs are published to GitHub Releases and to the
