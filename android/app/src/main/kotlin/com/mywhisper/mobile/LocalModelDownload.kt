@@ -176,6 +176,8 @@ object LocalModelDownload {
             return result.takeIf { stillCurrent() && currentFingerprint() == fingerprint }
         }
 
+        fun invalidate(id: String) = synchronized(lock) { map.remove(id); Unit }
+
         fun invalidateAll() = synchronized(lock) { map.clear() }
 
         fun has(id: String, fingerprint: String): Boolean = synchronized(lock) {

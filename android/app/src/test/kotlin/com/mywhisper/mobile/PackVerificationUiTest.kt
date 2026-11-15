@@ -57,7 +57,7 @@ class PackVerificationUiTest {
     fun recreatedDirectoryIsWatchedAgain() {
         val root = java.nio.file.Files.createTempDirectory("watch").toFile()
         val directory = java.io.File(root, "model").apply { mkdir() }
-        val listeners = mutableMapOf<String, () -> Unit>()
+        val listeners = mutableMapOf<String, (java.io.File) -> Unit>()
         var starts = 0
         try {
             compose.setContent {
@@ -71,12 +71,12 @@ class PackVerificationUiTest {
             compose.runOnIdle {
                 assertTrue(directory.delete())
                 assertTrue(directory.mkdir())
-                listeners.getValue(directory.path).invoke()
+                listeners.getValue(directory.path).invoke(directory)
             }
             compose.onNodeWithText("Changes 1").assertExists()
             compose.runOnIdle {
                 assertTrue(starts >= 2)
-                listeners.getValue(directory.path).invoke()
+                listeners.getValue(directory.path).invoke(directory)
             }
             compose.onNodeWithText("Changes 2").assertExists()
         } finally {

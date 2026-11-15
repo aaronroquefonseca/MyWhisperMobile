@@ -166,7 +166,8 @@ class MainActivity : ComponentActivity() {
     private val workers = Executors.newSingleThreadExecutor()
     private val sttVerifyCache = LocalModelDownload.PackVerifyCache()
     private val llmVerifyCache = LocalModelDownload.PackVerifyCache()
-    private val packChanges = mutableIntStateOf(0)
+    private val sttPackChanges = mutableIntStateOf(0)
+    private val llmPackChanges = mutableIntStateOf(0)
     private var multicastLock: WifiManager.MulticastLock? = null
     /** Active background-download WorkInfo observers, keyed by unique work name. */
     private val dlWorkObservers = mutableMapOf<String, Observer<List<WorkInfo>>>()
@@ -1461,13 +1462,25 @@ class MainActivity : ComponentActivity() {
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable
     private fun Root() {
+        val monitoredLlmAssets = remember { llmAssets() }
         rememberPackChanges(
             filesDir,
             LocalSttModels.MODELS.map { LocalSttModels.dirFor(filesDir, it) } + File(filesDir, "models"),
-            onChange = {
-                sttVerifyCache.invalidateAll()
-                llmVerifyCache.invalidateAll()
-                packChanges.intValue++
+            onChange = { changed ->
+                val sttIds = LocalSttModels.MODELS.filter { model ->
+                    affectsPackPath(changed, LocalSttModels.dirFor(filesDir, model))
+                }.map { it.id }
+                val llmIds = monitoredLlmAssets.filter { asset ->
+                    val slot = llmTaskFileFor(filesDir, asset)
+                    val legacy = LocalLlmManager.defaultTaskFile(filesDir)
+                    affectsPackPath(changed, slot) || affectsPackPath(changed, legacy) ||
+                        (changed.parentFile == slot.parentFile &&
+                            ModelDownloadSchedule.isOwnLlmPart(changed.name, slot.name, asset.id))
+                }.map { it.id }
+                sttIds.forEach { sttVerifyCache.invalidate(it) }
+                llmIds.forEach { llmVerifyCache.invalidate(it) }
+                if (sttIds.isNotEmpty()) sttPackChanges.intValue++
+                if (llmIds.isNotEmpty()) llmPackChanges.intValue++
             },
         )
         val s = settingsState.value
@@ -2197,7 +2210,7 @@ class MainActivity : ComponentActivity() {
             onDispose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
         }
         val selected = LocalSttModels.findById(selectedId)
-        val changes = packChanges.intValue
+        val changes = sttPackChanges.intValue
         val fingerprint = safePackFingerprint { sttPackFiles(filesDir, selected) }
         val localVerified = rememberVerifiedPack(
             selected.id, fingerprint, changes, sttVerifyCache,
@@ -2729,7 +2742,7 @@ class MainActivity : ComponentActivity() {
         var modelInspects by remember {
             mutableStateOf<Map<String, LocalSttModels.PackInspect>>(emptyMap())
         }
-        val sttChanges = packChanges.intValue
+        val sttChanges = sttPackChanges.intValue
         var sttFingerprints by remember(sttChanges) { mutableStateOf<Map<String, String>>(emptyMap()) }
         LaunchedEffect(version, sttChanges) {
             modelInspects = emptyMap()
@@ -3786,7 +3799,7 @@ class MainActivity : ComponentActivity() {
         // until the first pass lands, then flip as verified.
         val packCache = llmVerifyCache
         var llmInspects by remember { mutableStateOf<Map<String, LlmInspect>>(emptyMap()) }
-        val llmChanges = packChanges.intValue
+        val llmChanges = llmPackChanges.intValue
         var llmFingerprints by remember(llmChanges) { mutableStateOf<Map<String, String>>(emptyMap()) }
         LaunchedEffect(version, llmChanges) {
             llmInspects = emptyMap()

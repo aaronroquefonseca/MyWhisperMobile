@@ -324,6 +324,29 @@ class LocalDownloadTest {
     }
 
     @Test
+    fun invalidatingOnePackRetainsOtherVerifiedVerdicts() {
+        val cache = LocalModelDownload.PackVerifyCache()
+        var calls = 0
+        assertTrue(cache.getOrPut("first", "fp1") { calls++; true })
+        assertTrue(cache.getOrPut("second", "fp2") { calls++; true })
+        cache.invalidate("first")
+        assertFalse(cache.has("first", "fp1"))
+        assertTrue(cache.has("second", "fp2"))
+        assertTrue(cache.getOrPut("second", "fp2") { calls++; false })
+        assertEquals(2, calls)
+    }
+
+    @Test
+    fun packPathMatchingIncludesAncestorsButExcludesSiblings() {
+        val root = File("/models")
+        val first = File(root, "first")
+        val second = File(root, "second")
+        assertTrue(affectsPackPath(File(first, "encoder"), first))
+        assertTrue(affectsPackPath(root, first))
+        assertFalse(affectsPackPath(File(second, "encoder"), first))
+    }
+
+    @Test
     fun packVerifyCache_hitMissAndStale() {
         val cache = LocalModelDownload.PackVerifyCache()
         var calls = 0

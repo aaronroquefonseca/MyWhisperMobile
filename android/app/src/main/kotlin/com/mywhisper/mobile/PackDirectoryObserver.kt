@@ -12,12 +12,13 @@ import androidx.compose.runtime.setValue
 import java.io.Closeable
 import java.io.File
 
-private fun observeDirectory(directory: File, onChange: () -> Unit): Closeable {
+private fun observeDirectory(directory: File, onChange: (File) -> Unit): Closeable {
     val handler = Handler(Looper.getMainLooper())
     var active = true
     val observer = object : FileObserver(directory, ATTRIB or CLOSE_WRITE or MOVED_TO or MOVED_FROM or DELETE or CREATE or DELETE_SELF or MOVE_SELF) {
         override fun onEvent(event: Int, path: String?) {
-            handler.post { if (active) onChange() }
+            val changed = if (path == null) directory else File(directory, path)
+            handler.post { if (active) onChange(changed) }
         }
     }
     observer.startWatching()
@@ -29,16 +30,23 @@ private fun observeDirectory(directory: File, onChange: () -> Unit): Closeable {
 internal fun rememberPackChanges(
     root: File,
     directories: List<File>,
-    onChange: () -> Unit = {},
-    observe: (File, () -> Unit) -> Closeable = ::observeDirectory,
+    onChange: (File) -> Unit = {},
+    observe: (File, (File) -> Unit) -> Closeable = ::observeDirectory,
 ): Int {
     var generation by remember { mutableIntStateOf(0) }
     val watched = directories.flatMap { directory ->
         generateSequence(directory) { it.parentFile }.takeWhile { it.path.startsWith(root.path) }.toList()
     }.filter { it.isDirectory }.distinctBy { it.absolutePath }.sortedBy { it.absolutePath }
     DisposableEffect(watched, generation) {
-        val observers = watched.map { directory -> observe(directory) { onChange(); generation++ } }
+        val observers = watched.map { directory -> observe(directory) { changed -> onChange(changed); generation++ } }
         onDispose { observers.forEach { it.close() } }
     }
     return generation
+}
+
+/** True for the input itself or an ancestor/descendant filesystem change. */
+internal fun affectsPackPath(changed: File, input: File): Boolean {
+    val changedPath = changed.toPath().toAbsolutePath().normalize()
+    val inputPath = input.toPath().toAbsolutePath().normalize()
+    return changedPath.startsWith(inputPath) || inputPath.startsWith(changedPath)
 }
