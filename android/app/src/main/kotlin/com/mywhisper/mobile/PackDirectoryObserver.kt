@@ -40,6 +40,7 @@ internal fun rememberPackChanges(
     var generation by remember { mutableIntStateOf(0) }
     val lifetime = remember { booleanArrayOf(true) }
     val attached = remember { mutableSetOf<String>() }
+    val epochs = remember { mutableMapOf<String, Int>() }
     DisposableEffect(Unit) {
         lifetime[0] = true
         onDispose { lifetime[0] = false }
@@ -49,15 +50,21 @@ internal fun rememberPackChanges(
     }.filter { it.isDirectory }.distinctBy { it.absolutePath }.sortedBy { it.absolutePath }
     for (directory in watched) {
         key(directory.absolutePath) {
-            val identity = try {
-                val attributes = java.nio.file.Files.readAttributes(
+            // Inode + self-event epoch, never timestamps: Android has no birthtime, so
+            // creationTime() is the dir mtime, which every child write (state.db-wal in
+            // filesDir) bumps → reattach → reconcile → all packs re-verified in a loop.
+            val fileKey = try {
+                java.nio.file.Files.readAttributes(
                     directory.toPath(), java.nio.file.attribute.BasicFileAttributes::class.java,
-                )
-                attributes.fileKey() to attributes.creationTime()
+                ).fileKey()
             } catch (_: Exception) { null }
-            DisposableEffect(identity) {
+            DisposableEffect(fileKey, epochs[directory.absolutePath]) {
                 val observer = observe(directory) { changed ->
-                    if (lifetime[0]) { onChange(changed); generation++ }
+                    if (lifetime[0]) {
+                        // Event on the directory itself (deleted/moved): the watch may be dead, reattach.
+                        if (changed == directory) epochs[directory.absolutePath] = (epochs[directory.absolutePath] ?: 0) + 1
+                        onChange(changed); generation++
+                    }
                 }
                 // Reconcile the directory after reattachment, covering the small watch gap.
                 if (!attached.add(directory.absolutePath)) onChange(directory)
