@@ -5,7 +5,9 @@
 #include "parakeet.h"
 #include "whisper.h"
 
+#include <algorithm>
 #include <chrono>
+#include <functional>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -89,7 +91,93 @@ struct Llm {
     std::string tmpl;
     bool gemma4 = false;
     std::vector<llama_token> cached; // tokens currently in the KV cache (seq 0)
+    bool no_lookup = false;          // KV tail removal unsupported: plain decoding only
 };
+
+// Greedy decoding with prompt-lookup drafts: cleanup output mostly copies
+// the transcript, so after each token we look up the last few tokens in
+// the prompt and propose what followed there. One batched decode verifies
+// all drafts; output is identical to plain greedy decoding, just fewer
+// sequential steps. Returns false on a decode failure.
+bool generate_lookup(Llm * llm, llama_sampler * smpl, const std::vector<llama_token> & prompt, int max_tokens,
+                     int timeout_ms, std::chrono::steady_clock::time_point t0,
+                     const std::function<void(llama_token)> & emit) {
+    // Tuned on Exynos 990 / Gemma 4 E2B: 7.5 -> 13 tok/s (10/3 gave 12,
+    // 16/3 gave 10: long drafts cost more than they save on CPU).
+    const int kDraft = 6, kNgram = 2;
+    llama_memory_t mem = llama_get_memory(llm->ctx);
+    llama_batch batch = llama_batch_init(kDraft + 1, 0, 1);
+    llama_token tok = llama_sampler_sample(smpl, llm->ctx, -1);
+    int produced = 0;
+    bool ok = true;
+    while (produced < max_tokens && !llama_vocab_is_eog(llm->vocab, tok)) {
+        emit(tok);
+        ++produced;
+        if (timeout_ms > 0 && ms_since(t0) > timeout_ms) break;
+        // Draft: the tokens that followed the latest prompt occurrence of the
+        // last kNgram tokens (already decoded ones + tok).
+        std::vector<llama_token> draft;
+        const auto & h = llm->cached;
+        if ((int) h.size() >= kNgram - 1) {
+            llama_token key[kNgram];
+            for (int k = 0; k < kNgram - 1; ++k) key[k] = h[h.size() - (kNgram - 1) + k];
+            key[kNgram - 1] = tok;
+            for (int i = (int) prompt.size() - kNgram; i >= 0 && draft.empty(); --i) {
+                if (std::equal(key, key + kNgram, prompt.begin() + i)) {
+                    for (int j = i + kNgram; j < (int) prompt.size() && (int) draft.size() < kDraft; ++j) {
+                        draft.push_back(prompt[j]);
+                    }
+                }
+            }
+        }
+        const int base = (int) llm->cached.size();
+        batch.n_tokens = 0;
+        auto add = [&](llama_token t, int pos) {
+            const int n = batch.n_tokens++;
+            batch.token[n] = t;
+            batch.pos[n] = pos;
+            batch.n_seq_id[n] = 1;
+            batch.seq_id[n][0] = 0;
+            batch.logits[n] = 1;
+        };
+        add(tok, base);
+        for (size_t j = 0; j < draft.size(); ++j) add(draft[j], base + 1 + (int) j);
+        if (llama_decode(llm->ctx, batch) != 0) {
+            ok = false;
+            break;
+        }
+        llm->cached.push_back(tok);
+        // Verify drafts greedily: keep each one the model would also pick.
+        size_t accepted = 0;
+        llama_token next = llama_sampler_sample(smpl, llm->ctx, 0);
+        while (accepted < draft.size() && next == draft[accepted] && produced < max_tokens &&
+               !llama_vocab_is_eog(llm->vocab, next)) {
+            emit(next);
+            ++produced;
+            llm->cached.push_back(next);
+            ++accepted;
+            next = llama_sampler_sample(smpl, llm->ctx, (int) accepted);
+        }
+        if (accepted < draft.size() &&
+            !llama_memory_seq_rm(mem, 0, (llama_pos) llm->cached.size(), -1)) {
+            // Cache cannot drop the rejected tail: rebuild it and stop drafting.
+            llm->no_lookup = true;
+            llama_memory_clear(mem, true);
+            std::vector<llama_token> keep = llm->cached;
+            llm->cached.clear();
+            for (size_t i = 0; i < keep.size() && ok; i += 512) {
+                int len = (int) std::min<size_t>(512, keep.size() - i);
+                ok = llama_decode(llm->ctx, llama_batch_get_one(keep.data() + i, len)) == 0;
+            }
+            if (ok) llm->cached = keep;
+            next = ok ? llama_sampler_sample(smpl, llm->ctx, -1) : next;
+        }
+        tok = next;
+        if (!ok) break;
+    }
+    llama_batch_free(batch);
+    return ok;
+}
 
 std::string format_prompt(const Llm & llm, const char * system, const char * user) {
     const std::string sys = system ? system : "";
@@ -224,6 +312,7 @@ void * mw_llm_load(const char * model_path, const char * device, int n_ctx, int 
     const char * t = llama_model_chat_template(model, nullptr);
     llm->tmpl = t ? t : "";
     llm->gemma4 = llm->tmpl.find("<|turn>") != std::string::npos;
+    llm->no_lookup = getenv("MW_NO_LOOKUP") != nullptr; // bench comparison only
     if (g_log) {
         char msg[128];
         snprintf(msg, sizeof msg, "mw_llm_load: %s in %.0f ms\n", is_cpu(device) ? "CPU" : device, ms_since(t0));
@@ -295,19 +384,26 @@ char * mw_llm_generate(void * handle, const char * system, const char * user, in
     std::string out;
     auto t1 = std::chrono::steady_clock::now();
     bool failed = false;
-    for (int i = 0; i < max_tokens; ++i) {
-        llama_token tok = llama_sampler_sample(smpl, llm->ctx, -1);
-        if (llama_vocab_is_eog(llm->vocab, tok)) break;
+    auto emit = [&](llama_token tok) {
         char piece[256];
         int len = llama_token_to_piece(llm->vocab, tok, piece, sizeof piece, 0, true);
         if (len > 0) out.append(piece, len);
         st.gen_tokens++;
-        if (timeout_ms > 0 && ms_since(t0) > timeout_ms) break;
-        if (llama_decode(llm->ctx, llama_batch_get_one(&tok, 1)) != 0) {
-            failed = true;
-            break;
+    };
+    if (temperature <= 0.0f && !llm->no_lookup) {
+        failed = !generate_lookup(llm, smpl, toks, max_tokens, timeout_ms, t0, emit);
+    } else {
+        for (int i = 0; i < max_tokens; ++i) {
+            llama_token tok = llama_sampler_sample(smpl, llm->ctx, -1);
+            if (llama_vocab_is_eog(llm->vocab, tok)) break;
+            emit(tok);
+            if (timeout_ms > 0 && ms_since(t0) > timeout_ms) break;
+            if (llama_decode(llm->ctx, llama_batch_get_one(&tok, 1)) != 0) {
+                failed = true;
+                break;
+            }
+            llm->cached.push_back(tok);
         }
-        llm->cached.push_back(tok);
     }
     st.gen_ms = ms_since(t1);
     llama_sampler_free(smpl);
@@ -395,9 +491,12 @@ char * mw_stt_transcribe(void * handle, const float * pcm, int n_samples, const 
         p.language = (language && *language) ? language : "auto";
         p.initial_prompt = (prompt && *prompt) ? prompt : nullptr;
         // whisper encodes a fixed 30 s window; shrink it to the clip (50
-        // frames/s + 2.5 s margin) so a 5 s dictation costs ~1/4 of the
-        // encoder. Measured on Exynos 990: base 3.8x -> 15x realtime.
-        int ctx = (int) (n_samples / 16000.0 * 50.0) + 128;
+        // frames/s + margin) so a 5 s dictation costs ~1/4 of the encoder.
+        // Measured on Exynos 990: base 3.8x -> 15x realtime. Turbo's 4-layer
+        // decoder repeats sentences unless it sees ~10 s past the speech
+        // (margins 128/256 repeated, 512 and the full window did not).
+        const bool turbo = whisper_model_n_text_layer(stt->wctx) <= 4 && whisper_model_n_audio_layer(stt->wctx) >= 24;
+        int ctx = (int) (n_samples / 16000.0 * 50.0) + (turbo ? 512 : 128);
         if (ctx < 1500) p.audio_ctx = ctx;
         if (whisper_full(stt->wctx, p, pcm, n_samples) != 0) {
             set_err(err, "whisper transcription failed");
