@@ -17,7 +17,13 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.core.view.HapticFeedbackConstantsCompat
@@ -260,3 +266,33 @@ internal fun primaryFilterChipColors() = FilterChipDefaults.filterChipColors(
     selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimary,
     selectedTrailingIconColor = MaterialTheme.colorScheme.onPrimary,
 )
+
+/** API key / bearer token input, masked by default with an eye toggle so the value can be checked or copied. */
+@Composable
+internal fun ApiKeyField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    isError: Boolean = false,
+    errorText: String? = null,
+) {
+    var shown by rememberSaveable { mutableStateOf(false) }
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = { Text(stringResource(R.string.stt_apikey)) },
+        singleLine = true,
+        isError = isError,
+        supportingText = if (isError && errorText != null) ({ Text(errorText) }) else null,
+        visualTransformation = if (shown) VisualTransformation.None else PasswordVisualTransformation(),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+        trailingIcon = {
+            IconButton(onClick = { shown = !shown }) {
+                Icon(
+                    painterResource(if (shown) R.drawable.ic_visibility_off else R.drawable.ic_visibility),
+                    contentDescription = stringResource(if (shown) R.string.stt_apikey_hide else R.string.stt_apikey_show),
+                )
+            }
+        },
+        modifier = Modifier.fillMaxWidth(),
+    )
+}
