@@ -182,22 +182,37 @@ object LocalAiRuntime {
     }
 
     /**
-     * Candidate devices in preference order. Adreno runs llama.cpp's
-     * Qualcomm-tuned OpenCL kernels best, so OpenCL leads there; other
-     * GPUs go Vulkan first. ARM Mali GPUs come after the CPU: on Mali
-     * ggml-vulkan measured 10-20x slower than the CPU (Exynos 990: 8 vs
-     * 152 prompt tok/s), so they are only a failover. Pure for unit tests.
+     * Candidate devices for [kind] ("llm"/"stt") in preference order. GPUs
+     * that measured slower than the CPU (or crashed) on llama.cpp/whisper.cpp
+     * come after the CPU, so they are only a failover and never explored:
+     * - ARM Mali: 10-20x slower than the CPU (Exynos 990 / Mali-G77).
+     * - Adreno 6xx and older: llama.cpp's OpenCL kernels target Adreno
+     *   7xx+; on Adreno 650 OpenCL generated 6x slower than the CPU and
+     *   Vulkan aborted on a shader the driver rejects.
+     * Speech never uses OpenCL (ggml-opencl segfaults on whisper graphs).
+     * Among the rest, Adreno prefers OpenCL and other GPUs Vulkan. Pure.
      */
     @JvmStatic
-    internal fun deviceOrder(devices: List<Device>): List<String> {
-        val gpus = devices.filter { it.type == "gpu" || it.type == "igpu" }
+    internal fun deviceOrder(devices: List<Device>, kind: String = "llm"): List<String> {
+        val gpus = devices.filter {
+            (it.type == "gpu" || it.type == "igpu") &&
+                !(kind == "stt" && it.backend.contains("OpenCL", ignoreCase = true))
+        }
         val adreno = gpus.any { it.desc.contains("Adreno", ignoreCase = true) }
-        val (slow, fast) = gpus.partition { it.desc.contains("Mali", ignoreCase = true) }
+        val (slow, fast) = gpus.partition { isSlowGpu(it.desc) }
         val ranked = fast.sortedBy { d ->
             val openCl = d.backend.contains("OpenCL", ignoreCase = true)
             if (openCl == adreno) 0 else 1
         }
         return ranked.map { it.name } + CPU + slow.map { it.name }
+    }
+
+    /** Mali, or Adreno below the 7xx generation (e.g. "Adreno (TM) 650"). Pure. */
+    @JvmStatic
+    internal fun isSlowGpu(desc: String): Boolean {
+        if (desc.contains("Mali", ignoreCase = true)) return true
+        val adreno = Regex("Adreno[^0-9]*([0-9]{3})", RegexOption.IGNORE_CASE).find(desc) ?: return false
+        return adreno.groupValues[1].toInt() < 700
     }
 
     // -- per-device failure + speed memory ----------------------------------
@@ -240,7 +255,7 @@ object LocalAiRuntime {
             Log.w(TAG, "$kind: previous attempt on $crashed died natively, marking bad")
             prefs.edit().putBoolean(badKey(kind, crashed), true).remove(attemptKey(kind)).commit()
         }
-        val order = deviceOrder(devices())
+        val order = deviceOrder(devices(), kind)
         val bad = order.filter { prefs.getBoolean(badKey(kind, it), false) }.toSet()
         val costs = order.mapNotNull { d ->
             if (prefs.contains(costKey(kind, d))) d to prefs.getFloat(costKey(kind, d), 0f) else null

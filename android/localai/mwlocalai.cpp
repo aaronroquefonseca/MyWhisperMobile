@@ -271,7 +271,7 @@ char * mw_devices_json(void) {
     return dup_str(out);
 }
 
-void * mw_llm_load(const char * model_path, const char * device, int n_ctx, int n_threads, char ** err) {
+static void * mw_llm_load_impl(const char * model_path, const char * device, int n_ctx, int n_threads, char ** err) {
     auto t0 = std::chrono::steady_clock::now();
     ggml_backend_dev_t devs[2] = {nullptr, nullptr};
     llama_model_params mp = llama_model_default_params();
@@ -321,7 +321,7 @@ void * mw_llm_load(const char * model_path, const char * device, int n_ctx, int 
     return llm;
 }
 
-char * mw_llm_generate(void * handle, const char * system, const char * user, int max_tokens,
+static char * mw_llm_generate_impl(void * handle, const char * system, const char * user, int max_tokens,
                        float temperature, int timeout_ms, mw_stats * stats, char ** err) {
     auto * llm = (Llm *) handle;
     mw_stats st = {};
@@ -425,7 +425,7 @@ void mw_llm_free(void * handle) {
     delete llm;
 }
 
-void * mw_stt_load(const char * model_path, int kind, const char * device, int n_threads, char ** err) {
+static void * mw_stt_load_impl(const char * model_path, int kind, const char * device, int n_threads, char ** err) {
     bool use_gpu = !is_cpu(device);
     int gpu = 0;
     if (use_gpu) {
@@ -459,7 +459,7 @@ void * mw_stt_load(const char * model_path, int kind, const char * device, int n
     return stt;
 }
 
-char * mw_stt_transcribe(void * handle, const float * pcm, int n_samples, const char * language,
+static char * mw_stt_transcribe_impl(void * handle, const float * pcm, int n_samples, const char * language,
                          const char * prompt, mw_stats * stats, char ** err) {
     auto * stt = (Stt *) handle;
     mw_stats st = {};
@@ -519,6 +519,37 @@ void mw_stt_free(void * handle) {
     if (stt->wctx) whisper_free(stt->wctx);
     if (stt->pctx) parakeet_free(stt->pctx);
     delete stt;
+}
+
+// ggml backends report driver failures (e.g. a Vulkan pipeline the driver
+// rejects) as C++ exceptions; turn them into errors so the app falls back to
+// another device instead of aborting.
+#define MW_GUARD(call)                                              \
+    try {                                                           \
+        return call;                                                \
+    } catch (const std::exception & e) {                            \
+        set_err(err, std::string("native error: ") + e.what());     \
+    } catch (...) {                                                 \
+        set_err(err, "native error");                               \
+    }                                                               \
+    return nullptr;
+
+void * mw_llm_load(const char * model_path, const char * device, int n_ctx, int n_threads, char ** err) {
+    MW_GUARD(mw_llm_load_impl(model_path, device, n_ctx, n_threads, err))
+}
+
+char * mw_llm_generate(void * llm, const char * system, const char * user, int max_tokens, float temperature,
+                       int timeout_ms, mw_stats * stats, char ** err) {
+    MW_GUARD(mw_llm_generate_impl(llm, system, user, max_tokens, temperature, timeout_ms, stats, err))
+}
+
+void * mw_stt_load(const char * model_path, int kind, const char * device, int n_threads, char ** err) {
+    MW_GUARD(mw_stt_load_impl(model_path, kind, device, n_threads, err))
+}
+
+char * mw_stt_transcribe(void * stt, const float * pcm, int n_samples, const char * language, const char * prompt,
+                         mw_stats * stats, char ** err) {
+    MW_GUARD(mw_stt_transcribe_impl(stt, pcm, n_samples, language, prompt, stats, err))
 }
 
 void mw_free_str(char * s) { free(s); }

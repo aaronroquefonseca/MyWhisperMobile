@@ -16,17 +16,37 @@ class LocalAiRuntimeTest {
     private val cpu = dev("CPU", "CPU", "cpu", "CPU")
 
     @Test
-    fun deviceOrder_adrenoPrefersOpenClOthersVulkanCpuLast() {
-        val adreno = listOf(
+    fun deviceOrder_fastGpusFirstSlowOnesAfterCpu() {
+        val adreno750 = listOf(
+            cpu,
+            dev("Vulkan0", "Adreno (TM) 750", "igpu", "Vulkan"),
+            dev("GPUOpenCL", "QUALCOMM Adreno(TM) 750", "gpu", "OpenCL"),
+        )
+        assertEquals(listOf("GPUOpenCL", "Vulkan0", "CPU"), LocalAiRuntime.deviceOrder(adreno750))
+        // Speech never runs on OpenCL.
+        assertEquals(listOf("Vulkan0", "CPU"), LocalAiRuntime.deviceOrder(adreno750, "stt"))
+        // Adreno 6xx and Mali are failover only (slower than the CPU / crash).
+        val adreno650 = listOf(
             cpu,
             dev("Vulkan0", "Adreno (TM) 650", "igpu", "Vulkan"),
             dev("GPUOpenCL", "QUALCOMM Adreno(TM) 650", "gpu", "OpenCL"),
         )
-        assertEquals(listOf("GPUOpenCL", "Vulkan0", "CPU"), LocalAiRuntime.deviceOrder(adreno))
-        // Mali is failover only (slower than the CPU on llama.cpp).
+        assertEquals(listOf("CPU", "Vulkan0", "GPUOpenCL"), LocalAiRuntime.deviceOrder(adreno650))
         val mali = listOf(dev("Vulkan0", "Mali-G77", "igpu", "Vulkan"), cpu)
         assertEquals(listOf("CPU", "Vulkan0"), LocalAiRuntime.deviceOrder(mali))
+        // Unknown GPUs get explored.
+        assertEquals(listOf("Vulkan0", "CPU"), LocalAiRuntime.deviceOrder(listOf(dev("Vulkan0", "Samsung Xclipse 940", "igpu", "Vulkan"), cpu)))
         assertEquals(listOf("CPU"), LocalAiRuntime.deviceOrder(listOf(cpu)))
+    }
+
+    @Test
+    fun isSlowGpu_byVendorAndAdrenoGeneration() {
+        assertTrue(LocalAiRuntime.isSlowGpu("Mali-G715"))
+        assertTrue(LocalAiRuntime.isSlowGpu("Adreno (TM) 650"))
+        assertTrue(LocalAiRuntime.isSlowGpu("QUALCOMM Adreno(TM) 619"))
+        assertFalse(LocalAiRuntime.isSlowGpu("Adreno (TM) 740"))
+        assertFalse(LocalAiRuntime.isSlowGpu("QUALCOMM Adreno(TM) 830"))
+        assertFalse(LocalAiRuntime.isSlowGpu("Samsung Xclipse 940"))
     }
 
     @Test
