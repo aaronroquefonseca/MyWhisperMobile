@@ -182,19 +182,22 @@ object LocalAiRuntime {
     }
 
     /**
-     * GPUs in preference order, then CPU. Adreno runs llama.cpp's
-     * Qualcomm-tuned OpenCL kernels best; every other GPU goes Vulkan
-     * first. Pure for unit tests.
+     * Candidate devices in preference order. Adreno runs llama.cpp's
+     * Qualcomm-tuned OpenCL kernels best, so OpenCL leads there; other
+     * GPUs go Vulkan first. ARM Mali GPUs come after the CPU: on Mali
+     * ggml-vulkan measured 10-20x slower than the CPU (Exynos 990: 8 vs
+     * 152 prompt tok/s), so they are only a failover. Pure for unit tests.
      */
     @JvmStatic
     internal fun deviceOrder(devices: List<Device>): List<String> {
         val gpus = devices.filter { it.type == "gpu" || it.type == "igpu" }
         val adreno = gpus.any { it.desc.contains("Adreno", ignoreCase = true) }
-        val ranked = gpus.sortedBy { d ->
+        val (slow, fast) = gpus.partition { it.desc.contains("Mali", ignoreCase = true) }
+        val ranked = fast.sortedBy { d ->
             val openCl = d.backend.contains("OpenCL", ignoreCase = true)
             if (openCl == adreno) 0 else 1
         }
-        return ranked.map { it.name } + CPU
+        return ranked.map { it.name } + CPU + slow.map { it.name }
     }
 
     // -- per-device failure + speed memory ----------------------------------
@@ -204,17 +207,22 @@ object LocalAiRuntime {
     private fun costKey(kind: String, device: String) = "localai_cost_${PACK.id}_${kind}_$device"
 
     /**
-     * Next device to use from [order] (GPU-first), skipping [bad] ones.
-     * Every usable device is measured once (first unmeasured wins), then
-     * the cheapest measured one is used: a GPU that works but is slower
-     * than the CPU on this phone (e.g. Mali on llama.cpp) loses. Pure.
+     * Devices to try, in order, from [order], skipping [bad] ones. Every
+     * device up to the CPU is measured once (first unmeasured wins), then
+     * the cheapest measured one leads: a GPU that works but is slower
+     * than the CPU on this phone loses. Devices after the CPU in [order]
+     * are failover only. Pure.
      */
     @JvmStatic
     internal fun pickDevice(order: List<String>, bad: Set<String>, costs: Map<String, Float>): List<String> {
         val usable = order.filter { it == CPU || it !in bad }
-        val unmeasured = usable.filter { costs[it] == null }
-        val measured = usable.filter { costs[it] != null }.sortedBy { costs.getValue(it) }
-        return unmeasured + measured
+        // Devices ranked after the CPU are failover only: never explored.
+        val cpuAt = usable.indexOf(CPU)
+        val explore = if (cpuAt < 0) usable else usable.subList(0, cpuAt + 1)
+        val failover = if (cpuAt < 0) emptyList() else usable.subList(cpuAt + 1, usable.size)
+        val unmeasured = explore.filter { costs[it] == null }
+        val measured = explore.filter { costs[it] != null }.sortedBy { costs.getValue(it) }
+        return unmeasured + measured + failover
     }
 
     /** Store the latest measured cost (lower is better) of [kind] on [device]. */

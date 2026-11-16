@@ -423,7 +423,7 @@ object LocalLlmManager {
         check(LocalAiRuntime.load(app.filesDir)) { "on-device AI runtime not installed" }
         val prefs = app.getSharedPreferences("mw_state", android.content.Context.MODE_PRIVATE)
         val keepSecs = asset?.let {
-            LocalKeepWarm.readKeepSecs(prefs, LocalKeepWarm.KIND_LLM, it.id, LocalKeepWarm.IMMEDIATE)
+            LocalKeepWarm.readKeepSecs(prefs, LocalKeepWarm.KIND_LLM, it.id, LocalKeepWarm.LLM_DEFAULT)
         } ?: LocalKeepWarm.IMMEDIATE
         val think = asset?.let { LocalKeepWarm.readThinkBudget(prefs, it.id) } ?: 0
         val sys = systemWithThinking(system, asset, think)

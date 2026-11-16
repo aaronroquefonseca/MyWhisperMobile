@@ -23,8 +23,9 @@ class LocalAiRuntimeTest {
             dev("GPUOpenCL", "QUALCOMM Adreno(TM) 650", "gpu", "OpenCL"),
         )
         assertEquals(listOf("GPUOpenCL", "Vulkan0", "CPU"), LocalAiRuntime.deviceOrder(adreno))
+        // Mali is failover only (slower than the CPU on llama.cpp).
         val mali = listOf(dev("Vulkan0", "Mali-G77", "igpu", "Vulkan"), cpu)
-        assertEquals(listOf("Vulkan0", "CPU"), LocalAiRuntime.deviceOrder(mali))
+        assertEquals(listOf("CPU", "Vulkan0"), LocalAiRuntime.deviceOrder(mali))
         assertEquals(listOf("CPU"), LocalAiRuntime.deviceOrder(listOf(cpu)))
     }
 
@@ -43,6 +44,8 @@ class LocalAiRuntimeTest {
             listOf("CPU", "GPUOpenCL", "Vulkan0"),
             LocalAiRuntime.pickDevice(order, emptySet(), mapOf("GPUOpenCL" to 900f, "Vulkan0" to 5000f, "CPU" to 400f)),
         )
+        // Devices after the CPU are failover only, even when unmeasured.
+        assertEquals(listOf("CPU", "Vulkan0"), LocalAiRuntime.pickDevice(listOf("CPU", "Vulkan0"), emptySet(), emptyMap()))
         // Bad GPUs are skipped; the CPU is never dropped.
         assertEquals(listOf("Vulkan0", "CPU"), LocalAiRuntime.pickDevice(order, setOf("GPUOpenCL", "CPU"), emptyMap()))
     }

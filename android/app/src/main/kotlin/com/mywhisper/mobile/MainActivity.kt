@@ -4374,7 +4374,7 @@ class MainActivity : ComponentActivity() {
                                         statePrefs,
                                         LocalKeepWarm.KIND_LLM,
                                         a.id,
-                                        LocalKeepWarm.IMMEDIATE,
+                                        LocalKeepWarm.LLM_DEFAULT,
                                     ),
                                 ) { picked ->
                                     LocalKeepWarm.writeKeepSecs(

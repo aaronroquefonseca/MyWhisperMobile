@@ -5,6 +5,7 @@
 #include <android/log.h>
 #include <jni.h>
 
+#include <cstring>
 #include <string>
 
 namespace {
@@ -13,6 +14,9 @@ namespace {
 thread_local mw_stats g_last = {};
 
 void to_logcat(int level, const char * text) {
+    // ggml/llama/whisper are chatty at debug level (per-tensor, per-graph
+    // lines on every call); only warnings and our own mw_* lines go out.
+    if (level < 3 && strncmp(text, "mw_", 3) != 0) return;
     int prio = level >= 4 ? ANDROID_LOG_ERROR : level == 3 ? ANDROID_LOG_WARN : ANDROID_LOG_DEBUG;
     __android_log_write(prio, "MwLocalAi", text);
 }
