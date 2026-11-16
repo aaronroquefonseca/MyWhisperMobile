@@ -37,7 +37,6 @@ object ModelDownloadSchedule {
     const val KEY_URL = "mw_dl_url"
     const val KEY_SHA = "mw_dl_sha"
     const val KEY_SIZE = "mw_dl_size"
-    const val KEY_RUNTIME = "mw_dl_runtime"
 
     /** Progress output keys (observed by the row progress hooks). */
     const val PROG_RECEIVED = "mw_dl_received"

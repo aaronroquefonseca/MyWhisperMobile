@@ -120,7 +120,7 @@
     <string name="stt_langs_auto">%1$d idiomas · autodetección</string>
     <string name="stt_lang_single">Solo %1$s</string>
     <string name="stt_dict_badge">✓ Diccionario</string>
-    <string name="stt_small_cost_warn">Necesita ~1GB de RAM libre; la velocidad varía según el teléfono — la velocidad medida aparece tras la primera ejecución. Moonshine Tiny sigue siendo la opción predeterminada.</string>
+    <string name="stt_small_cost_warn">Necesita ~1GB de RAM libre; la velocidad varía según el teléfono — la velocidad medida aparece tras la primera ejecución. Whisper Base sigue siendo la opción predeterminada.</string>
     <string name="stt_speed_measured">%1$.1f× tiempo real en este teléfono</string>
     <string name="stt_speed_unmeasured">La velocidad varía según el teléfono — se mide tras la primera ejecución</string>
     <string name="stt_ram_gate">Requiere gama alta: %1$d MB+ de RAM total (este teléfono: %2$d MB)</string>
@@ -186,7 +186,7 @@
     <string name="stt_apikey_show">Mostrar clave API</string>
     <string name="stt_apikey_hide">Ocultar clave API</string>
     <string name="stt_streaming">Streaming (servidores ws)</string>
-    <string name="stt_streaming_note">Las URL http(s) siempre usan petición/respuesta; las ws(s) usan el protocolo sherpa.</string>
+    <string name="stt_streaming_note">Las URL http(s) siempre usan petición/respuesta; las ws(s) usan el protocolo de streaming de sherpa-onnx.</string>
     <string name="stt_enabled">Activada</string>
     <string name="stt_gemini_note">La voz de Gemini aún no está disponible en esta versión.</string>
     <string name="stt_dialog_title">Servicio de voz</string>
@@ -358,11 +358,11 @@
     <string name="notif_pref_sync_sub">Mostrar actividad durante la sincronización.</string>
     <string name="notif_pref_sync_ongoing">Estado fijado</string>
     <string name="notif_pref_sync_ongoing_sub">Mantener fijada la notificación de sincronización.</string>
-    <string name="local_need_full">Los modelos locales necesitan la versión completa — esta versión ligera no puede ejecutarlos. Instala el APK completo para voz y limpieza locales.</string>
+    <string name="local_need_full">Los modelos locales necesitan un móvil arm64. Este dispositivo no puede ejecutarlos, así que la voz y la limpieza usan tus proveedores de servidor.</string>
     <string name="local_singleton_blocked">Solo se permite una entrada Local — ya existe. Cierra esto y usa la entrada Local existente.</string>
     <string name="local_name_locked">Las entradas Local siempre usan el nombre «Local».</string>
     <string name="local_show_existing">Mostrar existente</string>
-    <string name="local_arm64_note">Requiere arm64-v8a — si actualizas desde un dispositivo antiguo, conserva tu versión actual.</string>
+    <string name="local_arm64_note">La primera descarga también trae el motor de IA local (~17MB, una sola vez). Usa la GPU cuando en este móvil es más rápida; si no, la CPU.</string>
     <string name="local_state_enabled">activado</string>
     <string name="local_state_disabled">desactivado</string>
     <string name="llm_local_models_title">Modelos locales</string>

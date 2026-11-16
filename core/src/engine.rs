@@ -578,8 +578,8 @@ impl Engine {
         let pcm16 = audio::f32_to_i16(&selected);
 
         let words = self.store.load_words().unwrap_or_default();
-        // On-device inference lives in Kotlin `LocalStt` (sherpa-onnx
-        // AAR), never in Rust: the server chain below skips `Local`
+        // On-device inference lives in Kotlin `LocalStt` (whisper.cpp
+        // runtime pack), never in Rust: the server chain below skips `Local`
         // entries, so there is deliberately no pack hashing on this hot
         // path (a full SHA256 over ~44MB per utterance would burn
         // disk+CPU on every server-fallback dictate). Pack verification

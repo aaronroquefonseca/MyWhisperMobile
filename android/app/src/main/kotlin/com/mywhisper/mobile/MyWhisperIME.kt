@@ -178,7 +178,7 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
             smartTapMs = { readSmartTapMs() },
             mode = { readMicMode() },
             releaseDelayMs = { readReleaseDelayMs() },
-            // On-device first (moonshine-v2 pack, VAD-chunked); miss or
+            // On-device first (selected local model); miss or
             // throw → server chain. Pack-gated: null without the pack.
             localTranscribe = { pcm -> LocalStt.transcribeIfEnabled(this, pcm) },
             localFirst = { LocalStt.isLocalFirst() },

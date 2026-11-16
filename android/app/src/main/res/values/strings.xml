@@ -119,7 +119,7 @@
     <string name="stt_langs_auto">%1$d languages · auto-detect</string>
     <string name="stt_lang_single">%1$s only</string>
     <string name="stt_dict_badge">✓ Dictionary</string>
-    <string name="stt_small_cost_warn">Needs ~1GB free RAM; speed varies by phone — measured speed appears after the first run. Moonshine Tiny stays the default.</string>
+    <string name="stt_small_cost_warn">Needs ~1GB free RAM; speed varies by phone — measured speed appears after the first run. Whisper Base stays the default.</string>
     <string name="stt_speed_measured">%1$.1f× realtime on this phone</string>
     <string name="stt_speed_unmeasured">Speed varies by phone — measured after the first run</string>
     <string name="stt_ram_gate">Requires flagship: %1$d MB+ total RAM (this phone: %2$d MB)</string>
@@ -185,7 +185,7 @@
     <string name="stt_apikey_show">Show API key</string>
     <string name="stt_apikey_hide">Hide API key</string>
     <string name="stt_streaming">Streaming (ws servers)</string>
-    <string name="stt_streaming_note">http(s) URLs always use request/response; ws(s) URLs use the sherpa protocol.</string>
+    <string name="stt_streaming_note">http(s) URLs always use request/response; ws(s) URLs use the sherpa-onnx streaming protocol.</string>
     <string name="stt_enabled">Enabled</string>
     <string name="stt_gemini_note">Gemini speech is not implemented in this build yet.</string>
     <string name="stt_dialog_title">Speech service</string>
@@ -357,11 +357,11 @@
     <string name="notif_pref_sync_sub">Show activity while a sync round runs.</string>
     <string name="notif_pref_sync_ongoing">Pinned sync status</string>
     <string name="notif_pref_sync_ongoing_sub">Keep the sync notification pinned while sync runs.</string>
-    <string name="local_need_full">Local models need the full flavor — this lite build can\'t run them. Install the full APK for on-device speech and cleanup.</string>
+    <string name="local_need_full">On-device models need an arm64 phone. This device can\'t run them, so speech and cleanup use your server providers.</string>
     <string name="local_singleton_blocked">Only one Local entry is allowed — it already exists. Close this and use the existing Local entry.</string>
     <string name="local_name_locked">Local entries always use the name “Local”.</string>
     <string name="local_show_existing">Show existing</string>
-    <string name="local_arm64_note">Requires arm64-v8a — if you update from an older device, keep your current version.</string>
+    <string name="local_arm64_note">The first download also fetches the on-device AI runtime (~17MB, once). It runs on the GPU when that is faster on this phone, otherwise on the CPU.</string>
     <string name="local_state_enabled">enabled</string>
     <string name="local_state_disabled">disabled</string>
     <string name="llm_local_models_title">On-device models</string>

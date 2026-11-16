@@ -26,6 +26,9 @@
         android:usesCleartextTraffic="true"
         android:supportsRtl="true"
         android:localeConfig="@xml/locales">
+        <!-- GPU inference (on-device AI pack): vendor OpenCL is dlopen'd by
+             ggml-opencl; Android 12+ hides vendor libs unless declared. -->
+        <uses-native-library android:name="libOpenCL.so" android:required="false" />
 
         <activity
             android:name=".MainActivity"

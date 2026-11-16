@@ -60,7 +60,7 @@ class Dictation(
      */
     private val pushPcm: (ShortArray, Int) -> Unit = { buf, n -> CoreBridge.pushPcm(buf, n) },
     /**
-     * Local-first hook (sherpa-onnx moonshine-v2 via LocalStt): receives
+     * Local-first hook (selected on-device model via LocalStt): receives
      * the utterance PCM (16 kHz i16) and returns (text, engine) on hit,
      * null on miss. Default null = server chain only. Any throw =
      * server fallback.
@@ -69,10 +69,8 @@ class Dictation(
     /**
      * Local-hit dictionary post-process (default
      * `LocalStt.postProcessLocal`: same snippet expansion the server
-     * path gets in Rust `finish_inner`, plus the WORD word-boost —
-     * sherpa-onnx 1.13.8 exposes no decoder bias channel for
-     * moonshine/whisper, so WORDS ship as post-process near-miss
-     * repair; see `LocalStt.postProcessLocal`). Injected so JVM unit
+     * path gets in Rust `finish_inner`, plus the WORD word-boost
+     * near-miss repair; see `LocalStt.postProcessLocal`). Injected so JVM unit
      * tests can supply pairs without the native lib. Applied to LOCAL
      * hits only, exactly once — server text is already expanded in
      * Rust. Any throw falls back to the server chain (applied inside
@@ -96,7 +94,7 @@ class Dictation(
     /**
      * Shutdown hook releasing the on-device recognizer
      * (`LocalStt.unload`). Injected (default no-op) so JVM unit tests
-     * never touch the sherpa AAR, which is absent off-device.
+     * never touch the native runtime, which is absent off-device.
      * Production wires `LocalStt.unload` at every construction site.
      */
     private val releaseLocal: () -> Unit = {},

@@ -6,107 +6,40 @@ import java.net.URL
 import java.util.Locale
 
 /**
- * On-device STT model catalog (phone mirror of desktop `stt.rs`
- * `WHISPER_MODELS` / `model_languages` / `capabilities`, trimmed to
- * phone-sane sherpa-onnx 1.13.8 offline entries).
+ * On-device STT model catalog. Every entry runs on whisper.cpp (ggml)
+ * from the downloadable runtime pack ([LocalAiRuntime]), GPU first:
+ * OpenAI Whisper (ggerganov/whisper.cpp conversions) and NVIDIA Parakeet
+ * TDT v3 (ggml-org/parakeet-GGUF). Each model is ONE file, SHA-256
+ * pinned from the Hugging Face LFS metadata.
  *
  * Copy honesty rules (owner phone-tested: absolute speed claims are
- * wrong — Note10+ runs whisper-small fast):
- * - no "(opt-in)" anywhere: ALL local models are opt-in by design
- *   (Local entry off by default, verified pack required), the label
- *   is noise.
- * - no absolute speed adjectives ("SLOW", "fastest", "slower"):
- *   pre-first-run copy stays neutral ("speed varies by phone"); after
- *   the first on-device run the row shows the measured
- *   "<x>× realtime on this phone" from the persisted last-decode
- *   speed factor ([speedPrefKey] / [speedFactor] /
- *   [formatSpeedUs]).
- * - cost guidance is RAM-only ("needs ~N free RAM", "requires
- *   flagship"), never speed.
+ * wrong): no "(opt-in)" anywhere, no absolute speed adjectives; after
+ * the first on-device run the row shows the measured
+ * "<x>× realtime on this phone" ([speedPrefKey] / [speedFactor] /
+ * [formatSpeedUs]); cost guidance is RAM-only.
  *
- * Seed rules (verified on HF, never invented):
- * - moonshine tiny-en: kept as the English option and default
- *   (existing pack + SHAs under `core/models`, reused here,
- *   never redefined).
- * - whisper tiny/base multilingual int8 (`csukuangfj` sherpa ports):
- *   existence + int8 ONNX magic + full-download SHA-256 verified,
- *   ≤500MB each, Spanish + 98 more via the shared multilingual vocab.
- * - whisper small multilingual int8 (`csukuangfj/sherpa-onnx-whisper-small`):
- *   existence + `onnx.quantize` magic + full-download SHA-256 verified
- *   (encoder 112442483B, decoder 262226114B, shared tokens 816730B;
- *   ~358MB total, ≤500MB cap). Needs ~1GB free RAM — the registry
- *   carries a RAM cost note; moonshine stays the default.
- * - whisper medium multilingual int8
- *   (`csukuangfj/sherpa-onnx-whisper-medium`, flagship tier):
- *   existence + `onnx.quantize` magic (both files open with the ONNX
- *   protobuf header containing "quantize") + full-download SHA-256
- *   verified 2026-10-15 (encoder 374196283B sha
- *   `1c54582b…d193e`, decoder 571059257B sha `595d00a3…412747`,
- *   shared multilingual tokens 816730B sha `b34b360d…a126` — same
- *   vocab pin as tiny/base/small; ~902MB total). Over the 500MB
- *   phone-sane cap by design: flagship-only tier gated by device
- *   total RAM ([WHISPER_MEDIUM_ID.minTotalRamMb]) with a clear
- *   requires-flagship note; moonshine stays the default.
- * - whisper large-v3 multilingual int8
- *   (`csukuangfj/sherpa-onnx-whisper-large-v3`): int8 ONNX magic +
- *   full-download SHA-256 verified (encoder 766671985B, decoder
- *   1008265203B, shared multilingual tokens 816730B — same vocab pin
- *   `b34b360d…a126` as the smaller whispers; ~1.7GB total). Flagship
- *   tier gated at 10GB total RAM; moonshine stays the default.
- * - whisper turbo multilingual int8
- *   (`csukuangfj/sherpa-onnx-whisper-turbo`): int8 ONNX magic +
- *   full-download SHA-256 verified (encoder 674716297B, decoder
- *   361080764B, same shared vocab pin; ~989MB total). Flagship tier
- *   gated at 8GB total RAM; moonshine stays the default.
- * - nemotron speech streaming en 0.6B int8 (transducer,
- *   `csukuangfj/sherpa-onnx-nemotron-speech-streaming-en-0.6b-int8-2026-01-14`):
- *   int8 ONNX magic + full-download SHA-256 verified (encoder
- *   652916830B, decoder 7257753B, joiner 1735862B, tokens 8952B;
- *   ~631MB total). English-only MANUAL entry, dictionary off (no
- *   hotwords channel for transducers yet), decoded through the
- *   online recognizer path per VAD chunk. No chunk-size claim: the
- *   repo README does not state one.
- * - nemotron 3.5 streaming multilingual 0.6B int8 (transducer,
- *   `csukuangfj2/…-560ms-int8-2026-06-11`): int8 ONNX magic +
- *   full-download SHA-256 verified (encoder 657601403B, decoder
- *   14978075B, joiner 9504438B, tokens 131440B; ~651MB total).
- *   15 desktop-parity languages, auto-detect (no language is sent on
- *   the online path — desktop parity), dictionary off like its EN
- *   sibling.
+ * Quantization: q8_0 everywhere the GPU kernels are fastest (OpenCL and
+ * Vulkan both have tuned q8_0/q4_0 paths; q5 types fall back to CPU on
+ * OpenCL). Whisper medium / large-v3 are not offered: large-v3-turbo is
+ * faster than medium at large-v3 accuracy.
  *
- * Drops (with reason, no download path):
- * - sense-voice int8: no Spanish (zh/en/ja/ko/yue only).
- * - whistle: own non-sherpa engine absent on phone (+ URL
- *   TO-VERIFY upstream).
- * - parakeet 0.6B int8 (~661MB): over the 500MB cap + transducer
- *   engine work.
- * - `.en` whisper repos: English-only by construction.
- *
- * No streaming claims anywhere (owner-waived): the badge set is
- * languages + dictionary + size only. Dictionary is marked per
- * model (desktop `capabilities` parity: whisper prompts natively;
- * moonshine follows the app-level post-process word-bias
- * convention) — no decoder hotwords are wired in this build, so the
- * effective path for custom words stays the server chain; see the
- * PR note.
+ * Dictionary: Whisper takes the custom words as its initial prompt;
+ * Parakeet has no prompt channel, so it relies on the app-level
+ * post-process word boost like every local model.
  */
 object LocalSttModels {
-    enum class Engine { MOONSHINE, WHISPER, TRANSDUCER }
+    enum class Engine { WHISPER, PARAKEET }
     enum class LangMode { AUTO, MANUAL }
 
     /**
-     * On-device vendor grouping (desktop `local_provider` parity,
-     * phone-sane subset: Moonshine = Useful Sensors moonshine,
-     * Whisper = OpenAI-family via csukuangfj sherpa ports, NVIDIA =
-     * Nemotron streaming transducers). Drives the provider pill filter
-     * in the models section; catalog order = display order.
+     * On-device vendor grouping (provider pill filter): Whisper = OpenAI
+     * Whisper family, NVIDIA = Parakeet. Catalog order = display order.
      */
-    enum class Provider { MOONSHINE, WHISPER, NVIDIA }
+    enum class Provider { WHISPER, NVIDIA }
 
     /** Display label per provider (pill copy). Pure for unit tests. */
     @JvmStatic
     fun providerLabel(p: Provider): String = when (p) {
-        Provider.MOONSHINE -> "Moonshine"
         Provider.WHISPER -> "Whisper"
         Provider.NVIDIA -> "NVIDIA"
     }
@@ -170,29 +103,20 @@ object LocalSttModels {
         "mg", "as", "tt", "ln", "ha", "ba", "jw", "su", "yue",
     )
 
-    const val MOONSHINE_ID = "moonshine-tiny-en"
-    const val WHISPER_TINY_ID = "whisper-tiny-multilingual-int8"
-    const val WHISPER_BASE_ID = "whisper-base-multilingual-int8"
-    const val WHISPER_SMALL_ID = "whisper-small-multilingual-int8"
-    const val WHISPER_MEDIUM_ID = "whisper-medium-multilingual-int8"
-    const val WHISPER_LARGE_ID = "whisper-large-multilingual-int8"
-    const val WHISPER_TURBO_ID = "whisper-turbo-multilingual-int8"
-    const val NEMOTRON_EN_ID = "nemotron-streaming-en-0.6b-int8"
-    const val NEMOTRON35_ID = "nemotron-35-streaming-multilingual-0.6b-int8"
+    const val WHISPER_TINY_ID = "whisper-tiny-q8"
+    const val WHISPER_BASE_ID = "whisper-base-q8"
+    const val WHISPER_SMALL_ID = "whisper-small-q8"
+    const val WHISPER_TURBO_ID = "whisper-large-v3-turbo-q8"
+    const val PARAKEET_ID = "parakeet-tdt-0.6b-v3-q8"
 
-    /**
-     * Nemotron 3.5 streaming language codes: desktop NEMOTRON_15
-     * parity (transcription-ready locales only; broad-coverage and
-     * adaptation-ready locales excluded — higher error rates or
-     * fine-tuning required).
-     */
-    val NEMOTRON35_LANGS: List<String> = listOf(
-        "en", "es", "fr", "it", "pt", "nl", "de", "tr", "ru", "ar",
-        "hi", "ja", "ko", "vi", "uk",
+    /** Parakeet TDT 0.6B v3 languages (NVIDIA model card: 25 European languages). */
+    val PARAKEET_LANGS: List<String> = listOf(
+        "bg", "hr", "cs", "da", "nl", "en", "et", "fi", "fr", "de", "el", "hu", "it",
+        "lv", "lt", "mt", "pl", "pt", "ro", "sk", "sl", "es", "sv", "ru", "uk",
     )
 
-    /** Default selected model (legacy behavior: English pack). */
-    const val DEFAULT_ID = MOONSHINE_ID
+    /** Default selected model: small, multilingual, runs on any phone. */
+    const val DEFAULT_ID = WHISPER_BASE_ID
 
     const val PREF_SELECTED_MODEL = "local_stt_model"
 
@@ -205,17 +129,11 @@ object LocalSttModels {
      */
     fun speedPrefKey(modelId: String): String = "local_stt_speed_$modelId"
 
-    /** Flagship gate: device needs this much TOTAL RAM (MB) for medium. */
-    const val MEDIUM_MIN_TOTAL_RAM_MB = 6_000L
+    /** RAM gate for whisper large-v3-turbo q8 (~874MB of weights). */
+    const val TURBO_MIN_TOTAL_RAM_MB = 6_000L
 
-    /** Flagship gate for whisper large-v3 int8 (~1.7GB of weights). */
-    const val LARGE_MIN_TOTAL_RAM_MB = 10_000L
-
-    /** Flagship gate for whisper turbo int8 (~989MB of weights). */
-    const val TURBO_MIN_TOTAL_RAM_MB = 8_000L
-
-    /** RAM gate for the Nemotron streaming transducers (~650MB of weights). */
-    const val NEMOTRON_MIN_TOTAL_RAM_MB = 6_000L
+    /** RAM gate for Parakeet TDT 0.6B q8 (~669MB of weights). */
+    const val PARAKEET_MIN_TOTAL_RAM_MB = 4_000L
 
     /**
      * Speed factor from one decode: audio seconds per decode second
@@ -279,316 +197,112 @@ object LocalSttModels {
 
     val MODELS: List<Entry> = listOf(
         Entry(
-            id = MOONSHINE_ID,
-            name = "Moonshine Tiny EN",
-            sizeLabel = "~44MB",
-            engine = Engine.MOONSHINE,
-            provider = Provider.MOONSHINE,
-            langMode = LangMode.MANUAL,
-            languages = listOf("en"),
-            dictionary = true,
-            runtimeNote = "English-only · speed varies by phone",
-            phoneTier = "any phone · default",
-            dirRel = "models/sherpa-moonshine-v2-tiny.en",
-            files = listOf(
-                ModelFile(
-                    "encoder_model.ort",
-                    "https://huggingface.co/csukuangfj2/sherpa-onnx-moonshine-tiny-en-quantized-2026-02-27/resolve/main/encoder_model.ort",
-                    "94e90a4654fc45cdfedb77c4c08e1739f48862998e58fada384b25118134f221",
-                    13281600,
-                ),
-                ModelFile(
-                    "decoder_model_merged.ort",
-                    "https://huggingface.co/csukuangfj2/sherpa-onnx-moonshine-tiny-en-quantized-2026-02-27/resolve/main/decoder_model_merged.ort",
-                    "cf524c4862d36e9e5ab032eddc73637efd822d70e868ac575cf1a46e1e4708a0",
-                    30412256,
-                ),
-                ModelFile(
-                    "tokens.txt",
-                    "https://huggingface.co/csukuangfj2/sherpa-onnx-moonshine-tiny-en-quantized-2026-02-27/resolve/main/tokens.txt",
-                    "2870d843e14c1e187bf1913a521562a63b53933814bd7f2145120468f494a049",
-                    549350,
-                ),
-            ),
-        ),
-        Entry(
             id = WHISPER_TINY_ID,
-            name = "Whisper Tiny Multilingual",
-            sizeLabel = "~99MB",
+            name = "Whisper Tiny",
+            sizeLabel = "~44MB",
             engine = Engine.WHISPER,
             provider = Provider.WHISPER,
             langMode = LangMode.AUTO,
             languages = WHISPER_LANGS,
             dictionary = true,
-            runtimeNote = "99 languages incl. Spanish · auto-detect · int8 · speed varies by phone",
-            phoneTier = "low-RAM phones OK",
-            dirRel = "models/sherpa-whisper-tiny-int8",
+            runtimeNote = "99 languages · auto-detect · speed varies by phone",
+            phoneTier = "any phone",
+            minTotalRamMb = 0,
+            dirRel = "models/ggml-whisper-tiny",
             files = listOf(
                 ModelFile(
-                    "tiny-encoder.int8.onnx",
-                    "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-tiny/resolve/main/tiny-encoder.int8.onnx",
-                    "d24fb083ae3b1041fc24e97971d60e280c9342201fbb67b0ab428a8b4a51a434",
-                    12937772,
-                ),
-                ModelFile(
-                    "tiny-decoder.int8.onnx",
-                    "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-tiny/resolve/main/tiny-decoder.int8.onnx",
-                    "d2fece8dd42771f1df975c6c0445770d0c292bf7547c2cae04a6c0cc57540925",
-                    89855401,
-                ),
-                ModelFile(
-                    "tiny-tokens.txt",
-                    "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-tiny/resolve/main/tiny-tokens.txt",
-                    "b34b360dbb493e781e479794586d661700670d65564001f23024971d1f2fa126",
-                    816730,
+                    "ggml-tiny-q8_0.bin",
+                    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny-q8_0.bin",
+                    "c2085835d3f50733e2ff6e4b41ae8a2b8d8110461e18821b09a15c40c42d1cca",
+                    43537433,
                 ),
             ),
         ),
         Entry(
             id = WHISPER_BASE_ID,
-            name = "Whisper Base Multilingual",
-            sizeLabel = "~153MB",
+            name = "Whisper Base",
+            sizeLabel = "~82MB",
             engine = Engine.WHISPER,
             provider = Provider.WHISPER,
             langMode = LangMode.AUTO,
             languages = WHISPER_LANGS,
             dictionary = true,
-            runtimeNote = "99 languages incl. Spanish · auto-detect · int8 · speed varies by phone",
-            phoneTier = "mid-tier phones and up",
-            dirRel = "models/sherpa-whisper-base-int8",
+            runtimeNote = "99 languages · auto-detect · speed varies by phone",
+            phoneTier = "any phone · default",
+            minTotalRamMb = 0,
+            dirRel = "models/ggml-whisper-base",
             files = listOf(
                 ModelFile(
-                    "base-encoder.int8.onnx",
-                    "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-base/resolve/main/base-encoder.int8.onnx",
-                    "0b8fb1304b6109976038efff5ace81720e00386f3ff6b54ee8c75291ca0a1e11",
-                    29120534,
-                ),
-                ModelFile(
-                    "base-decoder.int8.onnx",
-                    "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-base/resolve/main/base-decoder.int8.onnx",
-                    "9759d217388a01b3a4c7c15533201067b48ae819c4daafc8624e64b9409dc02d",
-                    130672026,
-                ),
-                ModelFile(
-                    "base-tokens.txt",
-                    "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-base/resolve/main/base-tokens.txt",
-                    "b34b360dbb493e781e479794586d661700670d65564001f23024971d1f2fa126",
-                    816730,
+                    "ggml-base-q8_0.bin",
+                    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q8_0.bin",
+                    "c577b9a86e7e048a0b7eada054f4dd79a56bbfa911fbdacf900ac5b567cbb7d9",
+                    81768585,
                 ),
             ),
         ),
         Entry(
             id = WHISPER_SMALL_ID,
-            name = "Whisper Small Multilingual",
-            sizeLabel = "~358MB",
+            name = "Whisper Small",
+            sizeLabel = "~264MB",
             engine = Engine.WHISPER,
             provider = Provider.WHISPER,
             langMode = LangMode.AUTO,
             languages = WHISPER_LANGS,
             dictionary = true,
-            runtimeNote = "99 languages incl. Spanish · needs ~1GB free RAM · speed varies by phone",
-            phoneTier = "flagship RAM recommended · needs ~1GB free RAM",
-            dirRel = "models/sherpa-whisper-small-int8",
+            runtimeNote = "99 languages · auto-detect · needs ~600MB free RAM · speed varies by phone",
+            phoneTier = "4GB+ phones",
+            minTotalRamMb = 0,
+            dirRel = "models/ggml-whisper-small",
             files = listOf(
                 ModelFile(
-                    "small-encoder.int8.onnx",
-                    "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-small/resolve/main/small-encoder.int8.onnx",
-                    "4cbe7b22fa9026b843b60a68640c747de05bafb1a11b57edc0e66c232d9f33a9",
-                    112442483,
-                ),
-                ModelFile(
-                    "small-decoder.int8.onnx",
-                    "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-small/resolve/main/small-decoder.int8.onnx",
-                    "acad50b5c782696e91b55914cc5ab4f756f1532f76e22aa6fc615f39fb69a8ee",
-                    262226114,
-                ),
-                ModelFile(
-                    "small-tokens.txt",
-                    "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-small/resolve/main/small-tokens.txt",
-                    "b34b360dbb493e781e479794586d661700670d65564001f23024971d1f2fa126",
-                    816730,
-                ),
-            ),
-        ),
-        Entry(
-            id = WHISPER_MEDIUM_ID,
-            name = "Whisper Medium Multilingual",
-            sizeLabel = "~902MB",
-            engine = Engine.WHISPER,
-            provider = Provider.WHISPER,
-            langMode = LangMode.AUTO,
-            languages = WHISPER_LANGS,
-            dictionary = true,
-            runtimeNote = "99 languages incl. Spanish · requires flagship · needs ~2GB free RAM · speed varies by phone",
-            phoneTier = "requires flagship · 6GB+ total RAM",
-            minTotalRamMb = MEDIUM_MIN_TOTAL_RAM_MB,
-            dirRel = "models/sherpa-whisper-medium-int8",
-            files = listOf(
-                ModelFile(
-                    "medium-encoder.int8.onnx",
-                    "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-medium/resolve/main/medium-encoder.int8.onnx",
-                    "1c54582b4d829de0089f6cb63bbbdb3bf7555398bacaf855fbecf1a84dfd193e",
-                    374196283,
-                ),
-                ModelFile(
-                    "medium-decoder.int8.onnx",
-                    "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-medium/resolve/main/medium-decoder.int8.onnx",
-                    "595d00a338a365a7bfa0ca7f296cabc639583bef770ab6130df90f49a6412747",
-                    571059257,
-                ),
-                ModelFile(
-                    "medium-tokens.txt",
-                    "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-medium/resolve/main/medium-tokens.txt",
-                    "b34b360dbb493e781e479794586d661700670d65564001f23024971d1f2fa126",
-                    816730,
-                ),
-            ),
-        ),
-        Entry(
-            id = WHISPER_LARGE_ID,
-            name = "Whisper Large v3 Multilingual",
-            sizeLabel = "~1.7GB",
-            engine = Engine.WHISPER,
-            provider = Provider.WHISPER,
-            langMode = LangMode.AUTO,
-            languages = WHISPER_LANGS,
-            dictionary = true,
-            runtimeNote = "99 languages incl. Spanish · requires flagship · needs ~4GB free RAM · speed varies by phone",
-            phoneTier = "requires flagship · 10GB+ total RAM",
-            minTotalRamMb = LARGE_MIN_TOTAL_RAM_MB,
-            dirRel = "models/sherpa-whisper-large-v3-int8",
-            files = listOf(
-                ModelFile(
-                    "large-v3-encoder.int8.onnx",
-                    "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-large-v3/resolve/main/large-v3-encoder.int8.onnx",
-                    "d531cf17248acc43e8c09b472a0877055e770877857a5332fc1304b36534ec85",
-                    766671985,
-                ),
-                ModelFile(
-                    "large-v3-decoder.int8.onnx",
-                    "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-large-v3/resolve/main/large-v3-decoder.int8.onnx",
-                    "ebc6bfd88e162a46cb3edee8a7e727e1dcbc65cabecb19e2573695e4d495e1af",
-                    1008265203,
-                ),
-                ModelFile(
-                    "large-v3-tokens.txt",
-                    "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-large-v3/resolve/main/large-v3-tokens.txt",
-                    "b34b360dbb493e781e479794586d661700670d65564001f23024971d1f2fa126",
-                    816730,
+                    "ggml-small-q8_0.bin",
+                    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q8_0.bin",
+                    "49c8fb02b65e6049d5fa6c04f81f53b867b5ec9540406812c643f177317f779f",
+                    264464607,
                 ),
             ),
         ),
         Entry(
             id = WHISPER_TURBO_ID,
-            name = "Whisper Turbo Multilingual",
-            sizeLabel = "~989MB",
+            name = "Whisper Large v3 Turbo",
+            sizeLabel = "~874MB",
             engine = Engine.WHISPER,
             provider = Provider.WHISPER,
             langMode = LangMode.AUTO,
             languages = WHISPER_LANGS,
             dictionary = true,
-            runtimeNote = "99 languages incl. Spanish · requires flagship · needs ~2GB free RAM · speed varies by phone",
-            phoneTier = "requires flagship · 8GB+ total RAM",
-            minTotalRamMb = TURBO_MIN_TOTAL_RAM_MB,
-            dirRel = "models/sherpa-whisper-turbo-int8",
-            files = listOf(
-                ModelFile(
-                    "turbo-encoder.int8.onnx",
-                    "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-turbo/resolve/main/turbo-encoder.int8.onnx",
-                    "b02dcdf54f348741e93fe732b67d933c8dcb6735655f710640143081db38878b",
-                    674716297,
-                ),
-                ModelFile(
-                    "turbo-decoder.int8.onnx",
-                    "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-turbo/resolve/main/turbo-decoder.int8.onnx",
-                    "20accd02388482eb3a46bd615631adfdc85e1eb2c7db9ea3f02a40ffe6b81547",
-                    361080764,
-                ),
-                ModelFile(
-                    "turbo-tokens.txt",
-                    "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-turbo/resolve/main/turbo-tokens.txt",
-                    "b34b360dbb493e781e479794586d661700670d65564001f23024971d1f2fa126",
-                    816730,
-                ),
-            ),
-        ),
-        Entry(
-            id = NEMOTRON_EN_ID,
-            name = "Nemotron Streaming EN",
-            sizeLabel = "~631MB",
-            engine = Engine.TRANSDUCER,
-            provider = Provider.NVIDIA,
-            langMode = LangMode.MANUAL,
-            languages = listOf("en"),
-            dictionary = false,
-            runtimeNote = "English-only · transducer · needs ~1.5GB free RAM · speed varies by phone",
+            runtimeNote = "99 languages · auto-detect · needs ~1.5GB free RAM · speed varies by phone",
             phoneTier = "6GB+ total RAM",
-            minTotalRamMb = NEMOTRON_MIN_TOTAL_RAM_MB,
-            dirRel = "models/sherpa-nemotron-streaming-en-0.6b",
+            minTotalRamMb = TURBO_MIN_TOTAL_RAM_MB,
+            dirRel = "models/ggml-whisper-large-v3-turbo",
             files = listOf(
                 ModelFile(
-                    "encoder.int8.onnx",
-                    "https://huggingface.co/csukuangfj/sherpa-onnx-nemotron-speech-streaming-en-0.6b-int8-2026-01-14/resolve/main/encoder.int8.onnx",
-                    "2f6ae81fe4ccd69ef04cdf048ecd49628e2d3148a6195e152a91b4d2497952dc",
-                    652916830,
-                ),
-                ModelFile(
-                    "decoder.int8.onnx",
-                    "https://huggingface.co/csukuangfj/sherpa-onnx-nemotron-speech-streaming-en-0.6b-int8-2026-01-14/resolve/main/decoder.int8.onnx",
-                    "1fb1795cb46e7d0e99b2e096eae83f7e324294e895975a1a894b0384cbbe37f6",
-                    7257753,
-                ),
-                ModelFile(
-                    "joiner.int8.onnx",
-                    "https://huggingface.co/csukuangfj/sherpa-onnx-nemotron-speech-streaming-en-0.6b-int8-2026-01-14/resolve/main/joiner.int8.onnx",
-                    "a3f41dccc0f67f37e4210051d1c39a29d473c841cfc32fe574135bac890db91d",
-                    1735862,
-                ),
-                ModelFile(
-                    "tokens.txt",
-                    "https://huggingface.co/csukuangfj/sherpa-onnx-nemotron-speech-streaming-en-0.6b-int8-2026-01-14/resolve/main/tokens.txt",
-                    "dc0b4584ab2e4ddbf888425c076c61b736e7356a015250db7d307e6f1a8188ff",
-                    8952,
+                    "ggml-large-v3-turbo-q8_0.bin",
+                    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q8_0.bin",
+                    "317eb69c11673c9de1e1f0d459b253999804ec71ac4c23c17ecf5fbe24e259a1",
+                    874188075,
                 ),
             ),
         ),
         Entry(
-            id = NEMOTRON35_ID,
-            name = "Nemotron 3.5 Streaming",
-            sizeLabel = "~651MB",
-            engine = Engine.TRANSDUCER,
+            id = PARAKEET_ID,
+            name = "Parakeet TDT 0.6B v3",
+            sizeLabel = "~669MB",
+            engine = Engine.PARAKEET,
             provider = Provider.NVIDIA,
             langMode = LangMode.AUTO,
-            languages = NEMOTRON35_LANGS,
+            languages = PARAKEET_LANGS,
             dictionary = false,
-            runtimeNote = "15 languages incl. Spanish · auto-detect · 560ms transducer · needs ~1.5GB free RAM · speed varies by phone",
-            phoneTier = "6GB+ total RAM",
-            minTotalRamMb = NEMOTRON_MIN_TOTAL_RAM_MB,
-            dirRel = "models/sherpa-nemotron-3.5-streaming-0.6b-560ms",
+            runtimeNote = "25 European languages incl. Spanish · auto-detect · needs ~1.2GB free RAM · speed varies by phone",
+            phoneTier = "4GB+ total RAM",
+            minTotalRamMb = PARAKEET_MIN_TOTAL_RAM_MB,
+            dirRel = "models/ggml-parakeet-tdt-0.6b-v3",
             files = listOf(
                 ModelFile(
-                    "encoder.int8.onnx",
-                    "https://huggingface.co/csukuangfj2/sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11/resolve/main/encoder.int8.onnx",
-                    "012e9321373af99021415e0b0eb3ec827b4be3153be6f30d9b448fe65e896e68",
-                    657601403,
-                ),
-                ModelFile(
-                    "decoder.int8.onnx",
-                    "https://huggingface.co/csukuangfj2/sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11/resolve/main/decoder.int8.onnx",
-                    "19f9c98fc6d0a2c33a65a43b36fdb2e914c26c0aa9764be3aebc502a1e982fb0",
-                    14978075,
-                ),
-                ModelFile(
-                    "joiner.int8.onnx",
-                    "https://huggingface.co/csukuangfj2/sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11/resolve/main/joiner.int8.onnx",
-                    "4101c7c679a0bc30483794b27a059e34e79232aa2068d78d51231a22c8b0d7ce",
-                    9504438,
-                ),
-                ModelFile(
-                    "tokens.txt",
-                    "https://huggingface.co/csukuangfj2/sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11/resolve/main/tokens.txt",
-                    "729cc103155bafa785f9cd45746cd41cabe97eab7182fc04d594129587958f8a",
-                    131440,
+                    "ggml-parakeet-tdt-0.6b-v3-q8_0.bin",
+                    "https://huggingface.co/ggml-org/parakeet-GGUF/resolve/main/ggml-parakeet-tdt-0.6b-v3-q8_0.bin",
+                    "4d64e9e96c2792186d072fde0034df0ad670cf680a2f53069052ead827fd600e",
+                    668757119,
                 ),
             ),
         ),
@@ -845,21 +559,14 @@ object LocalSttModels {
         )
 
     /**
-     * Whisper language for the sherpa config from the Capture picker
-     * code. Verified against sherpa-onnx source
-     * (`offline-whisper-greedy-search-decoder.cc`): empty string runs
-     * `DetectLanguage` (auto); any other value MUST be a valid code
-     * or the native process hard-exits — so unknown codes fail safe
-     * to auto instead of crashing. MANUAL entries ignore the picker
-     * and pin their single language. TRANSDUCER entries always return
-     * auto (empty): desktop parity — the online path sends no language
-     * at all (no flag, no per-stream option; the model decides), and
-     * the picker value is display-only there.
+     * whisper.cpp language from the Capture picker code: "" = auto-detect.
+     * Unknown codes fail safe to auto. MANUAL entries pin their single
+     * language; Parakeet always auto-detects (no language input).
      * Pure for unit tests.
      */
     @JvmStatic
     fun whisperLanguageFor(pickedCode: String, entry: Entry): String {
-        if (entry.engine == Engine.TRANSDUCER) return ""
+        if (entry.engine == Engine.PARAKEET) return ""
         if (entry.langMode == LangMode.MANUAL) return entry.languages.first()
         val t = pickedCode.trim().lowercase()
         if (t.isEmpty() || t == "auto") return ""

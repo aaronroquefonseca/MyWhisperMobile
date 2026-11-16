@@ -7,66 +7,18 @@ import java.io.File
 import kotlin.math.sqrt
 
 /**
- * On-device STT via the sherpa-onnx 1.13.8 AAR (`OfflineRecognizer`,
- * moonshine v2 tiny-en quantized pack under
- * `<filesDir>/models/sherpa-moonshine-v2-tiny.en`).
+ * On-device STT through whisper.cpp (Whisper + Parakeet, ggml) from the
+ * downloadable runtime pack ([LocalAiRuntime]), GPU first. The selected
+ * catalog model ([LocalSttModels]) decodes the whole utterance in one call
+ * (whisper.cpp windows long audio itself); silence-only input never
+ * reaches the model ([chunkPcm] finds no speech → server fallback).
  *
- * The AAR is full-flavor-only and NEVER on the lite classpath: every
- * `com.k2fsa.sherpa.onnx` touch goes through the [SherpaRunner]
- * reflection bridge (mirroring
- * `LocalLlmManager.MediaPipeRunner`), so this file compiles and runs
- * with no sherpa classes present — misses degrade to null and callers
- * keep the server fallback.
- *
- * V2 layout (quantized `sherpa-onnx-moonshine-tiny-en-quantized-2026-02-27`):
- * `encoder_model.ort` + `decoder_model_merged.ort` + `tokens.txt`, wired
- * through `OfflineMoonshineModelConfig(mergedDecoder=...)` (no
- * preprocessor / split decoders).
- *
- * Code-only dependency: the AAR itself is fetched by
- * `scripts/fetch-sherpa-aar.sh` (URL + SHA256 pinned) into
- * `android/app/libs/` and never committed; model files are never
- * committed either (see the JSON manifest under `core/models`).
- *
- * VAD-chunked decode: the 1.13.8 merged decoder hits an ORT broadcast
- * bug past ~9s of continuous audio (WER fails there), so utterances
- * are cut on silence ([chunkPcm], constants mirror
- * `core/src/local_stt.rs` — keep in sync by hand), decoded per chunk
- * with a fresh stream, and joined with spaces.
- *
- * All entry points return null / false when the pack is absent, the
- * Local chain entry is disabled, or the native lib fails — callers
- * fall back to the server chain.
+ * All entry points return null / false when the model or runtime is
+ * absent, the Local chain entry is disabled, or the native call fails —
+ * callers fall back to the server chain.
  */
 object LocalStt {
-    const val PACK_REL_DIR = "models/sherpa-moonshine-v2-tiny.en"
-    const val ENCODER = "encoder_model.ort"
-    const val MERGED_DECODER = "decoder_model_merged.ort"
-    const val TOKENS = "tokens.txt"
-    const val ENGINE_NAME = "local moonshine-v2-tiny.en"
     private const val TAG = "MwLocalStt"
-
-    /**
-     * Legacy moonshine pack id (registry [LocalSttModels.MOONSHINE_ID]
-     * is the source of truth; kept for URL/shape compat).
-     */
-    const val PACK_ID = "sherpa-onnx-moonshine-tiny-en-quantized-2026-02-27"
-
-    /** Registry view of the legacy moonshine pack. */
-    fun moonshineEntry(): LocalSttModels.Entry =
-        LocalSttModels.findById(LocalSttModels.MOONSHINE_ID)
-
-    data class PackAsset(
-        val fileName: String,
-        val url: String,
-        val sha256: String,
-        val sizeBytes: Long,
-    )
-
-    /** Legacy pack files (registry moonshine entry, same content). */
-    fun packAssets(): List<PackAsset> = moonshineEntry().files.map {
-        PackAsset(it.name, it.url, it.sha256, it.sizeBytes)
-    }
 
     // Chunk constants: mirror core/src/local_stt.rs.
     const val MAX_CHUNK_SECS = 8.0
@@ -77,30 +29,7 @@ object LocalStt {
 
     data class Result(val text: String, val loadMs: Long, val decodeMs: Long, val chunks: Int)
 
-    fun packDir(filesDir: File): File = File(filesDir, PACK_REL_DIR)
-
-    fun isAvailable(filesDir: File): Boolean {
-        val dir = packDir(filesDir)
-        return listOf(ENCODER, MERGED_DECODER, TOKENS).all { n ->
-            val f = File(dir, n)
-            f.isFile && f.length() > 0
-        }
-    }
-
-    /** SHA-verified legacy pack state (registry moonshine entry). */
-    fun packState(filesDir: File): LocalModelDownload.RowState =
-        LocalSttModels.stateFor(filesDir, moonshineEntry())
-
-    /** Legacy pack download (registry moonshine entry). */
-    fun downloadPack(
-        filesDir: File,
-        onProgress: (receivedBytes: Long, totalBytes: Long) -> Unit = { _, _ -> },
-    ) = LocalSttModels.download(filesDir, moonshineEntry(), onProgress)
-
-    /** Legacy pack delete (registry moonshine entry). */
-    fun deletePack(filesDir: File) = LocalSttModels.delete(filesDir, moonshineEntry())
-
-    /** Selected catalog model (SharedPreferences, default = moonshine fast pack). */
+    /** Selected catalog model (SharedPreferences, default [LocalSttModels.DEFAULT_ID]). */
     fun selectedEntry(prefs: android.content.SharedPreferences): LocalSttModels.Entry =
         LocalSttModels.findById(
             prefs.getString(LocalSttModels.PREF_SELECTED_MODEL, LocalSttModels.DEFAULT_ID),
@@ -114,11 +43,6 @@ object LocalStt {
     }
 
     fun engineName(entry: LocalSttModels.Entry): String = "local ${entry.id}"
-
-    @Volatile private var recognizer: Any? = null
-    @Volatile private var packKey: String? = null
-    @Volatile private var lastUsedMs: Long = 0L
-    private val lock = Any()
 
     /**
      * Split 16 kHz mono PCM into decode ranges (inclusive [IntRange]).
@@ -386,9 +310,8 @@ object LocalStt {
      * fuzzy-rewritten). Multi-word entries repair on exact
      * case-insensitive phrase match only.
      *
-     * Documented approximation, NOT decoder bias: sherpa-onnx 1.13.8
-     * exposes no bias channel for our engines (see [postProcessLocal]),
-     * so a word the decoder drops entirely cannot be recovered — only
+     * Documented approximation, NOT decoder bias (see [postProcessLocal]):
+     * a word the decoder drops entirely cannot be recovered — only
      * close misspellings snap to the curated spelling. Pure: no
      * Android calls, JVM-testable. Never throws (empty words → passthrough).
      */
@@ -457,27 +380,10 @@ object LocalStt {
      * expanded in Rust, and double application would diverge on nested
      * triggers. Never throws (loader failures → passthrough).
      *
-     * Channel findings (sherpa-onnx 1.13.8, verified against
-     * `classes.jar` via javap + upstream `sherpa-onnx/csrc` at
-     * tag v1.13.8):
-     * - (1) whisper prompt: NO channel. `OfflineWhisperModelConfig`
-     *   exposes only encoder/decoder/language/task/tailPaddings/
-     *   timestamps — no prompt setter (the server path sends `prompt`
-     *   as an HTTP multipart field; nothing equivalent exists offline).
-     * - (2) ruleFsts/ruleFars: knob exists on
-     *   `OfflineRecognizerConfig`, but it is inverse-text-normalization
-     *   (kaldifst rewrite rules applied post-decode), not word bias —
-     *   it needs precompiled .fst/.far artifacts per dictionary state
-     *   and cannot be synthesized Kotlin-side.
-     * - (3) hotwordsFile/hotwordsScore: knobs exist, but native
-     *   `Validate()` hard-fails unless
-     *   `decoding_method=modified_beam_search`, which is transducer-only;
-     *   our moonshine/whisper path runs greedy_search, so setting
-     *   hotwords would break recognizer creation outright (whisper +
-     *   moonshine impls never consult hotwords).
-     * With no viable decoder channel, WORDS ship as this explicit
-     * post-process approximation: near-miss repair, never acoustic
-     * re-bias. A word the decoder drops entirely is NOT recovered.
+     * Bias channels: Whisper also gets the words as its decoder initial
+     * prompt ([dictionaryPrompt]); Parakeet has no prompt input. This
+     * post-process near-miss repair runs for both; a word the decoder
+     * drops entirely is NOT recovered here.
      */
     fun postProcessLocal(
         text: String,
@@ -493,13 +399,10 @@ object LocalStt {
         }
 
     /**
-     * Transcribe 16 kHz mono PCM with VAD-chunked decode using the
-     * selected catalog model ([LocalSttModels]). Null when the model
-     * is not installed, the Local chain entry is disabled, or the
-     * native lib fails — caller keeps the server fallback. Never
-     * throws (all errors → null + log). `language` is the Capture
-     * picker code; AUTO catalog entries map `auto` to sherpa
-     * auto-detect, MANUAL entries pin their single language.
+     * Transcribe 16 kHz mono PCM with the selected catalog model. Null
+     * when the model or runtime is not installed, the input is silence,
+     * or every device failed — caller keeps the server fallback. Never
+     * throws. `language` is the Capture picker code.
      */
     fun transcribe(
         context: Context,
@@ -508,106 +411,25 @@ object LocalStt {
         language: String = "en",
     ): Result? {
         try {
-            val prefs = context.getSharedPreferences("mw_state", Context.MODE_PRIVATE)
+            val app = context.applicationContext
+            val prefs = app.getSharedPreferences("mw_state", Context.MODE_PRIVATE)
             val entry = selectedEntry(prefs)
-            val dir = LocalSttModels.dirFor(context.filesDir, entry)
-            if (!LocalSttModels.isInstalled(context.filesDir, entry)) return null
-            if (pcm16.isEmpty()) return null
-            val whisperLang = LocalSttModels.whisperLanguageFor(language, entry)
+            if (pcm16.isEmpty() || !LocalSttModels.isInstalled(app.filesDir, entry)) return null
             val ranges = chunkPcm(pcm16, sampleRate)
-            // Streaming transducers take the whole utterance (desktop
-            // parity: no VAD trim, no short-utterance skip); the
-            // offline engines still need at least one VAD range.
-            if (ranges.isEmpty() && entry.engine != LocalSttModels.Engine.TRANSDUCER) return null
-            // Cache key covers model dir + whisper language (changing
-            // either rebuilds the native recognizer). Keep-warm: one
-            // resident slot (memory bound) governed by this model's
-            // policy (default indefinite = today's behavior); idle
-            // expiry sweeps lazily on every use, immediate releases
-            // after each decode.
-            val key = dir.absolutePath + "|" + entry.id + "|" + whisperLang
-            val keepSecs = LocalKeepWarm.readKeepSecs(
-                prefs, LocalKeepWarm.KIND_STT, entry.id, LocalKeepWarm.INDEFINITE,
-            )
-            var loadMs = 0L
-            val now = LocalKeepWarm.nowMs()
-            val rec: Any = synchronized(lock) {
-                if (recognizer != null && packKey != key) {
-                    Log.i(TAG, "local keep: model switch, releasing resident recognizer")
-                    SherpaRunner.release(recognizer)
-                    recognizer = null
-                    packKey = null
-                }
-                if (recognizer != null &&
-                    LocalKeepWarm.isExpired(lastUsedMs, keepSecs, now)
-                ) {
-                    Log.i(
-                        TAG,
-                        "local keep: idle-expired ${entry.id} " +
-                            "idle=${(now - lastUsedMs) / 1000}s keep=${keepSecs}s, releasing",
-                    )
-                    SherpaRunner.release(recognizer)
-                    recognizer = null
-                    packKey = null
-                }
-                val cached = if (packKey == key) recognizer else null
-                if (cached != null) {
-                    Log.i(TAG, "local keep: reusing resident ${entry.id}")
-                    cached
-                } else {
-                    val t0 = android.os.SystemClock.elapsedRealtime()
-                    SherpaRunner.release(recognizer)
-                    recognizer = null
-                    val created = SherpaRunner.createRecognizer(dir, entry, whisperLang) ?: return null
-                    loadMs = android.os.SystemClock.elapsedRealtime() - t0
-                    recognizer = created
-                    packKey = key
-                    created
-                }
-            }
-            val sb = StringBuilder()
-            var decodeMs = 0L
-            if (entry.engine == LocalSttModels.Engine.TRANSDUCER) {
-                // Streaming transducer: one stream for the whole
-                // utterance (see decodeOnlineUtterance) — per-chunk
-                // fresh streams starve its language/decoder state.
-                val t1 = android.os.SystemClock.elapsedRealtime()
-                val utterance =
-                    SherpaRunner.decodeOnlineUtterance(rec, pcm16, sampleRate) ?: ""
-                if (utterance.isNotBlank()) sb.append(utterance.trim())
-                decodeMs = android.os.SystemClock.elapsedRealtime() - t1
-            } else {
-            for (r in ranges) {
-                val slice = pcm16.sliceArray(r)
-                val samples = FloatArray(slice.size) { i -> slice[i] / 32768.0f }
-                val t1 = android.os.SystemClock.elapsedRealtime()
-                val text = SherpaRunner.decodeChunkText(rec, samples, sampleRate) ?: ""
-                if (text.isNotBlank()) {
-                    if (sb.isNotEmpty()) sb.append(' ')
-                    sb.append(text.trim())
-                }
-                decodeMs += android.os.SystemClock.elapsedRealtime() - t1
-            }
-            }
-            Log.i(TAG, "local decode chunks=${ranges.size} chars=${sb.length} loadMs=$loadMs decodeMs=$decodeMs")
-            synchronized(lock) {
-                if (keepSecs == LocalKeepWarm.IMMEDIATE) {
-                    Log.i(TAG, "local keep: immediate policy, releasing ${entry.id}")
-                    SherpaRunner.release(recognizer)
-                    recognizer = null
-                    packKey = null
-                    lastUsedMs = 0L
-                } else {
-                    lastUsedMs = LocalKeepWarm.nowMs()
-                }
-            }
-            return Result(sb.toString(), loadMs, decodeMs, ranges.size)
-        } catch (e: UnsatisfiedLinkError) {
-            Log.w(TAG, "sherpa native missing, fallback to server: ${e.message}")
-            return null
+            if (ranges.isEmpty()) return null
+            if (!LocalAiRuntime.load(app.filesDir)) return null
+            // Trim leading/trailing silence only; inner pauses keep context.
+            val start = ranges.first().first
+            val samples = FloatArray(ranges.last().last - start + 1) { i -> pcm16[start + i] / 32768.0f }
+            val model = File(LocalSttModels.dirFor(app.filesDir, entry), entry.files.first().name)
+            val kind = if (entry.engine == LocalSttModels.Engine.PARAKEET) LocalAiNative.STT_PARAKEET else LocalAiNative.STT_WHISPER
+            val lang = LocalSttModels.whisperLanguageFor(language, entry)
+            val prompt = if (entry.engine == LocalSttModels.Engine.WHISPER) dictionaryPrompt(loadWordsOrEmpty()) else ""
+            val keepSecs = LocalKeepWarm.readKeepSecs(prefs, LocalKeepWarm.KIND_STT, entry.id, LocalKeepWarm.INDEFINITE)
+            return LocalAiRuntime.runOnBestDevice(prefs, "stt") { device ->
+                Engine.transcribe(prefs, model.absolutePath, kind, device, samples, lang, prompt, keepSecs)
+            }.copy(chunks = ranges.size)
         } catch (e: OutOfMemoryError) {
-            // OOM is an Error, not an Exception: release the cached
-            // recognizer (native + Java heap) and fall back to server.
             Log.w(TAG, "local transcribe OOM, fallback to server")
             try { unload() } catch (_: Throwable) {}
             return null
@@ -615,6 +437,23 @@ object LocalStt {
             Log.w(TAG, "local transcribe failed, fallback to server: ${e.message}")
             return null
         }
+    }
+
+    /**
+     * Whisper initial prompt from the user dictionary: comma-joined head
+     * words, capped well under Whisper's 224-token prompt window. Pure.
+     */
+    @JvmStatic
+    fun dictionaryPrompt(words: List<String>, maxChars: Int = 400): String {
+        val sb = StringBuilder()
+        for (w in words) {
+            val t = w.trim()
+            if (t.isEmpty()) continue
+            if (sb.length + t.length + 2 > maxChars) break
+            if (sb.isNotEmpty()) sb.append(", ")
+            sb.append(t)
+        }
+        return sb.toString()
     }
 
     /**
@@ -690,334 +529,61 @@ object LocalStt {
         return false
     }
 
-    fun unload() {
-        synchronized(lock) {
-            SherpaRunner.release(recognizer)
-            recognizer = null
-            packKey = null
-            lastUsedMs = 0L
-        }
-    }
+    fun unload() = Engine.release()
 
-    /**
-     * Reflection bridge to `com.k2fsa.sherpa.onnx` (mirrors
-     * `LocalLlmManager.MediaPipeRunner`): the sherpa AAR is
-     * full-flavor-only, so no direct references may appear here —
-     * everything resolves via `Class.forName` at call time. Missing
-     * classes / native lib → null (callers keep the server fallback).
-     * Configs are built with the public no-arg constructor + setters
-     * (verified against sherpa-onnx 1.13.8 `classes.jar`), never the
-     * synthetic Kotlin-default constructors.
-     */
-    internal object SherpaRunner {
-        private const val PKG = "com.k2fsa.sherpa.onnx"
+    /** One resident STT model (memory bound), keyed by path + kind + device. */
+    private object Engine {
+        private var handle = 0L
+        private var key: String? = null
+        private var lastUsedMs = 0L
+        private val lock = Any()
 
-        /**
-         * Trailing-silence pad for utterance streaming (samples @16k):
-         * one 560ms chunk + margin so the final speech frames sit in a
-         * full decode window with right context. See
-         * [decodeOnlineUtterance].
-         */
-        private const val ONLINE_TAIL_PAD_SAMPLES = 9600
-
-        /** False on lite builds / JVM tests (no sherpa classes). */
-        fun isSupported(): Boolean = loadClass("$PKG.OfflineRecognizer") != null
-
-        internal fun loadClass(name: String): Class<*>? =
-            try {
-                Class.forName(name)
-            } catch (_: Exception) {
-                null
-            } catch (_: LinkageError) {
-                null
+        fun transcribe(
+            prefs: android.content.SharedPreferences,
+            path: String,
+            kind: Int,
+            device: String,
+            samples: FloatArray,
+            language: String,
+            prompt: String,
+            keepSecs: Long,
+        ): Result = synchronized(lock) {
+            val k = "$path|$kind|$device"
+            if (handle != 0L && (key != k || LocalKeepWarm.isExpired(lastUsedMs, keepSecs, LocalKeepWarm.nowMs()))) closeLocked()
+            var loadMs = 0L
+            val warm = handle != 0L
+            if (handle == 0L) {
+                val t0 = android.os.SystemClock.elapsedRealtime()
+                handle = LocalAiNative.sttLoad(path, kind, device, LocalAiRuntime.threads())
+                key = k
+                loadMs = android.os.SystemClock.elapsedRealtime() - t0
             }
-
-        private fun newOf(name: String): Any? =
             try {
-                loadClass(name)?.getDeclaredConstructor()?.newInstance()
-            } catch (_: Exception) {
-                null
-            } catch (_: LinkageError) {
-                null
-            }
-
-        private fun call(target: Any, method: String, vararg args: Any?): Any? =
-            try {
-                val m = target.javaClass.methods.firstOrNull {
-                    it.name == method && it.parameterCount == args.size
-                } ?: return null
-                m.invoke(target, *args)
-            } catch (_: Exception) {
-                null
-            } catch (_: LinkageError) {
-                null
-            }
-
-        /**
-         * Loud twin of [call] for the online path: missing methods and
-         * throws are logged (method + message) instead of swallowed, so
-         * a silently-noop streaming call shows up in logcat. Never
-         * throws itself.
-         */
-        private fun callOnline(target: Any, method: String, vararg args: Any?): Any? {
-            try {
-                val m = target.javaClass.methods.firstOrNull {
-                    it.name == method && it.parameterCount == args.size
-                } ?: run {
-                    Log.w(TAG, "online missing $method/${args.size}")
-                    return null
+                val t1 = android.os.SystemClock.elapsedRealtime()
+                val text = LocalAiNative.sttTranscribe(handle, samples, language, prompt)
+                val decodeMs = android.os.SystemClock.elapsedRealtime() - t1
+                // ms of compute per second of audio; cold calls include
+                // one-time GPU shader compiles (see LocalLlmManager.Engine).
+                if (warm || keepSecs == LocalKeepWarm.IMMEDIATE) {
+                    LocalAiRuntime.recordCost(prefs, "stt", device, decodeMs * 16000.0 / samples.size)
                 }
-                return m.invoke(target, *args)
+                Log.i(TAG, "local decode on $device chars=${text.length} loadMs=$loadMs decodeMs=$decodeMs")
+                Result(text, loadMs, decodeMs, 1)
             } catch (e: Exception) {
-                Log.w(TAG, "online $method threw ${e.javaClass.simpleName}: ${e.message}")
-                return null
-            } catch (e: LinkageError) {
-                Log.w(TAG, "online $method linkage ${e.javaClass.simpleName}: ${e.message}")
-                return null
+                closeLocked()
+                throw e
+            } finally {
+                if (keepSecs == LocalKeepWarm.IMMEDIATE) closeLocked() else lastUsedMs = LocalKeepWarm.nowMs()
             }
         }
 
-        private fun modelConfig(moonshine: Any? = null, whisper: Any? = null, tokens: String): Any? {
-            val mc = newOf("$PKG.OfflineModelConfig") ?: return null
-            if (moonshine != null) call(mc, "setMoonshine", moonshine)
-            if (whisper != null) call(mc, "setWhisper", whisper)
-            call(mc, "setNumThreads", 2)
-            call(mc, "setProvider", "cpu")
-            call(mc, "setTokens", tokens)
-            return mc
-        }
+        fun release() = synchronized(lock) { closeLocked() }
 
-        /** Null when the AAR is absent, files are missing, or the native lib fails. */
-        fun createRecognizer(
-            dir: File,
-            entry: LocalSttModels.Entry,
-            whisperLang: String,
-        ): Any? {
-            try {
-                val tokens = File(
-                    dir,
-                    entry.files.first { it.name.endsWith("tokens.txt") }.name,
-                ).absolutePath
-                val model = when (entry.engine) {
-                    LocalSttModels.Engine.MOONSHINE -> {
-                        val moonshine = newOf("$PKG.OfflineMoonshineModelConfig") ?: return null
-                        call(moonshine, "setEncoder", File(dir, ENCODER).absolutePath)
-                        call(moonshine, "setMergedDecoder", File(dir, MERGED_DECODER).absolutePath)
-                        modelConfig(moonshine = moonshine, tokens = tokens) ?: return null
-                    }
-                    LocalSttModels.Engine.WHISPER -> {
-                        val enc = entry.files.first { "encoder" in it.name }.name
-                        val dec = entry.files.first { "decoder" in it.name }.name
-                        val whisper = newOf("$PKG.OfflineWhisperModelConfig") ?: return null
-                        call(whisper, "setEncoder", File(dir, enc).absolutePath)
-                        call(whisper, "setDecoder", File(dir, dec).absolutePath)
-                        call(whisper, "setLanguage", whisperLang)
-                        call(whisper, "setTask", "transcribe")
-                        call(whisper, "setTailPaddings", 1000)
-                        call(whisper, "setEnableTokenTimestamps", false)
-                        call(whisper, "setEnableSegmentTimestamps", false)
-                        modelConfig(whisper = whisper, tokens = tokens) ?: return null
-                    }
-                    LocalSttModels.Engine.TRANSDUCER -> {
-                        // Streaming transducer (Nemotron): a different
-                        // recognizer class — hand off to the online path.
-                        return createOnlineRecognizer(dir, entry)
-                    }
-                }
-                val feat = newOf("$PKG.FeatureConfig") ?: return null
-                call(feat, "setSampleRate", 16000)
-                call(feat, "setFeatureDim", 80)
-                val config = newOf("$PKG.OfflineRecognizerConfig") ?: return null
-                call(config, "setFeatConfig", feat)
-                call(config, "setModelConfig", model)
-                call(config, "setDecodingMethod", "greedy_search")
-                call(config, "setMaxActivePaths", 4)
-                val recCls = loadClass("$PKG.OfflineRecognizer") ?: return null
-                // OfflineRecognizer(AssetManager, OfflineRecognizerConfig):
-                // null assets → newFromFile, models live in filesDir.
-                val ctor = recCls.constructors.firstOrNull { it.parameterCount == 2 } ?: return null
-                return ctor.newInstance(null, config)
-            } catch (_: Exception) {
-                Log.w(TAG, "recognizer create failed")
-                return null
-            } catch (_: UnsatisfiedLinkError) {
-                Log.w(TAG, "sherpa native missing")
-                return null
-            } catch (_: LinkageError) {
-                Log.w(TAG, "sherpa classes missing (lite build?)")
-                return null
-            }
-        }
-
-        /** Decoded text for one VAD chunk, or null (→ blank, skipped). Never throws. */
-        fun decodeChunkText(rec: Any, samples: FloatArray, sampleRate: Int): String? {
-            try {
-                val stream = call(rec, "createStream") ?: return null
-                try {
-                    call(stream, "acceptWaveform", samples, sampleRate)
-                    call(rec, "decode", stream)
-                    val result = call(rec, "getResult", stream) ?: return null
-                    return call(result, "getText") as? String
-                } finally {
-                    call(stream, "release")
-                }
-            } catch (_: Exception) {
-                return null
-            } catch (_: UnsatisfiedLinkError) {
-                return null
-            } catch (_: LinkageError) {
-                return null
-            }
-        }
-
-        /**
-         * Streaming-transducer recognizer (Nemotron) via the ONLINE
-         * API. Class/method spec verified against the 1.13.8 AAR
-         * `classes.jar` via javap (constructor takes nullable
-         * AssetManager + config like the offline one; `createStream`
-         * takes a hotwords string — empty here; per-stream language
-         * goes through `setOption("language", …)`; no `setLanguage`
-         * exists). Null when the AAR is absent, files are missing, or
-         * the native lib fails.
-         */
-        fun createOnlineRecognizer(dir: File, entry: LocalSttModels.Entry): Any? {
-            try {
-                fun fileFor(vararg keys: String): String {
-                    val name = entry.files.first { f ->
-                        keys.any { k -> k in f.name }
-                    }.name
-                    return File(dir, name).absolutePath
-                }
-                val tokens = File(
-                    dir,
-                    entry.files.first { it.name.endsWith("tokens.txt") }.name,
-                ).absolutePath
-                val transducer = newOf("$PKG.OnlineTransducerModelConfig") ?: return null
-                call(transducer, "setEncoder", fileFor("encoder"))
-                call(transducer, "setDecoder", fileFor("decoder"))
-                call(transducer, "setJoiner", fileFor("joiner"))
-                val model = newOf("$PKG.OnlineModelConfig") ?: return null
-                call(model, "setTransducer", transducer)
-                call(model, "setTokens", tokens)
-                // Threads stay at the upstream default (1): every
-                // working reference (Kotlin demo, CLI, desktop server)
-                // runs the online path single-threaded; the offline
-                // path keeps its own numThreads=2 below.
-                call(model, "setProvider", "cpu")
-                val feat = newOf("$PKG.FeatureConfig") ?: return null
-                call(feat, "setSampleRate", 16000)
-                call(feat, "setFeatureDim", 80)
-                val config = newOf("$PKG.OnlineRecognizerConfig") ?: return null
-                call(config, "setFeatConfig", feat)
-                call(config, "setModelConfig", model)
-                call(config, "setDecodingMethod", "greedy_search")
-                call(config, "setMaxActivePaths", 4)
-                val recCls = loadClass("$PKG.OnlineRecognizer") ?: return null
-                // OnlineRecognizer(AssetManager, OnlineRecognizerConfig):
-                // null assets → newFromFile, models live in filesDir.
-                val ctor = recCls.constructors.firstOrNull { it.parameterCount == 2 } ?: return null
-                return ctor.newInstance(null, config)
-            } catch (_: Exception) {
-                Log.w(TAG, "online recognizer create failed")
-                return null
-            } catch (_: UnsatisfiedLinkError) {
-                Log.w(TAG, "sherpa native missing")
-                return null
-            } catch (_: LinkageError) {
-                Log.w(TAG, "sherpa classes missing (lite build?)")
-                return null
-            }
-        }
-
-        /**
-         * Streaming-transducer UTTERANCE decode: ONE online stream for
-         * the whole utterance. Transducers carry decoder + language
-         * state across frames — per-chunk fresh streams starve the
-         * language detector on short VAD segments (owner phone repro:
-         * valid pipeline, zero tokens). Desktop parity: the FULL
-         * utterance goes in (no VAD trim, no short-utterance skip —
-         * server-side endpointing owns that path), fed as mic-sized
-         * slices with periodic drains; trailing-silence pad (below),
-         * inputFinished + final drain + single read at the end. No
-         * language is sent (desktop parity: auto and explicit are
-         * byte-identical there — the model decides). Emits
-         * diagnostics (fed, slices, iterations, tokens, chars). Null
-         * (→ server fallback) on any failure. Never throws.
-         */
-        fun decodeOnlineUtterance(
-            rec: Any,
-            pcm16: ShortArray,
-            sampleRate: Int,
-        ): String? {
-            try {
-                val stream = callOnline(rec, "createStream", "") ?: run {
-                    Log.w(TAG, "online stream create failed")
-                    return null
-                }
-                try {
-                    var iters = 0
-                    var slices = 0
-                    // ~100ms mic-sized slices (1600 samples @16k floor).
-                    val slice = (sampleRate / 10).coerceAtLeast(1600)
-                    var offset = 0
-                    while (offset < pcm16.size) {
-                        val end = minOf(offset + slice, pcm16.size)
-                        val n = end - offset
-                        val buf = FloatArray(n) { i -> pcm16[offset + i] / 32768.0f }
-                        callOnline(stream, "acceptWaveform", buf, sampleRate)
-                        slices++
-                        var guard = 0
-                        while ((callOnline(rec, "isReady", stream) as? Boolean) == true && guard++ < 50) {
-                            callOnline(rec, "decode", stream)
-                            iters++
-                        }
-                        offset = end
-                    }
-                    // Trailing-silence pad: the streaming encoder needs
-                    // right context past the last speech frame to emit
-                    // the tail (owner repro in EN+ES: the final word
-                    // always missing — "prueba"/"test" dropped). A live
-                    // mic always has trailing audio; a burst feed has
-                    // none, so one chunk of zeros (~600ms) guarantees a
-                    // full final window. Silence decodes to blanks,
-                    // never text.
-                    callOnline(stream, "acceptWaveform", FloatArray(ONLINE_TAIL_PAD_SAMPLES), sampleRate)
-                    callOnline(stream, "inputFinished")
-                    var guard = 0
-                    while ((callOnline(rec, "isReady", stream) as? Boolean) == true && guard++ < 1000) {
-                        callOnline(rec, "decode", stream)
-                        iters++
-                    }
-                    // NOTE: no unconditional tail flush — decoding past
-                    // the buffered frames aborts the process (owner
-                    // phone repro: crash before commit). The ready gate
-                    // above is load-bearing; the tail (< 1 chunk) is
-                    // consumed by the last gated pass.
-                    val endpoint = callOnline(rec, "isEndpoint", stream) as? Boolean
-                    val result = callOnline(rec, "getResult", stream) ?: run {
-                        Log.w(TAG, "online getResult null fed=${pcm16.size} slices=$slices iters=$iters")
-                        return null
-                    }
-                    val text = callOnline(result, "getText") as? String
-                    val tokens = callOnline(result, "getTokens") as? Array<*>
-                    Log.i(TAG, "online utterance fed=${pcm16.size} slices=$slices iters=$iters endpoint=$endpoint tokens=${tokens?.size ?: -1} chars=${text?.length ?: -1}")
-                    return text
-                } finally {
-                    call(stream, "release")
-                }
-            } catch (_: Exception) {
-                return null
-            } catch (_: UnsatisfiedLinkError) {
-                return null
-            } catch (_: LinkageError) {
-                return null
-            }
-        }
-
-        /** Best-effort native release. Never throws (unload-safe). */
-        fun release(rec: Any?) {
-            if (rec == null) return
-            call(rec, "release")
+        private fun closeLocked() {
+            if (handle != 0L) LocalAiNative.sttFree(handle)
+            handle = 0L
+            key = null
+            lastUsedMs = 0L
         }
     }
 }

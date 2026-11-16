@@ -61,8 +61,8 @@ class SampleSpeechTest {
     fun assetFor_englishOnlyGetsEnAsset() {
         val enEntry = LocalSttModels.Entry(
             id = "x", name = "x", sizeLabel = "x",
-            engine = LocalSttModels.Engine.MOONSHINE,
-            provider = LocalSttModels.Provider.MOONSHINE,
+            engine = LocalSttModels.Engine.WHISPER,
+            provider = LocalSttModels.Provider.WHISPER,
             langMode = LocalSttModels.LangMode.MANUAL,
             languages = listOf("en"),
             dictionary = false, runtimeNote = "x", phoneTier = "x",
@@ -70,10 +70,10 @@ class SampleSpeechTest {
         )
         assertEquals(SampleSpeech.EN_ASSET, SampleSpeech.assetFor(enEntry))
         val multiEntry = enEntry.copy(
-            engine = LocalSttModels.Engine.TRANSDUCER,
+            engine = LocalSttModels.Engine.PARAKEET,
             provider = LocalSttModels.Provider.NVIDIA,
             langMode = LocalSttModels.LangMode.AUTO,
-            languages = LocalSttModels.NEMOTRON35_LANGS,
+            languages = LocalSttModels.PARAKEET_LANGS,
         )
         assertEquals(SampleSpeech.ES_ASSET, SampleSpeech.assetFor(multiEntry))
     }

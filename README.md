@@ -16,14 +16,15 @@ MyWhisper from F-Droid.
 
 Or download an APK from [GitHub Releases](https://github.com/aaronroquefonseca/MyWhisperMobile/releases):
 
-- **MyWhisper**: full app, including on-device speech recognition and cleanup.
-- **MyWhisper Lite**: server-only, much smaller.
+- **MyWhisper**: the app. On-device models are optional; their runtime
+  (~17 MB) downloads with the first model you pick, so the APK stays small
+  for everyone.
 - **Nightly**: built from every change on `main`
   ([rolling prerelease](https://github.com/aaronroquefonseca/MyWhisperMobile/releases/tag/nightly)).
   On F-Droid, enable beta updates for MyWhisper to get them.
 
-All builds are the same app, so you can switch between them by installing
-another APK over it, keeping your settings. Android only installs an equal
+Stable and nightly are the same app, so you can switch between them by
+installing another APK over it, keeping your settings. Android only installs an equal
 or newer version, so going from a nightly back to stable waits for the next
 release.
 
@@ -102,6 +103,13 @@ and cloud providers. On-device speech recognition and text cleanup are
 experimental and off by default; they require verified model files. See
 [core/README.md](core/README.md) for engine details.
 
+On-device models run on [llama.cpp](https://github.com/ggml-org/llama.cpp)
+(cleanup: Gemma GGUF) and [whisper.cpp](https://github.com/ggml-org/whisper.cpp)
+(speech: Whisper and NVIDIA Parakeet), built from source into a runtime pack
+the app downloads with the first local model (arm64 only). Inference runs on
+the GPU (Vulkan, or OpenCL on Adreno) when that is faster on the phone,
+otherwise on the CPU; the app measures this per device.
+
 ## Layout
 
 - `core/` — Rust engine (`mywhisper-core`), JNI `cdylib`.
@@ -111,6 +119,9 @@ experimental and off by default; they require verified model files. See
 - `scripts/build-core.sh` — `cargo ndk` release build for
   `arm64-v8a` + `x86_64` into `jniLibs` (runs automatically via the
   `buildRustCore` Gradle task).
+- `android/localai/` — C API + JNI over llama.cpp and whisper.cpp, with
+  local patches to the pinned upstream sources; `scripts/build-localai.sh`
+  builds the runtime pack (`BENCH=1` adds the `mwbench` on-device CLI).
 
 ## Build
 
@@ -143,7 +154,9 @@ release adds its CHANGELOG section as the "What's new" text.
    `mywhisper.versionName`; add a matching `## [x.y.z]` section to
    `CHANGELOG.md`.
 2. Merge to `main`, then push the tag `vx.y.z`. The release workflow signs
-   Full and Lite, creates the GitHub release, and sends Full to F-Droid.
+   the APK, creates the GitHub release, and sends it to F-Droid. The
+   on-device AI runtime pack is rebuilt only when its inputs change and is
+   published as its own `localai-<hash>` prerelease.
 
 The real versionCode is `mywhisper.versionCode × 1000`. Every push to `main`
 builds a nightly numbered from the last bump (e.g. 51003), so nightlies sit

@@ -118,6 +118,7 @@ class ModelDownloadWorker(
     ) {
         val entry = LocalSttModels.MODELS.firstOrNull { it.id == modelId }
             ?: throw IllegalArgumentException("unknown stt model $modelId")
+        ensureRuntime(label.ifBlank { entry.name }, workName, notifId, target, ModelDownloadSchedule.KIND_STT, entry.id)
         LocalSttModels.download(applicationContext.filesDir, entry) { r, t ->
             if (isStopped) throw CancellationException("cancelled")
             reportProgress(label.ifBlank { entry.name }, r, t, workName, notifId, target, ModelDownloadSchedule.KIND_STT, entry.id)
@@ -135,13 +136,12 @@ class ModelDownloadWorker(
         val sha = inputData.getString(ModelDownloadSchedule.KEY_SHA)
             ?: throw IllegalArgumentException("llm asset lacks sha")
         val size = inputData.getLong(ModelDownloadSchedule.KEY_SIZE, 0L)
-        val runtime = inputData.getString(ModelDownloadSchedule.KEY_RUNTIME)
-            ?: LocalLlmManager.RUNTIME_MEDIAPIPE
         val assetId = inputData.getString(ModelDownloadSchedule.KEY_MODEL_ID).orEmpty()
         if (MainActivity.isPlaceholderSha(sha)) {
             throw IllegalStateException("no sha pinned for $assetId")
         }
-        val asset = LocalLlmManager.ModelAsset(assetId, url, sha, size, runtime = runtime)
+        val asset = LocalLlmManager.ModelAsset(assetId, url, sha, size)
+        ensureRuntime(label.ifBlank { assetId }, workName, notifId, target, ModelDownloadSchedule.KIND_LLM, assetId)
         // Per-asset slot (multi-pack coexist): same dest the row
         // downloads to and verifies (`MainActivity.llmTaskFileFor`),
         // so completion flips the row to PRESENT.
@@ -152,6 +152,18 @@ class ModelDownloadWorker(
         LocalLlmManager.downloadModel(asset, dest) { r, t ->
             if (isStopped) throw CancellationException("cancelled")
             reportProgress(label.ifBlank { assetId }, r, t, workName, notifId, target, ModelDownloadSchedule.KIND_LLM, assetId)
+        }
+    }
+
+    /**
+     * The runtime pack (llama.cpp/whisper.cpp) rides along with the first
+     * local model download; progress shows on the same row. No-op once
+     * installed.
+     */
+    private fun ensureRuntime(label: String, workName: String, notifId: Int, target: String, kind: String, id: String) {
+        LocalAiRuntime.ensureDownloaded(applicationContext.filesDir) { r, t ->
+            if (isStopped) throw CancellationException("cancelled")
+            reportProgress(label, r, t, workName, notifId, target, kind, id)
         }
     }
 

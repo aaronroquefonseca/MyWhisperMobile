@@ -156,11 +156,11 @@ class LocalMultiPackTest {
             val a = MainActivity.llmTaskFileFor(dir, "gemma3-1b-it-int4")
             val b = MainActivity.llmTaskFileFor(dir, "gemma3-1b-it-mpseq-q8")
             assertFalse(a == b)
-            assertEquals(File(File(dir, "models"), "llm-gemma3-1b-it-int4.task"), a)
+            assertEquals(File(File(dir, "models"), "llm-gemma3-1b-it-int4.gguf"), a)
             assertEquals("models", a.parentFile?.name)
             // Unsafe ids sanitize (never path escape).
             val evil = MainActivity.llmTaskFileFor(dir, "../x")
-            assertEquals(File(File(dir, "models"), "llm-___x.task"), evil)
+            assertEquals(File(File(dir, "models"), "llm-___x.gguf"), evil)
             assertEquals(File(dir, "models"), evil.parentFile)
         } finally {
             dir.deleteRecursively()
@@ -173,17 +173,15 @@ class LocalMultiPackTest {
         try {
             val lm = LocalLlmManager.ModelAsset(
                 "gemma4-e2b-it",
-                "https://example/g4.litertlm",
+                "https://example/g4.gguf",
                 "c".repeat(64),
                 9,
-                runtime = LocalLlmManager.RUNTIME_LITERTLM,
             )
-            assertEquals(File(File(dir, "models"), "llm-gemma4-e2b-it.litertlm"), MainActivity.llmTaskFileFor(dir, lm))
-            // Id default + explicit ext stay .task (existing callers/tests).
-            assertEquals(File(File(dir, "models"), "llm-plain-id.task"), MainActivity.llmTaskFileFor(dir, "plain-id"))
+            assertEquals(File(File(dir, "models"), "llm-gemma4-e2b-it.gguf"), MainActivity.llmTaskFileFor(dir, lm))
+            assertEquals(File(File(dir, "models"), "llm-plain-id.gguf"), MainActivity.llmTaskFileFor(dir, "plain-id"))
             assertEquals(
-                File(File(dir, "models"), "llm-plain-id.litertlm"),
-                MainActivity.llmTaskFileFor(dir, "plain-id", "litertlm"),
+                File(File(dir, "models"), "llm-plain-id.bin"),
+                MainActivity.llmTaskFileFor(dir, "plain-id", "bin"),
             )
         } finally {
             dir.deleteRecursively()
@@ -196,10 +194,9 @@ class LocalMultiPackTest {
         try {
             val lm = LocalLlmManager.ModelAsset(
                 "gemma4-e2b-it",
-                "https://example/g4.litertlm",
+                "https://example/g4.gguf",
                 "c".repeat(64),
                 9,
-                runtime = LocalLlmManager.RUNTIME_LITERTLM,
             )
             val slot = MainActivity.llmTaskFileFor(dir, lm)
             slot.parentFile?.mkdirs()

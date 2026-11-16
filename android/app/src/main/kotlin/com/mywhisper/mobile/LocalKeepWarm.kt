@@ -7,7 +7,7 @@ package com.mywhisper.mobile
  * entry's per-model policy governs it:
  *
  * - `IMMEDIATE` (0): release right after each use (LLM default —
- *   today's MediaPipe/LiteRT behavior: load per call).
+ *   load per call).
  * - N seconds: stay loaded, evicted lazily once idle longer than N
  *   (no polling timers — every use sweeps, so an entry can linger
  *   past its deadline until the next use; harmless, documented).

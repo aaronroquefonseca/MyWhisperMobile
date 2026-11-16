@@ -109,7 +109,7 @@ class RowsUxReworkTest {
         // never MISMATCH.
         val dir = Files.createTempDirectory("stt-trunc").toFile()
         try {
-            val m = LocalSttModels.findById(LocalSttModels.MOONSHINE_ID)
+            val m = LocalSttModels.findById(LocalSttModels.WHISPER_BASE_ID)
             val pack = LocalSttModels.dirFor(dir, m)
             pack.mkdirs()
             for (f in m.files) {
@@ -128,7 +128,7 @@ class RowsUxReworkTest {
     fun stt_stateFor_completeGarbageIsMismatch() {
         val dir = Files.createTempDirectory("stt-mismatch").toFile()
         try {
-            val m = LocalSttModels.findById(LocalSttModels.MOONSHINE_ID)
+            val m = LocalSttModels.findById(LocalSttModels.WHISPER_BASE_ID)
             val pack = LocalSttModels.dirFor(dir, m)
             pack.mkdirs()
             // Full-size-but-corrupt set (sparse, instant): MISMATCH
@@ -336,7 +336,7 @@ class RowsUxReworkTest {
     fun stt_inspect_verifiesEachFileAtMostOnce() {
         val dir = Files.createTempDirectory("stt-inspect").toFile()
         try {
-            val m = LocalSttModels.findById(LocalSttModels.MOONSHINE_ID)
+            val m = LocalSttModels.findById(LocalSttModels.WHISPER_BASE_ID)
             val pack = LocalSttModels.dirFor(dir, m)
             pack.mkdirs()
             // Full-size sparse files (instant), stub verifies all.
@@ -363,7 +363,7 @@ class RowsUxReworkTest {
     fun stt_inspect_skipsHashOnTruncated_subsetHashesPresentOnly() {
         val dir = Files.createTempDirectory("stt-inspect2").toFile()
         try {
-            val m = LocalSttModels.findById(LocalSttModels.MOONSHINE_ID)
+            val m = LocalSttModels.findById(LocalSttModels.WHISPER_BASE_ID)
             val pack = LocalSttModels.dirFor(dir, m)
             pack.mkdirs()
             // All files truncated to 1 byte: no hash may run at all.
@@ -387,7 +387,10 @@ class RowsUxReworkTest {
     fun stt_inspect_verifiedBytesSumsVerifiedOnly() {
         val dir = Files.createTempDirectory("stt-inspect3").toFile()
         try {
-            val m = LocalSttModels.findById(LocalSttModels.MOONSHINE_ID)
+            // Two-file entry (catalog models are single-file; the
+            // inspector stays generic).
+            val base = LocalSttModels.findById(LocalSttModels.WHISPER_BASE_ID)
+            val m = base.copy(files = base.files + base.files.first().copy(name = "second.bin", sizeBytes = 16))
             val pack = LocalSttModels.dirFor(dir, m)
             pack.mkdirs()
             for (f in m.files) {

@@ -34,6 +34,11 @@ class MyWhisperApp : Application() {
                 CoreBridge.syncAllNow()
             } catch (_: Exception) {
             }
+            // Free storage held by pre-llama.cpp model formats and old packs.
+            LocalAiRuntime.removeLegacyModels(filesDir, cacheDir)
+            LocalAiRuntime.removeStalePacks(filesDir)
+            // Main process only: the IME process would re-enqueue (REPLACE) the same work.
+            if (android.app.Application.getProcessName() == packageName) LocalAiRuntime.ensureForInstalledModels(this)
             // Keep the bubble alive across process death when enabled.
             try {
                 val s = CoreBridge.getSettings().getOrThrow()

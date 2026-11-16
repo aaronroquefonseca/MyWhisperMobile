@@ -392,14 +392,13 @@ class LocalDownloadTest {
         }
     }
 
+    private val sttEntry = LocalSttModels.findById(LocalSttModels.WHISPER_BASE_ID)
+
     @Test
     fun sttPack_emptyDirIsMissing() {
         val dir = Files.createTempDirectory("stt-pack").toFile()
         try {
-            assertEquals(
-                LocalModelDownload.RowState.MISSING,
-                LocalStt.packState(dir),
-            )
+            assertEquals(LocalModelDownload.RowState.MISSING, LocalSttModels.stateFor(dir, sttEntry))
         } finally {
             dir.deleteRecursively()
         }
@@ -407,52 +406,35 @@ class LocalDownloadTest {
 
     @Test
     fun sttPack_sparseFullGarbageIsMismatch() {
-        // Full-size-but-corrupt legacy pack: MISMATCH only here. Sparse
-        // (instant, no blocks) so the pinned sizes cost nothing.
+        // Full-size-but-corrupt model: MISMATCH only here. Sparse
+        // (instant, no blocks) so the pinned size costs nothing.
         val dir = Files.createTempDirectory("stt-pack").toFile()
         try {
-            val pack = LocalStt.packDir(dir)
-            pack.mkdirs()
-            for (a in LocalStt.packAssets()) {
-                val file = File(pack, a.fileName)
+            val pack = LocalSttModels.dirFor(dir, sttEntry).apply { mkdirs() }
+            for (a in sttEntry.files) {
+                val file = File(pack, a.name)
                 java.io.RandomAccessFile(file, "rw").use { it.setLength(a.sizeBytes) }
                 file.appendBytes("x".toByteArray())
             }
-            assertEquals(
-                LocalModelDownload.RowState.MISMATCH,
-                LocalStt.packState(dir),
-            )
+            assertEquals(LocalModelDownload.RowState.MISMATCH, LocalSttModels.stateFor(dir, sttEntry))
         } finally {
             dir.deleteRecursively()
         }
     }
 
     @Test
-    fun sttPack_assetsMatchPinnedManifest() {
-        val assets = LocalStt.packAssets()
-        assertEquals(
-            listOf("encoder_model.ort", "decoder_model_merged.ort", "tokens.txt"),
-            assets.map { it.fileName },
-        )
-        assertTrue(assets.all { it.url.contains(LocalStt.PACK_ID) })
-        assertTrue(assets.all { it.sha256.length == 64 })
-        assertTrue(assets.all { it.sizeBytes > 0 })
-    }
-
-    @Test
     fun sttDeletePack_removesFilesAndPartials() {
         val dir = Files.createTempDirectory("stt-pack").toFile()
         try {
-            val pack = LocalStt.packDir(dir)
-            pack.mkdirs()
-            for (a in LocalStt.packAssets()) {
-                File(pack, a.fileName).writeBytes("x".toByteArray())
-                File(pack, "${a.fileName}.part").writeBytes("y".toByteArray())
+            val pack = LocalSttModels.dirFor(dir, sttEntry).apply { mkdirs() }
+            for (a in sttEntry.files) {
+                File(pack, a.name).writeBytes("x".toByteArray())
+                File(pack, "${a.name}.part").writeBytes("y".toByteArray())
             }
-            LocalStt.deletePack(dir)
-            for (a in LocalStt.packAssets()) {
-                assertFalse(File(pack, a.fileName).exists())
-                assertFalse(File(pack, "${a.fileName}.part").exists())
+            LocalSttModels.delete(dir, sttEntry)
+            for (a in sttEntry.files) {
+                assertFalse(File(pack, a.name).exists())
+                assertFalse(File(pack, "${a.name}.part").exists())
             }
         } finally {
             dir.deleteRecursively()

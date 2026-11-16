@@ -24,6 +24,14 @@ android {
         versionCode = releaseNumber * 1000
         versionName = providers.gradleProperty("mywhisper.versionName").getOrElse("0.1.0")
         manifestPlaceholders["appLabel"] = "MyWhisper"
+        // On-device AI runtime pack (scripts/build-localai.sh): downloaded on
+        // demand, never bundled. CI passes the release asset; empty = no
+        // download offered (a pack can still be sideloaded in debug).
+        fun prop(name: String) = providers.gradleProperty(name).getOrElse("")
+        buildConfigField("String", "LOCALAI_ID", "\"${prop("mywhisper.localai.id")}\"")
+        buildConfigField("String", "LOCALAI_URL", "\"${prop("mywhisper.localai.url")}\"")
+        buildConfigField("String", "LOCALAI_SHA256", "\"${prop("mywhisper.localai.sha256")}\"")
+        buildConfigField("long", "LOCALAI_SIZE", "${prop("mywhisper.localai.size").ifBlank { "0" }}L")
     }
 
     // Release signing from env (CI secrets); without MYWHISPER_KEYSTORE_PATH
@@ -41,16 +49,16 @@ android {
         debug {
             // Emulator (x86_64) + physical arm64 debug installs.
             ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
+            // Side-by-side test installs: -Pmywhisper.appIdSuffix=.test keeps
+            // the user's installed MyWhisper untouched.
+            providers.gradleProperty("mywhisper.appIdSuffix").orNull?.let { applicationIdSuffix = it }
         }
         release {
-            // APK SLIM: arm64-only release. The sherpa/LLM AARs ship 4 ABIs
-            // (~149MB of native .so outside arm64); Play + physical devices
-            // are arm64. x86_64 stays available in debug for the emulator.
+            // arm64-only release (the on-device AI pack is arm64-only too);
+            // x86_64 stays available in debug for the emulator.
             ndk { abiFilters += "arm64-v8a" }
             signingConfigs.findByName("release")?.let { signingConfig = it }
-            // APK SLIM: R8 + shrinkResources in release (rules in
-            // proguard-rules.pro: Tink -dontwarn/-keep, CoreBridge
-            // native keeps, sherpa/MediaPipe reflection keeps).
+            // R8 + shrinkResources in release (rules in proguard-rules.pro).
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
@@ -66,46 +74,27 @@ android {
         }
     }
 
-    // APK SLIM: lite = server chain only (no on-device AARs on the
-    // classpath at all); full = lite + sherpa STT + MediaPipe LLM.
-    // fullImplementation keeps the ~50MB sherpa AAR and tasks-genai
-    // (incl. libllm_inference_engine_jni.so) out of lite APKs. Lite
-    // compiles and runs without them: LocalStt/SherpaRunner and
-    // LocalLlmManager/MediaPipeRunner load those classes by reflection
-    // and return null/throw-caught (server fallback) when absent.
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     testOptions { unitTests.isIncludeAndroidResources = true }
-    flavorDimensions += "mode"
-    productFlavors {
-        create("lite") { dimension = "mode" }
-        create("full") { dimension = "mode" }
-    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions {
         jvmTarget = "17"
-        // litertlm-android ships Kotlin 2.4 metadata while the
-        // project pins Kotlin 2.2: our litertlm use is 100%
-        // reflection-discovered (no compile-time linkage — lite
-        // flavor never sees it), so the metadata check buys nothing
-        // for that dep. Scoped justification; revisit on the
-        // project-wide Kotlin upgrade.
-        freeCompilerArgs += "-Xskip-metadata-version-check"
     }
 }
 
-// Same applicationId for every variant so users can switch between lite/full
-// and stable/nightly without losing settings; the label tells them apart.
+// Same applicationId for stable/nightly so users can switch without losing
+// settings; the label tells them apart.
 androidComponents {
     onVariants { variant ->
         val nightly = variant.buildType == "nightly"
         val label = buildString {
             append("MyWhisper")
-            if (variant.flavorName == "lite") append(" Lite")
             if (nightly) append(" Nightly")
         }
         variant.manifestPlaceholders.put("appLabel", label)
@@ -139,23 +128,6 @@ dependencies {
     // the unmetered/battery-not-low constraints, and exponential-backoff
     // retry + app-kill resume (see ModelDownloadSchedule for rationale).
     implementation("androidx.work:work-runtime-ktx:2.9.0")
-    // On-device LLM cleanup (MediaPipe LLM Inference .task, GPU delegate;
-    // successor API: LiteRT-LM). Loaded lazily via reflection in
-    // LocalLlmManager so lite builds and JVM unit tests run without the
-    // native runner.
-    add("fullImplementation", "com.google.mediapipe:tasks-genai:0.10.29")
-    // On-device LLM runner v2 (LiteRT-LM, for Gemma 4 .litertlm
-    // bundles — MediaPipe tasks-genai is maintenance-only and has no
-    // Gemma 4 artifact). Loaded lazily via reflection in
-    // LocalLlmManager so lite builds and JVM unit tests run without
-    // the native runner, same as tasks-genai above.
-    add("fullImplementation", "com.google.ai.edge.litertlm:litertlm-android:0.18.1")
-    // On-device STT runtime (sherpa-onnx 1.13.8, arm64-v8a + x86_64 JNI).
-    // AAR fetched by scripts/fetch-sherpa-aar.sh (run once after
-    // checkout, CI does it too), never committed. fullImplementation only:
-    // lite has no sherpa classes on the classpath (LocalStt/SherpaRunner
-    // bridges by reflection, CNFE → null → server fallback).
-    add("fullImplementation", fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar", "*.jar"))))
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.14.1")

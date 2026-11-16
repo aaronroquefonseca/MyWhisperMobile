@@ -1,12 +1,15 @@
 name: release
 
-# Stable: tag push (v*) builds signed Full + Lite APKs, creates the GitHub
-# release with the CHANGELOG section, and hands the Full APK to the F-Droid
+# Stable: tag push (v*) builds the signed APK, creates the GitHub
+# release with the CHANGELOG section, and hands the APK to the F-Droid
 # repo (uploads to R2 incoming/, then starts aaronroquefonseca/fdroid's publish).
 # Nightly: every push to main does the same with the `nightly` build type,
 # replaces the rolling `nightly` GitHub prerelease, and syncs the F-Droid
 # listing (fastlane/metadata/android). F-Droid marks nightlies as Beta.
 # Manual re-run of a stable release via workflow_dispatch with an existing tag.
+# The on-device AI runtime pack is NOT in the APK: it is published once per
+# build-input hash as its own prerelease (tag localai-<hash>) and the APK
+# pins its URL + SHA-256; the app downloads it with the first local model.
 on:
   push:
     tags: ["v*"]
@@ -88,22 +91,44 @@ jobs:
       - name: Install cargo-ndk
         working-directory: core
         run: cargo install --locked cargo-ndk --version 4.1.2
-      - name: Fetch sherpa-onnx AAR (SHA256-pinned, never committed)
-        working-directory: .
-        run: bash scripts/fetch-sherpa-aar.sh
+      - name: On-device AI runtime pack (reuse or build + publish)
+        working-directory: ${{ github.workspace }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          PACK_ID="localai-$(cat scripts/build-localai.sh $(git ls-files android/localai | sort) | sha256sum | cut -c1-12)"
+          ASSET="${PACK_ID}-arm64-v8a.zip"
+          mkdir -p dist-pack
+          if ! gh release download "$PACK_ID" -p "$ASSET" -D dist-pack 2>/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends glslc spirv-tools ninja-build
+            bash scripts/build-localai.sh
+            (cd build/localai/lib && zip -q -9 -X "$GITHUB_WORKSPACE/dist-pack/$ASSET" ./*.so)
+            # A concurrent run may have published the same inputs first: use theirs.
+            gh release create "$PACK_ID" "dist-pack/$ASSET" --prerelease --target "$GITHUB_SHA" \
+              --title "On-device AI runtime ${PACK_ID#localai-}" \
+              --notes "llama.cpp + whisper.cpp runtime for MyWhisper's on-device models (arm64-v8a). Downloaded by the app; not meant for manual install." \
+              || { rm -f "dist-pack/$ASSET"; gh release download "$PACK_ID" -p "$ASSET" -D dist-pack; }
+          fi
+          SHA="$(sha256sum "dist-pack/$ASSET" | cut -d' ' -f1)"
+          SIZE="$(stat -c%s "dist-pack/$ASSET")"
+          URL="https://github.com/${GH_REPO}/releases/download/${PACK_ID}/${ASSET}"
+          echo "LOCALAI_PROPS=-Pmywhisper.localai.id=$PACK_ID -Pmywhisper.localai.url=$URL -Pmywhisper.localai.sha256=$SHA -Pmywhisper.localai.size=$SIZE" >> "$GITHUB_ENV"
       - uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d # v4
       - name: Restore release keystore
         env:
           MYWHISPER_KEYSTORE_B64: ${{ secrets.MYWHISPER_KEYSTORE_B64 }}
         run: echo "$MYWHISPER_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
-      - name: Assemble signed Full + Lite APKs
+      - name: Assemble signed APK
         env:
           MYWHISPER_KEYSTORE_PASSWORD: ${{ secrets.MYWHISPER_KEYSTORE_PASSWORD }}
           MYWHISPER_KEY_ALIAS: ${{ secrets.MYWHISPER_KEY_ALIAS }}
           MYWHISPER_KEY_PASSWORD: ${{ secrets.MYWHISPER_KEY_PASSWORD }}
         run: |
           MYWHISPER_KEYSTORE_PATH="$RUNNER_TEMP/release.keystore" ./gradlew \
-            ":app:assembleFull${BUILD_TYPE}" ":app:assembleLite${BUILD_TYPE}" \
+            ":app:assemble${BUILD_TYPE}" $LOCALAI_PROPS \
             "-Pmywhisper.nightlyNumber=${NIGHTLY_NUMBER}"
       - name: Remove release keystore
         if: always()
@@ -114,12 +139,11 @@ jobs:
           set -euo pipefail
           BT="${BUILD_TYPE,}"
           OUT=android/app/build/outputs/apk
-          META="$OUT/full/$BT/output-metadata.json"
+          META="$OUT/$BT/output-metadata.json"
           VERSION_NAME="$(jq -r '.elements[0].versionName' "$META")"
           VERSION_CODE="$(jq -r '.elements[0].versionCode' "$META")"
           mkdir -p dist
-          mv "$OUT/full/$BT/app-full-$BT.apk" "dist/MyWhisper-${VERSION_NAME}.apk"
-          mv "$OUT/lite/$BT/app-lite-$BT.apk" "dist/MyWhisper-Lite-${VERSION_NAME}.apk"
+          mv "$OUT/$BT/app-$BT.apk" "dist/MyWhisper-${VERSION_NAME}.apk"
           { echo "VERSION_NAME=$VERSION_NAME"; echo "VERSION_CODE=$VERSION_CODE"; } >> "$GITHUB_ENV"
           ls -l dist
       - name: Create GitHub Release
@@ -147,7 +171,7 @@ jobs:
             echo "Nightly build ${VERSION_NAME} (versionCode ${VERSION_CODE}) from ${GITHUB_SHA::7}."
             echo
             echo "Installs over the stable app (same package) and keeps your settings."
-            echo "Full includes on-device models; Lite is server-only."
+            echo "On-device models download their runtime on first use."
             echo
             echo "Changes since ${LAST_TAG:-the first commit}:"
             git log --format='- %s' --no-merges ${LAST_TAG:+"$LAST_TAG..HEAD"} | head -50
@@ -155,7 +179,7 @@ jobs:
           gh release delete nightly --cleanup-tag --yes 2>/dev/null || true
           gh release create nightly dist/*.apk --prerelease --target "$GITHUB_SHA" \
             --title "Nightly ${VERSION_NAME}" --notes-file nightly-notes.md
-      - name: Hand Full APK and listing to the F-Droid repo
+      - name: Hand the APK and listing to the F-Droid repo
         working-directory: ${{ github.workspace }}
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}

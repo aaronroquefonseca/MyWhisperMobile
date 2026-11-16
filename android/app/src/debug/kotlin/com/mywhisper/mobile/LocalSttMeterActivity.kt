@@ -8,13 +8,13 @@ import java.io.File
 
 /**
  * Debug-only meter harness (src/debug, never in release builds).
- * Launched by `scripts/meter-local-stt.sh`:
+ * Launched over adb (wav paths readable by the app):
  *
  *   am start -n com.mywhisper.mobile/.LocalSttMeterActivity \
  *     --es wavs "/abs/path/a.wav,/abs/path/b.wav" --es lang en
  *
- * Decodes each 16-bit mono WAV via [LocalStt] (moonshine v2,
- * VAD-chunked: <= 8s per chunk) and logs one line per clip plus a
+ * Decodes each 16-bit mono WAV via [LocalStt] (selected model, one
+ * call per clip) and logs one line per clip plus a
  * summary, all tagged `MW_METER`:
  *
  *   MW_METER clip=<name> loadMs=<n> decodeMs=<n> audioSecs=<f> rtf=<f> chunks=<n> chars=<n>
@@ -40,7 +40,7 @@ class LocalSttMeterActivity : Activity() {
     private fun runMeter() {
         val lang = intent.getStringExtra("lang")?.ifBlank { "en" } ?: "en"
         val wavs = (intent.getStringExtra("wavs") ?: "").split(",").filter { it.isNotBlank() }
-        Log.i("MW_METER", "packAvailable=${LocalStt.isAvailable(filesDir)} filesDir=$filesDir")
+        Log.i("MW_METER", "runtime=${LocalAiRuntime.isInstalled(filesDir)} filesDir=$filesDir")
         if (wavs.isEmpty()) {
             Log.i("MW_METER", "done clips=0")
             return
