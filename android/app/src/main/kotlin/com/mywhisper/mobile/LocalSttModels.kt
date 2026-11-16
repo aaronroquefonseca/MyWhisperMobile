@@ -18,9 +18,10 @@ import java.util.Locale
  * "<x>× realtime on this phone" ([speedPrefKey] / [speedFactor] /
  * [formatSpeedUs]); cost guidance is RAM-only.
  *
- * Quantization: q8_0 everywhere the GPU kernels are fastest (OpenCL and
+ * Quantization: q8_0 for Whisper and q4_0 for Parakeet (OpenCL and
  * Vulkan both have tuned q8_0/q4_0 paths; q5 types fall back to CPU on
- * OpenCL). Whisper medium / large-v3 are not offered: large-v3-turbo is
+ * OpenCL). Parakeet q4_0 measured as accurate as q8_0 on the EN/ES
+ * reference clips at half the size. Whisper medium / large-v3 are not offered: large-v3-turbo is
  * faster than medium at large-v3 accuracy.
  *
  * Dictionary: Whisper takes the custom words as its initial prompt;
@@ -107,7 +108,7 @@ object LocalSttModels {
     const val WHISPER_BASE_ID = "whisper-base-q8"
     const val WHISPER_SMALL_ID = "whisper-small-q8"
     const val WHISPER_TURBO_ID = "whisper-large-v3-turbo-q8"
-    const val PARAKEET_ID = "parakeet-tdt-0.6b-v3-q8"
+    const val PARAKEET_ID = "parakeet-tdt-0.6b-v3-q4"
 
     /** Parakeet TDT 0.6B v3 languages (NVIDIA model card: 25 European languages). */
     val PARAKEET_LANGS: List<String> = listOf(
@@ -132,8 +133,8 @@ object LocalSttModels {
     /** RAM gate for whisper large-v3-turbo q8 (~874MB of weights). */
     const val TURBO_MIN_TOTAL_RAM_MB = 6_000L
 
-    /** RAM gate for Parakeet TDT 0.6B q8 (~669MB of weights). */
-    const val PARAKEET_MIN_TOTAL_RAM_MB = 4_000L
+    /** RAM gate for Parakeet TDT 0.6B q4_0 (~356MB of weights). */
+    const val PARAKEET_MIN_TOTAL_RAM_MB = 3_000L
 
     /**
      * Speed factor from one decode: audio seconds per decode second
@@ -287,22 +288,22 @@ object LocalSttModels {
         Entry(
             id = PARAKEET_ID,
             name = "Parakeet TDT 0.6B v3",
-            sizeLabel = "~669MB",
+            sizeLabel = "~356MB",
             engine = Engine.PARAKEET,
             provider = Provider.NVIDIA,
             langMode = LangMode.AUTO,
             languages = PARAKEET_LANGS,
             dictionary = false,
-            runtimeNote = "25 European languages incl. Spanish · auto-detect · needs ~1.2GB free RAM · speed varies by phone",
-            phoneTier = "4GB+ total RAM",
+            runtimeNote = "25 European languages incl. Spanish · auto-detect · needs ~800MB free RAM · speed varies by phone",
+            phoneTier = "3GB+ total RAM",
             minTotalRamMb = PARAKEET_MIN_TOTAL_RAM_MB,
             dirRel = "models/ggml-parakeet-tdt-0.6b-v3",
             files = listOf(
                 ModelFile(
-                    "ggml-parakeet-tdt-0.6b-v3-q8_0.bin",
-                    "https://huggingface.co/ggml-org/parakeet-GGUF/resolve/main/ggml-parakeet-tdt-0.6b-v3-q8_0.bin",
-                    "4d64e9e96c2792186d072fde0034df0ad670cf680a2f53069052ead827fd600e",
-                    668757119,
+                    "ggml-parakeet-tdt-0.6b-v3-q4_0.bin",
+                    "https://huggingface.co/ggml-org/parakeet-GGUF/resolve/main/ggml-parakeet-tdt-0.6b-v3-q4_0.bin",
+                    "aa7fe2f5fb47d863ca23e8b1d490632d63a2599f515268b6d6bd656158dad45e",
+                    355615679,
                 ),
             ),
         ),

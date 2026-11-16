@@ -21,10 +21,20 @@ import java.net.URL
 class DevFetchActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        fetch(intent)
+        finish()
+    }
+
+    // Back-to-back `am start`s reach this (still finishing) instance here.
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        fetch(intent)
+    }
+
+    private fun fetch(intent: android.content.Intent) {
         val url = intent.getStringExtra("url").orEmpty()
         val out = intent.getStringExtra("out").orEmpty()
         val dest = File(filesDir, out).canonicalFile
-        finish()
         if (url.isBlank() || !dest.path.startsWith(filesDir.canonicalPath + "/")) {
             Log.i("MW_FETCH", "error bad args")
             return
