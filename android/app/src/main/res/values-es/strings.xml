@@ -183,8 +183,8 @@
     <string name="stt_url_cloud">URL base (vacío = valor del proveedor)</string>
     <string name="stt_model">Modelo</string>
     <string name="stt_apikey">Clave API</string>
-    <string name="stt_apikey_show">mostrar</string>
-    <string name="stt_apikey_hide">ocultar</string>
+    <string name="stt_apikey_show">Mostrar clave API</string>
+    <string name="stt_apikey_hide">Ocultar clave API</string>
     <string name="stt_streaming">Streaming (servidores ws)</string>
     <string name="stt_streaming_note">Las URL http(s) siempre usan petición/respuesta; las ws(s) usan el protocolo sherpa.</string>
     <string name="stt_enabled">Activada</string>

@@ -182,8 +182,8 @@
     <string name="stt_url_cloud">Base URL (blank = vendor default)</string>
     <string name="stt_model">Model</string>
     <string name="stt_apikey">API key</string>
-    <string name="stt_apikey_show">show</string>
-    <string name="stt_apikey_hide">hide</string>
+    <string name="stt_apikey_show">Show API key</string>
+    <string name="stt_apikey_hide">Hide API key</string>
     <string name="stt_streaming">Streaming (ws servers)</string>
     <string name="stt_streaming_note">http(s) URLs always use request/response; ws(s) URLs use the sherpa protocol.</string>
     <string name="stt_enabled">Enabled</string>

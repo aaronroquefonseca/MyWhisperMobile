@@ -117,8 +117,6 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
@@ -3590,7 +3588,6 @@ class MainActivity : ComponentActivity() {
         var key by remember { mutableStateOf(e.optString("api_key")) }
         var streaming by remember { mutableStateOf(e.optBoolean("streaming", true)) }
         var enabled by remember { mutableStateOf(e.optBoolean("enabled", true)) }
-        var showKey by remember { mutableStateOf(false) }
         // Draft test: same ONE ProviderTestRow pattern as the chain
         // rows (same button + latency/excerpt inline), run against the
         // unsaved draft values. Draft edits clear the stale result.
@@ -3706,23 +3703,8 @@ class MainActivity : ComponentActivity() {
                             modifier = Modifier.fillMaxWidth())
                     }
                     if (!isLocalKind) {
-                        OutlinedTextField(
-                            value = key, onValueChange = { key = it; draftResult = null },
-                            label = { Text(stringResource(R.string.stt_apikey)) },
-                            isError = keyMissing,
-                            supportingText = { if (keyMissing) Text(getString(R.string.task_api_key_required)) },
-                            visualTransformation = if (showKey) VisualTransformation.None
-                            else PasswordVisualTransformation(),
-                            trailingIcon = {
-                                TextButton(onClick = { showKey = !showKey }) {
-                                    Text(
-                                        if (showKey) stringResource(R.string.stt_apikey_hide)
-                                        else stringResource(R.string.stt_apikey_show),
-                                    )
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                        )
+                        ApiKeyField(key, { key = it; draftResult = null },
+                            isError = keyMissing, errorText = stringResource(R.string.task_api_key_required))
                     }
                     if (kind == "SelfHosted") {
                         Text(
@@ -4900,18 +4882,11 @@ class MainActivity : ComponentActivity() {
                             modifier = Modifier.fillMaxWidth())
                     }
                     if (kind == "Cloud") {
-                        OutlinedTextField(value = key, onValueChange = { key = it; draftResult = null },
-                            label = { Text(stringResource(R.string.stt_apikey)) },
-                            isError = keyMissing,
-                            supportingText = { if (keyMissing) Text(stringResource(R.string.task_api_key_required)) },
-                            visualTransformation = PasswordVisualTransformation(),
-                            modifier = Modifier.fillMaxWidth())
+                        ApiKeyField(key, { key = it; draftResult = null },
+                            isError = keyMissing, errorText = stringResource(R.string.task_api_key_required))
                     }
                     if (kind == "Ollama") {
-                        OutlinedTextField(value = key, onValueChange = { key = it; draftResult = null },
-                            label = { Text(stringResource(R.string.stt_apikey)) },
-                            visualTransformation = PasswordVisualTransformation(),
-                            modifier = Modifier.fillMaxWidth())
+                        ApiKeyField(key, { key = it; draftResult = null })
                         Text(
                             stringResource(R.string.stt_apikey_note),
                             style = MaterialTheme.typography.bodySmall,
