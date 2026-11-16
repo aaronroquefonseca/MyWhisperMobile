@@ -22,6 +22,8 @@ object CoreBridge {
     @JvmStatic external fun nativeStartUtterance(sampleRate: Int): String
     @JvmStatic external fun nativePushPcm(data: ShortArray, length: Int): String
     @JvmStatic external fun nativeFinishUtterance(): String
+    @JvmStatic external fun nativeFinishLocalUtterance(raw: String, text: String, engine: String, durationSecs: Int): String
+    @JvmStatic external fun nativeSetLocalLlmRunner(runner: LocalLlmCleanupRunner?): String
     @JvmStatic external fun nativeCancelUtterance(): String
     @JvmStatic external fun nativeGetHistory(limit: Int): String
     @JvmStatic external fun nativeClearHistory(): String
@@ -82,8 +84,31 @@ object CoreBridge {
     }
 
     /** Blocks on the server chain. Returns (text, engine) or throws. */
-    fun finishUtterance(): Pair<String, String> {
-        val d = dataOf(nativeFinishUtterance()) as JSONObject
+    fun finishUtterance(): Pair<String, String> = finishReply(nativeFinishUtterance())
+
+    /**
+     * On-device STT hit: run the same LLM cleanup chain + history
+     * write as [finishUtterance]. Blocks on cleanup — worker thread
+     * only. Returns (text, engine) or throws.
+     */
+    fun finishLocalUtterance(raw: String, text: String, engine: String, durationSecs: Int): Pair<String, String> =
+        finishReply(nativeFinishLocalUtterance(raw, text, engine, durationSecs))
+
+    /** Wire the on-device LLM into the dictation cleanup chain (once per process). */
+    fun setLocalLlmRunner(runner: LocalLlmCleanupRunner?) {
+        dataOf(nativeSetLocalLlmRunner(runner))
+    }
+
+    private fun finishReply(raw: String): Pair<String, String> {
+        val d = dataOf(raw) as JSONObject
+        // Per-entry cleanup outcome ("Ollama: llm post: ..."): the only
+        // trace of why cleanup did or did not apply.
+        d.optJSONArray("cleanup")?.let { notes ->
+            try {
+                android.util.Log.i("MwCleanup", (0 until notes.length()).joinToString(" | ") { notes.optString(it) })
+            } catch (_: Throwable) {
+            }
+        }
         return d.getString("text") to d.optString("engine", "")
     }
 

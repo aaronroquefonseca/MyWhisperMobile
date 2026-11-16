@@ -24,6 +24,8 @@
     native <methods>;
 }
 -keep class com.mywhisper.mobile.CoreBridge { *; }
+# Called back from Rust by method name (`cleanup`) over JNI.
+-keep class com.mywhisper.mobile.LocalLlmCleanupRunner { *; }
 
 # Reflection bridges: class/method names resolve via Class.forName at
 # runtime, so R8 must keep the targets in release builds that ship

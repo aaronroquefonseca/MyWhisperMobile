@@ -18,6 +18,9 @@ class MyWhisperApp : Application() {
             android.util.Log.i("MyWhisperIME", "app.onCreate key ok")
             CoreBridge.open(filesDir.absolutePath, key).getOrThrow()
             android.util.Log.i("MyWhisperIME", "app.onCreate core ok")
+            // Per process (IME, overlay, app): dictation cleanup reaches
+            // the on-device LLM only through this registration.
+            CoreBridge.setLocalLlmRunner(LocalLlmCleanupRunner(this))
         } catch (e: Exception) {
             coreError = e.message
             android.util.Log.i("MyWhisperIME", "app.onCreate err=${e.message}")

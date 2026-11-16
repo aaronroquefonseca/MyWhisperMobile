@@ -74,6 +74,7 @@ class LocalDictionaryParityTest {
                     "the INVESTOR ASKED now" to "test-engine"
                 },
                 cancelTranscription = {},
+                finishLocal = { _, text, engine, _ -> text to engine },
                 localTranscribe = { "the investor ask now" to "local moonshine-v2-tiny.en" },
                 localPostProcess = postProcess,
                 pushPcm = { _, _ -> },
@@ -113,6 +114,7 @@ class LocalDictionaryParityTest {
                 },
                 finishTranscription = { "server text" to "test-engine" },
                 cancelTranscription = {},
+                finishLocal = { _, text, engine, _ -> text to engine },
                 localTranscribe = { "local text" to "local moonshine-v2-tiny.en" },
                 localPostProcess = { throw RuntimeException("nope") },
                 pushPcm = { _, _ -> },

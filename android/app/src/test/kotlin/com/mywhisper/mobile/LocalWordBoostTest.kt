@@ -200,6 +200,7 @@ class LocalWordBoostTest {
                     "server text" to "test-engine"
                 },
                 cancelTranscription = {},
+                finishLocal = { _, text, engine, _ -> text to engine },
                 localTranscribe = { "deploy to kuberrnetes" to "local moonshine-v2-tiny.en" },
                 localPostProcess = { LocalStt.postProcessLocal(it, emptyList(), words) },
                 pushPcm = { _, _ -> },
