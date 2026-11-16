@@ -15,8 +15,12 @@ import java.io.File
 
 private fun observeDirectory(directory: File, onChange: (File) -> Unit): Closeable {
     val handler = Handler(Looper.getMainLooper())
-    val observer = object : FileObserver(directory, ATTRIB or CLOSE_WRITE or MOVED_TO or MOVED_FROM or DELETE or CREATE or DELETE_SELF or MOVE_SELF) {
+    val mask = FileObserver.ATTRIB or FileObserver.CLOSE_WRITE or FileObserver.MOVED_TO or FileObserver.MOVED_FROM or
+        FileObserver.DELETE or FileObserver.CREATE or FileObserver.DELETE_SELF or FileObserver.MOVE_SELF
+    val observer = object : FileObserver(directory, mask) {
         override fun onEvent(event: Int, path: String?) {
+            // IN_IGNORED (sent on stopWatching) and other unrequested bits arrive regardless of the mask.
+            if ((event and mask) == 0) return
             val changed = if (path == null) directory else File(directory, path)
             handler.post { onChange(changed) }
         }
