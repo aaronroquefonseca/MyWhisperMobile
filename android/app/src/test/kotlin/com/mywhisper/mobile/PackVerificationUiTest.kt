@@ -86,6 +86,40 @@ class PackVerificationUiTest {
     }
 
     @Test
+    fun childChurnDoesNotReattachOrReconcileDirectory() {
+        val root = java.nio.file.Files.createTempDirectory("watch-churn").toFile()
+        val listeners = mutableMapOf<String, (java.io.File) -> Unit>()
+        val changes = mutableListOf<java.io.File>()
+        var starts = 0
+        try {
+            compose.setContent {
+                val generation = rememberPackChanges(root, listOf(java.io.File(root, "models")), onChange = { changes.add(it) }) { file, callback ->
+                    starts++
+                    listeners[file.path] = callback
+                    java.io.Closeable { listeners.remove(file.path) }
+                }
+                Text("Changes $generation")
+            }
+            repeat(3) { i ->
+                compose.runOnIdle {
+                    // SQLite WAL churn in filesDir moves the dir mtime, which Android reports
+                    // as creationTime (no birthtime); host JDKs may not, so mtime is bumped too.
+                    val wal = java.io.File(root, "state.db-wal")
+                    wal.writeText("x$i")
+                    root.setLastModified(System.currentTimeMillis() + (i + 1) * 10_000L)
+                    listeners.getValue(root.path).invoke(wal)
+                }
+                compose.onNodeWithText("Changes ${i + 1}").assertExists()
+            }
+            compose.runOnIdle {
+                assertEquals(1, starts)
+                // A reattach would reconcile the whole root → every pack re-verified.
+                assertTrue(changes.none { it == root })
+            }
+        } finally { root.deleteRecursively() }
+    }
+
+    @Test
     fun burstAcrossDirectoriesKeepsOtherObserverAndQueuedEvents() {
         val root = java.nio.file.Files.createTempDirectory("watch-burst").toFile()
         val first = java.io.File(root, "first").apply { mkdir() }
