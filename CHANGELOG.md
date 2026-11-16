@@ -7,7 +7,7 @@ All notable changes to this project are documented here.
 ### Changed
 - One APK for everyone: on-device AI no longer makes the app bigger. Its runtime (llama.cpp + whisper.cpp, built from source, ~17 MB) downloads with the first local model. MyWhisper Lite is discontinued; installing MyWhisper over it keeps your settings.
 - On-device speech now runs on whisper.cpp: Whisper Tiny/Base/Small/Large v3 Turbo and NVIDIA Parakeet TDT v3 (25 languages incl. Spanish). Whisper takes your dictionary words as a prompt. Short dictations transcribe several times faster.
-- On-device cleanup now runs Gemma GGUF models on llama.cpp (Gemma 3 1B, Gemma 4 E2B/E4B). The system prompt is cached between dictations.
+- On-device cleanup now runs Gemma GGUF models on llama.cpp (Gemma 3 1B, Gemma 4 E2B/E4B). The system prompt is cached between dictations, output that copies the transcript is drafted from it (prompt-lookup decoding), and the model stays loaded for 10 minutes by default: a warm Gemma 4 E2B cleanup test takes ~0.8 s instead of ~5 s.
 - Local models use the GPU (Vulkan, or OpenCL on Adreno) when it is faster on your phone, otherwise the CPU; a GPU that fails or crashes is skipped automatically.
 
 ### Removed
