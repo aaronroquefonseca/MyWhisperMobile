@@ -24,7 +24,14 @@ class LocalFallbackTest {
     private class Harness(
         local: ((ShortArray) -> Pair<String, String>?)? = null,
         serverText: String = "server text",
+        serverError: String? = null,
+        localFirst: Boolean = true,
+        coreCleanup: (String) -> String = { it },
     ) {
+        /** (raw, text, engine) per core finish of a local hit. */
+        val coreFinishes: MutableList<Triple<String, String, String>> =
+            Collections.synchronizedList(mutableListOf())
+        val errors: MutableList<String> = Collections.synchronizedList(mutableListOf())
         val executor = Executors.newSingleThreadExecutor()
         val serverHit = AtomicBoolean(false)
         val localCalls = AtomicInteger(0)
@@ -43,9 +50,15 @@ class LocalFallbackTest {
             },
             finishTranscription = {
                 serverHit.set(true)
+                if (serverError != null) throw IllegalStateException(serverError)
                 serverText to "test-engine"
             },
             cancelTranscription = {},
+            localFirst = { localFirst },
+            finishLocal = { raw, text, engine, _ ->
+                coreFinishes.add(Triple(raw, text, engine))
+                coreCleanup(text) to engine
+            },
             localTranscribe = { pcm ->
                 localCalls.incrementAndGet()
                 (local ?: { null })(pcm)
@@ -60,7 +73,9 @@ class LocalFallbackTest {
                 override fun onResult(text: String) {
                     results.add(text)
                 }
-                override fun onError(msg: String) = Unit
+                override fun onError(msg: String) {
+                    errors.add(msg)
+                }
             }
         }
 
@@ -78,6 +93,72 @@ class LocalFallbackTest {
         h.finish()
         assertEquals(listOf("local text"), h.results)
         assertFalse("server must not run on local hit", h.serverHit.get())
+    }
+
+    @Test
+    fun localHit_finishesThroughCoreCleanup() {
+        // The old shortcut skipped the core: no LLM cleanup, no history.
+        val h = Harness(
+            local = { "local text" to "local moonshine-v2-tiny.en" },
+            coreCleanup = { "Local text." },
+        )
+        h.finish()
+        assertEquals(listOf("Local text."), h.results)
+        assertEquals(
+            listOf(Triple("local text", "local text", "local moonshine-v2-tiny.en")),
+            h.coreFinishes,
+        )
+    }
+
+    @Test
+    fun localHit_coreFailureStillDeliversLocalText() {
+        val h = Harness(
+            local = { "local text" to "local moonshine-v2-tiny.en" },
+            coreCleanup = { throw IllegalStateException("engine not open") },
+        )
+        h.finish()
+        assertEquals(listOf("local text"), h.results)
+    }
+
+    @Test
+    fun localBelowServer_serverRunsFirst() {
+        // Chain order: a Local entry under a working server must not
+        // preempt it (it used to win whenever its model was installed).
+        val h = Harness(local = { "local text" to "local" }, localFirst = false)
+        h.finish()
+        assertEquals(listOf("server text"), h.results)
+        assertEquals("local must not decode before the server", 0, h.localCalls.get())
+        assertTrue(h.coreFinishes.isEmpty())
+    }
+
+    @Test
+    fun localBelowServer_serverFailureFallsBackToLocal() {
+        val h = Harness(
+            local = { "local text" to "local" },
+            localFirst = false,
+            serverError = "llm post: connection refused",
+        )
+        h.dictation.pressDown()
+        h.pcmSinks.single()(ShortArray(16_000) { 1000 }, 16_000)
+        h.dictation.pressUp()
+        h.executor.submit {}.get(10, TimeUnit.SECONDS)
+        h.executor.shutdownNow()
+        assertTrue(h.serverHit.get())
+        assertEquals(listOf("local text"), h.results)
+        assertEquals(1, h.coreFinishes.size)
+        assertTrue(h.errors.isEmpty())
+    }
+
+    @Test
+    fun localBelowServer_bothFailSurfacesServerError() {
+        val h = Harness(local = { null }, localFirst = false, serverError = "server down")
+        h.dictation.pressDown()
+        h.pcmSinks.single()(ShortArray(16_000) { 1000 }, 16_000)
+        h.dictation.pressUp()
+        h.executor.submit {}.get(10, TimeUnit.SECONDS)
+        h.executor.shutdownNow()
+        assertTrue(h.results.isEmpty())
+        assertEquals(listOf("server down"), h.errors)
     }
 
     @Test

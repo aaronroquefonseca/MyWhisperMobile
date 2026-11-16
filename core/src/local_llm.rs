@@ -25,10 +25,15 @@
 //! devices (Pixel 8 / S23+) and does not reliably support
 //! emulators — hence unit tests first, numbers later.
 //!
+//! Runtime today: Kotlin runs the selected pack (LiteRT-LM
+//! `.litertlm` or MediaPipe `.task`) and registers itself through
+//! [`set_local_runner`] at process start; dictation cleanup reaches
+//! it via [`try_local_cleanup`].
+//!
 //! Fallback: the engine tries `Local` entries through
-//! [`try_local_cleanup`]; when no model is ready it returns `Err`
-//! and the chain falls through to the next enabled entry
-//! (Ollama/cloud). Default chain order is unchanged.
+//! [`try_local_cleanup`]; when no runner or model is ready it
+//! returns `Err` and the chain falls through to the next enabled
+//! entry (Ollama/cloud). Default chain order is unchanged.
 
 use crate::settings::LlmEntry;
 use std::path::Path;
@@ -305,7 +310,12 @@ pub fn cleanup_with(
     max_chars: usize,
 ) -> Result<String, String> {
     let prompt = build_cleanup_prompt(system, raw);
-    let out = backend.generate(&prompt)?;
+    trim_generation(&backend.generate(&prompt)?, max_chars)
+}
+
+/// Trim + cap one generation; empty is an error so the chain falls
+/// through to the next entry.
+fn trim_generation(out: &str, max_chars: usize) -> Result<String, String> {
     let trimmed = out.trim();
     if trimmed.is_empty() {
         return Err("local llm returned empty".to_string());
@@ -321,12 +331,29 @@ pub fn cleanup_with(
     }
 }
 
+/// In-process runner the platform registers (Android: Kotlin
+/// `LocalLlmCleanupRunner` over JNI). Takes `(system, transcript)`
+/// split, because LiteRT-LM models them separately.
+pub type LocalRunner = std::sync::Arc<dyn Fn(&str, &str) -> Result<String, String> + Send + Sync>;
+
+static RUNNER: std::sync::RwLock<Option<LocalRunner>> = std::sync::RwLock::new(None);
+
+/// Register (or clear with `None`) the in-process runner.
+pub fn set_local_runner(runner: Option<LocalRunner>) {
+    *RUNNER.write().unwrap_or_else(|e| e.into_inner()) = runner;
+}
+
+fn local_runner() -> Option<LocalRunner> {
+    RUNNER.read().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
 /// Cleanup-path entry point used by the engine (`LlmKind::Local`
 /// arm only). Resolution order:
 /// 1. `http(s)` `model_dir` → sidecar POST (bridge/tests);
-/// 2. otherwise → `Err` (model runs in Kotlin; Rust has no
-///    in-process runner) so the chain falls through to
-///    Ollama/cloud. Never panics, never touches the STT path.
+/// 2. registered in-process runner → it picks the selected verified
+///    pack and generates (fails with `Err` when none is installed);
+/// 3. otherwise → `Err`, so the chain falls through to the next
+///    entry. Never panics, never touches the STT path.
 pub fn try_local_cleanup(
     entry: &LlmEntry,
     system: &str,
@@ -341,17 +368,10 @@ pub fn try_local_cleanup(
         };
         return cleanup_with(&backend, system, raw, 4096);
     }
-    if !cfg.model_ready() {
-        return Err(format!(
-            "local llm model not ready at {} (download via Settings, fallback continues)",
-            cfg.model_path
-        ));
+    match local_runner() {
+        Some(run) => trim_generation(&run(system, raw)?, 4096),
+        None => Err("local llm not ready: no on-device runner registered".to_string()),
     }
-    // Model file present but inference lives in Kotlin: signal the
-    // bridge rather than failing silently. Kotlin drives generation
-    // through LocalLlmManager and never calls this path with a
-    // ready model (it short-circuits above via sidecar in tests).
-    Err("local llm runs in-process on Android (MediaPipe); no Rust runner".to_string())
 }
 
 /// Status snapshot for the Settings UI / JNI.
@@ -441,6 +461,8 @@ mod tests {
             num_ctx: None,
             thinking: None,
         };
+        // Engine tests register a process-global runner under this lock.
+        let _guard = crate::server_stt::status_test_lock();
         let err = try_local_cleanup(&e, "S", "r", Path::new("/nonexistent")).unwrap_err();
         assert!(err.contains("not ready"), "got: {err}");
     }

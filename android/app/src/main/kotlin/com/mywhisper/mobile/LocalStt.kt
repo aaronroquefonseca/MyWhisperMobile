@@ -651,6 +651,31 @@ object LocalStt {
         }
     }
 
+    /**
+     * True when the Local STT entry is the FIRST enabled chain entry,
+     * so [Dictation] decodes on-device before the server chain. A
+     * Local entry further down is only a fallback after the servers
+     * above it fail. Never throws.
+     */
+    fun isLocalFirst(): Boolean =
+        try {
+            localSttFirst(CoreBridge.getSettings().getOrThrow().optJSONObject("stt")?.optJSONArray("entries"))
+        } catch (_: Exception) {
+            false
+        }
+
+    /** Pure order rule behind [isLocalFirst] (unit-tested). */
+    @JvmStatic
+    internal fun localSttFirst(entries: org.json.JSONArray?): Boolean {
+        if (entries == null) return false
+        for (i in 0 until entries.length()) {
+            val e = entries.optJSONObject(i) ?: continue
+            if (!e.optBoolean("enabled", true)) continue
+            return e.optString("kind") == "Local"
+        }
+        return false
+    }
+
     private fun isLocalEntryEnabled(): Boolean {
         try {
             val s = CoreBridge.getSettings().getOrThrow()

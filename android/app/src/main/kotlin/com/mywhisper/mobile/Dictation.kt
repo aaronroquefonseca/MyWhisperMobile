@@ -80,6 +80,20 @@ class Dictation(
      */
     private val localPostProcess: (String) -> String = { LocalStt.postProcessLocal(it) },
     /**
+     * Chain order for the local hook (production
+     * `LocalStt.isLocalFirst`): true = decode on-device before the
+     * server chain; false = the Local entry sits below a server, so
+     * it only runs after the server chain fails.
+     */
+    private val localFirst: () -> Boolean = { true },
+    /**
+     * Finishes a local hit through the core (LLM cleanup chain +
+     * history), args (raw, post-processed, engine, durationSecs) →
+     * (text, engine). Default `CoreBridge.finishLocalUtterance`.
+     */
+    private val finishLocal: (String, String, String, Int) -> Pair<String, String> =
+        { raw, text, engine, secs -> CoreBridge.finishLocalUtterance(raw, text, engine, secs) },
+    /**
      * Shutdown hook releasing the on-device recognizer
      * (`LocalStt.unload`). Injected (default no-op) so JVM unit tests
      * never touch the sherpa AAR, which is absent off-device.
@@ -90,6 +104,9 @@ class Dictation(
     private val workers: ExecutorService = Executors.newSingleThreadExecutor(),
 ) {
     enum class State { IDLE, RECORDING, WORKING }
+
+    /** On-device decode: [raw] decoder output, [text] after [localPostProcess]. */
+    private data class LocalHit(val raw: String, val text: String, val engine: String)
 
     /** Stoppable mic handle (production: wraps [AudioCapture]; tests: fake). */
     interface Capture {
@@ -355,12 +372,15 @@ class Dictation(
             capture = null
             val text: String
             try {
-                // Local-first: the on-device catalog model via LocalStt
-                // on the utterance PCM; miss or throw → server chain
-                // (fallback intact).
-                // Only the LOCAL hook is guarded here: a server throw
-                // must reach the outer catch (session-gated drop) so
-                // cancel/shutdown during a blocked transcribe still
+                // On-device decode via LocalStt on the utterance PCM,
+                // honoring chain order: first enabled entry → decode
+                // before the server; lower in the chain → only after
+                // the server chain throws. Either way a hit finishes
+                // through the core ([finishLocal]) so it gets the same
+                // LLM cleanup + history as server text.
+                // Only the LOCAL hook is guarded: a server or core
+                // throw must reach the outer catch (session-gated
+                // drop) so cancel/shutdown during a blocked call still
                 // wins instead of retrying into a dead worker.
                 //
                 // An overflowed PCM copy is incomplete by construction,
@@ -369,30 +389,54 @@ class Dictation(
                 val (pcm, overflow) = synchronized(pcmLock) {
                     pcmBuf.copyOf(pcmSize) to pcmOverflowed
                 }
-                val local: String? = if (overflow) {
-                    log("local PCM overflowed 60s cap, server fallback")
-                    null
-                } else {
-                    try {
+                val secs = maxOf(1, pcm.size / 16_000)
+                fun decodeLocal(): LocalHit? {
+                    if (overflow) {
+                        log("local PCM overflowed 60s cap, server only")
+                        return null
+                    }
+                    return try {
                         // Local hits get the server's dictionary treatment
                         // (snippet expansion + WORD word-boost via
                         // [localPostProcess]) — raw on-device decode
                         // bypasses Rust `finish_inner`.
-                        // Throw → server fallback (same guard as decode).
-                        localTranscribe(pcm)?.first?.let(localPostProcess)
+                        localTranscribe(pcm)?.let { (raw, engine) -> LocalHit(raw, localPostProcess(raw), engine) }
                     } catch (_: Throwable) {
-                        // Local hook miss on ANY throw (incl. OOM Error)
-                        // → server fallback. Only the local hook is
-                        // guarded: a server throw must reach the outer
-                        // catch below.
+                        // Local hook miss on ANY throw (incl. OOM Error).
                         null
                     }
                 }
+                fun commitLocal(hit: LocalHit): String =
+                    try {
+                        finishLocal(hit.raw, hit.text, hit.engine, secs).first
+                    } catch (e: Exception) {
+                        // Never lose a decoded utterance to a core
+                        // failure: deliver it uncleaned (a cancel still
+                        // drops via the session check below).
+                        log("core finish for local hit failed: ${e.message}")
+                        hit.text
+                    }
+                val first = try { localFirst() } catch (_: Throwable) { true }
+                val local = if (first) decodeLocal() else null
                 // Cancelled during the (blocking) local decode: the
-                // result below already drops post-call, but the server
-                // upload itself must not happen for a dead utterance.
-                if (local == null && gen != session.get()) return@execute
-                text = local ?: finishTranscription().first
+                // result below already drops post-call, but neither the
+                // server upload nor cleanup may run for a dead utterance.
+                if (gen != session.get()) return@execute
+                text = if (local != null) {
+                    commitLocal(local)
+                } else {
+                    try {
+                        finishTranscription().first
+                    } catch (e: Exception) {
+                        // Local entry below the servers: fallback.
+                        // Under 0.3 s the server already said "too short".
+                        if (first || pcm.size < 4_800 || gen != session.get()) throw e
+                        val fallback = decodeLocal() ?: throw e
+                        if (gen != session.get()) return@execute
+                        log("server chain failed, local fallback")
+                        commitLocal(fallback)
+                    }
+                }
             } catch (e: Exception) {
                 if (gen == session.get()) {
                     listener?.onError(userFacingFinishError(e.message ?: "transcription failed"))

@@ -232,15 +232,123 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeFinishU
 ) -> jstring {
     let out = with_engine(
         |e| match e.finish_utterance() {
-            Ok(o) => ok_json(serde_json::json!({
-                "text": o.text, "raw": o.raw, "engine": o.engine,
-                "durationSecs": o.duration_secs, "words": o.words,
-            })),
+            Ok(o) => finish_json(o),
             Err(err) => err_json(err),
         },
         || err_json("engine not open"),
     );
     jstr(&mut env, &out)
+}
+
+#[cfg(target_os = "android")]
+fn finish_json(o: engine::FinishOutcome) -> String {
+    ok_json(serde_json::json!({
+        "text": o.text, "raw": o.raw, "engine": o.engine,
+        "durationSecs": o.duration_secs, "words": o.words,
+        "cleanup": o.cleanup,
+    }))
+}
+
+/// Finish an utterance transcribed on-device: LLM cleanup + history
+/// (same tail as `nativeFinishUtterance`).
+/// # Safety
+/// Called from the JVM with valid JNI handles (`env` attached, object args valid local refs).
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeFinishLocalUtterance(
+    mut env: JNIEnv,
+    _cls: JClass,
+    raw: JString,
+    text: JString,
+    engine_name: JString,
+    duration_secs: jint,
+) -> jstring {
+    let raw = get_string(&mut env, &raw).unwrap_or_default();
+    let text = get_string(&mut env, &text).unwrap_or_default();
+    let engine_name = get_string(&mut env, &engine_name).unwrap_or_default();
+    let out = with_engine(
+        |e| match e.finish_with_text(&raw, &text, &engine_name, duration_secs as i64) {
+            Ok(o) => finish_json(o),
+            Err(err) => err_json(err),
+        },
+        || err_json("engine not open"),
+    );
+    jstr(&mut env, &out)
+}
+
+/// Register the Kotlin on-device LLM runner (`null` clears it). The
+/// runner's `cleanup(String, String): String` is called on the
+/// finish thread while the engine lock is held, so it must never call
+/// back into `CoreBridge`. A thrown exception becomes the entry's
+/// error and the cleanup chain falls through.
+/// # Safety
+/// Called from the JVM with valid JNI handles (`env` attached, object args valid local refs).
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeSetLocalLlmRunner(
+    mut env: JNIEnv,
+    _cls: JClass,
+    runner: jni::objects::JObject,
+) -> jstring {
+    if runner.is_null() {
+        crate::local_llm::set_local_runner(None);
+        return jstr(&mut env, &ok_json(serde_json::Value::Null));
+    }
+    let (vm, obj) = match (env.get_java_vm(), env.new_global_ref(&runner)) {
+        (Ok(vm), Ok(obj)) => (vm, obj),
+        _ => return jstr(&mut env, &err_json("local llm runner ref failed")),
+    };
+    crate::local_llm::set_local_runner(Some(std::sync::Arc::new(
+        move |system: &str, raw: &str| -> Result<String, String> {
+            let mut env = vm
+                .attach_current_thread()
+                .map_err(|e| format!("local llm attach: {e}"))?;
+            call_local_runner(&mut env, obj.as_obj(), system, raw)
+        },
+    )));
+    jstr(&mut env, &ok_json(serde_json::Value::Null))
+}
+
+#[cfg(target_os = "android")]
+fn call_local_runner(
+    env: &mut JNIEnv,
+    runner: &jni::objects::JObject,
+    system: &str,
+    raw: &str,
+) -> Result<String, String> {
+    let sys = env
+        .new_string(system)
+        .map_err(|e| format!("local llm arg: {e}"))?;
+    let txt = env
+        .new_string(raw)
+        .map_err(|e| format!("local llm arg: {e}"))?;
+    let res = env.call_method(
+        runner,
+        "cleanup",
+        "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+        &[(&sys).into(), (&txt).into()],
+    );
+    if env.exception_check().unwrap_or(false) {
+        let thrown = env.exception_occurred().ok();
+        let _ = env.exception_clear();
+        let msg = thrown
+            .and_then(|t| {
+                env.call_method(&t, "toString", "()Ljava/lang/String;", &[])
+                    .ok()
+            })
+            .and_then(|v| v.l().ok())
+            .and_then(|o| get_string(env, &JString::from(o)).ok())
+            .unwrap_or_else(|| "local llm runner threw".to_string());
+        let _ = env.exception_clear();
+        return Err(msg);
+    }
+    let out = res
+        .and_then(|v| v.l())
+        .map_err(|e| format!("local llm call: {e}"))?;
+    if out.is_null() {
+        return Err("local llm returned null".to_string());
+    }
+    get_string(env, &JString::from(out))
 }
 
 /// # Safety

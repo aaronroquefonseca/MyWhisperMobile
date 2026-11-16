@@ -11,8 +11,9 @@
 //! `transcribe.rs`: same default prompt, same system+dictionary
 //! suffix, same `<transcript>` tags, same Ollama `/api/chat` sampling
 //! and cloud endpoints, same first-answer-wins failover. `Local`
-//! entries route through `local_llm` (on-device MediaPipe `.task`);
-//! when no model is ready they fail over to the next entry.
+//! entries route through `local_llm` (the platform-registered
+//! on-device runner); when no runner or model is ready they fail
+//! over to the next entry.
 
 use crate::audio::{self, MIN_SAMPLES_16K, Recorder};
 use crate::server_stt::{
@@ -173,9 +174,9 @@ fn llm_cleanup_one(
     use crate::settings::{CloudLlm, LlmKind};
     let user = format!("<transcript>{raw}</transcript>");
     match entry.kind {
-        // Cleanup path only: on-device MediaPipe `.task` via
-        // `local_llm`; unavailable → Err so the chain falls through
-        // to Ollama/cloud (default order unchanged). Never STT.
+        // Cleanup path only: the platform-registered on-device runner
+        // via `local_llm`; unavailable → Err so the chain falls
+        // through to Ollama/cloud (default order unchanged). Never STT.
         LlmKind::Local => crate::local_llm::try_local_cleanup(entry, system, raw, data_dir),
         LlmKind::Ollama => {
             let mut body = serde_json::json!({
@@ -314,20 +315,28 @@ fn llm_cleanup_one(
 /// fetch — cancelled utterances never reach fallback entries (the
 /// admitted entry still runs to its deadline; DROP async abort, same
 /// as the STT chain).
+///
+/// Also returns one note per attempted entry (`"<name>: ok"` or
+/// `"<name>: <error>"`) so the platform can log why cleanup did or
+/// did not apply; failures never surface to the user.
 fn post_process(
     raw: &str,
     lm: &crate::settings::LanguageModelSettings,
     words: &[String],
     witness: u64,
     data_dir: &std::path::Path,
-) -> String {
+) -> (String, Vec<String>) {
     if !lm.cleanup_enabled {
-        return raw.to_string();
+        return (raw.to_string(), vec!["cleanup disabled".to_string()]);
     }
     let chain = lm.chain();
     if chain.is_empty() {
-        return raw.to_string();
+        return (
+            raw.to_string(),
+            vec!["no enabled cleanup entries".to_string()],
+        );
     }
+    let mut notes = Vec::new();
     let system = match dictionary_suffix(words) {
         Some(suffix) => format!("{}\n\n{suffix}", effective_prompt(&lm.cleanup_prompt)),
         None => effective_prompt(&lm.cleanup_prompt).to_string(),
@@ -336,13 +345,21 @@ fn post_process(
         if crate::server_stt::server_generation() != witness {
             break;
         }
+        let label = if entry.name.trim().is_empty() {
+            format!("{:?}", entry.kind)
+        } else {
+            entry.name.clone()
+        };
         match llm_cleanup_one(entry, &system, raw, data_dir) {
-            Ok(text) if !text.trim().is_empty() => return text.trim().to_string(),
-            Ok(_) => continue,
-            Err(_) => continue,
+            Ok(text) if !text.trim().is_empty() => {
+                notes.push(format!("{label}: ok"));
+                return (text.trim().to_string(), notes);
+            }
+            Ok(_) => notes.push(format!("{label}: empty reply")),
+            Err(e) => notes.push(format!("{label}: {e}")),
         }
     }
-    raw.to_string()
+    (raw.to_string(), notes)
 }
 
 pub struct FinishOutcome {
@@ -351,6 +368,8 @@ pub struct FinishOutcome {
     pub engine: String,
     pub duration_secs: i64,
     pub words: u32,
+    /// Per-entry cleanup notes from [`post_process`] (diagnostics).
+    pub cleanup: Vec<String>,
 }
 
 pub struct Engine {
@@ -591,10 +610,63 @@ impl Engine {
             .flat_map(|s| s.triggers().into_iter().map(|t| (t, s.replacement.clone())))
             .collect();
         let expanded = expand_snippets(&raw, &pairs);
-        let text = post_process(
+        self.cleanup_and_deliver(
+            &raw,
             &expanded,
-            &self.settings.language_models,
+            &engine,
+            duration_secs,
             &words,
+            generation_at_entry,
+        )
+    }
+
+    /// Finish an utterance the platform already transcribed on-device
+    /// (Android `LocalStt`): `raw` is the decoder output, `text` the
+    /// platform-post-processed text (snippets + word boost). Runs the
+    /// same LLM cleanup chain and history write as the server path,
+    /// and ends the utterance so reconciles stop deferring. The PCM
+    /// buffered for the server path is dropped.
+    pub fn finish_with_text(
+        &mut self,
+        raw: &str,
+        text: &str,
+        engine: &str,
+        duration_secs: i64,
+    ) -> Result<FinishOutcome, String> {
+        self.started_at = None;
+        self.recorder = Recorder::default();
+        self.settings = self.store.load_settings();
+        let words = self.store.load_words().unwrap_or_default();
+        let generation_at_entry = crate::server_stt::server_generation();
+        let out = self.cleanup_and_deliver(
+            raw,
+            text,
+            engine,
+            duration_secs.max(1),
+            &words,
+            generation_at_entry,
+        );
+        if self.utterance_active {
+            self.utterance_active = false;
+            crate::server_stt::active_dec();
+        }
+        out
+    }
+
+    /// Shared tail: LLM cleanup → witness recheck → history.
+    fn cleanup_and_deliver(
+        &mut self,
+        raw: &str,
+        expanded: &str,
+        engine: &str,
+        duration_secs: i64,
+        words: &[String],
+        generation_at_entry: u64,
+    ) -> Result<FinishOutcome, String> {
+        let (text, cleanup) = post_process(
+            expanded,
+            &self.settings.language_models,
+            words,
             generation_at_entry,
             &self._dir,
         );
@@ -606,8 +678,9 @@ impl Engine {
         if crate::server_stt::server_generation() != generation_at_entry {
             return Err("superseded (provider switched mid-utterance)".to_string());
         }
-
-        Ok(self.finalize_delivery(&raw, &text, &engine, duration_secs))
+        let mut out = self.finalize_delivery(raw, &text, engine, duration_secs);
+        out.cleanup = cleanup;
+        Ok(out)
     }
 
     /// Shared delivery tail: retention first, then store only when
@@ -647,6 +720,7 @@ impl Engine {
                 engine: engine.to_string(),
                 duration_secs,
                 words: word_count,
+                cleanup: Vec::new(),
             }
         } else {
             FinishOutcome {
@@ -655,6 +729,7 @@ impl Engine {
                 raw: raw.to_string(),
                 engine: engine.to_string(),
                 duration_secs,
+                cleanup: Vec::new(),
             }
         }
     }
@@ -1209,6 +1284,126 @@ mod tests {
         assert_eq!(out.text, "Hello world.");
         stt_stub.join().unwrap();
         llm_stub.join().unwrap();
+    }
+
+    /// Clears the process-global runner even when an assert fails.
+    struct RunnerReset;
+    impl Drop for RunnerReset {
+        fn drop(&mut self) {
+            crate::local_llm::set_local_runner(None);
+        }
+    }
+
+    #[test]
+    fn registered_runner_cleans_server_dictation() {
+        // Issue #83: a ready on-device runner must be invoked by real
+        // dictation, not only by the Settings self-test.
+        let _guard = status_test_lock();
+        reset_status_state();
+        let _reset = RunnerReset;
+        let calls = std::sync::Arc::new(AtomicU64::new(0));
+        let seen = calls.clone();
+        crate::local_llm::set_local_runner(Some(std::sync::Arc::new(
+            move |_sys: &str, raw: &str| {
+                seen.fetch_add(1, Ordering::SeqCst);
+                Ok(format!("{raw} (local)"))
+            },
+        )));
+        let (stt_port, stt_stub) = stub_transcription_server();
+        let mut eng = open_engine();
+        let mut settings: AppSettings = serde_json::from_str(&settings_with(self_hosted_entry(
+            "Stub",
+            &format!("http://127.0.0.1:{stt_port}"),
+        )))
+        .unwrap();
+        settings.language_models.entries = vec![local_entry("")];
+        eng.put_settings(&serde_json::to_string(&settings).unwrap())
+            .unwrap();
+        eng.start_utterance(16000);
+        eng.push_pcm(&vec![1000i16; 8000]);
+        let out = eng.finish_utterance().unwrap();
+        assert_eq!(out.text, "hello world (local)");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(out.cleanup, vec!["Local: ok".to_string()]);
+        stt_stub.join().unwrap();
+    }
+
+    #[test]
+    fn failing_runner_falls_through_to_ollama_with_note() {
+        let _guard = status_test_lock();
+        reset_status_state();
+        let _reset = RunnerReset;
+        crate::local_llm::set_local_runner(Some(std::sync::Arc::new(|_: &str, _: &str| {
+            Err("pack missing".to_string())
+        })));
+        let (stt_port, stt_stub) = stub_transcription_server();
+        let (llm_port, llm_stub) = stub_ollama_server();
+        let mut eng = open_engine();
+        let mut settings: AppSettings = serde_json::from_str(&settings_with(self_hosted_entry(
+            "Stub",
+            &format!("http://127.0.0.1:{stt_port}"),
+        )))
+        .unwrap();
+        settings.language_models.entries = vec![
+            local_entry(""),
+            ollama_entry(&format!("http://127.0.0.1:{llm_port}")),
+        ];
+        eng.put_settings(&serde_json::to_string(&settings).unwrap())
+            .unwrap();
+        eng.start_utterance(16000);
+        eng.push_pcm(&vec![1000i16; 8000]);
+        let out = eng.finish_utterance().unwrap();
+        assert_eq!(out.text, "Hello world.");
+        assert_eq!(
+            out.cleanup,
+            vec!["Local: pack missing".to_string(), "Ollama: ok".to_string()]
+        );
+        stt_stub.join().unwrap();
+        llm_stub.join().unwrap();
+    }
+
+    #[test]
+    fn finish_with_text_cleans_stores_history_and_ends_utterance() {
+        // On-device STT hit: same cleanup chain + history as the
+        // server path, and the utterance stops counting as active.
+        let _guard = status_test_lock();
+        reset_status_state();
+        let (llm_port, llm_stub) = stub_ollama_server();
+        let mut eng = open_engine();
+        let mut settings: AppSettings = serde_json::from_str(&eng.settings_json()).unwrap();
+        settings.language_models.entries =
+            vec![ollama_entry(&format!("http://127.0.0.1:{llm_port}"))];
+        eng.put_settings(&serde_json::to_string(&settings).unwrap())
+            .unwrap();
+        eng.start_utterance(16000);
+        eng.push_pcm(&vec![1000i16; 8000]);
+        assert!(crate::server_stt::inference_active());
+        let out = eng
+            .finish_with_text("hello world", "hello world", "local test", 2)
+            .unwrap();
+        assert_eq!(out.text, "Hello world.");
+        assert_eq!(out.raw, "hello world");
+        assert_eq!(out.engine, "local test");
+        assert!(!crate::server_stt::inference_active());
+        let history: serde_json::Value = serde_json::from_str(&eng.history_json(10)).unwrap();
+        assert_eq!(history.as_array().unwrap().len(), 1);
+        llm_stub.join().unwrap();
+    }
+
+    #[test]
+    fn finish_with_text_respects_disabled_cleanup() {
+        let _guard = status_test_lock();
+        reset_status_state();
+        let mut eng = open_engine();
+        let mut settings: AppSettings = serde_json::from_str(&eng.settings_json()).unwrap();
+        settings.language_models.cleanup_enabled = false;
+        eng.put_settings(&serde_json::to_string(&settings).unwrap())
+            .unwrap();
+        let out = eng
+            .finish_with_text("raw words", "raw words", "local test", 1)
+            .unwrap();
+        assert_eq!(out.text, "raw words");
+        assert_eq!(out.cleanup, vec!["cleanup disabled".to_string()]);
     }
 
     #[test]
