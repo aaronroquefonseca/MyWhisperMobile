@@ -1316,7 +1316,11 @@ mod tests {
             &format!("http://127.0.0.1:{stt_port}"),
         )))
         .unwrap();
-        settings.language_models.entries = vec![local_entry("")];
+        // Android's entry dialog leaves its prefilled Ollama URL on Local
+        // rows; the runner must still win over that dead "sidecar".
+        let mut local = local_entry("");
+        local.url = "http://127.0.0.1:9".to_string();
+        settings.language_models.entries = vec![local];
         eng.put_settings(&serde_json::to_string(&settings).unwrap())
             .unwrap();
         eng.start_utterance(16000);

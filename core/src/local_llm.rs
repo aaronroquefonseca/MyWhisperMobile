@@ -349,17 +349,24 @@ fn local_runner() -> Option<LocalRunner> {
 
 /// Cleanup-path entry point used by the engine (`LlmKind::Local`
 /// arm only). Resolution order:
-/// 1. `http(s)` `model_dir` → sidecar POST (bridge/tests);
-/// 2. registered in-process runner → it picks the selected verified
+/// 1. registered in-process runner → it picks the selected verified
 ///    pack and generates (fails with `Err` when none is installed);
+/// 2. `http(s)` `model_dir` → sidecar POST (host tests only);
 /// 3. otherwise → `Err`, so the chain falls through to the next
 ///    entry. Never panics, never touches the STT path.
+///
+/// The runner wins over the URL: Local rows saved through the Android
+/// entry dialog keep its prefilled `http://127.0.0.1:11434`, which would
+/// otherwise send every on-device cleanup to a dead sidecar.
 pub fn try_local_cleanup(
     entry: &LlmEntry,
     system: &str,
     raw: &str,
     data_dir: &Path,
 ) -> Result<String, String> {
+    if let Some(run) = local_runner() {
+        return trim_generation(&run(system, raw)?, 4096);
+    }
     let cfg = LocalLlmConfig::from_entry(entry, data_dir);
     if cfg.model_dir.starts_with("http://") || cfg.model_dir.starts_with("https://") {
         let backend = SidecarBackend {
@@ -368,10 +375,7 @@ pub fn try_local_cleanup(
         };
         return cleanup_with(&backend, system, raw, 4096);
     }
-    match local_runner() {
-        Some(run) => trim_generation(&run(system, raw)?, 4096),
-        None => Err("local llm not ready: no on-device runner registered".to_string()),
-    }
+    Err("local llm not ready: no on-device runner registered".to_string())
 }
 
 /// Status snapshot for the Settings UI / JNI.
