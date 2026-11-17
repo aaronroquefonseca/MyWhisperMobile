@@ -18,17 +18,18 @@ internal class BubbleSurface : Drawable() {
         val cx = bounds.exactCenterX()
         val cy = bounds.exactCenterY()
         val half = diameter / 2f
-        val radius = minOf(16 * density, half)
+        // Pre-PR look: 16dp corners on the 50dp bubble, scaled with size; floors to a circle near dot size.
+        val radius = minOf(half, maxOf(diameter * 0.32f, 7 * density))
         paint.style = Paint.Style.FILL
-        paint.color = fill
-        paint.alpha = android.graphics.Color.alpha(fill) * drawableAlpha / 255
-        canvas.drawRoundRect(cx - half, cy - half, cx + half, cy + half, radius, radius, paint)
-        paint.style = Paint.Style.STROKE
-        paint.strokeWidth = density
+        // Border is the outer shape and fill sits strictly inside it, so no fill pixel can reach past the outline.
         paint.color = android.graphics.Color.BLACK
         paint.alpha = drawableAlpha
-        val inset = density / 2
-        canvas.drawRoundRect(cx - half + inset, cy - half + inset, cx + half - inset, cy + half - inset, radius, radius, paint)
+        canvas.drawRoundRect(cx - half, cy - half, cx + half, cy + half, radius, radius, paint)
+        val border = density
+        val inner = (radius - border).coerceAtLeast(0f)
+        paint.color = fill
+        paint.alpha = android.graphics.Color.alpha(fill) * drawableAlpha / 255
+        canvas.drawRoundRect(cx - half + border, cy - half + border, cx + half - border, cy + half - border, inner, inner, paint)
     }
     override fun setAlpha(alpha: Int) { drawableAlpha = alpha.coerceIn(0, 255); invalidateSelf() }
     override fun setColorFilter(colorFilter: ColorFilter?) { paint.colorFilter = colorFilter }
