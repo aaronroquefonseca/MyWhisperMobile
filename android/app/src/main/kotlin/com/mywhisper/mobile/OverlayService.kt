@@ -128,7 +128,9 @@ class OverlayService : Service(), Dictation.Listener {
         if (shape != BubbleAppearance.Shape.DOT) return 0f
         val micPx = maxOf(50, builtSize) * resources.displayMetrics.density
         val dockedLeft = (params?.x ?: 0) + micPx / 2 < resources.displayMetrics.widthPixels / 2
-        return (micPx - diameter) / 2 * (if (dockedLeft) -1 else 1)
+        // Stop 4dp short of the window edge: 16dp from the screen, between centered (30dp) and flush (12dp).
+        val shift = ((micPx - diameter) / 2 - 4 * resources.displayMetrics.density).coerceAtLeast(0f)
+        return shift * (if (dockedLeft) -1 else 1)
     }
 
     private fun appearanceSize() = BubbleAppearance.size(getSharedPreferences(PREFS, MODE_PRIVATE).getInt("float_size", 2))
