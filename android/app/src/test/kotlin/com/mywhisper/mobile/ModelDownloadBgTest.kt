@@ -359,4 +359,12 @@ class ModelDownloadBgTest {
             assertNotEquals("${f.name}: titles must differ", complete, failed)
         }
     }
+
+    @Test
+    fun progressDue_throttlesButAlwaysReportsTheEnd() {
+        assertTrue(ModelDownloadSchedule.progressDue(0L, 500L, 10, 100))
+        assertFalse(ModelDownloadSchedule.progressDue(1_000L, 1_200L, 10, 100))
+        assertTrue(ModelDownloadSchedule.progressDue(1_000L, 1_200L, 100, 100))
+        assertFalse(ModelDownloadSchedule.progressDue(1_000L, 1_200L, 100, null))
+    }
 }

@@ -42,6 +42,18 @@ object ModelDownloadSchedule {
     const val PROG_RECEIVED = "mw_dl_received"
     const val PROG_TOTAL = "mw_dl_total"
 
+    /**
+     * Progress cadence: at most every [PROGRESS_INTERVAL_MS], plus the final
+     * byte. Reporting per 64 KB read (a WorkManager DB write plus a
+     * notification update each) capped downloads at ~2 MB/s on a phone that
+     * fetches the same file at ~12 MB/s. Pure.
+     */
+    const val PROGRESS_INTERVAL_MS = 500L
+
+    @JvmStatic
+    fun progressDue(lastMs: Long, nowMs: Long, received: Long, total: Long?): Boolean =
+        nowMs - lastMs >= PROGRESS_INTERVAL_MS || (total != null && total > 0 && received >= total)
+
     const val KIND_STT = "stt"
     const val KIND_LLM = "llm"
 

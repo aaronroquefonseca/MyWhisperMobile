@@ -167,6 +167,8 @@ class ModelDownloadWorker(
         }
     }
 
+    private var lastProgressMs = 0L
+
     private fun reportProgress(
         label: String,
         received: Long,
@@ -177,6 +179,9 @@ class ModelDownloadWorker(
         kind: String,
         modelId: String,
     ) {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (!ModelDownloadSchedule.progressDue(lastProgressMs, now, received, total)) return
+        lastProgressMs = now
         try {
             setProgressAsync(workDataOf(ModelDownloadSchedule.PROG_RECEIVED to received, ModelDownloadSchedule.PROG_TOTAL to (total ?: -1L)))
         } catch (_: Exception) {
