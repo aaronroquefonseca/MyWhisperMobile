@@ -30,6 +30,10 @@ import androidx.core.view.HapticFeedbackConstantsCompat
 import androidx.core.view.ViewCompat
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import kotlin.math.roundToInt
 import androidx.compose.ui.unit.dp
 
 /** The compact, grouped pages used by the three task destinations. */
@@ -295,4 +299,42 @@ internal fun ApiKeyField(
         },
         modifier = Modifier.fillMaxWidth(),
     )
+}
+
+/**
+ * A few discrete values on a slider: shows the picked value live, saves once on
+ * release (no Save button), and greys out with its value kept when [enabled] is false.
+ */
+@Composable
+internal fun <T> OptionSlider(
+    label: String,
+    options: List<T>,
+    selected: T,
+    valueText: (T) -> String,
+    help: String,
+    enabled: Boolean = true,
+    onPick: (T) -> Unit,
+) {
+    val view = LocalView.current
+    var index by remember(selected) { mutableIntStateOf(options.indexOf(selected).coerceAtLeast(0)) }
+    val value = valueText(options[index])
+    val alpha = if (enabled) 1f else 0.38f
+    Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface.copy(alpha = alpha))
+    Text(value, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary.copy(alpha = alpha))
+    Slider(
+        value = index.toFloat(),
+        valueRange = 0f..options.lastIndex.toFloat(),
+        steps = options.size - 2,
+        enabled = enabled,
+        onValueChange = {
+            val next = it.roundToInt().coerceIn(options.indices)
+            if (next != index) {
+                index = next
+                ViewCompat.performHapticFeedback(view, HapticFeedbackConstantsCompat.SEGMENT_TICK)
+            }
+        },
+        onValueChangeFinished = { if (options[index] != selected) onPick(options[index]) },
+        modifier = Modifier.fillMaxWidth().semantics { contentDescription = label; stateDescription = value },
+    )
+    Text(help, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }

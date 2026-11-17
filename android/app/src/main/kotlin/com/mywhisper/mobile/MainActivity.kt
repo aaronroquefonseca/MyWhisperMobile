@@ -122,6 +122,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.zIndex
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.runtime.key
 import androidx.compose.ui.text.input.KeyboardType
@@ -2495,63 +2496,82 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun MicrophoneSettings(s: JSONObject) {
+        val prefs = s.optJSONObject("preferences") ?: JSONObject()
+        val hotkeys = s.optJSONObject("hotkeys") ?: JSONObject()
+        val stt = s.optJSONObject("stt") ?: JSONObject()
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-            Section(stringResource(R.string.setup_mic_button)) {
-                val prefs = s.optJSONObject("preferences") ?: JSONObject()
-                val mode = prefs.optString("mic_mode", "Smart")
-                Text(
-                    when (mode) {
-                        "Push" -> getString(R.string.setup_mode_push)
-                        "Tap" -> getString(R.string.setup_mode_tap)
-                        else -> getString(R.string.setup_mode_smart)
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                )
+            Section(stringResource(R.string.mic_press_title)) {
                 val modes = listOf("Smart", "Push", "Tap")
-                val modeLabels = listOf(getString(R.string.control_smart), getString(R.string.control_hold), getString(R.string.control_toggle))
-                ChoiceSetting(getString(R.string.setup_behavior_label), modeLabels[modes.indexOf(mode).coerceAtLeast(0)], modeLabels) { selected ->
-                    prefs.put("mic_mode", modes[modeLabels.indexOf(selected)])
+                val labels = listOf(getString(R.string.control_smart), getString(R.string.mic_mode_hold), getString(R.string.mic_mode_tap))
+                var mode by remember { mutableStateOf(prefs.optString("mic_mode", "Smart").takeIf { it in modes } ?: "Smart") }
+                ChoiceSetting(getString(R.string.setup_behavior_label), labels[modes.indexOf(mode)], labels) { picked ->
+                    mode = modes[labels.indexOf(picked)]
+                    prefs.put("mic_mode", mode)
                     s.put("preferences", prefs)
-                    // save() already reflects the committed state.
                     save()
                 }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(stringResource(R.string.setup_pill))
-                        Text(
-                            stringResource(R.string.setup_pill_sub),
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
-                    FeedbackSwitch(
-                        modifier = Modifier.semantics { contentDescription = getString(R.string.setup_pill) },
-                        checked = prefs.optBoolean("show_pill", true),
-                        onCheckedChange = {
-                            prefs.put("show_pill", it)
-                            s.put("preferences", prefs)
-                            save()
-                        },
-                    )
-                }
-                val hotkeys = s.optJSONObject("hotkeys") ?: JSONObject()
-                var tapMs by rememberSaveable {
-                    mutableStateOf(hotkeys.optLong("smart_tap_ms", 150L).toString())
-                }
-                OutlinedTextField(
-                    value = tapMs,
-                    onValueChange = { tapMs = it.filter(Char::isDigit).take(4) },
-                    label = { Text(stringResource(R.string.setup_tap_ceiling)) },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    modifier = Modifier.fillMaxWidth(),
+                Text(
+                    stringResource(when (mode) {
+                        "Push" -> R.string.setup_mode_push
+                        "Tap" -> R.string.setup_mode_tap
+                        else -> R.string.setup_mode_smart
+                    }),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Spacer(Modifier.height(4.dp))
-                Button(onClick = {
-                    hotkeys.put("smart_tap_ms", tapMs.toLongOrNull() ?: 150L)
+                Spacer(Modifier.height(16.dp))
+                // Always shown so the layout never jumps; greyed out outside Smart.
+                val tapOptions = listOf(100L, 150L, 200L, 250L, 300L, 400L, 500L)
+                val tapMs = hotkeys.optLong("smart_tap_ms", 150L)
+                OptionSlider(
+                    label = getString(R.string.mic_tap_limit),
+                    options = tapOptions,
+                    selected = tapOptions.minBy { kotlin.math.abs(it - tapMs) },
+                    valueText = { getString(R.string.mic_ms, it) },
+                    enabled = mode == "Smart",
+                    help = getString(if (mode == "Smart") R.string.mic_tap_limit_sub else R.string.mic_tap_limit_off),
+                ) {
+                    hotkeys.put("smart_tap_ms", it)
                     s.put("hotkeys", hotkeys)
                     save()
-                }) { Text(stringResource(R.string.setup_tap_save)) }
+                }
             }
             MicPrioritySection(s)
+            Section(stringResource(R.string.mic_recording_title)) {
+                val delayOptions = listOf(0L, 100L, 250L, 500L, 1000L)
+                val delayMs = stt.optLong("release_delay_ms", 0L)
+                OptionSlider(
+                    label = getString(R.string.stt_delay),
+                    options = delayOptions,
+                    selected = delayOptions.minBy { kotlin.math.abs(it - delayMs) },
+                    valueText = { if (it == 0L) getString(R.string.stt_delay_off) else getString(R.string.mic_ms, it) },
+                    help = getString(R.string.stt_delay_sub),
+                ) {
+                    stt.put("release_delay_ms", it)
+                    s.put("stt", stt)
+                    save()
+                }
+                var meter by remember { mutableStateOf(prefs.optBoolean("show_pill", true)) }
+                Spacer(Modifier.height(16.dp))
+                // Whole row toggles; aligned with the card content (ListItem would add its own inset).
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.toggleable(value = meter, role = Role.Switch) {
+                        meter = it
+                        prefs.put("show_pill", it)
+                        s.put("preferences", prefs)
+                        save()
+                    },
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(stringResource(R.string.setup_pill))
+                        Text(stringResource(R.string.setup_pill_sub), style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Spacer(Modifier.width(16.dp))
+                    FeedbackSwitch(checked = meter, onCheckedChange = null)
+                }
+            }
         }
     }
 
@@ -3500,18 +3520,6 @@ class MainActivity : ComponentActivity() {
                     },
                     valueRange = 0f..0.5f,
                 )
-                Spacer(Modifier.height(4.dp))
-                val delayOptions = listOf(0L to getString(R.string.stt_delay_off), 100L to "100 ms", 250L to "250 ms", 500L to "500 ms", 1000L to "1 s")
-                var delayMs by remember { mutableStateOf(stt.optLong("release_delay_ms", 0L)) }
-                Text(stringResource(R.string.stt_delay_sub), style = MaterialTheme.typography.bodySmall)
-                ChoiceSetting(
-                    getString(R.string.stt_delay),
-                    delayOptions.firstOrNull { it.first == delayMs }?.second ?: "$delayMs ms",
-                    delayOptions.map { it.second },
-                ) { picked ->
-                    delayMs = delayOptions.first { it.second == picked }.first
-                    stt.put("release_delay_ms", delayMs); save(); version++
-                }
             }
         }
         if (localInfo) {
