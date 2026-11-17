@@ -1,3 +1,4 @@
+import AVFoundation
 import SwiftUI
 import XCTest
 @testable import MyWhisper
@@ -168,5 +169,18 @@ final class SetupTests: XCTestCase {
         ["stt": ["entries": [
             ["kind": "Cloud", "enabled": true, "model": "whisper-1"]
         ]]]
+    }
+
+    // MARK: - Mic priority
+
+    func testMicPriorityNormalizesAndPicksFirstConnectedKind() {
+        XCTAssertEqual(MicRoute.priority(from: nil), ["Wired", "BuiltIn", "Bluetooth"])
+        let saved = MicRoute.applying(["Bluetooth", "Mystery", "Bluetooth"], to: [:])
+        let order = MicRoute.priority(from: saved)
+        XCTAssertEqual(order, ["Bluetooth", "Wired", "BuiltIn"])
+        let ports: [AVAudioSession.Port] = [.builtInMic, .bluetoothHFP, .usbAudio]
+        XCTAssertEqual(MicRoute.pick(priority: order, items: ports) { MicRoute.kind(of: $0) }, .bluetoothHFP)
+        XCTAssertEqual(MicRoute.pick(priority: MicRoute.defaults, items: ports) { MicRoute.kind(of: $0) }, .usbAudio)
+        XCTAssertNil(MicRoute.pick(priority: ["Bluetooth"], items: [AVAudioSession.Port.builtInMic]) { MicRoute.kind(of: $0) })
     }
 }

@@ -175,6 +175,7 @@ class MyWhisperIME : InputMethodService(), Dictation.Listener {
         }
         ensureCore()
         dictation = Dictation(
+            context = this,
             smartTapMs = { readSmartTapMs() },
             mode = { readMicMode() },
             releaseDelayMs = { readReleaseDelayMs() },

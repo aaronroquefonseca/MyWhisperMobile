@@ -85,6 +85,21 @@ pub enum MicSelection {
     Specific,
 }
 
+/// ANDROID PORT: input category ranked in `Preferences::mic_priority`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MicKind {
+    /// Headsets, USB and line-in microphones.
+    Wired,
+    BuiltIn,
+    /// Headset-profile mics (SCO / LE Audio); switches earbuds to call mode.
+    Bluetooth,
+}
+
+/// Matches pre-setting routing: wired/USB wins, Bluetooth never reached.
+fn default_mic_priority() -> Vec<MicKind> {
+    vec![MicKind::Wired, MicKind::BuiltIn, MicKind::Bluetooth]
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CopyBackend {
     #[default]
@@ -172,6 +187,11 @@ pub struct Preferences {
     pub ui_language: String,
     pub mic_selection: MicSelection,
     pub mic_device_id: String,
+    /// ANDROID PORT: capture walks this order and uses the first
+    /// connected kind. Built-in is always present, so kinds after it
+    /// are never used.
+    #[serde(default = "default_mic_priority")]
+    pub mic_priority: Vec<MicKind>,
     pub mic_warm_hold_secs: u32,
     /// Extra listening past release (ms, 0 = disabled): the release
     /// cut shifts later by this much. Settle/flush/truncate all key
@@ -214,6 +234,7 @@ impl Default for Preferences {
             ui_language: "system".to_string(),
             mic_selection: MicSelection::System,
             mic_device_id: String::new(),
+            mic_priority: default_mic_priority(),
             mic_warm_hold_secs: 0,
             mic_release_delay_ms: 0,
             auto_learn_dictionary: false,
@@ -898,6 +919,29 @@ mod tests {
             !serde_json::from_value::<Preferences>(old)
                 .unwrap()
                 .black_background
+        );
+    }
+
+    #[test]
+    fn mic_priority_defaults_for_older_settings_and_round_trips() {
+        let mut old = serde_json::to_value(Preferences::default()).unwrap();
+        assert_eq!(
+            old["mic_priority"],
+            serde_json::json!(["Wired", "BuiltIn", "Bluetooth"])
+        );
+        old["mic_priority"] = serde_json::json!(["Bluetooth", "BuiltIn", "Wired"]);
+        assert_eq!(
+            serde_json::from_value::<Preferences>(old.clone())
+                .unwrap()
+                .mic_priority,
+            vec![MicKind::Bluetooth, MicKind::BuiltIn, MicKind::Wired]
+        );
+        old.as_object_mut().unwrap().remove("mic_priority");
+        assert_eq!(
+            serde_json::from_value::<Preferences>(old)
+                .unwrap()
+                .mic_priority,
+            default_mic_priority()
         );
     }
 

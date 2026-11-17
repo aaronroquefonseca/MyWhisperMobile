@@ -44,6 +44,14 @@ struct SetupStrings: Equatable {
     let testPassed: String
     let testFailed: String
     let openSettings: String
+    // Android-parity: mic_priority_* / mic_kind_*.
+    let micPriority: String
+    let micPrioritySub: String
+    let micWired: String
+    let micBuiltIn: String
+    let micBluetooth: String
+    let micMoveUp: String
+    let micMoveDown: String
 
     static let english = SetupStrings(
         tabSetup: "Setup",
@@ -78,7 +86,15 @@ struct SetupStrings: Equatable {
         testRun: "Run test dictation",
         testPassed: "Test dictation worked.",
         testFailed: "Test dictation failed.",
-        openSettings: "Open Settings"
+        openSettings: "Open Settings",
+        micPriority: "Preferred microphone",
+        micPrioritySub: "Dictation uses the first one that is connected. The built-in microphone is always available, "
+            + "so anything below it is never used. Bluetooth switches earbuds to call mode while you dictate.",
+        micWired: "Wired and USB",
+        micBuiltIn: "Built-in microphone",
+        micBluetooth: "Bluetooth",
+        micMoveUp: "Move %@ up",
+        micMoveDown: "Move %@ down"
     )
 
     static let spanish = SetupStrings(
@@ -114,7 +130,15 @@ struct SetupStrings: Equatable {
         testRun: "Probar dictado",
         testPassed: "La prueba de dictado funcionó.",
         testFailed: "La prueba de dictado falló.",
-        openSettings: "Abrir Ajustes"
+        openSettings: "Abrir Ajustes",
+        micPriority: "Micrófono preferido",
+        micPrioritySub: "El dictado usa el primero que esté conectado. El micrófono integrado siempre está disponible, "
+            + "así que lo que quede debajo nunca se usa. Bluetooth pasa los auriculares a modo llamada mientras dictas.",
+        micWired: "Con cable y USB",
+        micBuiltIn: "Micrófono integrado",
+        micBluetooth: "Bluetooth",
+        micMoveUp: "Subir %@",
+        micMoveDown: "Bajar %@"
     )
 
     /// `languageCode` is `Locale.current.languageCode` at call sites;

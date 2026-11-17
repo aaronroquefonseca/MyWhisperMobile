@@ -1,9 +1,13 @@
 package com.mywhisper.mobile
 
 import android.annotation.SuppressLint
+import android.content.Context
+import android.media.AudioDeviceInfo
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.os.Build
 
 /**
  * 16 kHz mono PCM16 capture (feeds the core, which resamples/VADs to
@@ -11,6 +15,8 @@ import android.media.MediaRecorder
  * One-shot: [start] spawns the read loop, [stop] joins it.
  */
 class AudioCapture(
+    /** Routes per `preferences.mic_priority`; null = system default input. */
+    private val context: Context? = null,
     private val sampleRate: Int = 16_000,
     var onPcm: ((ShortArray, Int) -> Unit)? = null,
     var onError: ((String) -> Unit)? = null,
@@ -19,6 +25,7 @@ class AudioCapture(
 ) {
     private var record: AudioRecord? = null
     private var thread: Thread? = null
+    private var audioManager: AudioManager? = null
     @Volatile var running = false
         private set
 
@@ -50,6 +57,7 @@ class AudioCapture(
                 return false
             }
             record = rec
+            routeInput(rec)
             running = true
             rec.startRecording()
             thread = Thread({
@@ -84,12 +92,45 @@ class AudioCapture(
             CoreBridge.startUtterance(sampleRate)
             true
         } catch (e: SecurityException) {
+            stop()
             onError?.invoke("mic permission denied")
             false
         } catch (e: Exception) {
+            stop()
             onError?.invoke("mic start: ${e.message}")
             false
         }
+    }
+
+    /**
+     * Pins [rec] to the first connected kind in `preferences.mic_priority`.
+     * Bluetooth also needs the headset link (SCO / LE Audio) brought up as
+     * the communication device; [stop] releases it so earbuds leave call mode.
+     */
+    private fun routeInput(rec: AudioRecord) {
+        val am = context?.getSystemService(AudioManager::class.java) ?: return
+        val priority = try {
+            val arr = CoreBridge.getSettings().getOrThrow()
+                .optJSONObject("preferences")?.optJSONArray("mic_priority")
+            arr?.let { a -> List(a.length()) { a.optString(it) } }
+        } catch (_: Exception) {
+            null
+        } ?: return
+        val inputs = am.getDevices(AudioManager.GET_DEVICES_INPUTS).toList()
+        val kind = { d: AudioDeviceInfo -> MicRoute.kindOf(d.type) }
+        var device = MicRoute.pick(priority, inputs, kind) ?: return
+        if (kind(device) == MicRoute.BLUETOOTH) {
+            // shortcut: Bluetooth needs setCommunicationDevice (Android 12+); 10-11 fall through, add startBluetoothSco if asked.
+            val linked = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                am.availableCommunicationDevices.firstOrNull { it.type == device.type }
+                    ?.let { am.setCommunicationDevice(it) } == true
+            if (linked) {
+                audioManager = am
+            } else {
+                device = MicRoute.pick(priority - MicRoute.BLUETOOTH, inputs, kind) ?: return
+            }
+        }
+        rec.setPreferredDevice(device)
     }
 
     fun stop() {
@@ -108,6 +149,36 @@ class AudioCapture(
         } catch (_: Exception) {
         }
         record = null
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            audioManager?.let { try { it.clearCommunicationDevice() } catch (_: Exception) { } }
+        }
+        audioManager = null
+    }
+}
+
+/** Input categories, named as core `MicKind` serializes them. */
+internal object MicRoute {
+    const val WIRED = "Wired"
+    const val BUILT_IN = "BuiltIn"
+    const val BLUETOOTH = "Bluetooth"
+
+    fun kindOf(type: Int): String? = when (type) {
+        AudioDeviceInfo.TYPE_BUILTIN_MIC -> BUILT_IN
+        AudioDeviceInfo.TYPE_WIRED_HEADSET,
+        AudioDeviceInfo.TYPE_USB_DEVICE,
+        AudioDeviceInfo.TYPE_USB_HEADSET,
+        AudioDeviceInfo.TYPE_USB_ACCESSORY,
+        AudioDeviceInfo.TYPE_LINE_ANALOG,
+        AudioDeviceInfo.TYPE_LINE_DIGITAL -> WIRED
+        AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+        AudioDeviceInfo.TYPE_BLE_HEADSET -> BLUETOOTH
+        else -> null
+    }
+
+    /** First device whose kind ranks highest; null when none is ranked. */
+    fun <T> pick(priority: List<String>, devices: List<T>, kind: (T) -> String?): T? {
+        for (k in priority) devices.firstOrNull { kind(it) == k }?.let { return it }
+        return null
     }
 }
 

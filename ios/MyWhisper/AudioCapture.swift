@@ -74,8 +74,17 @@ final class AudioCapture {
         }
         do {
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.record, mode: .measurement)
+            let priority = MicRoute.priority(from: try? CoreBridge.getSettings())
+            // HFP only when Bluetooth can win: enabling it alone may switch earbuds to call mode.
+            let bluetooth = MicRoute.pick(priority: priority, items: [MicRoute.bluetooth, MicRoute.builtIn]) { $0 }
+                == MicRoute.bluetooth
+            try session.setCategory(.record, mode: .measurement, options: bluetooth ? [.allowBluetooth] : [])
             try session.setActive(true)
+            if let port = MicRoute.pick(priority: priority, items: session.availableInputs ?? [], kind: {
+                MicRoute.kind(of: $0.portType)
+            }) {
+                try session.setPreferredInput(port)
+            }
         } catch {
             onError?("mic start: \(error.localizedDescription)")
             return false
@@ -193,3 +202,46 @@ final class AudioCapture {
 // MARK: - Dictation transport
 
 extension AudioCapture: DictationCapture {}
+
+/// Ranked input kinds (`preferences.mic_priority`, core `MicKind`).
+/// Mirrors Android `MicRoute`.
+enum MicRoute {
+    static let wired = "Wired"
+    static let builtIn = "BuiltIn"
+    static let bluetooth = "Bluetooth"
+    static let defaults = [wired, builtIn, bluetooth]
+
+    static func kind(of port: AVAudioSession.Port) -> String? {
+        switch port {
+        case .builtInMic: return builtIn
+        case .headsetMic, .usbAudio, .lineIn: return wired
+        case .bluetoothHFP, .bluetoothLE, .carAudio: return bluetooth
+        default: return nil
+        }
+    }
+
+    /// Saved order with unknown kinds dropped and missing ones appended.
+    static func priority(from settings: [String: Any]?) -> [String] {
+        let prefs = settings?["preferences"] as? [String: Any]
+        let saved = (prefs?["mic_priority"] as? [String] ?? []).filter { defaults.contains($0) }
+        var seen = Set<String>()
+        return (saved + defaults).filter { seen.insert($0).inserted }
+    }
+
+    /// First item whose kind ranks highest; nil when none is ranked.
+    static func pick<T>(priority: [String], items: [T], kind: (T) -> String?) -> T? {
+        for wanted in priority {
+            if let hit = items.first(where: { kind($0) == wanted }) { return hit }
+        }
+        return nil
+    }
+
+    /// Pure `preferences.mic_priority` write transform.
+    static func applying(_ order: [String], to settings: [String: Any]) -> [String: Any] {
+        var settings = settings
+        var prefs = settings["preferences"] as? [String: Any] ?? [:]
+        prefs["mic_priority"] = order
+        settings["preferences"] = prefs
+        return settings
+    }
+}

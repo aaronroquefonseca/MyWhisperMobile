@@ -240,6 +240,17 @@ final class AppFlow: ObservableObject, Dictation.Listener {
         }
     }
 
+    /// Persist the ranked mic kinds; `AudioCapture` reads them at each start.
+    func applyMicPriority(_ order: [String]) {
+        do {
+            let updated = MicRoute.applying(order, to: try CoreBridge.getSettings())
+            try CoreBridge.putSettings(updated)
+            settings = updated
+        } catch {
+            coreError = String(describing: error)
+        }
+    }
+
     // MARK: - Result actions (Delivery surface)
 
     func copyResult() {

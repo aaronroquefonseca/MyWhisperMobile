@@ -633,7 +633,7 @@ class OverlayService : Service(), Dictation.Listener {
                     // Promote synchronously from the user's visible bubble gesture,
                     // before AudioRecord starts. Idle boot readiness needs no mic type.
                     startForegroundWithType(microphone = true)
-                    val cap = AudioCapture(onPcm = onPcm, onError = onError, onLevel = onLevel)
+                    val cap = AudioCapture(this, onPcm = onPcm, onError = onError, onLevel = onLevel)
                     if (cap.start()) object : Dictation.Capture {
                         override fun stop() {
                             cap.stop()

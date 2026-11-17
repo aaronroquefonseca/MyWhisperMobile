@@ -99,6 +99,8 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.stateDescription
 import kotlin.math.roundToInt
@@ -120,6 +122,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.zIndex
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.runtime.key
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -2546,6 +2550,98 @@ class MainActivity : ComponentActivity() {
                     s.put("hotkeys", hotkeys)
                     save()
                 }) { Text(stringResource(R.string.setup_tap_save)) }
+            }
+            MicPrioritySection(s)
+        }
+    }
+
+    /**
+     * Ranked input kinds (`preferences.mic_priority`); capture uses the first one
+     * connected. Drag the handle to reorder; TalkBack gets move up/down actions.
+     */
+    @Composable
+    private fun MicPrioritySection(s: JSONObject) {
+        val prefs = s.optJSONObject("preferences") ?: JSONObject()
+        val defaults = listOf(MicRoute.WIRED, MicRoute.BUILT_IN, MicRoute.BLUETOOTH)
+        val saved = prefs.optJSONArray("mic_priority")?.let { a -> List(a.length()) { a.optString(it) } }.orEmpty()
+        var order by remember { mutableStateOf(saved.filter { it in defaults }.distinct() + defaults.filterNot { it in saved }) }
+        var dragged by remember { mutableStateOf<String?>(null) }
+        var dragOffset by remember { mutableFloatStateOf(0f) }
+        val heights = remember { mutableMapOf<String, Int>() }
+        val labels = mapOf(
+            MicRoute.WIRED to (R.string.mic_kind_wired to R.string.mic_kind_wired_sub),
+            MicRoute.BUILT_IN to (R.string.mic_kind_builtin to R.string.mic_kind_builtin_sub),
+            MicRoute.BLUETOOTH to (R.string.mic_kind_bluetooth to R.string.mic_kind_bluetooth_sub),
+        )
+        fun swap(from: Int, to: Int) {
+            order = order.toMutableList().apply { add(to, removeAt(from)) }
+        }
+        fun persist() {
+            prefs.put("mic_priority", JSONArray(order))
+            s.put("preferences", prefs)
+            save()
+        }
+        Section(stringResource(R.string.mic_priority_title)) {
+            Text(
+                stringResource(R.string.mic_priority_sub),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            order.forEachIndexed { i, kind ->
+                key(kind) {
+                    val (title, sub) = labels.getValue(kind)
+                    val name = stringResource(title)
+                    val up = getString(R.string.mic_priority_up, name)
+                    val down = getString(R.string.mic_priority_down, name)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .zIndex(if (dragged == kind) 1f else 0f)
+                            .graphicsLayer { translationY = if (dragged == kind) dragOffset else 0f }
+                            .onSizeChanged { heights[kind] = it.height }
+                            .padding(top = 8.dp)
+                            .semantics {
+                                customActions = listOfNotNull(
+                                    CustomAccessibilityAction(up) { swap(i, i - 1); persist(); true }.takeIf { i > 0 },
+                                    CustomAccessibilityAction(down) { swap(i, i + 1); persist(); true }.takeIf { i < order.lastIndex },
+                                )
+                            },
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("${i + 1}. $name")
+                            Text(stringResource(sub), style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Icon(
+                            Icons.Filled.Menu,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .padding(12.dp)
+                                .pointerInput(Unit) {
+                                    detectDragGestures(
+                                        onDragStart = { dragged = kind; dragOffset = 0f },
+                                        onDragEnd = { dragged = null; dragOffset = 0f; persist() },
+                                        onDragCancel = { dragged = null; dragOffset = 0f; persist() },
+                                    ) { change, amount ->
+                                        change.consume()
+                                        dragOffset += amount.y
+                                        // Swap once the row passes its neighbor's midpoint.
+                                        val at = order.indexOf(kind)
+                                        val next = order.getOrNull(at + 1)?.let { heights[it] }
+                                        val prev = order.getOrNull(at - 1)?.let { heights[it] }
+                                        if (next != null && dragOffset > next / 2f) {
+                                            swap(at, at + 1)
+                                            dragOffset -= next
+                                        } else if (prev != null && dragOffset < -prev / 2f) {
+                                            swap(at, at - 1)
+                                            dragOffset += prev
+                                        }
+                                    }
+                                },
+                        )
+                    }
+                }
             }
         }
     }

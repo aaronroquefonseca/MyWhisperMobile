@@ -34,6 +34,8 @@ internal fun userFacingFinishError(msg: String): String =
  * does the work. [finish] transcribes on a worker thread.
  */
 class Dictation(
+    /** Lets the default capture honor `preferences.mic_priority`. */
+    private val context: android.content.Context? = null,
     private val smartTapMs: () -> Long = { 150L },
     private val mode: () -> String = { "Smart" },
     private val releaseDelayMs: () -> Long = { 0L },
@@ -42,7 +44,7 @@ class Dictation(
         onError: (String) -> Unit,
         onLevel: (Float) -> Unit,
     ) -> Capture? = { onPcm, onError, onLevel ->
-        val cap = AudioCapture(onPcm = onPcm, onError = onError, onLevel = onLevel)
+        val cap = AudioCapture(context, onPcm = onPcm, onError = onError, onLevel = onLevel)
         if (cap.start()) {
             object : Capture {
                 override fun stop() = cap.stop()
