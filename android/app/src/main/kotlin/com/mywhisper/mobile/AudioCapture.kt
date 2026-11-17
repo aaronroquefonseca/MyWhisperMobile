@@ -14,7 +14,7 @@ class AudioCapture(
     private val sampleRate: Int = 16_000,
     var onPcm: ((ShortArray, Int) -> Unit)? = null,
     var onError: ((String) -> Unit)? = null,
-    /** 0..1 peak per read, for the pill visualizer. */
+    /** 0..1 normalized voice level per 32 ms read (see [LevelNormalizer]). */
     var onLevel: ((Float) -> Unit)? = null,
 ) {
     private var record: AudioRecord? = null
@@ -53,7 +53,9 @@ class AudioCapture(
             running = true
             rec.startRecording()
             thread = Thread({
-                val buf = ShortArray(2048)
+                // 512 samples = 32 ms → ~31 level updates/s for the bars.
+                val buf = ShortArray(512)
+                val norm = LevelNormalizer()
                 while (running) {
                     val n = try {
                         rec.read(buf, 0, buf.size)
@@ -66,12 +68,12 @@ class AudioCapture(
                         } catch (_: Exception) {
                         }
                         try {
-                            var peak = 0
+                            var sum = 0.0
                             for (i in 0 until n) {
-                                val a = kotlin.math.abs(buf[i].toInt())
-                                if (a > peak) peak = a
+                                val v = buf[i].toDouble()
+                                sum += v * v
                             }
-                            onLevel?.invoke((peak / 32768f).coerceIn(0f, 1f))
+                            onLevel?.invoke(norm.push(kotlin.math.sqrt(sum / n) / 32768.0))
                         } catch (_: Exception) {
                         }
                     } else if (n < 0) {
@@ -106,5 +108,43 @@ class AudioCapture(
         } catch (_: Exception) {
         }
         record = null
+    }
+}
+
+/**
+ * Raw block RMS (0..1 full scale) → 0..1 visual level. Works in dB:
+ * an adaptive noise floor (drops instantly, creeps up slowly) gates
+ * room noise to 0, and a decaying loudness ceiling auto-gains so both
+ * quiet and loud talkers fill the bars. Linear peak/32768 left normal
+ * speech at ~5-20% height.
+ */
+class LevelNormalizer {
+    // Seeded from the first real block: a noisy room is learned at once
+    // instead of creeping up at FLOOR_RISE_DB; speech-first just costs one word gap.
+    private var floorDb = Double.NaN
+    private var ceilDb = Double.NaN
+
+    fun push(rms: Double): Float {
+        // Digital-zero warm-up blocks (some HALs) say nothing about room noise.
+        if (rms <= 0.0) return 0f
+        val db = 20.0 * kotlin.math.log10(rms.coerceAtLeast(1e-6))
+        if (floorDb.isNaN()) { floorDb = db; ceilDb = db + MIN_SPAN_DB }
+        floorDb = (if (db < floorDb) db else floorDb + FLOOR_RISE_DB).coerceIn(MIN_FLOOR_DB, -20.0)
+        ceilDb = maxOf(db, ceilDb - CEIL_FALL_DB, floorDb + MIN_SPAN_DB)
+        val gate = floorDb + GATE_DB
+        return ((db - gate) / (ceilDb - gate)).coerceIn(0.0, 1.0).toFloat()
+    }
+
+    companion object {
+        /** Per 32 ms block: floor rises ~1.5 dB/s, so steady noise is learned in seconds. */
+        const val FLOOR_RISE_DB = 0.05
+        /** Per block: ceiling relaxes ~6 dB/s after a loud burst. */
+        const val CEIL_FALL_DB = 0.2
+        /** Quietest floor; real mic self-noise sits above this. */
+        const val MIN_FLOOR_DB = -70.0
+        /** Level stays 0 until this far above the noise floor. */
+        const val GATE_DB = 6.0
+        /** Minimum floor→ceiling span, so pure noise never fills the bars. */
+        const val MIN_SPAN_DB = 24.0
     }
 }

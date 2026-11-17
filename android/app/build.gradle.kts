@@ -96,6 +96,8 @@ androidComponents {
         val label = buildString {
             append("MyWhisper")
             if (nightly) append(" Nightly")
+            // Side-by-side test install (see debug.applicationIdSuffix) needs a distinct icon label.
+            if (variant.buildType == "debug" && providers.gradleProperty("mywhisper.appIdSuffix").isPresent) append(" Test")
         }
         variant.manifestPlaceholders.put("appLabel", label)
         if (nightly) {
