@@ -18,6 +18,7 @@ object FloatState {
     @Volatile var imeActive: Boolean = false
     @Volatile var hasTextFocus: Boolean = false
     @Volatile var keyboardVisible: Boolean = false
+    @Volatile var searchField: Boolean = false
 
     /**
      * Overlay-permission denial latch for the recovery flow: set when
@@ -180,8 +181,12 @@ object FloatState {
     /** Idle positioning reserves the complete hold-control frame, including optional grip. */
     fun recordingWindowHeightDp(grab: Boolean): Int = 50 + 8 + 96 + if (grab) 14 else 0
 
-    /** Screen wakefulness belongs to live capture, never idle/processing. */
-    fun keepsScreenOn(state: Dictation.State): Boolean = state == Dictation.State.RECORDING
+    /** Delivery is queued off-thread; IDLE alone does not mean the paste finished. */
+    fun displayState(state: Dictation.State, pendingDeliveries: Int): Dictation.State =
+        if (state == Dictation.State.IDLE && pendingDeliveries > 0) Dictation.State.WORKING else state
+
+    /** Keep awake through capture, processing and result delivery. */
+    fun keepsScreenOn(state: Dictation.State): Boolean = state != Dictation.State.IDLE
 
     /** Recording shows a separate cancel target; processing cancels via the main button. */
     fun isStopVisible(state: Dictation.State): Boolean =

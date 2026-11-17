@@ -50,10 +50,21 @@ class FloatBubbleTest {
     }
 
     @Test
-    fun screenStaysOnOnlyWhileListening() {
+    fun screenStaysOnThroughProcessing() {
         assertTrue(FloatState.keepsScreenOn(Dictation.State.RECORDING))
-        assertFalse(FloatState.keepsScreenOn(Dictation.State.WORKING))
+        assertTrue(FloatState.keepsScreenOn(Dictation.State.WORKING))
         assertFalse(FloatState.keepsScreenOn(Dictation.State.IDLE))
+    }
+
+    @Test
+    fun queuedPasteKeepsProcessingVisibleAndAwakeUntilCommitCompletes() {
+        val delivering = FloatState.displayState(Dictation.State.IDLE, 1)
+        assertEquals(Dictation.State.WORKING, delivering)
+        assertTrue(FloatState.keepsScreenOn(delivering))
+        val delivered = FloatState.displayState(Dictation.State.IDLE, 0)
+        assertEquals(Dictation.State.IDLE, delivered)
+        assertFalse(FloatState.keepsScreenOn(delivered))
+        assertEquals(Dictation.State.RECORDING, FloatState.displayState(Dictation.State.RECORDING, 1))
     }
 
     @Test

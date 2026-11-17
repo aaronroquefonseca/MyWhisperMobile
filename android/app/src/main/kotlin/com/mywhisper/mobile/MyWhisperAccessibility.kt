@@ -42,10 +42,14 @@ class MyWhisperAccessibility : AccessibilityService() {
          * both directions, no flapping.
          */
         fun syncFocus() {
+            val node = try {
+                live?.rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            } catch (_: Exception) { null }
+            val search = try {
+                node?.let { BubbleAppearance.isSearch(it.inputType, it.viewIdResourceName, it.hintText?.toString()) } == true
+            } catch (_: Exception) { false }
             val focused = try {
-                live?.rootInActiveWindow
-                    ?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-                    ?.isEditable == true
+                node?.isEditable == true
             } catch (_: Exception) {
                 false
             }
@@ -56,7 +60,8 @@ class MyWhisperAccessibility : AccessibilityService() {
                     window.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_INPUT_METHOD && !bounds.isEmpty
                 } == true
             } catch (_: Exception) { false }
-            if (focused != FloatState.hasTextFocus || keyboard != FloatState.keyboardVisible) {
+            if (focused != FloatState.hasTextFocus || keyboard != FloatState.keyboardVisible || search != FloatState.searchField) {
+                FloatState.searchField = search
                 FloatState.hasTextFocus = focused
                 FloatState.keyboardVisible = keyboard
                 FloatState.refresh()
@@ -281,6 +286,7 @@ class MyWhisperAccessibility : AccessibilityService() {
         focusHandler.removeCallbacks(contentFocusCheck)
         if (live === this) {
             live = null
+            FloatState.searchField = false
             FloatState.keyboardVisible = false
             FloatState.hasTextFocus = false
             FloatState.refresh()
