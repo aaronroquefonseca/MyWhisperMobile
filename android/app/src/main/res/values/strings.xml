@@ -68,6 +68,16 @@
     <string name="setup_tap_save">Save tap timing</string>
     <string name="setup_pill">Listening pill</string>
     <string name="setup_pill_sub">Floating level meter while recording.</string>
+    <string name="mic_priority_title">Preferred microphone</string>
+    <string name="mic_priority_sub">Dictation uses the first one that is connected. The built-in microphone is always available, so anything below it is never used.</string>
+    <string name="mic_kind_wired">Wired and USB</string>
+    <string name="mic_kind_wired_sub">Headsets and USB microphones</string>
+    <string name="mic_kind_builtin">Built-in microphone</string>
+    <string name="mic_kind_builtin_sub">The microphone on this device</string>
+    <string name="mic_kind_bluetooth">Bluetooth</string>
+    <string name="mic_kind_bluetooth_sub">Earbuds, headsets and cars. Switches them to call mode, so music pauses while you dictate. Android 12+.</string>
+    <string name="mic_priority_up">Move %1$s up</string>
+    <string name="mic_priority_down">Move %1$s down</string>
     <string name="setup_float">Floating button</string>
     <string name="setup_float_sub">Dictate in any app without switching input methods. Shows with the on-screen keyboard by default; text-field focus is available in the visibility setting. Hides while the MyWhisper keyboard is up.</string>
     <string name="setup_float_on">Floating button is on.</string>

@@ -78,12 +78,27 @@ struct SetupView: View {
     var onOpenSettings: () -> Void = {}
     var onRunTest: () -> Void = {}
     var onThemeChange: (AppTheme) -> Void = { _ in }
+    var onMicPriorityChange: ([String]) -> Void = { _ in }
 
     @State private var showRationale = false
     @State private var showDenied = false
 
     private var checklist: SetupChecklist {
         setupChecklist(micGranted: micGranted, settings: settings, testPassed: testPassed)
+    }
+
+    private func micName(_ kind: String) -> String {
+        switch kind {
+        case MicRoute.wired: return strings.micWired
+        case MicRoute.bluetooth: return strings.micBluetooth
+        default: return strings.micBuiltIn
+        }
+    }
+
+    private func moving(_ order: [String], from: Int, to: Int) -> [String] {
+        var order = order
+        order.insert(order.remove(at: from), at: to)
+        return order
     }
 
     var body: some View {
@@ -149,6 +164,30 @@ struct SetupView: View {
                     }
                 }
                 .pickerStyle(.segmented)
+            }
+            Section {
+                let order = MicRoute.priority(from: settings)
+                ForEach(Array(order.enumerated()), id: \.element) { index, kind in
+                    let name = micName(kind)
+                    Text("\(index + 1). \(name)")
+                        .accessibilityAction(named: String(format: strings.micMoveUp, name)) {
+                            if index > 0 { onMicPriorityChange(moving(order, from: index, to: index - 1)) }
+                        }
+                        .accessibilityAction(named: String(format: strings.micMoveDown, name)) {
+                            if index < order.count - 1 { onMicPriorityChange(moving(order, from: index, to: index + 1)) }
+                        }
+                }
+                .onMove { source, destination in
+                    var next = order
+                    next.move(fromOffsets: source, toOffset: destination)
+                    onMicPriorityChange(next)
+                }
+                // Always show reorder handles, like Android's drag handles.
+                .environment(\.editMode, .constant(.active))
+            } header: {
+                Text(strings.micPriority)
+            } footer: {
+                Text(strings.micPrioritySub)
             }
             Section(strings.setupStatus) {
                 Text(strings.setupServerOnly)

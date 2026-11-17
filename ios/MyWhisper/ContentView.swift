@@ -100,7 +100,8 @@ struct ContentView: View {
                 onRequestMic: { flow.requestMic() },
                 onOpenSettings: { flow.openSystemSettings() },
                 onRunTest: { flow.runSetupTest() },
-                onThemeChange: { flow.applyTheme($0) }
+                onThemeChange: { flow.applyTheme($0) },
+                onMicPriorityChange: { flow.applyMicPriority($0) }
             )
         case .speech:
             SttSettingsView(store: speechStore)

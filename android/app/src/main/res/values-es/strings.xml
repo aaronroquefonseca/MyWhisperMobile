@@ -68,6 +68,16 @@
     <string name="setup_tap_save">Guardar tiempo</string>
     <string name="setup_pill">Pastilla de escucha</string>
     <string name="setup_pill_sub">Medidor de nivel flotante al grabar.</string>
+    <string name="mic_priority_title">Micrófono preferido</string>
+    <string name="mic_priority_sub">El dictado usa el primero que esté conectado. El micrófono integrado siempre está disponible, así que lo que quede debajo nunca se usa.</string>
+    <string name="mic_kind_wired">Con cable y USB</string>
+    <string name="mic_kind_wired_sub">Auriculares con cable y micrófonos USB</string>
+    <string name="mic_kind_builtin">Micrófono integrado</string>
+    <string name="mic_kind_builtin_sub">El micrófono de este dispositivo</string>
+    <string name="mic_kind_bluetooth">Bluetooth</string>
+    <string name="mic_kind_bluetooth_sub">Auriculares, cascos y coches. Los pasa a modo llamada, así que la música se pausa mientras dictas. Android 12+.</string>
+    <string name="mic_priority_up">Subir %1$s</string>
+    <string name="mic_priority_down">Bajar %1$s</string>
     <string name="setup_float">Botón flotante</string>
     <string name="setup_float_sub">Dicta en cualquier app sin cambiar de teclado. Se muestra con el teclado en pantalla de forma predeterminada; puedes elegir el enfoque del campo de texto en visibilidad. Se oculta mientras usas el teclado MyWhisper.</string>
     <string name="setup_float_on">El botón flotante está activado.</string>
