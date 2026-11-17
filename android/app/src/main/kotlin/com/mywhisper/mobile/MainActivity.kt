@@ -1145,16 +1145,30 @@ class MainActivity : ComponentActivity() {
         onProgress: (receivedBytes: Long, totalBytes: Long?) -> Unit,
         onDone: () -> Unit,
         onError: (detail: String) -> Unit,
+        onActive: () -> Unit = {},
+        resume: Boolean = false,
     ) {
         val workName = ModelDownloadSchedule.workNameFor(kind, id)
-        if (dlWorkObservers.containsKey(workName)) return
         try {
             val live = WorkManager.getInstance(this)
                 .getWorkInfosForUniqueWorkLiveData(workName)
+            // A screen re-entry brings fresh row state: the old observer
+            // would keep writing into the discarded one.
+            dlWorkObservers.remove(workName)?.let { live.removeObserver(it) }
+            var seenActive = false
             val obs = Observer<List<WorkInfo>> { infos ->
                 val info = infos.firstOrNull() ?: return@Observer
-                when (ModelDownloadSchedule.actionForWorkState(info.state.name)) {
+                val action = ModelDownloadSchedule.actionForWorkState(info.state.name)
+                // Re-attaching on screen entry: only to work still running;
+                // finished/failed work from earlier stays out of the row.
+                if (resume && !seenActive && action != ModelDownloadSchedule.WorkRowAction.TRACK) {
+                    dlWorkObservers.remove(workName)?.let { live.removeObserver(it) }
+                    return@Observer
+                }
+                when (action) {
                     ModelDownloadSchedule.WorkRowAction.TRACK -> {
+                        seenActive = true
+                        onActive()
                         val r = info.progress.getLong(ModelDownloadSchedule.PROG_RECEIVED, -1L)
                         if (r >= 0) {
                             val t = info.progress.getLong(ModelDownloadSchedule.PROG_TOTAL, -1L)
@@ -2759,6 +2773,23 @@ class MainActivity : ComponentActivity() {
                 checking = checking,
             )
         }
+        fun trackModelDownload(m: LocalSttModels.Entry, resume: Boolean) {
+            observeDownloadWork(
+                kind = ModelDownloadSchedule.KIND_STT,
+                id = m.id,
+                onProgress = { r, t ->
+                    dlProg = dlProg + (m.id to (r to (t ?: LocalSttModels.totalBytes(m))))
+                },
+                onDone = { dlBusy = dlBusy - m.id; dlProg = dlProg - m.id; version++ },
+                onError = { msg ->
+                    dlBusy = dlBusy - m.id
+                    dlErr = dlErr + (m.id to msg)
+                    version++
+                },
+                onActive = { if (!dlBusy.contains(m.id)) dlBusy = dlBusy + m.id },
+                resume = resume,
+            )
+        }
         fun startModelDownload(m: LocalSttModels.Entry) {
             // No runtime: downloads could never run — refuse fail-closed.
             if (!sttRunner) {
@@ -2773,20 +2804,11 @@ class MainActivity : ComponentActivity() {
             // required, own progress notification + Cancel); the row
             // tracks the unique work below for in-place progress.
             ModelDownloadManager.enqueueSttModel(this@MainActivity, m.id)
-            observeDownloadWork(
-                kind = ModelDownloadSchedule.KIND_STT,
-                id = m.id,
-                onProgress = { r, t ->
-                    dlProg = dlProg + (m.id to (r to (t ?: LocalSttModels.totalBytes(m))))
-                },
-                onDone = { dlBusy = dlBusy - m.id; dlProg = dlProg - m.id; version++ },
-                onError = { msg ->
-                    dlBusy = dlBusy - m.id
-                    dlErr = dlErr + (m.id to msg)
-                    version++
-                },
-            )
+            trackModelDownload(m, resume = false)
         }
+        // Downloads keep running in WorkManager while this screen is gone:
+        // re-attach their rows (busy + real progress) on every entry.
+        LaunchedEffect(Unit) { LocalSttModels.MODELS.forEach { trackModelDownload(it, resume = true) } }
         // Provider tests: ONE pattern on every chain row (same
         // button + latency/excerpt inline). Per-entry state keyed by
         // row id so reorder keeps results with their row.
@@ -3823,6 +3845,23 @@ class MainActivity : ComponentActivity() {
         }
         // No on-device runtime (not arm64 / no pack URL): no Download offered.
         val llmRunner = remember { llmRunnerSupported() }
+        fun trackLlmDownload(a: LocalLlmManager.ModelAsset, resume: Boolean) {
+            observeDownloadWork(
+                kind = ModelDownloadSchedule.KIND_LLM,
+                id = a.id,
+                onProgress = { r, t -> llmDlProg = llmDlProg + (a.id to (r to t)) },
+                onDone = { llmDlBusy = llmDlBusy - a.id; llmDlProg = llmDlProg - a.id; version++ },
+                onError = { msg ->
+                    llmDlBusy = llmDlBusy - a.id
+                    llmDlErr = llmDlErr + (a.id to msg)
+                    version++
+                },
+                onActive = { if (!llmDlBusy.contains(a.id)) llmDlBusy = llmDlBusy + a.id },
+                resume = resume,
+            )
+        }
+        // Re-attach rows to downloads still running in WorkManager (see STT).
+        LaunchedEffect(Unit) { assets.forEach { trackLlmDownload(it, resume = true) } }
         fun startLlmDownload(a: LocalLlmManager.ModelAsset) {
             // No runtime: downloads could never run — refuse fail-closed.
             if (!llmRunner) {
@@ -3837,17 +3876,7 @@ class MainActivity : ComponentActivity() {
             // required, own progress notification + Cancel); the row
             // tracks the unique work below for in-place progress.
             ModelDownloadManager.enqueueLlmAsset(this@MainActivity, a)
-            observeDownloadWork(
-                kind = ModelDownloadSchedule.KIND_LLM,
-                id = a.id,
-                onProgress = { r, t -> llmDlProg = llmDlProg + (a.id to (r to t)) },
-                onDone = { llmDlBusy = llmDlBusy - a.id; llmDlProg = llmDlProg - a.id; version++ },
-                onError = { msg ->
-                    llmDlBusy = llmDlBusy - a.id
-                    llmDlErr = llmDlErr + (a.id to msg)
-                    version++
-                },
-            )
+            trackLlmDownload(a, resume = false)
         }
         fun startLlmDownloadMetered(a: LocalLlmManager.ModelAsset) {
             // Explicit metered-data consent from the waiting row: same
@@ -3863,17 +3892,7 @@ class MainActivity : ComponentActivity() {
             llmDlErr = llmDlErr - a.id
             llmDlProg = llmDlProg + (a.id to (0L to a.sizeBytes.takeIf { it > 0 }))
             ModelDownloadManager.enqueueLlmAsset(this@MainActivity, a, metered = true)
-            observeDownloadWork(
-                kind = ModelDownloadSchedule.KIND_LLM,
-                id = a.id,
-                onProgress = { r, t -> llmDlProg = llmDlProg + (a.id to (r to t)) },
-                onDone = { llmDlBusy = llmDlBusy - a.id; llmDlProg = llmDlProg - a.id; version++ },
-                onError = { msg ->
-                    llmDlBusy = llmDlBusy - a.id
-                    llmDlErr = llmDlErr + (a.id to msg)
-                    version++
-                },
-            )
+            trackLlmDownload(a, resume = false)
         }
         fun selectLlm(a: LocalLlmManager.ModelAsset) {
             statePrefs.edit() { putString(PREF_SELECTED_LLM, a.id) }
