@@ -203,5 +203,6 @@ class ModelDownloadWorker(
         ForegroundInfo(
             notifId,
             ModelDownloadNotifications.buildProgress(applicationContext, label, received, total, workName, notifId, target, kind, modelId),
+            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
         )
 }
