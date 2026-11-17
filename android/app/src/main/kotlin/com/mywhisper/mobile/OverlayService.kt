@@ -105,6 +105,85 @@ class OverlayService : Service(), Dictation.Listener {
     private var hintParams: WindowManager.LayoutParams? = null
     private val hintHide = Runnable { hideMoveHint() }
 
+    private var parked = false
+    private var builtSize = 50
+    private var idleElapsed = false
+    private var touching = false
+    private var shrinkScheduled = false
+    private var surface: BubbleSurface? = null
+    private var surfaceAnimator: android.animation.ValueAnimator? = null
+    private var surfaceTarget = -1f
+    private val pendingDelivery = java.util.concurrent.atomic.AtomicInteger(0)
+    private val shrinkIdle = Runnable {
+        shrinkScheduled = false
+        idleElapsed = true
+        if (!parked) refreshChrome(dictation.current)
+    }
+
+    private fun micInset() = dp((maxOf(50, builtSize) - 50) / 2)
+
+    private fun appearanceSize() = BubbleAppearance.size(getSharedPreferences(PREFS, MODE_PRIVATE).getInt("float_size", 2))
+
+    private fun updateIdleSurface(state: Dictation.State) {
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        val busy = state != Dictation.State.IDLE || pendingDelivery.get() > 0
+        if (busy || touching || parked) {
+            mainHandler.removeCallbacks(shrinkIdle)
+            shrinkScheduled = false
+            idleElapsed = false
+        } else if (!idleElapsed && !shrinkScheduled &&
+            BubbleAppearance.idleBehavior(prefs.getString("float_idle_style", "full")).usesDelay) {
+            shrinkScheduled = true
+            mainHandler.postDelayed(shrinkIdle, BubbleAppearance.IDLE_DELAY_MS)
+        }
+        val shape = BubbleAppearance.shape(BubbleAppearance.idleBehavior(prefs.getString("float_idle_style", "full")),
+            idleElapsed, FloatState.searchField, prefs.getBoolean("float_shrink_search", false), builtGrab, busy)
+        val diameter = resources.displayMetrics.density * BubbleAppearance.diameter(if (busy) 50 else builtSize, shape)
+        val drawable = surface ?: return
+        drawable.fill = if (state == Dictation.State.RECORDING) 0xFFE8E8E8.toInt() else Color.WHITE
+        drawable.invalidateSelf()
+        if (surfaceTarget == diameter) return
+        surfaceTarget = diameter
+        surfaceAnimator?.cancel()
+        val from = drawable.diameter.takeIf { it > 0 } ?: diameter
+        val iconFrom = micBtn?.imageAlpha ?: 255
+        val iconTo = if (shape == BubbleAppearance.Shape.DOT) 0 else 255
+        surfaceAnimator = android.animation.ValueAnimator.ofFloat(from, diameter).apply {
+            duration = 180L
+            interpolator = android.view.animation.DecelerateInterpolator()
+            addUpdateListener {
+                drawable.diameter = it.animatedValue as Float
+                if (state == Dictation.State.IDLE) micBtn?.imageAlpha = (iconFrom + (iconTo - iconFrom) * it.animatedFraction).toInt()
+                val padding = ((maxOf(50, builtSize) * resources.displayMetrics.density - drawable.diameter * 0.6f) / 2).toInt().coerceAtLeast(0)
+                micBtn?.setPadding(padding, padding, padding, padding)
+            }
+            start()
+        }
+    }
+
+    /** Keep the same attached overlay, fully transparent and unable to intercept input. */
+    private fun parkBubble() {
+        if (parked) return
+        if (holder == null) showBubble()
+        dictation.cancel()
+        hideMoveHint()
+        hideVizPill()
+        hideLockTarget()
+        cancelPendingPress()
+        touching = false
+        parked = true
+        mainHandler.removeCallbacks(shrinkIdle)
+        shrinkScheduled = false
+        surfaceAnimator?.cancel()
+        holder?.animate()?.cancel()
+        holder?.alpha = 0f
+        params?.let {
+            it.alpha = 0f
+            it.flags = (it.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE) and WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON.inv()
+            try { wm?.updateViewLayout(holder, it) } catch (_: Exception) { }
+        }
+    }
+
     private var downRawX = 0f
     private var downRawY = 0f
     private var baseX = 0
@@ -206,8 +285,8 @@ class OverlayService : Service(), Dictation.Listener {
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
             PixelFormat.TRANSLUCENT).apply {
                 gravity = Gravity.TOP or Gravity.LEFT
-                x = params?.x ?: loc[0]
-                val startY = (params?.y ?: loc[1]) + (if (builtGrab) dp(14) else 0) + dp(4)
+                x = (params?.x ?: loc[0]) + micInset()
+                val startY = (params?.y ?: loc[1]) + (if (builtGrab) dp(14) else 0) + dp(4) + micInset()
                 y = (startY - dp(80)).coerceAtLeast(safeBounds(targetSize, targetSize).minY)
                 height = (startY - y).coerceAtLeast(targetSize) + dp(146)
                 lockTravelDistance = (startY + dp(25) - y - targetSize / 2f).coerceAtLeast(dp(24).toFloat())
@@ -272,7 +351,7 @@ class OverlayService : Service(), Dictation.Listener {
         val wasUnstuck = holdUnstuck
         holdUnstuck = FloatState.magnetReleased(distance, holdUnstuck, dp(18).toFloat(), dp(10).toFloat())
         if (wasUnstuck != holdUnstuck) tick(8L, 35)
-        val limit = if (upward) lockTravelDistance else dp(89).toFloat()
+        val limit = if (upward) lockTravelDistance else dp(89).toFloat() + micInset()
         val wasArmed = if (upward) lockArmed else cancelArmed
         val armed = holdUnstuck && FloatState.magnetCaptured((limit - distance).coerceAtLeast(0f), wasArmed,
             dp(20).toFloat(), dp(34).toFloat())
@@ -921,13 +1000,26 @@ class OverlayService : Service(), Dictation.Listener {
         android.util.Log.i("MwFloat", "apply show=$show holder=${holder != null}")
         // Grip pref flipped while the bubble is up: rebuild the chrome so
         // the layout matches (no grip row <=> free drag).
-        if (holder != null && builtGrab != grabEnabled()) {
+        if (holder != null && (builtGrab != grabEnabled() || builtSize != appearanceSize()) && dictation.current == Dictation.State.IDLE) {
             removeBubble()
         }
         if (show) {
-            if (holder == null) showBubble() else refreshChrome(dictation.current)
+            if (holder == null) showBubble() else {
+                if (parked) {
+                    parked = false
+                    idleElapsed = false
+                    holder?.alpha = 1f
+                    holder?.visibility = View.VISIBLE
+                    params?.let {
+                        it.flags = it.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+                        try { wm?.updateViewLayout(holder, it) } catch (_: Exception) { }
+                    }
+                }
+                refreshChrome(FloatState.displayState(dictation.current, pendingDelivery.get()))
+            }
         } else {
-            removeBubble(animate = true)
+            if (getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean("float_keep_attached", false)) parkBubble()
+            else removeBubble(animate = true)
         }
     }
 
@@ -940,7 +1032,8 @@ class OverlayService : Service(), Dictation.Listener {
         }
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
 
-        val size = dp(50)
+        builtSize = appearanceSize()
+        val size = dp(maxOf(50, builtSize))
         val haloPad = 0
         val cellW = size + haloPad * 2
         val gripTouch = size
@@ -995,7 +1088,7 @@ class OverlayService : Service(), Dictation.Listener {
                 background = GradientDrawable().apply {
                     shape = GradientDrawable.RECTANGLE
                     cornerRadius = dp(2).toFloat()
-                    setColor(Color.WHITE)
+                    setColor(BubbleAppearance.gripColor)
                 }
                 layoutParams = FrameLayout.LayoutParams(dp(28), dp(4), Gravity.CENTER)
             }
@@ -1023,6 +1116,8 @@ class OverlayService : Service(), Dictation.Listener {
             setOnTouchListener { _, ev -> onMicTouch(ev) }
         }
         micBtn = mic
+        surface = BubbleSurface().apply { density = resources.displayMetrics.density; diameter = dp(builtSize).toFloat() }
+        mic.background = surface
         micCell.addView(mic)
         root.addView(micCell)
         // Stop BELOW the mic: same column, centered (symmetric on both
@@ -1128,7 +1223,7 @@ class OverlayService : Service(), Dictation.Listener {
 
     /** Reserve room before capture so Android never refits the hold window under the finger. */
     private fun safeBubbleBounds(width: Int, height: Int): SafeBounds =
-        safeBounds(width, maxOf(height, dp(FloatState.recordingWindowHeightDp(grabEnabled()))))
+        safeBounds(width, maxOf(height, dp(FloatState.recordingWindowHeightDp(grabEnabled()) + (maxOf(50, builtSize) - 50))))
 
     private fun completeBubbleDrag(x: Float, y: Float): Boolean {
         trackSnooze(x, y)
@@ -1179,7 +1274,21 @@ class OverlayService : Service(), Dictation.Listener {
      * same drag (release still finishes unless dropped on the X).
      * Inside the margin, jitter is involuntary and ignored.
      */
+    private fun trackInteraction(ev: MotionEvent) {
+        if (ev.actionMasked == MotionEvent.ACTION_DOWN) {
+            touching = true
+            mainHandler.removeCallbacks(shrinkIdle)
+            shrinkScheduled = false
+        }
+        if (ev.actionMasked == MotionEvent.ACTION_UP || ev.actionMasked == MotionEvent.ACTION_CANCEL) {
+            touching = false
+            idleElapsed = false
+            mainHandler.post { if (!parked) refreshChrome(dictation.current) }
+        }
+    }
+
     private fun onMicTouch(ev: MotionEvent): Boolean {
+        trackInteraction(ev)
         val grab = grabEnabled()
         if (ev.actionMasked == MotionEvent.ACTION_DOWN && dictation.current == Dictation.State.WORKING) {
             processingTouch = true
@@ -1348,6 +1457,7 @@ class OverlayService : Service(), Dictation.Listener {
      * hint seen. Never Dictation input.
      */
     private fun onHandleTouch(ev: MotionEvent): Boolean {
+        trackInteraction(ev)
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 downRawX = ev.rawX
@@ -1423,6 +1533,15 @@ class OverlayService : Service(), Dictation.Listener {
     }
 
     private fun removeBubble(animate: Boolean = false) {
+        parked = false
+        touching = false
+        mainHandler.removeCallbacks(shrinkIdle)
+        shrinkScheduled = false
+        idleElapsed = false
+        surfaceAnimator?.cancel()
+        surfaceAnimator = null
+        surface = null
+        surfaceTarget = -1f
         vizMorphAnimator?.cancel()
         vizMorphAnimator = null
         mainHandler.removeCallbacks(revealHoldControls)
@@ -1475,6 +1594,7 @@ class OverlayService : Service(), Dictation.Listener {
 
     /** Flat monochrome states; opacity affects the surface, keeping the mic legible. */
     private fun refreshChrome(state: Dictation.State) {
+        if (parked) return
         if (!getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean("float_lock_enabled", true)) hideLockTarget()
         val processing = FloatState.isProcessing(state)
         val stateChanged = chromeState != state
@@ -1494,26 +1614,18 @@ class OverlayService : Service(), Dictation.Listener {
             }
         }
         micBtn?.apply {
-            val nextBackground = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = dp(16).toFloat()
-                setColor(if (state == Dictation.State.RECORDING) 0xFFE8E8E8.toInt() else Color.WHITE)
-                // Uniform translucency belongs to the compositor's window alpha,
-                // not fractional-alpha pixels in this drawing buffer.
-            }
             backgroundTintList = null
-            background = nextBackground
+            background = surface
             minimumWidth = 0
             minimumHeight = 0
             adjustViewBounds = false
             val logo = true
             setImageResource(if (processing) R.drawable.ic_float_processing else if (logo) R.drawable.ic_stat_sync else R.drawable.ic_mic)
             scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
-            val iconPadding = dp(if (logo) 10 else 11)
-            setPadding(iconPadding, iconPadding, iconPadding, iconPadding)
             imageTintList = android.content.res.ColorStateList.valueOf(Color.BLACK)
             alpha = if (state == Dictation.State.RECORDING && !toggleRecording) 0f else 1f
         }
+        updateIdleSurface(state)
         haloView?.visibility = View.GONE
         dragHandle?.visibility = if (state == Dictation.State.RECORDING) View.INVISIBLE else View.VISIBLE
         if (stateChanged) {
@@ -1527,10 +1639,6 @@ class OverlayService : Service(), Dictation.Listener {
                 }
             } else {
                 micBtn?.contentDescription = getString(R.string.ime_mic)
-                processingAnimator = android.animation.ObjectAnimator.ofInt(micBtn, "imageAlpha", 160, 255).apply {
-                    duration = 90L
-                    start()
-                }
             }
         }
         cancelGuide?.visibility = if (state == Dictation.State.RECORDING && !toggleRecording) {
@@ -1542,7 +1650,7 @@ class OverlayService : Service(), Dictation.Listener {
                 if (holdControlsReady) View.VISIBLE else View.INVISIBLE
             } else View.GONE
         params?.let { lp ->
-            val height = dp(50 + 8 + (if (builtGrab) 14 else 0) +
+            val height = dp(maxOf(50, builtSize) + 8 + (if (builtGrab) 14 else 0) +
                 (if ((state == Dictation.State.RECORDING && !toggleRecording) || holdReturning) 96 else 0))
             if (lp.height != height) {
                 lp.height = height
@@ -1605,7 +1713,7 @@ class OverlayService : Service(), Dictation.Listener {
         if (toggleRecording && toggleReturnOffset != 0f) {
             toggleReturnOffset = 0f
             val lp = vizParams ?: return
-            val destination = (params?.y ?: lp.y) + (if (builtGrab) dp(14) else 0) + dp(4)
+            val destination = (params?.y ?: lp.y) + (if (builtGrab) dp(14) else 0) + dp(4) + micInset()
             toggleReturnAnimator?.cancel()
             toggleReturnAnimator = android.animation.ValueAnimator.ofInt(lp.y, destination).apply {
                 duration = 120L
@@ -1636,8 +1744,8 @@ class OverlayService : Service(), Dictation.Listener {
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE, PixelFormat.TRANSLUCENT).apply {
             gravity = Gravity.TOP or Gravity.LEFT
-            x = if (vizDockedLeft) bubble.x else bubble.x + bubble.width - width
-            y = bubble.y + (if (builtGrab) dp(14) else 0) + dp(4)
+            x = if (vizDockedLeft) bubble.x + micInset() else bubble.x + bubble.width - width - micInset()
+            y = bubble.y + (if (builtGrab) dp(14) else 0) + dp(4) + micInset()
         }
         val pill = object : FrameLayout(this) {
             private val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = 0xCC1D1B20.toInt() }
@@ -1645,7 +1753,7 @@ class OverlayService : Service(), Dictation.Listener {
             override fun onDraw(canvas: android.graphics.Canvas) {
                 val left = if (vizDockedLeft) 0f else this.width - vizVisibleWidth
                 val right = if (vizDockedLeft) vizVisibleWidth else this.width.toFloat()
-                canvas.drawRoundRect(left, 0f, right, height.toFloat(), dp(18).toFloat(), dp(18).toFloat(), paint)
+                if (vizVisibleWidth > dp(52)) canvas.drawRoundRect(left, 0f, right, height.toFloat(), dp(18).toFloat(), dp(18).toFloat(), paint)
                 super.onDraw(canvas)
             }
         }
@@ -1660,7 +1768,11 @@ class OverlayService : Service(), Dictation.Listener {
             scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
             imageTintList = android.content.res.ColorStateList.valueOf(if (primary) Color.BLACK else Color.WHITE)
             backgroundTintList = null
-            background = if (primary) GradientDrawable().apply { cornerRadius = dp(16).toFloat(); setColor(Color.WHITE) } else null
+            background = if (primary) GradientDrawable().apply {
+                cornerRadius = dp(16).toFloat()
+                setColor(Color.WHITE)
+                setStroke(dp(1).coerceAtLeast(1), Color.BLACK)
+            } else null
             setPadding(dp(14), dp(14), dp(14), dp(14))
             val left = if (primary) vizDockedLeft else !vizDockedLeft
             layoutParams = FrameLayout.LayoutParams(dp(52), dp(52), (if (left) Gravity.LEFT else Gravity.RIGHT) or Gravity.CENTER_VERTICAL)
@@ -1675,6 +1787,16 @@ class OverlayService : Service(), Dictation.Listener {
         }
         pill.addView(cancel)
         pill.addView(primary)
+        val entryScale = ((surface?.diameter ?: dp(50).toFloat()) / dp(52)).coerceIn(0.1f, 1f)
+        primary.scaleX = entryScale
+        primary.scaleY = entryScale
+        primary.imageAlpha = micBtn?.imageAlpha ?: 255
+        primary.animate().scaleX(1f).scaleY(1f).setDuration(120L)
+            .setInterpolator(android.view.animation.DecelerateInterpolator()).start()
+        android.animation.ObjectAnimator.ofInt(primary, "imageAlpha", primary.imageAlpha, 255).apply {
+            duration = 120L
+            start()
+        }
         vizHolder = pill
         vizParams = lp
         vizBars = bars
@@ -1701,7 +1823,7 @@ class OverlayService : Service(), Dictation.Listener {
         toggleReturnAnimator?.cancel()
         toggleCollapsing = true
         vizParams?.let { lp ->
-            lp.flags = (lp.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE) and WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON.inv()
+            lp.flags = lp.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
             try { wm?.updateViewLayout(outgoing, lp) } catch (_: Exception) { }
         }
         vizCancel?.animate()?.alpha(0f)?.setDuration(80L)?.start()
@@ -1729,7 +1851,7 @@ class OverlayService : Service(), Dictation.Listener {
         val root = vizHolder ?: return
         val lp = vizParams ?: return
         val bubble = params ?: return
-        lp.y = bubble.y + (if (builtGrab) dp(14) else 0) + dp(4) +
+        lp.y = bubble.y + (if (builtGrab) dp(14) else 0) + dp(4) + micInset() +
             (micBtn?.translationY ?: 0f).toInt()
         try { wm?.updateViewLayout(root, lp) } catch (_: Exception) { }
     }
@@ -1876,7 +1998,9 @@ class OverlayService : Service(), Dictation.Listener {
     // -- Dictation.Listener ----------------------------------------------
 
     override fun onState(s: Dictation.State, toggled: Boolean) {
-        micBtn?.post {
+        mainHandler.post {
+            val s = FloatState.displayState(s, pendingDelivery.get())
+            if (parked || holder == null) return@post
             val nextToggle = s == Dictation.State.RECORDING && toggled
             val leavingRecording = vizHolder != null && s != Dictation.State.RECORDING
             if (leavingRecording && !toggleCollapsing) collapseToggleToBubble()
@@ -1917,7 +2041,6 @@ class OverlayService : Service(), Dictation.Listener {
     }
 
     override fun onResult(text: String) {
-        micBtn?.post { refreshChrome(Dictation.State.IDLE) }
         android.util.Log.i("MwFloat", "onResult len=${text.length} text=<$text>")
         deliver(text)
     }
@@ -1944,37 +2067,43 @@ class OverlayService : Service(), Dictation.Listener {
 
     /** Commit runs here (not in onResult) to keep the result text. */
     fun deliver(text: String) {
+        pendingDelivery.incrementAndGet()
         bgWorkers.execute {
-            val t = text.trim()
-            android.util.Log.i(
-                "MwFloat",
-                "deliver entry len=${text.length} trimmedLen=${t.length} text=<$t>",
-            )
-            if (t.isEmpty()) {
-                android.util.Log.i("MwFloat", "deliver drop-empty")
-                return@execute
-            }
-            val ok = MyWhisperAccessibility.commit(t)
-            android.util.Log.i("MwFloat", "deliver commit ok=$ok text=<$t>")
-            if (!ok) {
-                // Toast must run on the main thread (this is a worker).
-                // a11y off is a configuration failure, not a missing
-                // field: say which one so the fix is obvious.
-                val a11yOff = !MyWhisperAccessibility.isOn(this)
-                android.util.Log.i("MwFloat", "deliver fail a11yOff=$a11yOff")
-                mainHandler.post {
-                    try {
-                        Toast.makeText(
-                            this,
-                            getString(
-                                if (a11yOff) R.string.float_need_a11y
-                                else R.string.float_no_field,
-                            ),
-                            Toast.LENGTH_LONG,
-                        ).show()
-                    } catch (_: Exception) {
+            try {
+                val t = text.trim()
+                android.util.Log.i(
+                    "MwFloat",
+                    "deliver entry len=${text.length} trimmedLen=${t.length} text=<$t>",
+                )
+                if (t.isEmpty()) {
+                    android.util.Log.i("MwFloat", "deliver drop-empty")
+                    return@execute
+                }
+                val ok = MyWhisperAccessibility.commit(t)
+                android.util.Log.i("MwFloat", "deliver commit ok=$ok text=<$t>")
+                if (!ok) {
+                    // Toast must run on the main thread (this is a worker).
+                    // a11y off is a configuration failure, not a missing
+                    // field: say which one so the fix is obvious.
+                    val a11yOff = !MyWhisperAccessibility.isOn(this)
+                    android.util.Log.i("MwFloat", "deliver fail a11yOff=$a11yOff")
+                    mainHandler.post {
+                        try {
+                            Toast.makeText(
+                                this,
+                                getString(
+                                    if (a11yOff) R.string.float_need_a11y
+                                    else R.string.float_no_field,
+                                ),
+                                Toast.LENGTH_LONG,
+                            ).show()
+                        } catch (_: Exception) {
+                        }
                     }
                 }
+            } finally {
+                pendingDelivery.decrementAndGet()
+                onState(dictation.current, toggleRecording)
             }
         }
     }

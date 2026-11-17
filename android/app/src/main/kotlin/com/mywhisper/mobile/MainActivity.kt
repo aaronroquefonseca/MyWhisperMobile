@@ -2312,7 +2312,11 @@ class MainActivity : ComponentActivity() {
                     )
                     FeedbackSwitch(modifier = Modifier.semantics { contentDescription = getString(R.string.setup_float_grab) }, checked = grab, onCheckedChange = {
                         grab = it
-                        setupPrefs.edit { putBoolean("float_grab", it) }
+                        val behavior = BubbleAppearance.idleBehavior(setupPrefs.getString("float_idle_style", "full"))
+                        setupPrefs.edit {
+                            putBoolean("float_grab", it)
+                            putString("float_idle_style", BubbleAppearance.withGrip(behavior, it).key)
+                        }
                         // Rebuild the bubble chrome for the new mode.
                         OverlayService.start(this@MainActivity)
                     })
@@ -2322,6 +2326,7 @@ class MainActivity : ComponentActivity() {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                BubbleAppearanceSettings(setupPrefs, grab) { OverlayService.start(this@MainActivity) }
                 var upperLock by remember { mutableStateOf(setupPrefs.getBoolean("float_lock_enabled", true)) }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(stringResource(R.string.float_lock_enabled), modifier = Modifier.weight(1f))
@@ -2330,14 +2335,6 @@ class MainActivity : ComponentActivity() {
                         setupPrefs.edit { putBoolean("float_lock_enabled", it) }
                         OverlayService.start(this@MainActivity)
                     })
-                }
-                var followKeyboard by remember { mutableStateOf(setupPrefs.getBoolean("float_follow_keyboard", true)) }
-                ChoiceSetting(getString(R.string.float_visibility),
-                    getString(if (followKeyboard) R.string.float_follow_keyboard else R.string.float_follow_focus),
-                    listOf(getString(R.string.float_follow_keyboard), getString(R.string.float_follow_focus))) { picked ->
-                    followKeyboard = picked == getString(R.string.float_follow_keyboard)
-                    setupPrefs.edit { putBoolean("float_follow_keyboard", followKeyboard) }
-                    OverlayService.start(this@MainActivity)
                 }
                 var snoozeMinutes by remember { mutableIntStateOf(setupPrefs.getInt("float_snooze_minutes", 10)) }
                 ChoiceSetting(getString(R.string.float_snooze_duration), "$snoozeMinutes min",
@@ -2379,45 +2376,69 @@ class MainActivity : ComponentActivity() {
                         OverlayService.start(this@MainActivity)
                     },
                 )
-                if (!grab) {
-                    // No grip: a finger that stays put this long records;
-                    // moving sooner means a drag (never a dictation).
-                    var delayMs by remember {
-                        mutableIntStateOf(
-                            FloatState.pressDelayMs(
-                                setupPrefs.getInt(
-                                    "float_press_delay",
-                                    FloatState.PRESS_DELAY_DEFAULT_MS,
+                var advanced by rememberSaveable { mutableStateOf(false) }
+                TextButton(onClick = { advanced = !advanced }, modifier = Modifier.semantics {
+                    stateDescription = getString(if (advanced) R.string.bubble_advanced_open else R.string.bubble_advanced_closed)
+                }) { Text(stringResource(R.string.bubble_advanced)) }
+                if (advanced) {
+                    var followKeyboard by remember { mutableStateOf(setupPrefs.getBoolean("float_follow_keyboard", true)) }
+                    ChoiceSetting(getString(R.string.float_visibility),
+                        getString(if (followKeyboard) R.string.float_follow_keyboard else R.string.float_follow_focus),
+                        listOf(getString(R.string.float_follow_keyboard), getString(R.string.float_follow_focus))) { picked ->
+                        followKeyboard = picked == getString(R.string.float_follow_keyboard)
+                        setupPrefs.edit { putBoolean("float_follow_keyboard", followKeyboard) }
+                        OverlayService.start(this@MainActivity)
+                    }
+                    var resident by remember { mutableStateOf(setupPrefs.getBoolean("float_keep_attached", false)) }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(stringResource(R.string.bubble_resident), Modifier.weight(1f))
+                        FeedbackSwitch(modifier = Modifier.semantics { contentDescription = getString(R.string.bubble_resident) }, checked = resident, onCheckedChange = {
+                            resident = it
+                            setupPrefs.edit { putBoolean("float_keep_attached", it) }
+                            OverlayService.start(this@MainActivity)
+                        })
+                    }
+                    Text(stringResource(R.string.bubble_resident_help), style = MaterialTheme.typography.bodySmall)
+                    if (!grab) {
+                        // No grip: a finger that stays put this long records;
+                        // moving sooner means a drag (never a dictation).
+                        var delayMs by remember {
+                            mutableIntStateOf(
+                                FloatState.pressDelayMs(
+                                    setupPrefs.getInt(
+                                        "float_press_delay",
+                                        FloatState.PRESS_DELAY_DEFAULT_MS,
+                                    ),
                                 ),
-                            ),
+                            )
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        val delayOptions = FloatState.PRESS_DELAY_OPTIONS_MS
+                        Text(getString(R.string.setup_float_delay), style = MaterialTheme.typography.bodyMedium)
+                        Text("$delayMs ms", style = MaterialTheme.typography.bodySmall)
+                        Slider(
+                            value = delayOptions.indexOf(delayMs).coerceAtLeast(0).toFloat(),
+                            valueRange = 0f..delayOptions.lastIndex.toFloat(),
+                            steps = delayOptions.size - 2,
+                            onValueChange = {
+                                val next = delayOptions[it.roundToInt().coerceIn(delayOptions.indices)]
+                                if (next != delayMs) {
+                                    delayMs = next
+                                    ViewCompat.performHapticFeedback(hapticView, HapticFeedbackConstantsCompat.SEGMENT_TICK)
+                                }
+                            },
+                            modifier = Modifier.semantics { contentDescription = getString(R.string.setup_float_delay); stateDescription = "$delayMs ms" },
+                            onValueChangeFinished = {
+                                setupPrefs.edit { putInt("float_press_delay", delayMs) }
+                                OverlayService.start(this@MainActivity)
+                            },
+                        )
+                        Text(
+                            stringResource(R.string.setup_float_delay_sub),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    Spacer(Modifier.height(8.dp))
-                    val delayOptions = FloatState.PRESS_DELAY_OPTIONS_MS
-                    Text(getString(R.string.setup_float_delay), style = MaterialTheme.typography.bodyMedium)
-                    Text("$delayMs ms", style = MaterialTheme.typography.bodySmall)
-                    Slider(
-                        value = delayOptions.indexOf(delayMs).coerceAtLeast(0).toFloat(),
-                        valueRange = 0f..delayOptions.lastIndex.toFloat(),
-                        steps = delayOptions.size - 2,
-                        onValueChange = {
-                            val next = delayOptions[it.roundToInt().coerceIn(delayOptions.indices)]
-                            if (next != delayMs) {
-                                delayMs = next
-                                ViewCompat.performHapticFeedback(hapticView, HapticFeedbackConstantsCompat.SEGMENT_TICK)
-                            }
-                        },
-                        modifier = Modifier.semantics { contentDescription = getString(R.string.setup_float_delay); stateDescription = "$delayMs ms" },
-                        onValueChangeFinished = {
-                            setupPrefs.edit { putInt("float_press_delay", delayMs) }
-                            OverlayService.start(this@MainActivity)
-                        },
-                    )
-                    Text(
-                        stringResource(R.string.setup_float_delay_sub),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
                 }
             }
         }

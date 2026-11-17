@@ -96,7 +96,7 @@
             android:exported="false">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Floating dictation bubble with microphone capture" />
+                android:value="Floating dictation button with microphone capture" />
         </service>
 
         <service
