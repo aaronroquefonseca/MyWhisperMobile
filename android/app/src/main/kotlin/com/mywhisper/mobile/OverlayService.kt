@@ -175,6 +175,8 @@ class OverlayService : Service(), Dictation.Listener {
         mainHandler.removeCallbacks(shrinkIdle)
         shrinkScheduled = false
         surfaceAnimator?.cancel()
+        // A cancelled morph has not necessarily reached its target. Resume it on reveal.
+        surfaceTarget = -1f
         holder?.animate()?.cancel()
         holder?.alpha = 0f
         params?.let {
@@ -1116,7 +1118,17 @@ class OverlayService : Service(), Dictation.Listener {
             setOnTouchListener { _, ev -> onMicTouch(ev) }
         }
         micBtn = mic
-        surface = BubbleSurface().apply { density = resources.displayMetrics.density; diameter = dp(builtSize).toFloat() }
+        val initialShape = BubbleAppearance.shape(
+            BubbleAppearance.idleBehavior(prefs.getString("float_idle_style", "full")),
+            elapsed = false, search = FloatState.searchField,
+            shrinkSearch = prefs.getBoolean("float_shrink_search", false), grip = grab, busy = false,
+        )
+        surface = BubbleSurface().apply {
+            density = resources.displayMetrics.density
+            diameter = density * BubbleAppearance.diameter(builtSize, initialShape)
+        }
+        mic.imageAlpha = if (initialShape == BubbleAppearance.Shape.DOT) 0 else 255
+        chromeState = Dictation.State.IDLE
         mic.background = surface
         micCell.addView(mic)
         root.addView(micCell)
