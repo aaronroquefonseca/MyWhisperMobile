@@ -6,8 +6,7 @@ package com.mywhisper.mobile
  * a 1–3GB engine per warm model would OOM phones); the loaded
  * entry's per-model policy governs it:
  *
- * - `IMMEDIATE` (0): release right after each use (LLM default —
- *   today's MediaPipe/LiteRT behavior: load per call).
+ * - `IMMEDIATE` (0): release right after each use (load per call).
  * - N seconds: stay loaded, evicted lazily once idle longer than N
  *   (no polling timers — every use sweeps, so an entry can linger
  *   past its deadline until the next use; harmless, documented).
@@ -26,6 +25,13 @@ object LocalKeepWarm {
 
     /** Never idle-evict (explicit drops still apply). */
     const val INDEFINITE = -1L
+
+    /**
+     * LLM default: stay loaded 10 minutes. Loading per call cost ~5 s plus
+     * the full system-prompt prefill on every dictation (measured, Gemma 3
+     * 1B on Exynos 990: 12 s cold vs <1 s warm with the cached prompt).
+     */
+    const val LLM_DEFAULT = 600L
 
     const val KIND_STT = "stt"
     const val KIND_LLM = "llm"

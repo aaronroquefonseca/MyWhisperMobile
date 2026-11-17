@@ -1,34 +1,12 @@
 //! On-device LLM cleanup (text polish only — never STT).
 //!
-//! Chosen provider: MediaPipe LLM Inference `.task` family
-//! (Google AI Edge; successor API: LiteRT-LM Kotlin). The actual
-//! inference lives in Kotlin (`LocalLlmManager.kt`, GPU delegate);
-//! this module owns the portable pieces the engine needs:
-//! prompt packing, model-asset manifest + SHA-256 verification,
-//! sidecar/bridge backend plumbing, and the cleanup-path hook.
-//!
-//! ## Spike comparison (literature numbers, see PR body)
-//!
-//! | Provider | Pack / model size | Decode (1-2B, flagship) | APK delta | RAM (1B) | License | Android API |
-//! |---|---|---|---|---|---|---|
-//! | llama.cpp via JNI (Llama-3.2-1B Q4_0 GGUF ~0.77 GB, Q8 ~1.3 GB) | GGUF download, not bundled | ~8-15 tok/s CPU (ARM NEON); ExecuTorch XNNPACK proxy 1B q4 decode ~46-50 tok/s, TTFT ~0.3 s / 64-prompt (OnePlus 12) | ~1-2 MB `.so` + OpenMP | ~1.5-2 GB | MIT | hand-rolled JNI, no official SDK |
-//! | **MediaPipe LLM Inference `.task` (CHOSEN)** (SmolLM2-360M ~0.4 GB, Gemma-3 1B int4 ~0.7 GB, Gemma2-2B int8 ~2.5 GB) | single `.task` download, not bundled | ~10-20 tok/s decode, prefill hundreds tok/s (Pixel 8 / S23 class, Google blog, 1024-in / 1280-max, int4/8) | ~5-10 MB AAR (`tasks-genai`) | ~1-2 GB | Apache-2.0 (models: Gemma license) | official Kotlin `LlmInference.generateResponse`, GPU delegate; maintenance-only → LiteRT-LM successor |
-//! | MLC (Qwen2.5-1.5B q4f16 ~1.2 GB assets, Llama-3.2-3B q4f16 ~2 GB) | TVM-compiled lib + weights download; >1 GB if bundled | ~11 tok/s measured (TinyBench S24 Ultra: 312 tok, prefill 2341 ms, decode 28.2 s) | runtime + per-model lib (tens of MB) + assets | ~3-4.2 GB est. VRAM | Apache-2.0 | OpenAI-compatible, heaviest toolchain (TVM compile/model, 5-15 min build, NDK 27) |
-//!
-//! Pick rationale: cleanup prompts are short (one utterance +
-//! system prompt); MediaPipe gives a single downloadable `.task`
-//! file, the official Kotlin `LlmInference` API with GPU delegate,
-//! and no NDK/TVM build. Decode/prefill rows above are
-//! literature-sourced, not bench-verified here — polish latency is
-//! unmeasured until the owner runs `scripts/bench-local-llm.sh`
-//! on-device. Caveat (Google docs): the API targets high-end
-//! devices (Pixel 8 / S23+) and does not reliably support
-//! emulators — hence unit tests first, numbers later.
-//!
-//! Runtime today: Kotlin runs the selected pack (LiteRT-LM
-//! `.litertlm` or MediaPipe `.task`) and registers itself through
-//! [`set_local_runner`] at process start; dictation cleanup reaches
-//! it via [`try_local_cleanup`].
+//! Runner: llama.cpp (GGUF) from the app's downloadable runtime pack,
+//! driven from Kotlin (`LocalLlmManager.kt`, GPU first). This module owns
+//! the portable pieces the engine needs: prompt packing, model-asset
+//! manifest + SHA-256 verification, sidecar/bridge backend plumbing, and
+//! the cleanup-path hook. Kotlin registers itself through
+//! [`set_local_runner`] at process start; dictation cleanup reaches it via
+//! [`try_local_cleanup`].
 //!
 //! Fallback: the engine tries `Local` entries through
 //! [`try_local_cleanup`]; when no runner or model is ready it
@@ -39,12 +17,12 @@ use crate::settings::LlmEntry;
 use std::path::Path;
 
 /// Portable config for one on-device cleanup call, derived from an
-/// `LlmEntry` of kind `Local`: `model` is the `.task` file path (or
+/// `LlmEntry` of kind `Local`: `model` is the `.gguf` file path (or
 /// model id when unresolved), `url` optionally overrides the model
 /// dir / sidecar endpoint.
 #[derive(Debug, Clone)]
 pub struct LocalLlmConfig {
-    /// Absolute `.task` path when resolved, else the stored id.
+    /// Absolute model path when resolved, else the stored id.
     pub model_path: String,
     /// Model dir, or `http(s)://` sidecar endpoint for tests/bridges.
     pub model_dir: String,
@@ -81,17 +59,17 @@ impl LocalLlmConfig {
         }
     }
 
-    /// True when a `.task` file exists at `model_path`.
+    /// True when a model file exists at `model_path`.
     pub fn model_ready(&self) -> bool {
         !self.model_path.trim().is_empty() && Path::new(&self.model_path).is_file()
     }
 }
 
-/// Default on-device model location: `<data>/models/cleanup.task`.
+/// Default on-device model location: `<data>/models/cleanup.gguf`.
 pub fn default_task_path(data_dir: &Path) -> String {
     data_dir
         .join("models")
-        .join("cleanup.task")
+        .join("cleanup.gguf")
         .to_string_lossy()
         .into_owned()
 }
@@ -104,7 +82,7 @@ pub fn build_cleanup_prompt(system: &str, raw: &str) -> String {
 
 // -- model manifest (download manager + SHA pinning) --------------------
 
-/// One downloadable `.task` asset. Binaries are NEVER committed;
+/// One downloadable model asset. Binaries are NEVER committed;
 /// `scripts/fetch-local-llm.sh` downloads + verifies these.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct ModelAsset {

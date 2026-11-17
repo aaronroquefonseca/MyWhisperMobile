@@ -1,18 +1,15 @@
-# APK SLIM: release R8 rules (2026-10-15). R8 is release-only; debug
-# keeps everything for the emulator.
+# Release R8 rules. R8 is release-only; debug keeps everything.
 
 # Tink (androidx.security:security-crypto): default R8 run fails on
 # missing errorprone/javax.annotation classes — silence, keep the impl.
 -dontwarn com.google.errorprone.annotations.**
 -dontwarn javax.annotation.**
 -dontwarn javax.annotation.meta.**
-# Optional Tink/MediaPipe deps R8 flags as missing (http downloader,
-# AutoValue, image pipeline, protobuf internals, joda-time): none are
-# on the runtime path we use (EncryptedSharedPreferences file crypto,
-# text-only LlmInference via reflection).
+# Optional Tink deps R8 flags as missing (http downloader, AutoValue,
+# protobuf internals, joda-time): not on the EncryptedSharedPreferences
+# file-crypto path we use.
 -dontwarn com.google.api.client.**
 -dontwarn com.google.auto.value.**
--dontwarn com.google.mediapipe.framework.image.**
 -dontwarn com.google.protobuf.**
 -dontwarn org.joda.time.**
 -keep class com.google.crypto.tink.** { *; }
@@ -27,19 +24,6 @@
 # Called back from Rust by method name (`cleanup`) over JNI.
 -keep class com.mywhisper.mobile.LocalLlmCleanupRunner { *; }
 
-# Reflection bridges: class/method names resolve via Class.forName at
-# runtime, so R8 must keep the targets in release builds that ship
-# them (full flavor; harmless when absent in lite).
--keep class com.k2fsa.sherpa.onnx.** { *; }
--keep class com.google.mediapipe.tasks.genai.llminference.** { *; }
-# Own bridge (loaded by NAME from common code, never referenced
-# directly — R8 cannot see the edge). The litertlm library classes
-# it touches are traced normally through its direct references.
--keep class com.mywhisper.mobile.LiteRtLmBridge { *; }
-# LiteRT-LM itself: its NATIVE library looks up these classes and
-# members BY NAME at runtime (verified root cause of the release-
-# only nativeCreateConversation abort — R8 had renamed Engine to
-# m4.f, Conversation to m4.e and removed ConversationConfig
-# outright, while debug builds worked). No consumer rules ship in
-# the AAR, so keep the whole surface here.
--keep class com.google.ai.edge.litertlm.** { *; }
+# On-device AI pack: libmwlocalai.so binds JNI symbols to this exact
+# class name (Java_com_mywhisper_mobile_LocalAiNative_*).
+-keep class com.mywhisper.mobile.LocalAiNative { *; }

@@ -10,10 +10,9 @@ import org.junit.Test
 class LocalLlmCleanupRunnerTest {
     private val asset = LocalLlmManager.ModelAsset(
         id = "gemma-test",
-        url = "https://example/x.litertlm",
+        url = "https://example/x.gguf",
         sha256 = "ab".repeat(32),
         sizeBytes = 1,
-        runtime = LocalLlmManager.RUNTIME_LITERTLM,
     )
 
     @Test

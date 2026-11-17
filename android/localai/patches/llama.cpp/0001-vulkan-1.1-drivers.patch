@@ -1,0 +1,130 @@
+diff --git a/ggml/src/ggml-vulkan/ggml-vulkan.cpp b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+index 22641f5..5083780 100644
+--- a/ggml/src/ggml-vulkan/ggml-vulkan.cpp
++++ b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+@@ -4571,6 +4571,28 @@ vk_device ggml_vk_get_device(size_t idx) {
+ 
+         last_struct = (VkBaseOutStructure *)&vk12_features;
+ 
++        // Vulkan 1.1 driver (e.g. Mali on Exynos 990, Adreno 6xx on older
++        // Android): the 1.2 core functionality we use is only reachable
++        // through its KHR/EXT extensions, and their entry points (timeline
++        // semaphores, buffer device address, ...) stay null unless enabled.
++        if (device->properties.apiVersion < VK_API_VERSION_1_2) {
++            static const char * const promoted[] = {
++                "VK_KHR_timeline_semaphore", "VK_KHR_buffer_device_address", "VK_KHR_8bit_storage",
++                "VK_KHR_vulkan_memory_model", "VK_KHR_driver_properties", "VK_KHR_shader_float_controls",
++                "VK_KHR_spirv_1_4", "VK_EXT_host_query_reset", "VK_EXT_scalar_block_layout",
++                "VK_KHR_uniform_buffer_standard_layout", "VK_KHR_shader_subgroup_extended_types",
++                "VK_EXT_descriptor_indexing",
++            };
++            for (const char * name : promoted) {
++                for (const auto & ep : ext_props) {
++                    if (strcmp(name, ep.extensionName) == 0) {
++                        device_extensions.push_back(name);
++                        break;
++                    }
++                }
++            }
++        }
++
+         VkPhysicalDeviceInternallySynchronizedQueuesFeaturesKHR internally_synchronized_queues_features{};
+         internally_synchronized_queues_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INTERNALLY_SYNCHRONIZED_QUEUES_FEATURES_KHR;
+         internally_synchronized_queues_features.pNext = nullptr;
+@@ -5044,6 +5066,12 @@ vk_device ggml_vk_get_device(size_t idx) {
+             .setPEnabledExtensionNames(device_extensions);
+         device_create_info.setPNext(&device_features2);
+         device->device = device->physical_device.createDevice(device_create_info);
++        if (device->properties.apiVersion < VK_API_VERSION_1_2) {
++            // Resolve device entry points (with KHR fallbacks for the 1.2
++            // core names) from this device; instance-level lookup leaves
++            // them null on Android's loader.
++            VULKAN_HPP_DEFAULT_DISPATCHER.init(device->device);
++        }
+ 
+         if (device->device_fault) {
+             device->pfn_vkGetDeviceFaultInfoEXT = (PFN_vkGetDeviceFaultInfoEXT)
+@@ -5692,7 +5720,7 @@ void ggml_vk_instance_init() {
+         // If only CPU devices are available, return without devices.
+         if (vk_instance.device_indices.empty()) {
+             for (size_t i = 0; i < devices.size(); i++) {
+-                if (devices[i].getProperties().deviceType != vk::PhysicalDeviceType::eCpu) {
++                if (devices[i].getProperties().deviceType != vk::PhysicalDeviceType::eCpu && ggml_vk_device_is_supported(devices[i])) {
+                     vk_instance.device_indices.push_back(i);
+                     break;
+                 }
+@@ -16836,6 +16864,20 @@ bool ggml_vk_instance_debug_utils_ext_available(
+ }
+ 
+ bool ggml_vk_device_is_supported(const vk::PhysicalDevice & vkdev) {
++    // Vulkan 1.1 drivers work through the promoted extensions enabled at
++    // device creation; without these two they would crash on null entry
++    // points or reject the SPIR-V 1.4 shaders, so use the CPU instead.
++    if (vkdev.getProperties().apiVersion < VK_API_VERSION_1_2) {
++        bool timeline = false, spirv14 = false;
++        for (const auto & ep : vkdev.enumerateDeviceExtensionProperties()) {
++            timeline = timeline || strcmp(ep.extensionName, "VK_KHR_timeline_semaphore") == 0;
++            spirv14 = spirv14 || strcmp(ep.extensionName, "VK_KHR_spirv_1_4") == 0;
++        }
++        if (!timeline || !spirv14) {
++            return false;
++        }
++    }
++
+     VkPhysicalDeviceFeatures2 device_features2;
+     device_features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+ 
+diff --git a/ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp b/ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp
+index 7ccccfa..f7c8da2 100644
+--- a/ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp
++++ b/ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp
+@@ -348,19 +348,30 @@ compile_count_guard acquire_compile_slot() {
+ }
+ 
+ void string_to_spv_func(std::string name, std::string in_path, std::string out_path, std::map<std::string, std::string> defines, bool coopmat, bool dep_file, compile_count_guard slot) {
+-    std::string target_env = (name.find("_cm2") != std::string::npos) ? "--target-env=vulkan1.3" : "--target-env=vulkan1.2";
++    // Plain shaders target Vulkan 1.1 + SPIR-V 1.4 so 1.1 drivers exposing
++    // VK_KHR_spirv_1_4 can load them; 1.2+ drivers accept SPIR-V 1.4 too.
++    // Cooperative-matrix shaders only run on newer drivers: keep 1.2/1.3.
++    const bool cm2 = name.find("_cm2") != std::string::npos;
++    std::string target_env = cm2 ? "--target-env=vulkan1.3" : coopmat ? "--target-env=vulkan1.2" : "--target-env=vulkan1.1";
+ 
+     #ifdef _WIN32
+         std::vector<std::string> cmd = {GLSLC, "-fshader-stage=compute", target_env, "\"" + in_path + "\"", "-o", "\"" + out_path + "\""};
+     #else
+         std::vector<std::string> cmd = {GLSLC, "-fshader-stage=compute", target_env, in_path, "-o", out_path};
+     #endif
++    const bool spv14 = !cm2 && !coopmat;
++    if (spv14) {
++        cmd.push_back("--target-spv=spv1.4");
++    }
+ 
+     // disable spirv-opt for coopmat shaders for https://github.com/ggml-org/llama.cpp/issues/10734
+     // disable spirv-opt for bf16 shaders for https://github.com/ggml-org/llama.cpp/issues/15344
+     // disable spirv-opt for rope shaders for https://github.com/ggml-org/llama.cpp/issues/16860
+     // disable spirv-opt for dot2 shaders (spirv-opt doesn't recognize SPV_VALVE_mixed_float_dot_product capability)
+-    if (!coopmat && name.find("bf16") == std::string::npos && name.find("rope") == std::string::npos && name.find("_dot2") == std::string::npos) {
++    // SPIR-V 1.4 output is optimized by spirv-opt below: glslc's -O validates
++    // it against the plain vulkan1.1 environment (SPIR-V 1.3) and fails.
++    const bool optimize = !coopmat && name.find("bf16") == std::string::npos && name.find("rope") == std::string::npos && name.find("_dot2") == std::string::npos;
++    if (optimize && !spv14) {
+         cmd.push_back("-O");
+     }
+ 
+@@ -406,6 +417,16 @@ void string_to_spv_func(std::string name, std::string in_path, std::string out_p
+             return;
+         }
+ 
++        if (optimize && spv14) {
++            std::vector<std::string> opt = {"spirv-opt", "-O", "--target-env=vulkan1.1spv1.4", out_path, "-o", out_path};
++            std::string opt_out, opt_err;
++            if (execute_command(opt, opt_out, opt_err) != 0 || !opt_err.empty()) {
++                std::cerr << "cannot optimize " << name << "\n\n" << opt_err << std::endl;
++                compile_failed = true;
++                return;
++            }
++        }
++
+         if (dep_file) {
+             // replace .spv output path with the embed .cpp path which is used as output in CMakeLists.txt
+             std::string dep = read_binary_file(target_cpp + ".d", true);

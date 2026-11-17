@@ -20,7 +20,7 @@ class ModelDownloadBgTest {
 
     @Test
     fun workNames_uniquePerModel_safeChars() {
-        val a = ModelDownloadSchedule.workNameFor("stt", LocalSttModels.MOONSHINE_ID)
+        val a = ModelDownloadSchedule.workNameFor("stt", LocalSttModels.WHISPER_BASE_ID)
         val b = ModelDownloadSchedule.workNameFor("stt", LocalSttModels.WHISPER_TINY_ID)
         val c = ModelDownloadSchedule.workNameFor("llm", "gemma3-1b-it-int4")
         assertNotEquals(a, b)
@@ -33,7 +33,7 @@ class ModelDownloadBgTest {
         // keeps a single writer and lets Retry re-run).
         assertEquals(
             a,
-            ModelDownloadSchedule.workNameFor("stt", LocalSttModels.MOONSHINE_ID),
+            ModelDownloadSchedule.workNameFor("stt", LocalSttModels.WHISPER_BASE_ID),
         )
     }
 
@@ -72,13 +72,13 @@ class ModelDownloadBgTest {
     fun cancelWipe_removesPartialsKeepsFinals() {
         val dir = Files.createTempDirectory("dl-cancel").toFile()
         try {
-            // STT: partial gone, verified final + unrelated file kept.
+            // STT: partial gone, final + unrelated file kept.
             val entry = LocalSttModels.findById(LocalSttModels.WHISPER_TINY_ID)
             val pack = LocalSttModels.dirFor(dir, entry)
             pack.mkdirs()
             val part = File(pack, entry.files.first().name + ".part")
             part.writeBytes("partial".toByteArray())
-            val final = File(pack, entry.files[1].name)
+            val final = File(pack, entry.files.first().name)
             final.writeBytes("final".toByteArray())
             val other = File(pack, "notes.txt")
             other.writeBytes("x".toByteArray())
@@ -105,7 +105,7 @@ class ModelDownloadBgTest {
     }
 
     @Test
-    fun notifIds_stableAndDistinct() {        val a = ModelDownloadSchedule.workNameFor("stt", LocalSttModels.MOONSHINE_ID)
+    fun notifIds_stableAndDistinct() {        val a = ModelDownloadSchedule.workNameFor("stt", LocalSttModels.WHISPER_BASE_ID)
         val b = ModelDownloadSchedule.workNameFor("stt", LocalSttModels.WHISPER_TINY_ID)
         assertEquals(
             ModelDownloadSchedule.notifIdFor(a),
@@ -358,5 +358,13 @@ class ModelDownloadBgTest {
             assertTrue("${f.name}: complete title present", complete.isNotBlank())
             assertNotEquals("${f.name}: titles must differ", complete, failed)
         }
+    }
+
+    @Test
+    fun progressDue_throttlesButAlwaysReportsTheEnd() {
+        assertTrue(ModelDownloadSchedule.progressDue(0L, 500L, 10, 100))
+        assertFalse(ModelDownloadSchedule.progressDue(1_000L, 1_200L, 10, 100))
+        assertTrue(ModelDownloadSchedule.progressDue(1_000L, 1_200L, 100, 100))
+        assertFalse(ModelDownloadSchedule.progressDue(1_000L, 1_200L, 100, null))
     }
 }

@@ -1,40 +1,32 @@
 {
-  "provider": "mediapipe",
-  "notes": "Binaries NEVER committed. Download via the in-app Text cleanup > Local row (SHA-256 verified) or scripts/fetch-local-llm.sh. SHAs below were verified by full download + sha256sum. Gemma 4 note: only .litertlm (LiteRT-LM runtime) + web.task (WebGPU) artifacts exist - no Android MediaPipe .task; Gemma 4 entries use runtime litertlm (own runner, full flavor). Gated files need HF auth + license; Apache-2.0 files download directly.",
+  "provider": "llama.cpp",
+  "notes": "Binaries NEVER committed. Download via the in-app Text cleanup > Local row (SHA-256 verified) or scripts/fetch-local-llm.sh. GGUF files run on llama.cpp from the on-device AI runtime pack (GPU first). SHAs are the Hugging Face LFS oids. All files are ungated.",
   "models": [
     {
-      "id": "gemma3-1b-it-int4",
-      "url": "https://huggingface.co/aquhm/gemma3-1b-it-int4-litert/resolve/main/gemma3-1b-it-int4.task",
-      "sha256": "e3d981c01aeaaac69a84ffa0d4be13281b3176731063f1bea1c9fe6887bd9dee",
-      "size_bytes": 554661243,
+      "id": "gemma3-1b-it-q4_0",
+      "url": "https://huggingface.co/unsloth/gemma-3-1b-it-GGUF/resolve/main/gemma-3-1b-it-Q4_0.gguf",
+      "sha256": "27ee88e03be02e9ba73def9a819d570d8ad73716e50769e87f374ae394b0276e",
+      "size_bytes": 721918496,
       "min_ram_mb": 3072,
-      "note": "Small-phone option: ~0.5GB weights, fits 4-6GB phones (Note9-class)."
+      "note": "Small-phone option: ~0.7GB, fits 4-6GB phones."
     },
     {
-      "id": "gemma3-1b-it-mpseq-q8",
-      "url": "https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/Gemma3-1B-IT_multi-prefill-seq_q8_ekv2048.task",
-      "sha256": "e79a6c3fc0fd109f3b2697e7ae0905fcfded68640656d0433ca6276dc8d1b734",
-      "size_bytes": 1073765694,
-      "min_ram_mb": 4096,
-      "note": "Official multi-prefill-seq q8 (ekv2048): the parameterization Google's Android sample used (tasks-genai 0.10.29); gated - needs HF auth + Gemma license."
+      "id": "gemma4-e2b-it-qat-q4_0",
+      "url": "https://huggingface.co/google/gemma-4-E2B-it-qat-q4_0-gguf/resolve/main/gemma-4-E2B_q4_0-it.gguf",
+      "sha256": "fa401b55b07ee70a54c6dae3903c783a6e65064312529ea57175cb5f8dec6634",
+      "size_bytes": 3349516256,
+      "min_ram_mb": 6144,
+      "thinking": true,
+      "note": "Gemma 4 E2B, Google's quantization-aware Q4_0 (Apache-2.0). 8GB+ phones."
     },
     {
-      "id": "gemma4-e2b-it",
-      "runtime": "litertlm",
-      "url": "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm",
-      "sha256": "181938105e0eefd105961417e8da75903eacda102c4fce9ce90f50b97139a63c",
-      "size_bytes": 2588147712,
-      "min_ram_mb": 8192,
-      "note": "Gemma 4 E2B via LiteRT-LM (Apache-2.0, ungated). Needs the litertlm runner; 12GB phones fine."
-    },
-    {
-      "id": "gemma4-e4b-it",
-      "runtime": "litertlm",
-      "url": "https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it.litertlm",
-      "sha256": "0b2a8980ce155fd97673d8e820b4d29d9c7d99b8fa6806f425d969b145bd52e0",
-      "size_bytes": 3659530240,
+      "id": "gemma4-e4b-it-qat-q4_0",
+      "url": "https://huggingface.co/google/gemma-4-E4B-it-qat-q4_0-gguf/resolve/main/gemma-4-E4B_q4_0-it.gguf",
+      "sha256": "676c35070db6dbe52f93e9c864ee0fba4eddea94b9c875d9cb10daff453fbaee",
+      "size_bytes": 5154941280,
       "min_ram_mb": 10240,
-      "note": "Gemma 4 E4B via LiteRT-LM (Apache-2.0, ungated). Heaviest option: ~3.4GB weights, 12GB phones."
+      "thinking": true,
+      "note": "Gemma 4 E4B, Google's quantization-aware Q4_0 (Apache-2.0). Heaviest option: 12GB phones."
     }
   ]
 }

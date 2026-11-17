@@ -71,23 +71,46 @@ jobs:
         working-directory: core
         run: cargo install --locked cargo-ndk --version 4.1.2
       # Gradle build cache + configuration cache; no daemon issues on GH runners.
-      - name: Fetch sherpa-onnx AAR (SHA256-pinned, never committed)
-        working-directory: .
-        run: bash scripts/fetch-sherpa-aar.sh
       - uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d # v4
       - name: Lint (errors fail), unit tests, unsigned debug APK
-        # Per-flavor lint/test tasks (apk-slim flavors: lintDebug no longer
-        # exists); assembleDebug still aggregates BOTH flavors. No emulator.
-        # assembleDebug is unsigned (release signing needs secrets, out of scope).
+        # One APK; the on-device AI runtime is a separate download (job
+        # below). No emulator. assembleDebug is unsigned (release signing
+        # needs secrets, out of scope).
         run: |
-          ./gradlew :app:lintFullDebug :app:lintLiteDebug
-          ./gradlew :app:testFullDebugUnitTest :app:testLiteDebugUnitTest
+          ./gradlew :app:lintDebug
+          ./gradlew :app:testDebugUnitTest
           ./gradlew :app:assembleDebug
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: app-debug
-          path: |
-            android/app/build/outputs/apk/full/debug/app-full-debug.apk
-            android/app/build/outputs/apk/lite/debug/app-lite-debug.apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 7
+
+  # On-device AI runtime pack (llama.cpp + whisper.cpp, built from pinned
+  # sources): proves the native build and the local patches still apply.
+  # Cached by its inputs, so unrelated pushes skip the ~15 min build.
+  localai:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - id: cache
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: build/localai
+          key: localai-${{ hashFiles('scripts/build-localai.sh', 'android/localai/**') }}
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
+        if: steps.cache.outputs.cache-hit != 'true'
+        with:
+          packages: 'ndk;28.2.13676358'
+      - name: Build the runtime pack
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends glslc spirv-tools ninja-build
+          bash scripts/build-localai.sh
+          du -sh build/localai/lib

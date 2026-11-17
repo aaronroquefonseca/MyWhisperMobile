@@ -24,22 +24,7 @@ class LocalLlmCleanupRunner(context: Context) {
         val asset = MainActivity.llmSelectedAsset(assets, prefs.getString(MainActivity.PREF_SELECTED_LLM, null))
             ?: throw IllegalStateException("no local llm asset in manifest")
         val file = modelFile(app.filesDir, asset)
-        return if (asset.runtime == LocalLlmManager.RUNTIME_LITERTLM) {
-            LocalLlmManager.generateLitertlm(
-                file,
-                system,
-                transcript,
-                keepSecs = LocalKeepWarm.readKeepSecs(prefs, LocalKeepWarm.KIND_LLM, asset.id, LocalKeepWarm.IMMEDIATE),
-                thinkBudget = LocalKeepWarm.readThinkBudget(prefs, asset.id).takeIf { it > 0 },
-            )
-        } else {
-            LocalLlmManager.generate(
-                file,
-                LocalLlmManager.buildPrompt(system, transcript),
-                context = app,
-                assetId = asset.id,
-            )
-        }
+        return LocalLlmManager.generate(app, file, system, transcript, asset)
     }
 
     companion object {

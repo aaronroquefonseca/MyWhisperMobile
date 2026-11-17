@@ -182,9 +182,10 @@ class MainActivity : ComponentActivity() {
     internal enum class LocalPackState { PRESENT, MISSING, MISMATCH, INCOMPLETE }
 
     /**
-     * Lite-gated row state for the Local STT/LLM download rows.
-     * NEED_FULL_FLAVOR = runner absent (lite flavor): the full-APK
-     * pointer shows instead of Download; the rest mirror the
+     * Runner-gated row state for the Local STT/LLM download rows.
+     * NEED_FULL_FLAVOR = no on-device runtime for this device/build
+     * (not arm64, or no pack URL): an explanation shows instead of
+     * Download; the rest mirror the
      * verified-pack row machine ([LocalModelDownload.RowState]).
      * Pure for unit tests.
      */
@@ -312,25 +313,24 @@ class MainActivity : ComponentActivity() {
         }
 
         /**
-         * Per-asset model file: `models/llm-<assetId>.<ext>` (`.task`
-         * for MediaPipe, `.litertlm` for LiteRT-LM), so several
+         * Per-asset model file: `models/llm-<assetId>.gguf`, so several
          * downloaded LLM packs coexist (one file per asset) while the
-         * legacy single `cleanup.task` slot stays untouched. Pure for
+         * legacy single `cleanup.gguf` slot stays untouched. Pure for
          * unit tests (file mapping only, no Context).
          */
         @JvmStatic
-        internal fun llmTaskFileFor(dir: File, assetId: String, ext: String = "task"): File {
+        internal fun llmTaskFileFor(dir: File, assetId: String, ext: String = LocalLlmManager.MODEL_EXT): File {
             val safe = assetId.map { c ->
                 if (c.isLetterOrDigit() || c == '-' || c == '_') c else '_'
             }.joinToString("").ifBlank { "model" }
-            val cleanExt = ext.trimStart('.').ifBlank { "task" }
+            val cleanExt = ext.trimStart('.').ifBlank { LocalLlmManager.MODEL_EXT }
             return File(File(dir, "models"), "llm-$safe.$cleanExt")
         }
 
         /** Asset-aware slot: extension follows the entry runtime. */
         @JvmStatic
         internal fun llmTaskFileFor(dir: File, asset: LocalLlmManager.ModelAsset): File =
-            llmTaskFileFor(dir, asset.id, LocalLlmManager.extForRuntime(asset.runtime))
+            llmTaskFileFor(dir, asset.id, LocalLlmManager.MODEL_EXT)
 
         /**
          * Files whose stats gate an LLM asset's cached verdict: the
@@ -622,12 +622,11 @@ class MainActivity : ComponentActivity() {
             ProviderTest.llmRemoteTestAllowed(kind, url, model)
 
         /**
-         * Lite-flavor gate for the Local STT/LLM rows: lite builds ship
-         * no on-device runners (sherpa / MediaPipe are
-         * fullImplementation-only), so downloads offered there could
-         * never run. False (= runner absent) forces the NEED_FULL_FLAVOR
-         * row, which shows the full-APK pointer instead of Download.
-         * True (= full flavor) defers to the verified-pack row machine.
+         * Runtime gate for the Local STT/LLM rows: without an on-device
+         * runtime for this device/build ([LocalAiRuntime.supported]),
+         * downloads could never run. False forces the NEED_FULL_FLAVOR
+         * row, which explains why instead of offering Download. True
+         * defers to the verified-pack row machine.
          * Fail-closed: NEED_FULL_FLAVOR never enables the toggle.
          * Pure for unit tests (runner presence injected).
          */
@@ -660,43 +659,13 @@ class MainActivity : ComponentActivity() {
         internal fun gatedToggleAllowed(state: GatedRowState): Boolean =
             state == GatedRowState.PRESENT
 
-        /** Sherpa STT runner present (false on lite builds / JVM tests). Never throws. */
+        /** On-device STT runner available (runtime pack for this ABI). Never throws. */
         @JvmStatic
-        internal fun sttRunnerSupported(): Boolean =
-            try {
-                LocalStt.SherpaRunner.isSupported()
-            } catch (_: Exception) {
-                false
-            } catch (_: LinkageError) {
-                false
-            }
+        internal fun sttRunnerSupported(): Boolean = LocalAiRuntime.supported()
 
-        /** MediaPipe LLM runner present (false on lite builds / JVM tests). Never throws. */
+        /** On-device LLM runner available (same runtime pack as STT). Never throws. */
         @JvmStatic
-        internal fun llmRunnerSupported(): Boolean =
-            mediapipeRunnerSupported() || litertlmRunnerSupported()
-
-        /** LiteRT-LM runner present (false on lite builds / JVM tests). Never throws. */
-        @JvmStatic
-        internal fun litertlmRunnerSupported(): Boolean =
-            try {
-                Class.forName("com.mywhisper.mobile.LiteRtLmBridge")
-                true
-            } catch (_: Exception) {
-                false
-            } catch (_: LinkageError) {
-                false
-            }
-
-        private fun mediapipeRunnerSupported(): Boolean =
-            try {
-                Class.forName("com.google.mediapipe.tasks.genai.llminference.LlmInference")
-                true
-            } catch (_: Exception) {
-                false
-            } catch (_: LinkageError) {
-                false
-            }
+        internal fun llmRunnerSupported(): Boolean = LocalAiRuntime.supported()
 
         // -- Local sections UX (collapsible + unified STT/LLM pattern) ---
 
@@ -892,42 +861,34 @@ class MainActivity : ComponentActivity() {
           * sync guard); binaries are NEVER committed.
           */
         internal const val LLM_MANIFEST_JSON = """{
-  "provider": "mediapipe",
-  "notes": "Binaries NEVER committed. Download via the in-app Text cleanup > Local row (SHA-256 verified) or scripts/fetch-local-llm.sh. SHAs below were verified by full download + sha256sum. Gemma 4 note: only .litertlm (LiteRT-LM runtime) + web.task (WebGPU) artifacts exist - no Android MediaPipe .task; Gemma 4 entries use runtime litertlm (own runner, full flavor). Gated files need HF auth + license; Apache-2.0 files download directly.",
+  "provider": "llama.cpp",
+  "notes": "Binaries NEVER committed. Download via the in-app Text cleanup > Local row (SHA-256 verified) or scripts/fetch-local-llm.sh. GGUF files run on llama.cpp from the on-device AI runtime pack (GPU first). SHAs are the Hugging Face LFS oids. All files are ungated.",
   "models": [
     {
-      "id": "gemma3-1b-it-int4",
-      "url": "https://huggingface.co/aquhm/gemma3-1b-it-int4-litert/resolve/main/gemma3-1b-it-int4.task",
-      "sha256": "e3d981c01aeaaac69a84ffa0d4be13281b3176731063f1bea1c9fe6887bd9dee",
-      "size_bytes": 554661243,
+      "id": "gemma3-1b-it-q4_0",
+      "url": "https://huggingface.co/unsloth/gemma-3-1b-it-GGUF/resolve/main/gemma-3-1b-it-Q4_0.gguf",
+      "sha256": "27ee88e03be02e9ba73def9a819d570d8ad73716e50769e87f374ae394b0276e",
+      "size_bytes": 721918496,
       "min_ram_mb": 3072,
-      "note": "Small-phone option: ~0.5GB weights, fits 4-6GB phones (Note9-class)."
+      "note": "Small-phone option: ~0.7GB, fits 4-6GB phones."
     },
     {
-      "id": "gemma3-1b-it-mpseq-q8",
-      "url": "https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/Gemma3-1B-IT_multi-prefill-seq_q8_ekv2048.task",
-      "sha256": "e79a6c3fc0fd109f3b2697e7ae0905fcfded68640656d0433ca6276dc8d1b734",
-      "size_bytes": 1073765694,
-      "min_ram_mb": 4096,
-      "note": "Official multi-prefill-seq q8 (ekv2048): the parameterization Google's Android sample used (tasks-genai 0.10.29); gated - needs HF auth + Gemma license."
+      "id": "gemma4-e2b-it-qat-q4_0",
+      "url": "https://huggingface.co/google/gemma-4-E2B-it-qat-q4_0-gguf/resolve/main/gemma-4-E2B_q4_0-it.gguf",
+      "sha256": "fa401b55b07ee70a54c6dae3903c783a6e65064312529ea57175cb5f8dec6634",
+      "size_bytes": 3349516256,
+      "min_ram_mb": 6144,
+      "thinking": true,
+      "note": "Gemma 4 E2B, Google's quantization-aware Q4_0 (Apache-2.0). 8GB+ phones."
     },
     {
-      "id": "gemma4-e2b-it",
-      "runtime": "litertlm",
-      "url": "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm",
-      "sha256": "181938105e0eefd105961417e8da75903eacda102c4fce9ce90f50b97139a63c",
-      "size_bytes": 2588147712,
-      "min_ram_mb": 8192,
-      "note": "Gemma 4 E2B via LiteRT-LM (Apache-2.0, ungated). Needs the litertlm runner; 12GB phones fine."
-    },
-    {
-      "id": "gemma4-e4b-it",
-      "runtime": "litertlm",
-      "url": "https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it.litertlm",
-      "sha256": "0b2a8980ce155fd97673d8e820b4d29d9c7d99b8fa6806f425d969b145bd52e0",
-      "size_bytes": 3659530240,
+      "id": "gemma4-e4b-it-qat-q4_0",
+      "url": "https://huggingface.co/google/gemma-4-E4B-it-qat-q4_0-gguf/resolve/main/gemma-4-E4B_q4_0-it.gguf",
+      "sha256": "676c35070db6dbe52f93e9c864ee0fba4eddea94b9c875d9cb10daff453fbaee",
+      "size_bytes": 5154941280,
       "min_ram_mb": 10240,
-      "note": "Gemma 4 E4B via LiteRT-LM (Apache-2.0, ungated). Heaviest option: ~3.4GB weights, 12GB phones."
+      "thinking": true,
+      "note": "Gemma 4 E4B, Google's quantization-aware Q4_0 (Apache-2.0). Heaviest option: 12GB phones."
     }
   ]
 }"""
@@ -1184,16 +1145,30 @@ class MainActivity : ComponentActivity() {
         onProgress: (receivedBytes: Long, totalBytes: Long?) -> Unit,
         onDone: () -> Unit,
         onError: (detail: String) -> Unit,
+        onActive: () -> Unit = {},
+        resume: Boolean = false,
     ) {
         val workName = ModelDownloadSchedule.workNameFor(kind, id)
-        if (dlWorkObservers.containsKey(workName)) return
         try {
             val live = WorkManager.getInstance(this)
                 .getWorkInfosForUniqueWorkLiveData(workName)
+            // A screen re-entry brings fresh row state: the old observer
+            // would keep writing into the discarded one.
+            dlWorkObservers.remove(workName)?.let { live.removeObserver(it) }
+            var seenActive = false
             val obs = Observer<List<WorkInfo>> { infos ->
                 val info = infos.firstOrNull() ?: return@Observer
-                when (ModelDownloadSchedule.actionForWorkState(info.state.name)) {
+                val action = ModelDownloadSchedule.actionForWorkState(info.state.name)
+                // Re-attaching on screen entry: only to work still running;
+                // finished/failed work from earlier stays out of the row.
+                if (resume && !seenActive && action != ModelDownloadSchedule.WorkRowAction.TRACK) {
+                    dlWorkObservers.remove(workName)?.let { live.removeObserver(it) }
+                    return@Observer
+                }
+                when (action) {
                     ModelDownloadSchedule.WorkRowAction.TRACK -> {
+                        seenActive = true
+                        onActive()
                         val r = info.progress.getLong(ModelDownloadSchedule.PROG_RECEIVED, -1L)
                         if (r >= 0) {
                             val t = info.progress.getLong(ModelDownloadSchedule.PROG_TOTAL, -1L)
@@ -1296,7 +1271,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** Thinking-budget menu, litertlm entries only (0 = off, default). */
+    /** Thinking menu, models with a thinking mode only (0 = off, default). */
     @Composable
     private fun ThinkDropdown(current: Int, onPick: (Int) -> Unit) {
         var open by remember { mutableStateOf(false) }
@@ -1396,7 +1371,7 @@ class MainActivity : ComponentActivity() {
         // conversation / sendMessage when the tombstone is bare.
         try {
             val proc = Runtime.getRuntime().exec(
-                arrayOf("logcat", "-d", "-v", "brief", "MwLlm:I", "litert:I", "*:S"),
+                arrayOf("logcat", "-d", "-v", "brief", "MwLlm:I", "MwLocalAi:I", "*:S"),
             )
             val out = proc.inputStream.bufferedReader().readText()
             proc.waitFor()
@@ -2774,7 +2749,7 @@ class MainActivity : ComponentActivity() {
         fun bytesOf(id: String): Long =
             modelInspects[id]?.verifiedBytes ?: 0L
         val selPack = packOf(selectedModel.id)
-        // Lite flavor ships no sherpa runner: the chain toggle and all
+        // No on-device runtime (not arm64 / no pack URL): the chain toggle and all
         // Download buttons gate on this (fail-closed, no download offered).
         val sttRunner = remember { sttRunnerSupported() }
         // Per-model in-row download state (desktop fill_stt_models
@@ -2798,20 +2773,7 @@ class MainActivity : ComponentActivity() {
                 checking = checking,
             )
         }
-        fun startModelDownload(m: LocalSttModels.Entry) {
-            // Lite flavor: downloads could never run — refuse fail-closed.
-            if (!sttRunner) {
-                toast(getString(R.string.local_need_full))
-                return
-            }
-            if (dlBusy.contains(m.id)) return
-            dlBusy = dlBusy + m.id
-            dlErr = dlErr - m.id
-            dlProg = dlProg + (m.id to (0L to LocalSttModels.totalBytes(m)))
-            // Background path: bytes move in WorkManager (app-open not
-            // required, own progress notification + Cancel); the row
-            // tracks the unique work below for in-place progress.
-            ModelDownloadManager.enqueueSttModel(this@MainActivity, m.id)
+        fun trackModelDownload(m: LocalSttModels.Entry, resume: Boolean) {
             observeDownloadWork(
                 kind = ModelDownloadSchedule.KIND_STT,
                 id = m.id,
@@ -2824,8 +2786,29 @@ class MainActivity : ComponentActivity() {
                     dlErr = dlErr + (m.id to msg)
                     version++
                 },
+                onActive = { if (!dlBusy.contains(m.id)) dlBusy = dlBusy + m.id },
+                resume = resume,
             )
         }
+        fun startModelDownload(m: LocalSttModels.Entry) {
+            // No runtime: downloads could never run — refuse fail-closed.
+            if (!sttRunner) {
+                toast(getString(R.string.local_need_full))
+                return
+            }
+            if (dlBusy.contains(m.id)) return
+            dlBusy = dlBusy + m.id
+            dlErr = dlErr - m.id
+            dlProg = dlProg + (m.id to (0L to LocalSttModels.totalBytes(m)))
+            // Background path: bytes move in WorkManager (app-open not
+            // required, own progress notification + Cancel); the row
+            // tracks the unique work below for in-place progress.
+            ModelDownloadManager.enqueueSttModel(this@MainActivity, m.id)
+            trackModelDownload(m, resume = false)
+        }
+        // Downloads keep running in WorkManager while this screen is gone:
+        // re-attach their rows (busy + real progress) on every entry.
+        LaunchedEffect(Unit) { LocalSttModels.MODELS.forEach { trackModelDownload(it, resume = true) } }
         // Provider tests: ONE pattern on every chain row (same
         // button + latency/excerpt inline). Per-entry state keyed by
         // row id so reorder keeps results with their row.
@@ -3311,7 +3294,7 @@ class MainActivity : ComponentActivity() {
                             }
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 if (!sttRunner) {
-                                    // Lite flavor: no Download offered (could
+                                    // No runtime: no Download offered (could
                                     // never run) — full-APK pointer instead.
                                     Text(
                                         stringResource(R.string.local_need_full),
@@ -3860,10 +3843,27 @@ class MainActivity : ComponentActivity() {
             }
             return LocalLlmManager.defaultTaskFile(filesDir)
         }
-        // Lite flavor ships no MediaPipe runner: no Download offered.
+        // No on-device runtime (not arm64 / no pack URL): no Download offered.
         val llmRunner = remember { llmRunnerSupported() }
+        fun trackLlmDownload(a: LocalLlmManager.ModelAsset, resume: Boolean) {
+            observeDownloadWork(
+                kind = ModelDownloadSchedule.KIND_LLM,
+                id = a.id,
+                onProgress = { r, t -> llmDlProg = llmDlProg + (a.id to (r to t)) },
+                onDone = { llmDlBusy = llmDlBusy - a.id; llmDlProg = llmDlProg - a.id; version++ },
+                onError = { msg ->
+                    llmDlBusy = llmDlBusy - a.id
+                    llmDlErr = llmDlErr + (a.id to msg)
+                    version++
+                },
+                onActive = { if (!llmDlBusy.contains(a.id)) llmDlBusy = llmDlBusy + a.id },
+                resume = resume,
+            )
+        }
+        // Re-attach rows to downloads still running in WorkManager (see STT).
+        LaunchedEffect(Unit) { assets.forEach { trackLlmDownload(it, resume = true) } }
         fun startLlmDownload(a: LocalLlmManager.ModelAsset) {
-            // Lite flavor: downloads could never run — refuse fail-closed.
+            // No runtime: downloads could never run — refuse fail-closed.
             if (!llmRunner) {
                 toast(getString(R.string.local_need_full))
                 return
@@ -3876,17 +3876,7 @@ class MainActivity : ComponentActivity() {
             // required, own progress notification + Cancel); the row
             // tracks the unique work below for in-place progress.
             ModelDownloadManager.enqueueLlmAsset(this@MainActivity, a)
-            observeDownloadWork(
-                kind = ModelDownloadSchedule.KIND_LLM,
-                id = a.id,
-                onProgress = { r, t -> llmDlProg = llmDlProg + (a.id to (r to t)) },
-                onDone = { llmDlBusy = llmDlBusy - a.id; llmDlProg = llmDlProg - a.id; version++ },
-                onError = { msg ->
-                    llmDlBusy = llmDlBusy - a.id
-                    llmDlErr = llmDlErr + (a.id to msg)
-                    version++
-                },
-            )
+            trackLlmDownload(a, resume = false)
         }
         fun startLlmDownloadMetered(a: LocalLlmManager.ModelAsset) {
             // Explicit metered-data consent from the waiting row: same
@@ -3902,17 +3892,7 @@ class MainActivity : ComponentActivity() {
             llmDlErr = llmDlErr - a.id
             llmDlProg = llmDlProg + (a.id to (0L to a.sizeBytes.takeIf { it > 0 }))
             ModelDownloadManager.enqueueLlmAsset(this@MainActivity, a, metered = true)
-            observeDownloadWork(
-                kind = ModelDownloadSchedule.KIND_LLM,
-                id = a.id,
-                onProgress = { r, t -> llmDlProg = llmDlProg + (a.id to (r to t)) },
-                onDone = { llmDlBusy = llmDlBusy - a.id; llmDlProg = llmDlProg - a.id; version++ },
-                onError = { msg ->
-                    llmDlBusy = llmDlBusy - a.id
-                    llmDlErr = llmDlErr + (a.id to msg)
-                    version++
-                },
-            )
+            trackLlmDownload(a, resume = false)
         }
         fun selectLlm(a: LocalLlmManager.ModelAsset) {
             statePrefs.edit() { putString(PREF_SELECTED_LLM, a.id) }
@@ -3939,33 +3919,14 @@ class MainActivity : ComponentActivity() {
                         LocalLlmManager.runSelfTest(
                             llmActiveFile(target),
                             system,
-                            generateFn = { f, p ->
-                                if (target.runtime == LocalLlmManager.RUNTIME_LITERTLM) {
-                                    val prefs = applicationContext.getSharedPreferences(
-                                        "mw_state",
-                                        MODE_PRIVATE,
-                                    )
-                                    LocalLlmManager.generateLitertlm(
-                                        f,
-                                        system,
-                                        LocalLlmManager.SELFTEST_TRANSCRIPT,
-                                        keepSecs = LocalKeepWarm.readKeepSecs(
-                                            prefs,
-                                            LocalKeepWarm.KIND_LLM,
-                                            target.id,
-                                            LocalKeepWarm.IMMEDIATE,
-                                        ),
-                                        thinkBudget = LocalKeepWarm.readThinkBudget(prefs, target.id)
-                                            .takeIf { it > 0 },
-                                    )
-                                } else {
-                                    LocalLlmManager.generate(
-                                        f,
-                                        p,
-                                        context = applicationContext,
-                                        assetId = target.id,
-                                    )
-                                }
+                            generateFn = { f, _ ->
+                                LocalLlmManager.generate(
+                                    applicationContext,
+                                    f,
+                                    system,
+                                    LocalLlmManager.SELFTEST_TRANSCRIPT,
+                                    target,
+                                )
                             },
                         ),
                     )
@@ -4432,7 +4393,7 @@ class MainActivity : ComponentActivity() {
                                         statePrefs,
                                         LocalKeepWarm.KIND_LLM,
                                         a.id,
-                                        LocalKeepWarm.IMMEDIATE,
+                                        LocalKeepWarm.LLM_DEFAULT,
                                     ),
                                 ) { picked ->
                                     LocalKeepWarm.writeKeepSecs(
@@ -4452,9 +4413,8 @@ class MainActivity : ComponentActivity() {
                                     version++
                                 }
                             }
-                            // Thinking budget (litertlm entries only —
-                            // tasks-genai exposes no thinking knob).
-                            if (a.runtime == LocalLlmManager.RUNTIME_LITERTLM) {
+                            // Thinking switch (models with a thinking mode).
+                            if (a.thinking) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text(
                                         stringResource(R.string.think_label),
@@ -4498,7 +4458,7 @@ class MainActivity : ComponentActivity() {
                             }
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 if (!llmRunner) {
-                                    // Lite flavor: no Download offered (could never
+                                    // No runtime: no Download offered (could never
                                     // run) — full-APK pointer instead.
                                     Text(
                                         stringResource(R.string.local_need_full),

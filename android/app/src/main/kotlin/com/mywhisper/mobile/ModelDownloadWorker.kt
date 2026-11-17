@@ -118,6 +118,7 @@ class ModelDownloadWorker(
     ) {
         val entry = LocalSttModels.MODELS.firstOrNull { it.id == modelId }
             ?: throw IllegalArgumentException("unknown stt model $modelId")
+        ensureRuntime(label.ifBlank { entry.name }, workName, notifId, target, ModelDownloadSchedule.KIND_STT, entry.id)
         LocalSttModels.download(applicationContext.filesDir, entry) { r, t ->
             if (isStopped) throw CancellationException("cancelled")
             reportProgress(label.ifBlank { entry.name }, r, t, workName, notifId, target, ModelDownloadSchedule.KIND_STT, entry.id)
@@ -135,13 +136,12 @@ class ModelDownloadWorker(
         val sha = inputData.getString(ModelDownloadSchedule.KEY_SHA)
             ?: throw IllegalArgumentException("llm asset lacks sha")
         val size = inputData.getLong(ModelDownloadSchedule.KEY_SIZE, 0L)
-        val runtime = inputData.getString(ModelDownloadSchedule.KEY_RUNTIME)
-            ?: LocalLlmManager.RUNTIME_MEDIAPIPE
         val assetId = inputData.getString(ModelDownloadSchedule.KEY_MODEL_ID).orEmpty()
         if (MainActivity.isPlaceholderSha(sha)) {
             throw IllegalStateException("no sha pinned for $assetId")
         }
-        val asset = LocalLlmManager.ModelAsset(assetId, url, sha, size, runtime = runtime)
+        val asset = LocalLlmManager.ModelAsset(assetId, url, sha, size)
+        ensureRuntime(label.ifBlank { assetId }, workName, notifId, target, ModelDownloadSchedule.KIND_LLM, assetId)
         // Per-asset slot (multi-pack coexist): same dest the row
         // downloads to and verifies (`MainActivity.llmTaskFileFor`),
         // so completion flips the row to PRESENT.
@@ -155,6 +155,20 @@ class ModelDownloadWorker(
         }
     }
 
+    /**
+     * The runtime pack (llama.cpp/whisper.cpp) rides along with the first
+     * local model download; progress shows on the same row. No-op once
+     * installed.
+     */
+    private fun ensureRuntime(label: String, workName: String, notifId: Int, target: String, kind: String, id: String) {
+        LocalAiRuntime.ensureDownloaded(applicationContext.filesDir) { r, t ->
+            if (isStopped) throw CancellationException("cancelled")
+            reportProgress(label, r, t, workName, notifId, target, kind, id)
+        }
+    }
+
+    private var lastProgressMs = 0L
+
     private fun reportProgress(
         label: String,
         received: Long,
@@ -165,6 +179,9 @@ class ModelDownloadWorker(
         kind: String,
         modelId: String,
     ) {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (!ModelDownloadSchedule.progressDue(lastProgressMs, now, received, total)) return
+        lastProgressMs = now
         try {
             setProgressAsync(workDataOf(ModelDownloadSchedule.PROG_RECEIVED to received, ModelDownloadSchedule.PROG_TOTAL to (total ?: -1L)))
         } catch (_: Exception) {
@@ -191,5 +208,6 @@ class ModelDownloadWorker(
         ForegroundInfo(
             notifId,
             ModelDownloadNotifications.buildProgress(applicationContext, label, received, total, workName, notifId, target, kind, modelId),
+            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
         )
 }

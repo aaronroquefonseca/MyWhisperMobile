@@ -5,5 +5,9 @@
             android:name=".LocalSttMeterActivity"
             android:exported="true"
             android:theme="@style/Theme.MyWhisper" />
+        <activity
+            android:name=".DevFetchActivity"
+            android:exported="true"
+            android:theme="@android:style/Theme.NoDisplay" />
     </application>
 </manifest>
