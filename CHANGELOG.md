@@ -4,14 +4,28 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-17
+
+### Added
+- Floating button: five sizes with haptic ticks, a thin outline so it stays visible on light backgrounds, and idle modes that shrink it or turn it into a dot after a configurable delay (1–5 s, default 2 s), optionally also over search fields.
+- LLM cleanup entries can show and hide their API key, like speech-to-text entries.
+
 ### Changed
 - One APK for everyone: on-device AI no longer makes the app bigger. Its runtime (llama.cpp + whisper.cpp, built from source, ~17 MB) downloads with the first local model. MyWhisper Lite is discontinued; installing MyWhisper over it keeps your settings.
 - On-device speech now runs on whisper.cpp: Whisper Tiny/Base/Small/Large v3 Turbo and NVIDIA Parakeet TDT v3 (25 languages incl. Spanish). Whisper takes your dictionary words as a prompt. Short dictations transcribe several times faster.
 - On-device cleanup now runs Gemma GGUF models on llama.cpp (Gemma 3 1B, Gemma 4 E2B/E4B). The system prompt is cached between dictations, output that copies the transcript is drafted from it (prompt-lookup decoding), and the model stays loaded for 10 minutes by default: a warm Gemma 4 E2B cleanup test takes ~0.8 s instead of ~5 s.
 - Local models use the GPU (Vulkan, or OpenCL on Adreno) when it is faster on your phone, otherwise the CPU; a GPU that fails or crashes is skipped automatically.
+- The recording visualizer reacts clearly to your voice: silence shows dots, and speaking opens the bars from the middle out. Background noise is ignored and quiet voices are boosted.
+- The screen stays awake while a floating-button dictation is transcribing and pasting.
+- Floating button visibility, hold delay and readiness moved to Advanced, now an expandable section.
 
 ### Removed
 - Moonshine, Whisper Medium/Large v3 and Nemotron streaming models (Whisper Large v3 Turbo and Parakeet replace them), and the MediaPipe / LiteRT-LM / sherpa-onnx runtimes. Model files in those old formats are deleted on update to free the space.
+
+### Fixed
+- LLM cleanup now also runs on on-device transcripts, and the on-device cleanup model runs during dictation instead of only in its self-test. A Local speech-to-text entry below a working server is used as a fallback instead of always winning.
+- Local models no longer re-verify in a loop that left them stuck in "Checking".
+- No more white pixels outside the floating button's border at its corners.
 
 ## [1.1.0] - 2026-11-15
 
