@@ -11,11 +11,14 @@ internal class BubbleSurface : Drawable() {
     var diameter = 0f
         set(value) { field = value; invalidateSelf() }
     var fill = android.graphics.Color.WHITE
+    /** Horizontal shift from center, used to hug the docked screen edge as a dot. */
+    var offsetX = 0f
+        set(value) { field = value; invalidateSelf() }
     var density = 1f
     private var drawableAlpha = 255
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     override fun draw(canvas: Canvas) {
-        val cx = bounds.exactCenterX()
+        val cx = bounds.exactCenterX() + offsetX
         val cy = bounds.exactCenterY()
         val half = diameter / 2f
         // Pre-PR look: 16dp corners on the 50dp bubble, scaled with size; floors to a circle near dot size.
