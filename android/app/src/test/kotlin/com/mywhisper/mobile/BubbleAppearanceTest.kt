@@ -10,6 +10,9 @@ class BubbleAppearanceTest {
         BubbleAppearance.shape(behavior, elapsed, search, shrinkSearch, grip, busy)
 
     @Test fun defaultsAndCorruptSettings() {
+        assertEquals(2000, BubbleAppearance.idleDelayMs(0))
+        assertEquals(2000, BubbleAppearance.idleDelayMs(1234))
+        BubbleAppearance.idleDelayOptionsMs.forEach { assertEquals(it, BubbleAppearance.idleDelayMs(it)) }
         assertEquals(50, BubbleAppearance.size(2))
         assertEquals(50, BubbleAppearance.size(-1))
         assertEquals(50, BubbleAppearance.size(99))

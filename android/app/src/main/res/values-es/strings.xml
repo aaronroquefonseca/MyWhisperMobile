@@ -531,7 +531,11 @@
     <string name="bubble_dot">Punto tras 2 segundos</string>
     <string name="bubble_always_dot">Siempre empezar como un punto</string>
     <string name="bubble_always_dot_help">Aparece como un punto, también en campos de búsqueda. Se expande al grabar y procesar.</string>
-    <string name="bubble_dot_grip">Las opciones de punto requieren desactivar el punto de agarre. Al activarlo se selecciona Mantener el tamaño elegido.</string>
+    <string name="bubble_dot_grip">Las opciones de punto quedan en pausa mientras el punto de agarre está activado. Tu elección vuelve al desactivarlo.</string>
+    <string name="bubble_idle_delay">Retardo de reducción</string>
+    <string name="bubble_idle_delay_value">%1$s s</string>
+    <string name="bubble_idle_delay_sub">Cuánto tiempo sin interacción permanece el botón flotante a tamaño completo antes de reducirse.</string>
+    <string name="bubble_idle_delay_off">Solo se aplica cuando el botón se reduce tras un retardo.</string>
     <string name="bubble_search">Reducir desde el inicio en campos de búsqueda</string>
     <string name="bubble_dot_help">Toca o mantén pulsado el botón flotante como siempre, incluso cuando es un punto.</string>
     <string name="bubble_resident">Mantener la superposición preparada (experimental)</string>
@@ -540,11 +544,12 @@
     <string name="bubble_tile_keep">Mantener tamaño</string>
     <string name="bubble_tile_no_shrink">Sin reducir</string>
     <string name="bubble_tile_small">Más pequeño</string>
-    <string name="bubble_tile_after">Tras 2 segundos</string>
+    <string name="bubble_tile_after">Tras %1$s s</string>
     <string name="bubble_tile_dot">Reducir a punto</string>
     <string name="bubble_tile_start_dot">Empezar como punto</string>
     <string name="bubble_tile_immediate">Desde el inicio</string>
     <string name="bubble_advanced">Avanzado</string>
+    <string name="bubble_advanced_sub">Visibilidad, superposición residente, retardos de reducción y pulsación</string>
     <string name="bubble_advanced_open">Expandido</string>
     <string name="bubble_advanced_closed">Contraído</string>
 </resources>

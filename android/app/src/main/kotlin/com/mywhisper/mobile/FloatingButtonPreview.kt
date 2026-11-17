@@ -19,7 +19,7 @@ import kotlinx.coroutines.delay
 
 /** Appearance preview only. Recording gestures belong to the real floating button. */
 @Composable
-internal fun FloatingButtonPreview(size: Int, behavior: BubbleAppearance.IdleBehavior, grip: Boolean, opacity: Int) {
+internal fun FloatingButtonPreview(size: Int, behavior: BubbleAppearance.IdleBehavior, grip: Boolean, opacity: Int, idleDelayMs: Int) {
     var elapsed by remember { mutableStateOf(false) }
     var previousSize by remember { mutableIntStateOf(size) }
     var showSelectedSize by remember { mutableStateOf(false) }
@@ -31,10 +31,10 @@ internal fun FloatingButtonPreview(size: Int, behavior: BubbleAppearance.IdleBeh
             showSelectedSize = false
         }
     }
-    LaunchedEffect(size, behavior, grip) {
+    LaunchedEffect(size, behavior, grip, idleDelayMs) {
         elapsed = false
         if (behavior.usesDelay) {
-            delay(BubbleAppearance.IDLE_DELAY_MS)
+            delay(idleDelayMs.toLong())
             elapsed = true
         }
     }

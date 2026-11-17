@@ -40,6 +40,8 @@ import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Add
@@ -61,6 +63,8 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -2312,11 +2316,8 @@ class MainActivity : ComponentActivity() {
                     )
                     FeedbackSwitch(modifier = Modifier.semantics { contentDescription = getString(R.string.setup_float_grab) }, checked = grab, onCheckedChange = {
                         grab = it
-                        val behavior = BubbleAppearance.idleBehavior(setupPrefs.getString("float_idle_style", "full"))
-                        setupPrefs.edit {
-                            putBoolean("float_grab", it)
-                            putString("float_idle_style", BubbleAppearance.withGrip(behavior, it).key)
-                        }
+                        // Keep the stored idle choice; dot choices pause while the grip is on and return after.
+                        setupPrefs.edit { putBoolean("float_grab", it) }
                         // Rebuild the bubble chrome for the new mode.
                         OverlayService.start(this@MainActivity)
                     })
@@ -2377,9 +2378,17 @@ class MainActivity : ComponentActivity() {
                     },
                 )
                 var advanced by rememberSaveable { mutableStateOf(false) }
-                TextButton(onClick = { advanced = !advanced }, modifier = Modifier.semantics {
-                    stateDescription = getString(if (advanced) R.string.bubble_advanced_open else R.string.bubble_advanced_closed)
-                }) { Text(stringResource(R.string.bubble_advanced)) }
+                HorizontalDivider(Modifier.padding(top = 8.dp))
+                val chevron by animateFloatAsState(if (advanced) 180f else 0f, label = "advancedChevron")
+                ListItem(
+                    headlineContent = { Text(stringResource(R.string.bubble_advanced), style = MaterialTheme.typography.titleMedium) },
+                    supportingContent = { Text(stringResource(R.string.bubble_advanced_sub)) },
+                    trailingContent = { Icon(Icons.Filled.KeyboardArrowDown, null, Modifier.graphicsLayer { rotationZ = chevron }, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                    modifier = Modifier.clickable(role = Role.Button) { advanced = !advanced }.semantics {
+                        stateDescription = getString(if (advanced) R.string.bubble_advanced_open else R.string.bubble_advanced_closed)
+                    },
+                )
                 if (advanced) {
                     var followKeyboard by remember { mutableStateOf(setupPrefs.getBoolean("float_follow_keyboard", true)) }
                     ChoiceSetting(getString(R.string.float_visibility),
@@ -2399,6 +2408,8 @@ class MainActivity : ComponentActivity() {
                         })
                     }
                     Text(stringResource(R.string.bubble_resident_help), style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.height(8.dp))
+                    IdleDelaySetting(setupPrefs, grab) { OverlayService.start(this@MainActivity) }
                     if (!grab) {
                         // No grip: a finger that stays put this long records;
                         // moving sooner means a drag (never a dictation).

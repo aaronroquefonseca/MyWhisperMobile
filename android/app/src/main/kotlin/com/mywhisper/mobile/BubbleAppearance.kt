@@ -3,7 +3,10 @@ package com.mywhisper.mobile
 /** Idle appearance is independent of dictation mode and visibility. */
 object BubbleAppearance {
     val sizes = listOf(38, 44, 50, 58, 66)
-    const val IDLE_DELAY_MS = 2000L
+    val idleDelayOptionsMs = listOf(1000, 1500, 2000, 3000, 5000)
+    const val IDLE_DELAY_DEFAULT_MS = 2000
+    fun idleDelayMs(stored: Int) = if (stored in idleDelayOptionsMs) stored else IDLE_DELAY_DEFAULT_MS
+    fun seconds(ms: Int): String = java.text.NumberFormat.getInstance().apply { maximumFractionDigits = 1 }.format(ms / 1000.0)
     val gripColor = 0xFF9E9E9E.toInt()
     fun size(index: Int) = sizes.getOrElse(index) { sizes[2] }
     enum class Shape { FULL, SMALL, DOT }

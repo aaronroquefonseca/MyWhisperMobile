@@ -113,6 +113,7 @@ class OverlayService : Service(), Dictation.Listener {
     private var surface: BubbleSurface? = null
     private var surfaceAnimator: android.animation.ValueAnimator? = null
     private var surfaceTarget = -1f
+    private var surfaceOffsetTarget = 0f
     private val pendingDelivery = java.util.concurrent.atomic.AtomicInteger(0)
     private val shrinkIdle = Runnable {
         shrinkScheduled = false
@@ -121,6 +122,14 @@ class OverlayService : Service(), Dictation.Listener {
     }
 
     private fun micInset() = dp((maxOf(50, builtSize) - 50) / 2)
+
+    /** A dot hugs its docked edge instead of floating in the middle of the full-size window. */
+    private fun dotOffset(shape: BubbleAppearance.Shape, diameter: Float): Float {
+        if (shape != BubbleAppearance.Shape.DOT) return 0f
+        val micPx = maxOf(50, builtSize) * resources.displayMetrics.density
+        val dockedLeft = (params?.x ?: 0) + micPx / 2 < resources.displayMetrics.widthPixels / 2
+        return (micPx - diameter) / 2 * (if (dockedLeft) -1 else 1)
+    }
 
     private fun appearanceSize() = BubbleAppearance.size(getSharedPreferences(PREFS, MODE_PRIVATE).getInt("float_size", 2))
 
@@ -132,9 +141,9 @@ class OverlayService : Service(), Dictation.Listener {
             shrinkScheduled = false
             idleElapsed = false
         } else if (!idleElapsed && !shrinkScheduled &&
-            BubbleAppearance.idleBehavior(prefs.getString("float_idle_style", "full")).usesDelay) {
+            BubbleAppearance.withGrip(BubbleAppearance.idleBehavior(prefs.getString("float_idle_style", "full")), builtGrab).usesDelay) {
             shrinkScheduled = true
-            mainHandler.postDelayed(shrinkIdle, BubbleAppearance.IDLE_DELAY_MS)
+            mainHandler.postDelayed(shrinkIdle, BubbleAppearance.idleDelayMs(prefs.getInt("float_idle_delay", BubbleAppearance.IDLE_DELAY_DEFAULT_MS)).toLong())
         }
         val shape = BubbleAppearance.shape(BubbleAppearance.idleBehavior(prefs.getString("float_idle_style", "full")),
             idleElapsed, FloatState.searchField, prefs.getBoolean("float_shrink_search", false), builtGrab, busy)
@@ -142,10 +151,14 @@ class OverlayService : Service(), Dictation.Listener {
         val drawable = surface ?: return
         drawable.fill = if (state == Dictation.State.RECORDING) 0xFFE8E8E8.toInt() else Color.WHITE
         drawable.invalidateSelf()
-        if (surfaceTarget == diameter) return
+        val micPx = maxOf(50, builtSize) * resources.displayMetrics.density
+        val offset = dotOffset(shape, diameter)
+        if (surfaceTarget == diameter && surfaceOffsetTarget == offset) return
         surfaceTarget = diameter
+        surfaceOffsetTarget = offset
         surfaceAnimator?.cancel()
         val from = drawable.diameter.takeIf { it > 0 } ?: diameter
+        val offsetFrom = drawable.offsetX
         val iconFrom = micBtn?.imageAlpha ?: 255
         val iconTo = if (shape == BubbleAppearance.Shape.DOT) 0 else 255
         surfaceAnimator = android.animation.ValueAnimator.ofFloat(from, diameter).apply {
@@ -153,8 +166,9 @@ class OverlayService : Service(), Dictation.Listener {
             interpolator = android.view.animation.DecelerateInterpolator()
             addUpdateListener {
                 drawable.diameter = it.animatedValue as Float
+                drawable.offsetX = offsetFrom + (offset - offsetFrom) * it.animatedFraction
                 if (state == Dictation.State.IDLE) micBtn?.imageAlpha = (iconFrom + (iconTo - iconFrom) * it.animatedFraction).toInt()
-                val padding = ((maxOf(50, builtSize) * resources.displayMetrics.density - drawable.diameter * 0.6f) / 2).toInt().coerceAtLeast(0)
+                val padding = ((micPx - drawable.diameter * 0.6f) / 2).toInt().coerceAtLeast(0)
                 micBtn?.setPadding(padding, padding, padding, padding)
             }
             start()
@@ -1126,6 +1140,7 @@ class OverlayService : Service(), Dictation.Listener {
         surface = BubbleSurface().apply {
             density = resources.displayMetrics.density
             diameter = density * BubbleAppearance.diameter(builtSize, initialShape)
+            offsetX = dotOffset(initialShape, diameter)
         }
         mic.imageAlpha = if (initialShape == BubbleAppearance.Shape.DOT) 0 else 255
         chromeState = Dictation.State.IDLE
@@ -1554,6 +1569,7 @@ class OverlayService : Service(), Dictation.Listener {
         surfaceAnimator = null
         surface = null
         surfaceTarget = -1f
+        surfaceOffsetTarget = 0f
         vizMorphAnimator?.cancel()
         vizMorphAnimator = null
         mainHandler.removeCallbacks(revealHoldControls)
