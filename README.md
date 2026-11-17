@@ -33,7 +33,8 @@ release.
 Focus any text field and the floating button appears over the app. A quick
 tap starts dictation; tap ✓ to transcribe and insert the text, or ✕ to
 discard it. Or press and hold to talk, release to send, slide up to lock
-recording, or slide down to cancel. It follows the keyboard, snaps to the
+recording, or slide down to cancel. While you talk, the level meter blooms
+out from the center with your voice. It follows the keyboard, snaps to the
 screen edge, and can be dragged, faded, locked, or snoozed.
 
 <table>
@@ -49,6 +50,27 @@ screen edge, and can be dragged, faded, locked, or snoozed.
     <td align="center" width="33%">
       <img src="docs/screenshots/pill-hold.png" alt="Floating button held down, listening with live audio levels, a lock target above and a cancel target below" width="220" /><br />
       <sub><b>Hold to talk</b><br />release sends · ↑ lock · ↓ cancel</sub>
+    </td>
+  </tr>
+</table>
+
+Pick from five sizes, XS to XL. When idle, the button can keep its size,
+shrink after a delay, shrink to a small dot, or start as a dot. It still
+responds to a tap or hold in every shape.
+
+<table>
+  <tr>
+    <td align="center" width="33%">
+      <img src="docs/screenshots/pill-small.png" alt="Floating button shrunk to a smaller size while idle in Messages" width="220" /><br />
+      <sub><b>Shrink when idle</b></sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/screenshots/pill-dot.png" alt="Floating button reduced to a small dot at the screen edge while idle" width="220" /><br />
+      <sub><b>Or shrink to a dot</b></sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/screenshots/button-appearance.png" alt="Floating button settings with a size slider from XS to XL and four idle options" width="220" /><br />
+      <sub><b>Size and idle settings</b></sub>
     </td>
   </tr>
 </table>
@@ -92,6 +114,8 @@ screen edge, and can be dragged, faded, locked, or snoozed.
   Hold and release to stop, or tap to start and tap again to finish.
 - **Listening indicator** — an optional floating level meter shows audio
   activity while recording.
+- **Microphone priority** — rank wired, built-in, and Bluetooth inputs;
+  dictation uses the first one connected.
 - **Your setup** — manage speech providers, text cleanup, dictionary,
   history, preferences, and sync from the app.
 
