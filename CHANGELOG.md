@@ -4,6 +4,10 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Removed
+- The MyWhisper keyboard (input method). The floating button covers dictation in every app; if the MyWhisper keyboard was your active keyboard, Android switches back to your previous one after the update.
+- The Android 12 and below warning on the floating button page: placeholder text no longer leaks into dictations there.
+
 ## [1.2.0] - 2026-11-17
 
 ### Added
