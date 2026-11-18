@@ -39,19 +39,22 @@ later via `NsdManager`), `stt`/`transcribe` server supervision
 
 ## Crypto key
 
-Desktop keeps the SQLCipher key in the Secret Service. Android keeps
-it in Keystore-backed `EncryptedSharedPreferences` (`KeystoreKey.kt`)
-and passes it per-process to `nativeOpen`, which sets
-`MYWHISPER_DB_KEY` before `Store::open`. Same ciphertext format —
-a `state.db` moved between devices opens with the same key.
+Desktop keeps the SQLCipher key in the Secret Service and `state.db`
+is encrypted. Android keeps a key in Keystore-backed
+`EncryptedSharedPreferences` (`KeystoreKey.kt`) and passes it
+per-process to `nativeOpen`, which sets `MYWHISPER_DB_KEY` before
+`Store::open`. Android builds plain SQLite (see `Cargo.toml`), which
+ignores `PRAGMA key`: on Android `state.db` is **not encrypted** today,
+and only the app sandbox and Android's file-based encryption protect
+it. The key is reserved for optional SQLCipher
+([#111](https://github.com/aaronroquefonseca/MyWhisperMobile/issues/111)).
 
 ## TODO (later)
 
 - On-device STT (sherpa-onnx/whisper JNI) → stop skipping `Local` chain entries.
 - Streaming partials (sherpa WS online pump while held).
-- SQLCipher on Android (needs vendored OpenSSL; currently plaintext
-  `bundled` — app sandbox still isolates the file, Keystore key kept
-  for the switch).
+- Optional SQLCipher on Android (needs vendored OpenSSL; currently
+  plaintext `bundled`), tracked in #111.
 - Gemini cloud STT.
 - Foreground service for always-on sync (currently runs while the app
   or IME process lives, plus manual/auto rounds).

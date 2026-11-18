@@ -7,10 +7,12 @@ import androidx.security.crypto.MasterKey
 import java.security.SecureRandom
 
 /**
- * SQLCipher key for `state.db`, Android equivalent of the desktop
- * Secret Service `mywhisper/state-db` entry: a random 32-byte key kept
- * in Keystore-backed EncryptedSharedPreferences, handed to the core as
- * 64 hex chars via `nativeOpen`.
+ * Key for `state.db`, Android equivalent of the desktop Secret Service
+ * `mywhisper/state-db` entry: a random 32-byte key kept in
+ * Keystore-backed EncryptedSharedPreferences, handed to the core as 64
+ * hex chars via `nativeOpen`. Android builds plain SQLite, which ignores
+ * the key, so `state.db` is not encrypted yet; the key is reserved for
+ * optional SQLCipher (#111).
  */
 object KeystoreKey {
     private const val FILE = "mw_keys"
