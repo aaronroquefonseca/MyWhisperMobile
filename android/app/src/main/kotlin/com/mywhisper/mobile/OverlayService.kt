@@ -536,7 +536,8 @@ class OverlayService : Service(), Dictation.Listener {
             val mic = micBtn ?: return
             val micLoc = IntArray(2)
             mic.getLocationOnScreen(micLoc)
-            capturedX = lp.x + targetX - micLoc[0] - mic.width / 2f
+            // Center the drawn surface, not the view: a dot is shifted toward its docked edge.
+            capturedX = lp.x + targetX - micLoc[0] - mic.width / 2f - (surface?.offsetX ?: 0f)
             capturedY = lp.y + targetY - micLoc[1] - mic.height / 2f
         }
         // One position owner: capture chooses a fixed destination; finger motion
