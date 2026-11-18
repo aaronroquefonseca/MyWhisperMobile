@@ -4,7 +4,10 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-18
+
 ### Added
+- Preferred microphone: rank Wired, Built-in and Bluetooth inputs (in that order by default); dictation uses the first one connected. Bluetooth headsets switch to call mode only when ranked above the built-in mic.
 - Floating button: Extra small mode, a toggle under the size slider. The button rests as the smallest round button and grows to full size while recording. Size and Shrink smaller pause while it is on and come back when it is off; the dot options still work.
 
 ### Changed
@@ -14,10 +17,15 @@ All notable changes to this project are documented here.
 - Snooze duration moved to Advanced.
 - The floating button preview loops through the idle change, sped up, with a dashed outline of the starting shape and a caption for each step.
 - Floating button settings no longer jump when toggles change their help text; options that do not apply are greyed out instead of hidden, and notes slide in.
+- Microphone behavior settings redesigned: Smart, Hold or Tap mode is a segmented control with a line explaining each, and the quick-tap limit and extra listening delay (moved here from Voice) are sliders.
 
 ### Removed
 - The MyWhisper keyboard (input method). The floating button covers dictation in every app; if the MyWhisper keyboard was your active keyboard, Android switches back to your previous one after the update.
 - The Android 12 and below warning on the floating button page: placeholder text no longer leaks into dictations there.
+
+### Fixed
+- Dragging a row in the transcription or cleanup model chain no longer flips it back and forth or loses later moves.
+- The dot-shaped floating button is centered on the snooze target.
 
 ## [1.2.0] - 2026-11-17
 
