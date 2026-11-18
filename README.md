@@ -110,10 +110,6 @@ responds to a tap or hold in every shape.
 - **Floating button** — keep a microphone available over other apps and
   dictate into a focused text field. Setup guides you through microphone,
   display-over-apps, and dictation-service permissions.
-- **MyWhisper keyboard** — an alternative input method with a mic bar.
-  Hold and release to stop, or tap to start and tap again to finish.
-- **Listening indicator** — an optional floating level meter shows audio
-  activity while recording.
 - **Microphone priority** — rank wired, built-in, and Bluetooth inputs;
   dictation uses the first one connected.
 - **Your setup** — manage speech providers, text cleanup, dictionary,
@@ -139,7 +135,7 @@ otherwise on the CPU; the app measures this per device.
 - `core/` — Rust engine (`mywhisper-core`), JNI `cdylib`.
   Verbatim desktop ports (`settings`, `audio`, `textnorm`, `store`)
   plus mobile-only `server_stt`, `engine`, JNI in `lib.rs`.
-- `android/` — Kotlin app (Compose config + IME service).
+- `android/` — Kotlin app (Compose config, floating button, accessibility service).
 - `scripts/build-core.sh` — `cargo ndk` release build for
   `arm64-v8a` + `x86_64` into `jniLibs` (runs automatically via the
   `buildRustCore` Gradle task).
@@ -160,8 +156,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
 Then open the app and follow setup to configure speech recognition and
-enable the floating button. To use the keyboard instead, enable and switch
-to the MyWhisper input method and grant microphone access.
+enable the floating button.
 
 ## F-Droid listing
 

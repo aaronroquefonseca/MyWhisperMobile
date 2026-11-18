@@ -62,16 +62,6 @@ class HardeningGuardsTest {
         assertTrue(HardeningGuards.barHalfHeight(2f, 1f, 3f) >= 0f)
     }
 
-    // -- IME-state re-sync --------------------------------------------
-
-    @Test
-    fun resolveImeActive_persistedWins() {
-        assertTrue(HardeningGuards.resolveImeActive(true, false))
-        assertFalse(HardeningGuards.resolveImeActive(false, true))
-        assertTrue(HardeningGuards.resolveImeActive(null, true))
-        assertFalse(HardeningGuards.resolveImeActive(null, false))
-    }
-
     // -- Boot retry ----------------------------------------------------
 
     @Test

@@ -135,7 +135,7 @@ struct RecordView: View {
     // MARK: - Visuals (IME micVisualFor parity)
 
     /// IDLE purple 0x6750A4, RECORDING red 0xB3261E, WORKING amber
-    /// 0x7C4D00 — same hex as `MyWhisperIME.micVisualFor`.
+    /// 0x7C4D00.
     private var buttonColor: Color {
         switch state {
         case .idle: return Self.color(0x6750A4)

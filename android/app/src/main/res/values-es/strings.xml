@@ -44,11 +44,7 @@
     <string name="setup_step1">1 · Activa el método de entrada</string>
     <string name="setup_enabled_yes">MyWhisper está activado como método de entrada.</string>
     <string name="setup_enabled_no">MyWhisper aún no está activado.</string>
-    <string name="setup_open_ime">Abrir ajustes del método de entrada</string>
     <string name="setup_step2">2 · Cámbiate a él</string>
-    <string name="setup_active_now">MyWhisper está activo (%1$s).</string>
-    <string name="setup_active_how">Elige MyWhisper en la lista y abre cualquier campo de texto — la barra del micrófono indica que está activo.</string>
-    <string name="setup_pick">Elegir método de entrada</string>
     <string name="setup_step3">3 · Micrófono</string>
     <string name="setup_mic_yes">Micrófono concedido.</string>
     <string name="setup_mic_no">El micrófono es necesario para dictar.</string>
@@ -64,8 +60,6 @@
     <string name="setup_mode_tap">Toca para empezar a grabar y toca de nuevo para parar.</string>
     <string name="setup_mode_smart">Un toque rápido empieza y para la grabación. Mantén pulsado para hablar y suelta para parar.</string>
     <string name="setup_behavior">Comportamiento: %1$s</string>
-    <string name="setup_pill">Medidor de nivel del teclado</string>
-    <string name="setup_pill_sub">Muestra un medidor de nivel flotante sobre el teclado de MyWhisper mientras grabas.</string>
     <string name="mic_ms">%1$d ms</string>
     <string name="mic_tap_limit_off">Solo se usa en el modo Inteligente.</string>
     <string name="mic_tap_limit_sub">Las pulsaciones más cortas inician la grabación sin manos. Las más largas solo graban mientras mantienes.</string>
@@ -85,7 +79,7 @@
     <string name="mic_priority_up">Subir %1$s</string>
     <string name="mic_priority_down">Bajar %1$s</string>
     <string name="setup_float">Botón flotante</string>
-    <string name="setup_float_sub">Dicta en cualquier app sin cambiar de teclado. Se muestra con el teclado en pantalla de forma predeterminada; puedes elegir el enfoque del campo de texto en visibilidad. Se oculta mientras usas el teclado MyWhisper.</string>
+    <string name="setup_float_sub">Dicta en cualquier app sin cambiar de teclado. Se muestra con el teclado en pantalla de forma predeterminada; puedes elegir el enfoque del campo de texto en visibilidad.</string>
     <string name="setup_float_on">El botón flotante está activado.</string>
     <string name="setup_float_off">El botón flotante está desactivado.</string>
     <string name="setup_float_overlay">Permitir mostrar sobre apps</string>
@@ -95,7 +89,6 @@
     <string name="setup_float_grab_sub">Asa fina sobre el botón flotante para moverla. Desactivado: arrastra el propio botón flotante.</string>
     <string name="setup_float_delay">Retardo de pulsación</string>
     <string name="setup_float_delay_sub">Cuánto debe quedarse quieta el botón flotante antes de grabar; un movimiento pequeño cuenta como arrastre.</string>
-    <string name="setup_float_old_warn">En Android 12 y versiones anteriores, el botón flotante puede incluir el texto de ayuda en algunas apps. Ahí se recomienda el teclado MyWhisper.</string>
     <string name="unified_notif_channel">Estado del dictado y la sincronización</string>
     <string name="float_notif_title">Botón flotante MyWhisper</string>
     <string name="float_notif_text">Dictado flotante activo</string>
@@ -116,9 +109,6 @@
     <string name="sync_name_default">generado</string>
     <string name="save_failed">falló al guardar: %1$s</string>
     <string name="done">listo</string>
-    <string name="seen_just_now">activo hace un momento</string>
-    <string name="seen_min_ago">activo hace %1$d min</string>
-    <string name="seen_h_ago">activo hace %1$d h</string>
 
     <!-- Transcription -->
     <string name="stt_chain">Cadena (arriba = se prueba primero)</string>
@@ -341,22 +331,8 @@
     <string name="sync_add_failed">falló: %1$s</string>
 
     <!-- IME -->
-    <string name="ime_hint_smart">mantén para hablar · toca para alternar</string>
-    <string name="ime_hint_push">mantén para hablar · suelta para parar</string>
-    <string name="ime_hint_tap">toca para empezar · toca para parar</string>
-    <string name="ime_rec_toggle">grabando — toca el micro para terminar</string>
-    <string name="ime_rec_push">grabando — suelta para parar</string>
-    <string name="ime_rec_tap">grabando — toca el micro para parar</string>
-    <string name="ime_rec_smart">grabando — suelta para parar, un toque rápido alterna</string>
     <string name="ime_working">transcribiendo…</string>
     <string name="ime_mic">Dictar</string>
-    <string name="ime_listening">Escuchando</string>
-    <string name="ime_backspace">Retroceso</string>
-    <string name="ime_slide_cancel">↓ desliza abajo para cancelar · suelta para enviar</string>
-    <string name="ime_cancelled">Cancelado</string>
-    <string name="ime_keyboard">Teclado</string>
-    <string name="ime_settings">Ajustes</string>
-    <string name="ime_cancel">Cancelar</string>
 
     <!-- Sync service notification -->
     <string name="notif_sync_title">Sincronización MyWhisper</string>
@@ -418,14 +394,11 @@
     <string name="ux_devices_sync">Dispositivos y sincronización</string>
     <string name="ux_ready">Listo para dictar</string>
     <string name="ux_setup_progress">Primeros pasos · %1$d de 3 listos</string>
-    <string name="ux_keyboard_check">Activa y selecciona el teclado MyWhisper</string>
     <string name="ux_speech_heading">Reconocimiento de voz</string>
     <string name="ux_speech_ready">Tu proveedor de voz está configurado.</string>
     <string name="ux_speech_intro">Elige dónde convertir tu voz en texto: en tu teléfono o con un servidor.</string>
     <string name="ux_speech_manage">Gestionar reconocimiento de voz</string>
     <string name="ux_speech_setup">Configurar reconocimiento de voz</string>
-    <string name="ux_keyboard_enable">Activar teclado MyWhisper</string>
-    <string name="ux_keyboard_choose">Elegir teclado</string>
     <string name="ux_microphone_access">Acceso al micrófono</string>
     <string name="ux_hide_preferences">Ocultar preferencias</string>
     <string name="ux_show_preferences">Preferencias · notificaciones, micrófono y apariencia</string>
@@ -446,7 +419,6 @@
     <string name="new_back">Volver</string>
     <string name="new_notifications">Notificaciones</string>
     <string name="new_appearance">Apariencia</string>
-    <string name="new_keyboard">Teclado opcional</string>
     <string name="new_bubble_tab">Botón</string>
     <string name="new_speech_tab">Voz</string>
     <string name="new_cleanup_tab">Limpieza</string>
@@ -455,7 +427,6 @@
     <string name="new_appearance_description">Tema, fondo e icono de la app</string>
     <string name="new_devices_description">Vincular dispositivos y gestionar sincronización</string>
     <string name="new_activity_description">Consultar el uso del dictado</string>
-    <string name="new_keyboard_description">Método de entrada alternativo. No es necesario para el botón flotante.</string>
     <string name="new_diagnostics_description">Resolver problemas y copiar información de diagnóstico</string>
     <string name="new_notifications_enabled">Notificaciones permitidas</string>
     <string name="new_enable_notifications">Activar notificaciones</string>
@@ -502,7 +473,6 @@
     <string name="task_library_sync">Sincroniza tu biblioteca</string>
     <string name="task_sync_description">Comparte diccionario, fragmentos y datos guardados entre dispositivos</string>
     <string name="task_service_failed">No se pudo actualizar el botón flotante. Comprueba los permisos.</string>
-    <string name="task_keyboard_optional">El teclado MyWhisper es opcional. Puedes seguir usando el teclado que prefieras.</string>
     <string name="task_api_key_required">Añade una clave API para el endpoint predeterminado del proveedor.</string>
     <string name="material_notification_title">¿Permitir notificaciones?</string>
     <string name="material_notifications_optional">Este permiso se comparte en toda la app. El dictado y la sincronización pueden seguir funcionando si lo rechazas.</string>

@@ -12,18 +12,18 @@ class MyWhisperApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        android.util.Log.i("MyWhisperIME", "app.onCreate begin")
+        android.util.Log.i("MyWhisperApp", "app.onCreate begin")
         try {
             val key = KeystoreKey.getOrCreateHex(this)
-            android.util.Log.i("MyWhisperIME", "app.onCreate key ok")
+            android.util.Log.i("MyWhisperApp", "app.onCreate key ok")
             CoreBridge.open(filesDir.absolutePath, key).getOrThrow()
-            android.util.Log.i("MyWhisperIME", "app.onCreate core ok")
+            android.util.Log.i("MyWhisperApp", "app.onCreate core ok")
             // Per process (IME, overlay, app): dictation cleanup reaches
             // the on-device LLM only through this registration.
             CoreBridge.setLocalLlmRunner(LocalLlmCleanupRunner(this))
         } catch (e: Exception) {
             coreError = e.message
-            android.util.Log.i("MyWhisperIME", "app.onCreate err=${e.message}")
+            android.util.Log.i("MyWhisperApp", "app.onCreate err=${e.message}")
             return
         }
         // Opportunistic convergence: one round per process start so

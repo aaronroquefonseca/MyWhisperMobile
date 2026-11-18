@@ -118,11 +118,10 @@ class FloatBubbleTest {
 
     @Test
     fun keyboardVisibility_doesNotWaitForStaleTextFocus() {
-        assertFalse(FloatState.shouldShowBubble(true, false, true, true, true, false))
-        assertTrue(FloatState.shouldShowBubble(true, false, true, false, true, true))
-        assertFalse(FloatState.shouldShowBubble(true, true, true, true, true, true))
-        assertFalse(FloatState.shouldShowBubble(true, false, false, true, true, true))
-        assertTrue(FloatState.shouldShowBubble(true, false, true, true, false, false))
+        assertFalse(FloatState.shouldShowBubble(true, true, true, true, false))
+        assertTrue(FloatState.shouldShowBubble(true, true, false, true, true))
+        assertFalse(FloatState.shouldShowBubble(true, false, true, true, true))
+        assertTrue(FloatState.shouldShowBubble(true, true, true, false, false))
     }
 
     @Test
@@ -154,13 +153,13 @@ class FloatBubbleTest {
     // -- Auto-show rule --------------------------------------------
 
     @Test
-    fun show_requiresEnabled_noIme_a11yAndFocus() {
+    fun show_requiresEnabled_a11yAndFocus() {
         // a11y off: the bubble cannot land text anywhere — never show it.
-        assertFalse(FloatState.shouldShowBubble(true, false, false, false))
-        assertFalse(FloatState.shouldShowBubble(true, false, false, true))
+        assertFalse(FloatState.shouldShowBubble(true, false, false))
+        assertFalse(FloatState.shouldShowBubble(true, false, true))
         // a11y on: needs a focused editable field.
-        assertTrue(FloatState.shouldShowBubble(true, false, true, true))
-        assertFalse(FloatState.shouldShowBubble(true, false, true, false))
+        assertTrue(FloatState.shouldShowBubble(true, true, true))
+        assertFalse(FloatState.shouldShowBubble(true, true, false))
     }
 
     // -- Free drag + hold delay (grip off) --------------------------
@@ -195,11 +194,8 @@ class FloatBubbleTest {
     }
 
     @Test
-    fun show_hiddenWhenDisabledOrImeUp() {
-        assertFalse(FloatState.shouldShowBubble(false, false, false, true))
-        // Our own keyboard up: bubble stands down.
-        assertFalse(FloatState.shouldShowBubble(true, true, false, true))
-        assertFalse(FloatState.shouldShowBubble(true, true, true, true))
+    fun show_hiddenWhenDisabled() {
+        assertFalse(FloatState.shouldShowBubble(false, true, true))
     }
 
     // -- Edge snap -------------------------------------------------

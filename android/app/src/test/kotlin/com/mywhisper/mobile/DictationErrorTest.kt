@@ -1,7 +1,6 @@
 package com.mywhisper.mobile
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -38,10 +37,9 @@ class DictationErrorTest {
 
     @Test
     fun rewrittenCopyIsNotARoutineDrop() {
-        // Both surfaces must SHOW it (IME status + bubble toast): it
-        // must not match the routine-drop filters.
+        // The bubble toast must SHOW it: it must not match the
+        // routine-drop filter.
         val msg = userFacingFinishError("no server STT configured: x")
-        assertFalse(MyWhisperIME.isRoutineDrop(msg))
         assertTrue(shouldSurfaceError(msg))
     }
 }

@@ -38,7 +38,7 @@ enum TranscriptionState: Equatable {
 }
 
 /// User-facing STT failure categories. Android parity
-/// (`OverlayService.shouldSurfaceError` / `MyWhisperIME.isRoutineDrop`):
+/// (`OverlayService.shouldSurfaceError`):
 /// only silence/too-short stay silent (empty state) — everything else,
 /// including cancel/supersede races from a provider switch, surfaces.
 enum SttFailureCategory: Equatable {
