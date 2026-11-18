@@ -4,6 +4,17 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Added
+- Floating button: Extra small mode, a toggle under the size slider. The button rests as the smallest round button and grows to full size while recording. Size and Shrink smaller pause while it is on and come back when it is off; the dot options still work.
+
+### Changed
+- A shrunk floating button is a circle again, as the settings preview shows.
+- Floating button corners are adaptive again: a fixed corner size, so smaller sizes look rounder and larger ones squarer. Advanced has a Button shape option to switch back to the uniform shape.
+- Shrink delay now runs from 2 to 10 s, default 5 s.
+- Snooze duration moved to Advanced.
+- The floating button preview loops through the idle change, sped up, with a dashed outline of the starting shape and a caption for each step.
+- Floating button settings no longer jump when toggles change their help text; options that do not apply are greyed out instead of hidden, and notes slide in.
+
 ### Removed
 - The MyWhisper keyboard (input method). The floating button covers dictation in every app; if the MyWhisper keyboard was your active keyboard, Android switches back to your previous one after the update.
 - The Android 12 and below warning on the floating button page: placeholder text no longer leaks into dictations there.

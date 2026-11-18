@@ -89,6 +89,7 @@
     <string name="setup_float_grab_sub">Asa fina sobre el botón flotante para moverla. Desactivado: arrastra el propio botón flotante.</string>
     <string name="setup_float_delay">Retardo de pulsación</string>
     <string name="setup_float_delay_sub">Cuánto debe quedarse quieta el botón flotante antes de grabar; un movimiento pequeño cuenta como arrastre.</string>
+    <string name="setup_float_delay_off">Solo se aplica cuando el punto de agarre está desactivado.</string>
     <string name="unified_notif_channel">Estado del dictado y la sincronización</string>
     <string name="float_notif_title">Botón flotante MyWhisper</string>
     <string name="float_notif_text">Dictado flotante activo</string>
@@ -511,6 +512,15 @@
     <string name="bubble_l">L</string>
     <string name="bubble_xl">XL</string>
     <string name="bubble_default_size">M es el tamaño predeterminado actual. La vista previa muestra el tamaño elegido.</string>
+    <string name="bubble_extra_small">Extra pequeño</string>
+    <string name="bubble_extra_small_sub">Siempre el botón redondo más pequeño. Crece a tamaño completo al grabar.</string>
+    <string name="bubble_extra_small_size_paused">El tamaño queda en pausa mientras Extra pequeño está activado. Tu tamaño vuelve al desactivarlo.</string>
+    <string name="bubble_small_extra_small">Más pequeño queda en pausa mientras Extra pequeño está activado, porque el botón ya es así de pequeño. Tu elección vuelve al desactivarlo.</string>
+    <string name="bubble_shape">Forma del botón</string>
+    <string name="bubble_shape_adaptive">Adaptable</string>
+    <string name="bubble_shape_uniform">Uniforme</string>
+    <string name="bubble_shape_adaptive_sub">Mismo tamaño de esquina en todos los tamaños: los botones pequeños se ven más redondos y los grandes más cuadrados.</string>
+    <string name="bubble_shape_uniform_sub">Las esquinas crecen con el botón, así que todos los tamaños tienen la misma forma.</string>
     <string name="bubble_idle">Cuando está inactivo</string>
     <string name="bubble_full">Mantener el tamaño elegido</string>
     <string name="bubble_small">Más pequeño tras 2 segundos</string>
@@ -526,7 +536,10 @@
     <string name="bubble_dot_help">Toca o mantén pulsado el botón flotante como siempre, incluso cuando es un punto.</string>
     <string name="bubble_resident">Mantener la superposición preparada (experimental)</string>
     <string name="bubble_resident_help">Mantiene una superposición transparente que deja pasar los toques mientras está oculta. Podría aparecer más rápido. Desactivado por defecto.</string>
-    <string name="bubble_preview_ready">Vista previa</string>
+    <string name="bubble_preview_start">Listo</string>
+    <string name="bubble_preview_after">Tras %1$s s inactivo</string>
+    <string name="bubble_preview_sped_up">Acelerado</string>
+    <string name="bubble_preview_dot">Punto hasta que grabes</string>
     <string name="bubble_tile_keep">Mantener tamaño</string>
     <string name="bubble_tile_no_shrink">Sin reducir</string>
     <string name="bubble_tile_small">Más pequeño</string>
@@ -535,7 +548,7 @@
     <string name="bubble_tile_start_dot">Empezar como punto</string>
     <string name="bubble_tile_immediate">Desde el inicio</string>
     <string name="bubble_advanced">Avanzado</string>
-    <string name="bubble_advanced_sub">Visibilidad, superposición residente, retardos de reducción y pulsación</string>
+    <string name="bubble_advanced_sub">Visibilidad, superposición residente, pausa, forma, retardos de reducción y pulsación</string>
     <string name="bubble_advanced_open">Expandido</string>
     <string name="bubble_advanced_closed">Contraído</string>
 </resources>

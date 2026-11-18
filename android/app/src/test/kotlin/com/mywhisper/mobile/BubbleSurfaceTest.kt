@@ -18,11 +18,13 @@ import org.robolectric.annotation.GraphicsMode
 class BubbleSurfaceTest {
     @Test
     fun antialiasedEdgeIsOnlyBorderNeverFill() {
-        for (density in listOf(2f, 2.625f, 3f, 3.5f)) for (dp in listOf(14f, 24f, 32f, 38f, 50f, 66f)) {
+        for (uniformShape in listOf(false, true)) for (round in listOf(0f, 0.5f, 1f)) for (density in listOf(2f, 2.625f, 3f, 3.5f)) for (dp in listOf(14f, 24f, 32f, 38f, 50f, 66f)) {
             val px = (dp * density).toInt() + 4
             val bitmap = Bitmap.createBitmap(px, px, Bitmap.Config.ARGB_8888)
             BubbleSurface().apply {
                 this.density = density
+                roundness = round
+                uniform = uniformShape
                 diameter = dp * density
                 setBounds(0, 0, px, px)
             }.draw(Canvas(bitmap))
@@ -30,7 +32,7 @@ class BubbleSurfaceTest {
                 val c = bitmap.getPixel(x, y)
                 // Any pixel not fully opaque lies on the outer edge and must be pure border, not white fill.
                 if (Color.alpha(c) in 1..254) assertTrue(
-                    "density=$density dp=$dp ($x,$y) ${Integer.toHexString(c)}",
+                    "uniform=$uniformShape round=$round density=$density dp=$dp ($x,$y) ${Integer.toHexString(c)}",
                     Color.red(c) < 40 && Color.green(c) < 40 && Color.blue(c) < 40,
                 )
             }

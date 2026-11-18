@@ -12,6 +12,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
@@ -29,7 +30,9 @@ internal fun BubbleAppearanceSettings(prefs: SharedPreferences, grip: Boolean, r
     var size by remember { mutableIntStateOf(prefs.getInt("float_size", 2).takeIf { it in 0..4 } ?: 2) }
     // Stored choice survives Grab point; only the effective choice changes while it is on.
     val stored by rememberIdleBehavior(prefs)
-    val behavior = BubbleAppearance.withGrip(stored, grip)
+    val extraSmall by rememberExtraSmall(prefs)
+    val uniform by rememberUniformShape(prefs)
+    val behavior = BubbleAppearance.effective(stored, grip, extraSmall)
     val idleDelay by rememberIdleDelay(prefs)
     var previewOpacity by remember { mutableIntStateOf(prefs.getInt("float_opacity", 65)) }
     DisposableEffect(prefs) {
@@ -41,11 +44,11 @@ internal fun BubbleAppearanceSettings(prefs: SharedPreferences, grip: Boolean, r
     }
     var search by remember { mutableStateOf(prefs.getBoolean("float_shrink_search", false)) }
     Text(stringResource(R.string.bubble_size), style = MaterialTheme.typography.titleMedium)
-    FloatingButtonPreview(BubbleAppearance.size(size), behavior, grip, previewOpacity, idleDelay)
+    FloatingButtonPreview(BubbleAppearance.buttonSize(size, extraSmall), stored, grip, extraSmall, uniform, previewOpacity, idleDelay)
     val sizes = listOf(R.string.bubble_xs, R.string.bubble_s, R.string.bubble_m, R.string.bubble_l, R.string.bubble_xl)
     val sizeLabel = stringResource(R.string.bubble_size)
     val selectedSize = stringResource(sizes[size])
-    Slider(value = size.toFloat(), valueRange = 0f..4f, steps = 3,
+    Slider(value = size.toFloat(), valueRange = 0f..4f, steps = 3, enabled = !extraSmall,
         onValueChange = {
             val next = it.roundToInt().coerceIn(0, 4)
             if (next != size) {
@@ -57,11 +60,29 @@ internal fun BubbleAppearanceSettings(prefs: SharedPreferences, grip: Boolean, r
         modifier = Modifier.fillMaxWidth().semantics { contentDescription = sizeLabel; stateDescription = selectedSize })
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         sizes.forEachIndexed { index, label ->
-            Text(stringResource(label), color = if (index == size) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            val color = if (index == size) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+            Text(stringResource(label), color = color.copy(alpha = if (extraSmall) 0.38f else 1f),
                 style = MaterialTheme.typography.bodySmall)
         }
     }
-    Text(stringResource(R.string.bubble_default_size), style = MaterialTheme.typography.bodySmall)
+    // Same slot either way so the layout does not jump when Extra small flips.
+    StableText(listOf(stringResource(R.string.bubble_default_size), stringResource(R.string.bubble_extra_small_size_paused)),
+        if (extraSmall) 1 else 0, style = MaterialTheme.typography.bodySmall)
+    val extraSmallLabel = stringResource(R.string.bubble_extra_small)
+    Row(Modifier.fillMaxWidth().padding(vertical = 8.dp).toggleable(extraSmall, role = Role.Switch, onValueChange = {
+        ViewCompat.performHapticFeedback(hapticView, if (it) HapticFeedbackConstantsCompat.TOGGLE_ON else HapticFeedbackConstantsCompat.TOGGLE_OFF)
+        // Size and Shrink smaller stay stored; they come back when Extra small turns off.
+        prefs.edit { putBoolean("float_extra_small", it) }
+        refresh()
+    }), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(extraSmallLabel, style = MaterialTheme.typography.bodyLarge)
+            Text(stringResource(R.string.bubble_extra_small_sub), style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Spacer(Modifier.width(16.dp))
+        Switch(checked = extraSmall, onCheckedChange = null)
+    }
     Text(stringResource(R.string.bubble_idle), style = MaterialTheme.typography.titleMedium)
     val choices = listOf(
         Triple(BubbleAppearance.IdleBehavior.FULL, R.string.bubble_tile_keep, R.string.bubble_tile_no_shrink),
@@ -73,7 +94,7 @@ internal fun BubbleAppearanceSettings(prefs: SharedPreferences, grip: Boolean, r
         choices.chunked(2).forEach { pair ->
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 pair.forEach { (value, title, timing) ->
-                    val enabled = !grip || !value.usesDot
+                    val enabled = BubbleAppearance.effective(value, grip, extraSmall) == value
                     val selected = behavior == value
                     Surface(Modifier.weight(1f).selectable(selected, enabled = enabled, role = Role.RadioButton, onClick = {
                         prefs.edit { putString("float_idle_style", value.key); remove("float_shrink_always") }
@@ -83,7 +104,8 @@ internal fun BubbleAppearanceSettings(prefs: SharedPreferences, grip: Boolean, r
                         border = BorderStroke(if (selected) 2.dp else 1.dp, if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant)) {
                         Column(Modifier.padding(12.dp).heightIn(min = 100.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Row(Modifier.height(28.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                if (value != BubbleAppearance.IdleBehavior.ALWAYS_DOT) AppearanceMark(28)
+                                // Extra small starts from the small circle, so the tiles show that.
+                                if (value != BubbleAppearance.IdleBehavior.ALWAYS_DOT) AppearanceMark(if (extraSmall) 19 else 28)
                                 if (value.usesDelay) Text("→", color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 if (value != BubbleAppearance.IdleBehavior.FULL) AppearanceMark(if (value.usesDot) 8 else 19)
                             }
@@ -96,7 +118,8 @@ internal fun BubbleAppearanceSettings(prefs: SharedPreferences, grip: Boolean, r
             }
         }
     }
-    if (grip) Text(stringResource(R.string.bubble_dot_grip), style = MaterialTheme.typography.bodySmall)
+    Reveal(grip) { Text(stringResource(R.string.bubble_dot_grip), style = MaterialTheme.typography.bodySmall) }
+    Reveal(extraSmall) { Text(stringResource(R.string.bubble_small_extra_small), style = MaterialTheme.typography.bodySmall) }
     // Always shown so the layout never jumps; greyed out (value kept) when the idle choice has no delay.
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(stringResource(R.string.bubble_search), Modifier.weight(1f),
@@ -104,7 +127,7 @@ internal fun BubbleAppearanceSettings(prefs: SharedPreferences, grip: Boolean, r
         Switch(checked = search, enabled = behavior.usesDelay,
             onCheckedChange = { search = it; prefs.edit { putBoolean("float_shrink_search", it) }; refresh() })
     }
-    if (behavior == BubbleAppearance.IdleBehavior.ALWAYS_DOT) {
+    Reveal(behavior == BubbleAppearance.IdleBehavior.ALWAYS_DOT) {
         Text(stringResource(R.string.bubble_always_dot_help), style = MaterialTheme.typography.bodySmall)
     }
     Text(stringResource(R.string.bubble_dot_help), style = MaterialTheme.typography.bodySmall)
@@ -113,6 +136,28 @@ internal fun BubbleAppearanceSettings(prefs: SharedPreferences, grip: Boolean, r
 @Composable
 private fun rememberIdleBehavior(prefs: SharedPreferences): State<BubbleAppearance.IdleBehavior> =
     rememberPref(prefs, "float_idle_style") { BubbleAppearance.idleBehavior(it.getString("float_idle_style", "full")) }
+
+@Composable
+private fun rememberExtraSmall(prefs: SharedPreferences): State<Boolean> =
+    rememberPref(prefs, "float_extra_small") { it.getBoolean("float_extra_small", false) }
+
+@Composable
+private fun rememberUniformShape(prefs: SharedPreferences): State<Boolean> =
+    rememberPref(prefs, "float_shape") { BubbleAppearance.uniformShape(it.getString("float_shape", null)) }
+
+/** Advanced: adaptive corners (fixed radius, rounder when smaller) or one uniform shape at every size. */
+@Composable
+internal fun ButtonShapeSetting(prefs: SharedPreferences, refresh: () -> Unit) {
+    val uniform by rememberUniformShape(prefs)
+    val adaptiveLabel = stringResource(R.string.bubble_shape_adaptive)
+    val uniformLabel = stringResource(R.string.bubble_shape_uniform)
+    ChoiceSetting(stringResource(R.string.bubble_shape), if (uniform) uniformLabel else adaptiveLabel, listOf(adaptiveLabel, uniformLabel)) { picked ->
+        prefs.edit { putString("float_shape", if (picked == uniformLabel) "uniform" else "adaptive") }
+        refresh()
+    }
+    StableText(listOf(stringResource(R.string.bubble_shape_adaptive_sub), stringResource(R.string.bubble_shape_uniform_sub)), if (uniform) 1 else 0,
+        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+}
 
 @Composable
 private fun rememberIdleDelay(prefs: SharedPreferences): State<Int> =
@@ -133,7 +178,7 @@ private fun <T> rememberPref(prefs: SharedPreferences, key: String, read: (Share
 @Composable
 internal fun IdleDelaySetting(prefs: SharedPreferences, grip: Boolean, refresh: () -> Unit) {
     val hapticView = LocalView.current
-    val behavior = BubbleAppearance.withGrip(rememberIdleBehavior(prefs).value, grip)
+    val behavior = BubbleAppearance.effective(rememberIdleBehavior(prefs).value, grip, rememberExtraSmall(prefs).value)
     val stored by rememberIdleDelay(prefs)
     var delayMs by remember(stored) { mutableIntStateOf(stored) }
     val options = BubbleAppearance.idleDelayOptionsMs
@@ -154,7 +199,7 @@ internal fun IdleDelaySetting(prefs: SharedPreferences, grip: Boolean, refresh: 
         },
         onValueChangeFinished = { prefs.edit { putInt("float_idle_delay", delayMs) }; refresh() },
         modifier = Modifier.fillMaxWidth().semantics { contentDescription = label; stateDescription = value })
-    Text(stringResource(if (enabled) R.string.bubble_idle_delay_sub else R.string.bubble_idle_delay_off),
+    StableText(listOf(stringResource(R.string.bubble_idle_delay_sub), stringResource(R.string.bubble_idle_delay_off)), if (enabled) 0 else 1,
         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }
 

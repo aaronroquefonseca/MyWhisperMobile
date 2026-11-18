@@ -2317,12 +2317,6 @@ class MainActivity : ComponentActivity() {
                         OverlayService.start(this@MainActivity)
                     })
                 }
-                var snoozeMinutes by remember { mutableIntStateOf(setupPrefs.getInt("float_snooze_minutes", 10)) }
-                ChoiceSetting(getString(R.string.float_snooze_duration), "$snoozeMinutes min",
-                    listOf("5 min", "10 min", "15 min", "30 min", "60 min")) { picked ->
-                    snoozeMinutes = picked.substringBefore(" ").toInt()
-                    setupPrefs.edit { putInt("float_snooze_minutes", snoozeMinutes) }
-                }
                 var snoozedUntil by remember { mutableStateOf(setupPrefs.getLong("float_snoozed_until", 0)) }
                 androidx.compose.runtime.DisposableEffect(setupPrefs) {
                     val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { prefs, key ->
@@ -2338,7 +2332,7 @@ class MainActivity : ComponentActivity() {
                         snoozedUntil = 0
                     }
                 }
-                if (snoozedUntil > System.currentTimeMillis()) {
+                Reveal(snoozedUntil > System.currentTimeMillis()) {
                     TextButton(onClick = {
                         startService(Intent(this@MainActivity, OverlayService::class.java)
                             .setAction(OverlayService.ACTION_UNSNOOZE))
@@ -2369,7 +2363,7 @@ class MainActivity : ComponentActivity() {
                         stateDescription = getString(if (advanced) R.string.bubble_advanced_open else R.string.bubble_advanced_closed)
                     },
                 )
-                if (advanced) {
+                Reveal(advanced) {
                     var followKeyboard by remember { mutableStateOf(setupPrefs.getBoolean("float_follow_keyboard", true)) }
                     ChoiceSetting(getString(R.string.float_visibility),
                         getString(if (followKeyboard) R.string.float_follow_keyboard else R.string.float_follow_focus),
@@ -2388,11 +2382,20 @@ class MainActivity : ComponentActivity() {
                         })
                     }
                     Text(stringResource(R.string.bubble_resident_help), style = MaterialTheme.typography.bodySmall)
+                    var snoozeMinutes by remember { mutableIntStateOf(setupPrefs.getInt("float_snooze_minutes", 10)) }
+                    ChoiceSetting(getString(R.string.float_snooze_duration), "$snoozeMinutes min",
+                        listOf("5 min", "10 min", "15 min", "30 min", "60 min")) { picked ->
+                        snoozeMinutes = picked.substringBefore(" ").toInt()
+                        setupPrefs.edit { putInt("float_snooze_minutes", snoozeMinutes) }
+                    }
+                    ButtonShapeSetting(setupPrefs) { OverlayService.start(this@MainActivity) }
                     Spacer(Modifier.height(8.dp))
                     IdleDelaySetting(setupPrefs, grab) { OverlayService.start(this@MainActivity) }
-                    if (!grab) {
+                    run {
                         // No grip: a finger that stays put this long records;
                         // moving sooner means a drag (never a dictation).
+                        // With the grip it does not apply: greyed out (value kept) instead of hidden, so nothing jumps.
+                        val delayAlpha = if (grab) 0.38f else 1f
                         var delayMs by remember {
                             mutableIntStateOf(
                                 FloatState.pressDelayMs(
@@ -2405,12 +2408,15 @@ class MainActivity : ComponentActivity() {
                         }
                         Spacer(Modifier.height(8.dp))
                         val delayOptions = FloatState.PRESS_DELAY_OPTIONS_MS
-                        Text(getString(R.string.setup_float_delay), style = MaterialTheme.typography.bodyMedium)
-                        Text("$delayMs ms", style = MaterialTheme.typography.bodySmall)
+                        Text(getString(R.string.setup_float_delay), style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = delayAlpha))
+                        Text("$delayMs ms", style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = delayAlpha))
                         Slider(
                             value = delayOptions.indexOf(delayMs).coerceAtLeast(0).toFloat(),
                             valueRange = 0f..delayOptions.lastIndex.toFloat(),
                             steps = delayOptions.size - 2,
+                            enabled = !grab,
                             onValueChange = {
                                 val next = delayOptions[it.roundToInt().coerceIn(delayOptions.indices)]
                                 if (next != delayMs) {
@@ -2424,11 +2430,9 @@ class MainActivity : ComponentActivity() {
                                 OverlayService.start(this@MainActivity)
                             },
                         )
-                        Text(
-                            stringResource(R.string.setup_float_delay_sub),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                        StableText(listOf(stringResource(R.string.setup_float_delay_sub), stringResource(R.string.setup_float_delay_off)),
+                            if (grab) 1 else 0, style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }

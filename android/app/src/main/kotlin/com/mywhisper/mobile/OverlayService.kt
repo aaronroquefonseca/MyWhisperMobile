@@ -133,7 +133,9 @@ class OverlayService : Service(), Dictation.Listener {
         return shift * (if (dockedLeft) -1 else 1)
     }
 
-    private fun appearanceSize() = BubbleAppearance.size(getSharedPreferences(PREFS, MODE_PRIVATE).getInt("float_size", 2))
+    private fun extraSmall() = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean("float_extra_small", false)
+
+    private fun appearanceSize() = BubbleAppearance.buttonSize(getSharedPreferences(PREFS, MODE_PRIVATE).getInt("float_size", 2), extraSmall())
 
     private fun updateIdleSurface(state: Dictation.State) {
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
@@ -143,15 +145,16 @@ class OverlayService : Service(), Dictation.Listener {
             shrinkScheduled = false
             idleElapsed = false
         } else if (!idleElapsed && !shrinkScheduled &&
-            BubbleAppearance.withGrip(BubbleAppearance.idleBehavior(prefs.getString("float_idle_style", "full")), builtGrab).usesDelay) {
+            BubbleAppearance.effective(BubbleAppearance.idleBehavior(prefs.getString("float_idle_style", "full")), builtGrab, extraSmall()).usesDelay) {
             shrinkScheduled = true
             mainHandler.postDelayed(shrinkIdle, BubbleAppearance.idleDelayMs(prefs.getInt("float_idle_delay", BubbleAppearance.IDLE_DELAY_DEFAULT_MS)).toLong())
         }
         val shape = BubbleAppearance.shape(BubbleAppearance.idleBehavior(prefs.getString("float_idle_style", "full")),
-            idleElapsed, FloatState.searchField, prefs.getBoolean("float_shrink_search", false), builtGrab, busy)
+            idleElapsed, FloatState.searchField, prefs.getBoolean("float_shrink_search", false), builtGrab, extraSmall(), busy)
         val diameter = resources.displayMetrics.density * BubbleAppearance.diameter(if (busy) 50 else builtSize, shape)
         val drawable = surface ?: return
         drawable.fill = if (state == Dictation.State.RECORDING) 0xFFE8E8E8.toInt() else Color.WHITE
+        drawable.uniform = BubbleAppearance.uniformShape(prefs.getString("float_shape", null))
         drawable.invalidateSelf()
         val micPx = maxOf(50, builtSize) * resources.displayMetrics.density
         val offset = dotOffset(shape, diameter)
@@ -161,6 +164,8 @@ class OverlayService : Service(), Dictation.Listener {
         surfaceAnimator?.cancel()
         val from = drawable.diameter.takeIf { it > 0 } ?: diameter
         val offsetFrom = drawable.offsetX
+        val roundFrom = drawable.roundness
+        val roundTo = BubbleAppearance.roundness(shape)
         val iconFrom = micBtn?.imageAlpha ?: 255
         val iconTo = if (shape == BubbleAppearance.Shape.DOT) 0 else 255
         surfaceAnimator = android.animation.ValueAnimator.ofFloat(from, diameter).apply {
@@ -169,6 +174,7 @@ class OverlayService : Service(), Dictation.Listener {
             addUpdateListener {
                 drawable.diameter = it.animatedValue as Float
                 drawable.offsetX = offsetFrom + (offset - offsetFrom) * it.animatedFraction
+                drawable.roundness = roundFrom + (roundTo - roundFrom) * it.animatedFraction
                 if (state == Dictation.State.IDLE) micBtn?.imageAlpha = (iconFrom + (iconTo - iconFrom) * it.animatedFraction).toInt()
                 val padding = ((micPx - drawable.diameter * 0.6f) / 2).toInt().coerceAtLeast(0)
                 micBtn?.setPadding(padding, padding, padding, padding)
@@ -1137,12 +1143,14 @@ class OverlayService : Service(), Dictation.Listener {
         val initialShape = BubbleAppearance.shape(
             BubbleAppearance.idleBehavior(prefs.getString("float_idle_style", "full")),
             elapsed = false, search = FloatState.searchField,
-            shrinkSearch = prefs.getBoolean("float_shrink_search", false), grip = grab, busy = false,
+            shrinkSearch = prefs.getBoolean("float_shrink_search", false), grip = grab, extraSmall = extraSmall(), busy = false,
         )
         surface = BubbleSurface().apply {
             density = resources.displayMetrics.density
             diameter = density * BubbleAppearance.diameter(builtSize, initialShape)
             offsetX = dotOffset(initialShape, diameter)
+            roundness = BubbleAppearance.roundness(initialShape)
+            uniform = BubbleAppearance.uniformShape(prefs.getString("float_shape", null))
         }
         mic.imageAlpha = if (initialShape == BubbleAppearance.Shape.DOT) 0 else 255
         chromeState = Dictation.State.IDLE

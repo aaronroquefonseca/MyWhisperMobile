@@ -6,12 +6,17 @@ import org.junit.Test
 class BubbleAppearanceTest {
     private fun shape(behavior: BubbleAppearance.IdleBehavior = BubbleAppearance.IdleBehavior.DOT_AFTER_DELAY,
                       elapsed: Boolean = false, search: Boolean = false, shrinkSearch: Boolean = false,
-                      grip: Boolean = false, busy: Boolean = false) =
-        BubbleAppearance.shape(behavior, elapsed, search, shrinkSearch, grip, busy)
+                      grip: Boolean = false, extraSmall: Boolean = false, busy: Boolean = false) =
+        BubbleAppearance.shape(behavior, elapsed, search, shrinkSearch, grip, extraSmall, busy)
 
     @Test fun defaultsAndCorruptSettings() {
-        assertEquals(2000, BubbleAppearance.idleDelayMs(0))
-        assertEquals(2000, BubbleAppearance.idleDelayMs(1234))
+        assertEquals(5000, BubbleAppearance.idleDelayMs(0))
+        assertEquals(5000, BubbleAppearance.idleDelayMs(1234))
+        // Old sub-2 s choices fall back to the new default.
+        assertEquals(5000, BubbleAppearance.idleDelayMs(1000))
+        assertEquals(5000, BubbleAppearance.idleDelayMs(1500))
+        assertEquals(2000, BubbleAppearance.idleDelayOptionsMs.first())
+        assertEquals(10000, BubbleAppearance.idleDelayOptionsMs.last())
         BubbleAppearance.idleDelayOptionsMs.forEach { assertEquals(it, BubbleAppearance.idleDelayMs(it)) }
         assertEquals(50, BubbleAppearance.size(2))
         assertEquals(50, BubbleAppearance.size(-1))
@@ -47,13 +52,42 @@ class BubbleAppearanceTest {
         }
         assertEquals(BubbleAppearance.Shape.SMALL, shape(BubbleAppearance.IdleBehavior.SMALL_AFTER_DELAY, elapsed = true, grip = true))
     }
-    @Test fun enablingGripResetsDotSelectionToDefault() {
+    @Test fun gripAndExtraSmallPauseOnlyTheirConflictingChoices() {
         for (mode in BubbleAppearance.IdleBehavior.entries) {
-            val enabled = BubbleAppearance.withGrip(mode, true)
-            assertEquals(if (mode.usesDot) BubbleAppearance.IdleBehavior.FULL else mode, enabled)
-            assertEquals(enabled, BubbleAppearance.withGrip(enabled, false))
-            assertEquals(mode, BubbleAppearance.withGrip(mode, false))
+            assertEquals(if (mode.usesDot) BubbleAppearance.IdleBehavior.FULL else mode, BubbleAppearance.effective(mode, true, false))
+            val small = mode == BubbleAppearance.IdleBehavior.SMALL_AFTER_DELAY
+            assertEquals(if (small) BubbleAppearance.IdleBehavior.FULL else mode, BubbleAppearance.effective(mode, false, true))
+            assertEquals(mode, BubbleAppearance.effective(mode, false, false))
         }
+    }
+    @Test fun extraSmallRestsAsSmallCircleAndStillAllowsDots() {
+        val small = BubbleAppearance.Shape.SMALL
+        assertEquals(small, shape(BubbleAppearance.IdleBehavior.FULL, extraSmall = true))
+        // Shrink smaller is paused: never shrinks below the resting size.
+        assertEquals(small, shape(BubbleAppearance.IdleBehavior.SMALL_AFTER_DELAY, elapsed = true, extraSmall = true))
+        assertEquals(small, shape(BubbleAppearance.IdleBehavior.DOT_AFTER_DELAY, extraSmall = true))
+        assertEquals(BubbleAppearance.Shape.DOT, shape(BubbleAppearance.IdleBehavior.DOT_AFTER_DELAY, elapsed = true, extraSmall = true))
+        assertEquals(BubbleAppearance.Shape.DOT, shape(BubbleAppearance.IdleBehavior.ALWAYS_DOT, extraSmall = true))
+        assertEquals(small, shape(BubbleAppearance.IdleBehavior.ALWAYS_DOT, grip = true, extraSmall = true))
+        assertEquals(BubbleAppearance.Shape.FULL, shape(BubbleAppearance.IdleBehavior.FULL, extraSmall = true, busy = true))
+        assertEquals(38, BubbleAppearance.buttonSize(4, extraSmall = true))
+        assertEquals(66, BubbleAppearance.buttonSize(4, extraSmall = false))
+        assertEquals(0f, BubbleAppearance.roundness(BubbleAppearance.Shape.FULL))
+        assertEquals(1f, BubbleAppearance.roundness(small))
+        assertEquals(1f, BubbleAppearance.roundness(BubbleAppearance.Shape.DOT))
+    }
+    @Test fun adaptiveCornersStayFixedWhileUniformScales() {
+        // Adaptive is the default: unknown or missing values never pick uniform.
+        assertFalse(BubbleAppearance.uniformShape(null))
+        assertFalse(BubbleAppearance.uniformShape("adaptive"))
+        assertTrue(BubbleAppearance.uniformShape("uniform"))
+        assertEquals(16f, BubbleAppearance.cornerRadius(50f, 1f, uniform = false), 0.001f)
+        assertEquals(16f, BubbleAppearance.cornerRadius(66f, 1f, uniform = false), 0.001f)
+        assertEquals(16f, BubbleAppearance.cornerRadius(32f, 1f, uniform = false), 0.001f)
+        assertEquals(12f, BubbleAppearance.cornerRadius(24f, 1f, uniform = false), 0.001f)
+        assertEquals(16f, BubbleAppearance.cornerRadius(50f, 1f, uniform = true), 0.001f)
+        assertEquals(66 * 0.32f, BubbleAppearance.cornerRadius(66f, 1f, uniform = true), 0.001f)
+        assertEquals(48f, BubbleAppearance.cornerRadius(150f, 3f, uniform = false), 0.001f)
     }
     @Test fun activeStatesAlwaysExpand() {
         BubbleAppearance.IdleBehavior.entries.forEach {

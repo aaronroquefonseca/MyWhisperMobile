@@ -30,6 +30,15 @@ import androidx.core.view.HapticFeedbackConstantsCompat
 import androidx.core.view.ViewCompat
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -141,6 +150,30 @@ internal fun SearchableChoiceSetting(label: String, value: String, options: List
             confirmButton = {},
             dismissButton = { TextButton(onClick = { open = false }) { Text(stringResource(android.R.string.cancel)) } },
         )
+    }
+}
+
+/**
+ * Copy that swaps with a setting: every variant is laid out in the same slot and only [selected] shows,
+ * so the slot keeps the tallest variant's height and nothing below it jumps.
+ */
+@Composable
+internal fun StableText(variants: List<String>, selected: Int, modifier: Modifier = Modifier,
+                        style: TextStyle = LocalTextStyle.current, color: Color = Color.Unspecified) {
+    Box(modifier.fillMaxWidth()) {
+        variants.forEachIndexed { index, text ->
+            val shown = index == selected
+            Text(text, Modifier.graphicsLayer { alpha = if (shown) 1f else 0f }
+                .then(if (shown) Modifier else Modifier.clearAndSetSemantics {}), style = style, color = color)
+        }
+    }
+}
+
+/** Content that comes and goes with a setting expands and fades instead of popping in. */
+@Composable
+internal fun Reveal(visible: Boolean, content: @Composable ColumnScope.() -> Unit) {
+    AnimatedVisibility(visible, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
+        Column(content = content)
     }
 }
 

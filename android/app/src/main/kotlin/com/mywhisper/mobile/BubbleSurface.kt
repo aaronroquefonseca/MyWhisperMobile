@@ -15,14 +15,19 @@ internal class BubbleSurface : Drawable() {
     var offsetX = 0f
         set(value) { field = value; invalidateSelf() }
     var density = 1f
+    var uniform = false
+        set(value) { field = value; invalidateSelf() }
+    /** 0 = squircle, 1 = circle; animated so a shrink morphs the corners too. */
+    var roundness = 0f
+        set(value) { field = value; invalidateSelf() }
     private var drawableAlpha = 255
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     override fun draw(canvas: Canvas) {
         val cx = bounds.exactCenterX() + offsetX
         val cy = bounds.exactCenterY()
         val half = diameter / 2f
-        // Pre-PR look: 16dp corners on the 50dp bubble, scaled with size; floors to a circle near dot size.
-        val radius = minOf(half, maxOf(diameter * 0.32f, 7 * density))
+        val squircle = BubbleAppearance.cornerRadius(diameter, density, uniform)
+        val radius = squircle + (half - squircle) * roundness
         paint.style = Paint.Style.FILL
         // Border is the outer shape and fill sits strictly inside it, so no fill pixel can reach past the outline.
         paint.color = android.graphics.Color.BLACK
