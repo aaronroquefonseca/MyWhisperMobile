@@ -8,7 +8,6 @@ import android.net.Uri
 import android.net.wifi.WifiManager
 import android.os.Bundle
 import android.provider.Settings
-import android.view.inputmethod.InputMethodManager
 import androidx.activity.compose.BackHandler
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -122,7 +121,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.zIndex
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.runtime.key
 import androidx.compose.ui.text.input.KeyboardType
@@ -1418,29 +1416,6 @@ class MainActivity : ComponentActivity() {
             else -> "REASON_$r"
         }
 
-    private fun imeEnabled(): Boolean {
-        // NOTE: Settings.Secure ENABLED_INPUT_METHODS is unreadable for
-        // targetSdk 34+. InputMethodManager is the allowed path.
-        return try {
-            val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-            imm.enabledInputMethodList.any { it.packageName == packageName }
-        } catch (_: Exception) {
-            false
-        }
-    }
-
-    private fun imeSeenActive(): String {
-        val ts = getSharedPreferences("mw_state", MODE_PRIVATE)
-            .getLong("ime_seen_ts", 0L)
-        if (ts <= 0L) return ""
-        val ago = (System.currentTimeMillis() - ts) / 1000
-        return when {
-            ago < 60 -> getString(R.string.seen_just_now)
-            ago < 3600 -> getString(R.string.seen_min_ago, ago / 60)
-            else -> getString(R.string.seen_h_ago, ago / 3600)
-        }
-    }
-
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable
     private fun Root() {
@@ -1525,7 +1500,7 @@ class MainActivity : ComponentActivity() {
                 6 to getString(R.string.tab_devices),
                 9 to getString(R.string.setup_float),
                 8 to getString(R.string.new_notifications), 10 to getString(R.string.setup_mic_button),
-                11 to getString(R.string.new_appearance), 12 to getString(R.string.new_keyboard),
+                11 to getString(R.string.new_appearance),
                 13 to getString(R.string.diag_title),
                 14 to getString(R.string.ux_nav_voice), 15 to getString(R.string.task_library),
                 16 to getString(R.string.task_welcome),
@@ -1622,7 +1597,6 @@ class MainActivity : ComponentActivity() {
                             8 -> NotificationSettings()
                             10 -> MicrophoneSettings(s)
                             11 -> AppearanceSettings(s)
-                            12 -> KeyboardSettings()
                             13 -> DiagnosticsSettings()
 
                         }
@@ -2125,7 +2099,6 @@ class MainActivity : ComponentActivity() {
             SettingsGroup(getString(R.string.task_app)) {
                 DestinationRow(getString(R.string.new_notifications), getString(if (notificationsAllowed.value) R.string.new_notifications_enabled else R.string.new_notifications_description), { onNavigate(8) })
                 DestinationRow(getString(R.string.new_appearance), getString(R.string.new_appearance_description), { onNavigate(11) })
-                DestinationRow(getString(R.string.new_keyboard), getString(R.string.new_keyboard_description), { onNavigate(12) })
                 DestinationRow(getString(R.string.diag_title), getString(R.string.new_diagnostics_description), { onNavigate(13) })
             }
         }
@@ -2266,8 +2239,6 @@ class MainActivity : ComponentActivity() {
             }
             Spacer(Modifier.height(16.dp))
             if (setup.next != BubbleSetupState.Step.COMPLETE) TextButton(onClick = onDone) { Text(getString(R.string.task_later)) }
-            Text(getString(R.string.task_keyboard_optional), style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 12.dp))
             if (started || setup.next == BubbleSetupState.Step.COMPLETE) {
                 SettingsGroup(getString(R.string.ux_quiet_notifications_title)) {
                     Text(getString(R.string.ux_quiet_notifications_help), Modifier.padding(16.dp), style = MaterialTheme.typography.bodyMedium)
@@ -2300,9 +2271,6 @@ class MainActivity : ComponentActivity() {
         val setupPrefs = getSharedPreferences("mw_state", MODE_PRIVATE)
         val hapticView = LocalView.current
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-            if (android.os.Build.VERSION.SDK_INT < 33) {
-                Text(getString(R.string.setup_float_old_warn), modifier = Modifier.padding(16.dp), color = MaterialTheme.colorScheme.error)
-            }
             Section(stringResource(R.string.setup_float)) {
                 val prefs = s.optJSONObject("preferences") ?: JSONObject()
                 val on = prefs.optBoolean("float_enabled", true)
@@ -2558,26 +2526,6 @@ class MainActivity : ComponentActivity() {
                     s.put("stt", stt)
                     save()
                 }
-                var meter by remember { mutableStateOf(prefs.optBoolean("show_pill", true)) }
-                Spacer(Modifier.height(16.dp))
-                // Whole row toggles; aligned with the card content (ListItem would add its own inset).
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.toggleable(value = meter, role = Role.Switch) {
-                        meter = it
-                        prefs.put("show_pill", it)
-                        s.put("preferences", prefs)
-                        save()
-                    },
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(stringResource(R.string.setup_pill))
-                        Text(stringResource(R.string.setup_pill_sub), style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    Spacer(Modifier.width(16.dp))
-                    FeedbackSwitch(checked = meter, onCheckedChange = null)
-                }
             }
         }
     }
@@ -2694,37 +2642,6 @@ class MainActivity : ComponentActivity() {
             }
             Section(stringResource(R.string.icon_style_title)) {
                 LauncherIconSettings()
-            }
-        }
-    }
-
-    @Composable
-    private fun KeyboardSettings() {
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-            Text(getString(R.string.new_keyboard_description), modifier = Modifier.padding(16.dp))
-            Section(getString(R.string.ux_keyboard_enable)) {
-                Text(
-                    if (imeEnabled()) "MyWhisper is enabled as an input method."
-                    else "MyWhisper is not enabled yet.",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Spacer(Modifier.height(8.dp))
-                Button(onClick = {
-                    startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
-                }) { Text(stringResource(R.string.setup_open_ime)) }
-            }
-            Section(getString(R.string.ux_keyboard_choose)) {
-                val seen = imeSeenActive()
-                Text(
-                    if (seen.isNotEmpty()) getString(R.string.setup_active_now, seen)
-                    else getString(R.string.setup_active_how),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Spacer(Modifier.height(8.dp))
-                Button(onClick = {
-                    (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager)
-                        .showInputMethodPicker()
-                }) { Text(stringResource(R.string.setup_pick)) }
             }
         }
     }

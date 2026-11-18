@@ -1,4 +1,4 @@
-Dictate into any app using a floating microphone button or the MyWhisper keyboard.
+Dictate into any app using a floating microphone button.
 
 <b>Floating button</b>
 <ul>
@@ -9,11 +9,6 @@ Dictate into any app using a floating microphone button or the MyWhisper keyboar
 <li>Five sizes, XS to XL. When idle it can keep its size, shrink, shrink to a dot, or start as a dot.</li>
 <li>Drag it, snap it to the edge, fade it, lock it, or snooze it.</li>
 <li>Rank wired, built-in, and Bluetooth microphones; dictation uses the first one connected.</li>
-</ul>
-
-<b>MyWhisper keyboard</b>
-<ul>
-<li>An input method with a mic bar: hold and release, or tap to start and tap again to finish.</li>
 </ul>
 
 <b>Speech recognition</b>

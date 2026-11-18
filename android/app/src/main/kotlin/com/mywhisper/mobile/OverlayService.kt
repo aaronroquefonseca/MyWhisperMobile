@@ -987,8 +987,8 @@ class OverlayService : Service(), Dictation.Listener {
     }
 
     /**
-     * Auto-show rule: floating enabled, our IME not active, and (when
-     * the accessibility service is on) a text field focused. No
+     * Auto-show rule: floating enabled and (when the accessibility
+     * service is on) a text field focused. No
      * manual hide needed.
      */
     private fun applyVisibility() {
@@ -998,7 +998,7 @@ class OverlayService : Service(), Dictation.Listener {
         } catch (_: Exception) {
             false
         }
-        android.util.Log.i("MwFloat", "apply on=$on ime=${FloatState.imeActive} focus=${FloatState.hasTextFocus}")
+        android.util.Log.i("MwFloat", "apply on=$on focus=${FloatState.hasTextFocus}")
         if (!on || snoozed()) {
             if (snoozed()) {
                 mainHandler.removeCallbacks(snoozeEnd)
@@ -1010,7 +1010,6 @@ class OverlayService : Service(), Dictation.Listener {
         }
         val show = FloatState.shouldShowBubble(
             floatEnabled = true,
-            imeActive = FloatState.imeActive,
             a11yOn = MyWhisperAccessibility.isOn(this),
             hasTextFocus = FloatState.hasTextFocus,
             followKeyboard = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean("float_follow_keyboard", true),

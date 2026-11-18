@@ -156,4 +156,3 @@ def sub_file(path, is_composable_file=True):
 if __name__ == "__main__":
     base = "/home/aaronroque/Projects/MyWhisperMobile/android/app/src/main/kotlin/com/mywhisper/mobile"
     sub_file(f"{base}/MainActivity.kt")
-    sub_file(f"{base}/MyWhisperIME.kt")

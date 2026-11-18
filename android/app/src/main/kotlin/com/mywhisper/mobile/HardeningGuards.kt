@@ -34,13 +34,6 @@ object HardeningGuards {
         return (minHalf + v * (laneMax - minHalf)).coerceIn(0f, cap)
     }
 
-    /**
-     * imeActive resolution after process death: memory defaults false,
-     * so a persisted value wins; otherwise keep memory.
-     */
-    fun resolveImeActive(persisted: Boolean?, memActive: Boolean): Boolean =
-        persisted ?: memActive
-
     /** Boot-retry backoff for retry N (1-based): 1m,2m,4m,8m, cap 15m. */
     fun bootRetryDelayMs(retryNumber: Int): Long {
         val shift = (retryNumber - 1).coerceIn(0, 10)
