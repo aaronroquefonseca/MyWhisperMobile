@@ -1996,6 +1996,10 @@ class MainActivity : ComponentActivity() {
         row: @Composable (entry: JSONObject, handle: @Composable () -> Unit) -> Unit,
     ) {
         val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+        // pointerInput(id) outlives recompositions; read the latest list and
+        // callback, or moves land on a JSON array a save() already replaced.
+        val currentItems by androidx.compose.runtime.rememberUpdatedState(items)
+        val currentOnMove by androidx.compose.runtime.rememberUpdatedState(onMove)
         var dragging by remember { mutableStateOf<String?>(null) }
         var dragIdx by remember { mutableIntStateOf(-1) }
         var accumulated by remember { mutableFloatStateOf(0f) }
@@ -2034,7 +2038,7 @@ class MainActivity : ComponentActivity() {
                                     onDragStart = {
                                         if (dragging != null) return@detectDragGestures
                                         dragging = id
-                                        dragIdx = items.indexOfFirst { idOf(it) == id }
+                                        dragIdx = currentItems.indexOfFirst { idOf(it) == id }
                                         accumulated = 0f
                                     },
                                     onDragEnd = { dragging = null; dragIdx = -1 },
@@ -2049,12 +2053,15 @@ class MainActivity : ComponentActivity() {
                                         val visible = listState.layoutInfo.visibleItemsInfo
                                         val info = visible.firstOrNull { it.key == active }
                                             ?: return@detectDragGestures
+                                        // Layout still shows the pre-move order: hit-testing it
+                                        // would swap straight back (the flip-flop bug).
+                                        if (info.index != dragIdx) return@detectDragGestures
                                         val center = info.offset + info.size / 2f + accumulated
                                         val target = visible.firstOrNull { v ->
                                             center >= v.offset && center < v.offset + v.size
                                         }?.index ?: dragIdx
-                                        if (target in items.indices && target != dragIdx) {
-                                            onMove(dragIdx, target)
+                                        if (target in currentItems.indices && target != dragIdx) {
+                                            currentOnMove(dragIdx, target)
                                             dragIdx = target
                                             accumulated = 0f
                                         }
