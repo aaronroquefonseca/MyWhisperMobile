@@ -4,6 +4,9 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Security
+- Dictated text is no longer written to the system log (logcat). Bug reports and `adb logcat` captures showed every transcription in full; the log now records only its length.
+
 ## [1.3.0] - 2026-11-18
 
 ### Added

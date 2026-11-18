@@ -2079,7 +2079,7 @@ class OverlayService : Service(), Dictation.Listener {
     }
 
     override fun onResult(text: String) {
-        android.util.Log.i("MwFloat", "onResult len=${text.length} text=<$text>")
+        android.util.Log.i("MwFloat", "onResult len=${text.length}")
         deliver(text)
     }
 
@@ -2111,14 +2111,14 @@ class OverlayService : Service(), Dictation.Listener {
                 val t = text.trim()
                 android.util.Log.i(
                     "MwFloat",
-                    "deliver entry len=${text.length} trimmedLen=${t.length} text=<$t>",
+                    "deliver entry len=${text.length} trimmedLen=${t.length}",
                 )
                 if (t.isEmpty()) {
                     android.util.Log.i("MwFloat", "deliver drop-empty")
                     return@execute
                 }
                 val ok = MyWhisperAccessibility.commit(t)
-                android.util.Log.i("MwFloat", "deliver commit ok=$ok text=<$t>")
+                android.util.Log.i("MwFloat", "deliver commit ok=$ok")
                 if (!ok) {
                     // Toast must run on the main thread (this is a worker).
                     // a11y off is a configuration failure, not a missing
