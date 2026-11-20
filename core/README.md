@@ -8,14 +8,14 @@ Portable MyWhisper engine for Android, exposed over JNI (`lib.rs`).
 |---|---|---|
 | `settings.rs` | verbatim port | + `ANDROID PORT` patches: pill enums from `viz_types`, not GTK `viz`; `preferences.mic_mode` (mobile-only mic-button behavior) |
 | `audio.rs` | verbatim port | Recorder/resample/VAD/WAV all portable |
-| `textnorm.rs` | verbatim port | snippet expansion + whisper prompt budgets |
+| `textnorm.rs` | verbatim port | snippet matching (accent/case-folded) + expansion, whisper prompt budgets |
 | `store.rs` | verbatim port | + `ANDROID PORT` patch: `db_key()` reads `MYWHISPER_DB_KEY` (set by JNI from the Keystore key); keyring branch kept for host builds/tests |
 | `device.rs` | verbatim port | node identity (`device.key`), same keys as desktop |
 | `net.rs` | verbatim port | Noise_XX sync transport; same protocol version as desktop |
 | `viz_types.rs` | mobile-only | serde clones of desktop `viz.rs` pref enums (no pill on Android) |
 | `server_stt.rs` | mobile-only | server STT chain client; wire protocols mirror desktop `transcribe.rs` |
 | `sync_ctl.rs` | mobile-only | sync lifecycle (listener + mDNS + loops) over `net.rs` |
-| `engine.rs` | mobile-only | utterance pipeline mirroring desktop `deliver`; cleanup is a faithful `post_process` port (same default prompt, same endpoints, same failover; `Local` entries route through `local_llm` with fallback) |
+| `engine.rs` | mobile-only | utterance pipeline mirroring desktop `deliver`; cleanup is a faithful `finalize_transcript`/`cleanup_once` port (snippets protected by placeholders through cleanup, same default prompt, same endpoints, same failover; `Local` entries route through `local_llm` with fallback) |
 | `local_llm.rs` | mobile-only | on-device LLM cleanup (MediaPipe `.task` chosen provider): prompt packing, SHA-256 manifest verify, sidecar/Fn backends; cleanup path only, never STT |
 | `lib.rs` | mobile-only | JNI bridge |
 

@@ -23,6 +23,7 @@ getrandom = "0.4"
 snow = "0.10"
 mdns-sd = "0.21"
 ed25519-dalek = { version = "3.0.0", features = ["rand_core"] }
+unicode-normalization = "0.1"
 
 # ANDROID PORT: bundled-sqlcipher needs OpenSSL headers the NDK does not
 # ship, so Android builds use plaintext `bundled` for now (app sandbox

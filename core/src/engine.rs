@@ -22,7 +22,6 @@ use crate::server_stt::{
 };
 use crate::settings::{AppSettings, HistoryEntry, LlmEntry};
 use crate::store::Store;
-use crate::textnorm::expand_snippets;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -255,7 +254,11 @@ fn llm_cleanup_one(
     }
 }
 
-/// Post-process STT output (mirrors desktop `post_process`).
+/// One successful cleanup run (mirrors desktop `cleanup_once`), or
+/// `None` when cleanup is disabled, has no enabled entries, or the
+/// whole chain fails. `extra_system` appends a section to the system
+/// prompt (the snippet placeholder contract).
+///
 /// `witness` is the utterance admission generation: a control
 /// transition since admission aborts before the next fallback cleanup
 /// fetch — cancelled utterances never reach fallback entries (the
@@ -265,28 +268,30 @@ fn llm_cleanup_one(
 /// Also returns one note per attempted entry (`"<name>: ok"` or
 /// `"<name>: <error>"`) so the platform can log why cleanup did or
 /// did not apply; failures never surface to the user.
-fn post_process(
-    raw: &str,
+fn cleanup_once(
+    text: &str,
     lm: &crate::settings::LanguageModelSettings,
     words: &[String],
+    extra_system: Option<&str>,
     witness: u64,
     data_dir: &std::path::Path,
-) -> (String, Vec<String>) {
+) -> (Option<String>, Vec<String>) {
     if !lm.cleanup_enabled {
-        return (raw.to_string(), vec!["cleanup disabled".to_string()]);
+        return (None, vec!["cleanup disabled".to_string()]);
     }
     let chain = lm.chain();
     if chain.is_empty() {
-        return (
-            raw.to_string(),
-            vec!["no enabled cleanup entries".to_string()],
-        );
+        return (None, vec!["no enabled cleanup entries".to_string()]);
     }
     let mut notes = Vec::new();
-    let system = match dictionary_suffix(words) {
+    let mut system = match dictionary_suffix(words) {
         Some(suffix) => format!("{}\n\n{suffix}", effective_prompt(&lm.cleanup_prompt)),
         None => effective_prompt(&lm.cleanup_prompt).to_string(),
     };
+    if let Some(extra) = extra_system {
+        system.push_str("\n\n");
+        system.push_str(extra);
+    }
     for entry in chain {
         if crate::server_stt::server_generation() != witness {
             break;
@@ -296,16 +301,234 @@ fn post_process(
         } else {
             entry.name.clone()
         };
-        match llm_cleanup_one(entry, &system, raw, data_dir) {
-            Ok(text) if !text.trim().is_empty() => {
+        match llm_cleanup_one(entry, &system, text, data_dir) {
+            Ok(cleaned) if !cleaned.trim().is_empty() => {
                 notes.push(format!("{label}: ok"));
-                return (text.trim().to_string(), notes);
+                return (Some(cleaned.trim().to_string()), notes);
             }
             Ok(_) => notes.push(format!("{label}: empty reply")),
             Err(e) => notes.push(format!("{label}: {e}")),
         }
     }
-    (raw.to_string(), notes)
+    (None, notes)
+}
+
+/// Final transcript for one utterance (desktop #13
+/// `finalize_transcript`): recognize snippet triggers on the ORIGINAL
+/// transcription, protect them through cleanup, restore them
+/// literally. The contract, enforced in code (not just prompt text):
+/// - Matching runs before cleanup, so the LLM can never rewrite a
+///   valid trigger into something unrecognizable.
+/// - Matched spans travel through cleanup as per-utterance
+///   placeholders; the saved replacements never enter the LLM
+///   request, so the model cannot modify them.
+/// - The cleanup response must contain every placeholder exactly
+///   once, in order, with no other reserved-marker occurrences;
+///   anything else rejects the response.
+/// - Restoration splices replacements verbatim without re-matching,
+///   so self-containing (`go` → `go now`) and cross-snippet
+///   replacements stay non-recursive.
+/// - Input already resembling markers skips cleanup entirely.
+/// - Any validation failure (or disabled/failed/unavailable cleanup)
+///   falls back to the deterministic once-expansion of the original.
+fn finalize_transcript(
+    raw: &str,
+    lm: &crate::settings::LanguageModelSettings,
+    words: &[String],
+    snips: &[(String, String)],
+    witness: u64,
+    data_dir: &std::path::Path,
+) -> (String, Vec<String>) {
+    let matches = crate::textnorm::find_snippet_matches(raw, snips);
+    if matches.is_empty() {
+        let (cleaned, notes) = cleanup_once(raw, lm, words, None, witness, data_dir);
+        return (cleaned.unwrap_or_else(|| raw.to_string()), notes);
+    }
+    let fallback = |note: &str, mut notes: Vec<String>| {
+        notes.push(format!("snippets: {note}; expanded without cleanup"));
+        (crate::textnorm::expand_snippets(raw, snips), notes)
+    };
+    // User text already resembling markers never enters the protected
+    // request, so it survives verbatim.
+    if contains_marker_like(raw) {
+        return fallback("marker-like input", Vec::new());
+    }
+    let Some(token) = snippet_token(raw) else {
+        return fallback("no fresh placeholder namespace", Vec::new());
+    };
+    let mut protected = String::with_capacity(raw.len());
+    let mut replacements = Vec::with_capacity(matches.len());
+    let mut cursor = 0;
+    for (idx, m) in matches.iter().enumerate() {
+        protected.push_str(&raw[cursor..m.start]);
+        protected.push_str(&snippet_placeholder(&token, idx));
+        cursor = m.end;
+        replacements.push(m.replacement.clone());
+    }
+    protected.push_str(&raw[cursor..]);
+    let instruction = placeholder_instruction();
+    match cleanup_once(&protected, lm, words, Some(&instruction), witness, data_dir) {
+        (Some(cleaned), notes) => match restore_protected(&cleaned, &token, &replacements) {
+            Some(text) => (text, notes),
+            None => fallback("placeholder contract broken", notes),
+        },
+        // Disabled, failed, or unavailable cleanup: same fallback.
+        (None, notes) => (crate::textnorm::expand_snippets(raw, snips), notes),
+    }
+}
+
+/// Placeholder vocabulary: ASCII word characters only, so cleanup
+/// models have no reason to reformat them. Unpredictability comes
+/// from a 64-bit random token per utterance, but randomness alone is
+/// not the collision defense: `snippet_token` verifies the namespace
+/// is absent from the input, `finalize_transcript` refuses to protect
+/// input that already resembles markers, and `restore_protected`
+/// rejects any imitator — well-formed or malformed — in the response.
+const SNIPPET_TAG_PREFIX: &str = "__MSG_SNIPPET_";
+const SNIPPET_TAG_SUFFIX: &str = "__";
+
+fn snippet_placeholder(token: &str, index: usize) -> String {
+    format!("{SNIPPET_TAG_PREFIX}{token}_{index}{SNIPPET_TAG_SUFFIX}")
+}
+
+/// Attempts before giving up on a fresh namespace; the caller falls
+/// back deterministically on `None`.
+const TOKEN_ATTEMPTS: usize = 64;
+
+/// Per-utterance token from a namespace verified absent from the
+/// input, or `None` when no fresh candidate appears.
+fn snippet_token(raw: &str) -> Option<String> {
+    static FALLBACK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let mut next = || {
+        let mut bytes = [0u8; 8];
+        if getrandom::fill(&mut bytes).is_ok() {
+            bytes.iter().map(|b| format!("{b:02x}")).collect()
+        } else {
+            let n = FALLBACK.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            format!("{:016x}", n.wrapping_add(std::process::id() as u64))
+        }
+    };
+    snippet_token_with(raw, &mut next)
+}
+
+/// First candidate absent from `raw` wins, `None` after
+/// `TOKEN_ATTEMPTS` rejections. Tests inject colliding sequences.
+fn snippet_token_with(raw: &str, next: &mut impl FnMut() -> String) -> Option<String> {
+    (0..TOKEN_ATTEMPTS)
+        .map(|_| next())
+        .find(|candidate| !candidate.is_empty() && !raw.contains(candidate.as_str()))
+}
+
+/// Extra system-prompt section while placeholders are active.
+/// Instructions alone are not trusted: `restore_protected` enforces
+/// the contract on the response.
+fn placeholder_instruction() -> String {
+    format!(
+        "Protected snippet tokens look like {SNIPPET_TAG_PREFIX}<hex>_<n>{SNIPPET_TAG_SUFFIX} \
+         (letters, digits and underscores only). Copy each one into the cleaned transcript \
+         verbatim, exactly once, in its original position and order. Never translate, reformat, \
+         split, merge, remove, or duplicate them, and never invent new ones."
+    )
+}
+
+/// Every reserved-stem occurrence (byte start, byte end): `MSG`, a run
+/// of underscores and ASCII whitespace (possibly empty), then
+/// `SNIPPET`, ASCII case-insensitive. Covers glued, truncated,
+/// rewrapped, recased and whitespace-altered marker copies. Pure ASCII
+/// matching keeps all indices on char boundaries.
+fn reserved_stem_spans(text: &str) -> Vec<(usize, usize)> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i + 3 <= bytes.len() {
+        if bytes[i..i + 3].eq_ignore_ascii_case(b"MSG") {
+            let mut j = i + 3;
+            while j < bytes.len() && (bytes[j] == b'_' || bytes[j].is_ascii_whitespace()) {
+                j += 1;
+            }
+            if j + 7 <= bytes.len() && bytes[j..j + 7].eq_ignore_ascii_case(b"SNIPPET") {
+                out.push((i, j + 7));
+                i = j + 7;
+                continue;
+            }
+        }
+        // Advance one char to stay on a byte boundary.
+        i += text[i..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+    }
+    out
+}
+
+/// True when the text holds anything placeholder-shaped.
+fn contains_marker_like(text: &str) -> bool {
+    !reserved_stem_spans(text).is_empty()
+}
+
+/// Every well-formed placeholder occurrence: (byte start, byte end,
+/// full token text). Foreign well-formed tokens are returned and
+/// rejected as unexpected; malformed fragments are caught separately
+/// by `reserved_stem_spans`.
+fn scan_placeholders(text: &str) -> Vec<(usize, usize, String)> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if text[i..].starts_with(SNIPPET_TAG_PREFIX) {
+            let mut j = i + SNIPPET_TAG_PREFIX.len();
+            while j < bytes.len() && bytes[j].is_ascii_hexdigit() {
+                j += 1;
+            }
+            if j > i + SNIPPET_TAG_PREFIX.len() && j < bytes.len() && bytes[j] == b'_' {
+                let mut k = j + 1;
+                let digits = k;
+                while k < bytes.len() && bytes[k].is_ascii_digit() {
+                    k += 1;
+                }
+                if k > digits && text[k..].starts_with(SNIPPET_TAG_SUFFIX) {
+                    let end = k + SNIPPET_TAG_SUFFIX.len();
+                    out.push((i, end, text[i..end].to_string()));
+                    i = end;
+                    continue;
+                }
+            }
+        }
+        i += text[i..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+    }
+    out
+}
+
+/// Validate the cleanup response against the expected placeholders
+/// and splice the saved replacements verbatim. `None` on any breach:
+/// wrong count, token or order, or any reserved-stem occurrence
+/// outside a validated placeholder span. Only the response is
+/// scanned; restored replacement text is never inspected or
+/// re-matched.
+fn restore_protected(cleaned: &str, token: &str, replacements: &[String]) -> Option<String> {
+    let found = scan_placeholders(cleaned);
+    if found.len() != replacements.len() {
+        return None;
+    }
+    for (index, (_, _, text)) in found.iter().enumerate() {
+        if *text != snippet_placeholder(token, index) {
+            return None;
+        }
+    }
+    for (stem_start, stem_end) in reserved_stem_spans(cleaned) {
+        if !found
+            .iter()
+            .any(|(start, end, _)| *start <= stem_start && stem_end <= *end)
+        {
+            return None;
+        }
+    }
+    let mut out = String::with_capacity(cleaned.len());
+    let mut cursor = 0;
+    for ((start, end, _), rep) in found.iter().zip(replacements) {
+        out.push_str(&cleaned[cursor..*start]);
+        out.push_str(rep);
+        cursor = *end;
+    }
+    out.push_str(&cleaned[cursor..]);
+    Some(out)
 }
 
 pub struct FinishOutcome {
@@ -314,7 +537,7 @@ pub struct FinishOutcome {
     pub engine: String,
     pub duration_secs: i64,
     pub words: u32,
-    /// Per-entry cleanup notes from [`post_process`] (diagnostics).
+    /// Per-entry cleanup notes from [`cleanup_once`] (diagnostics).
     pub cleanup: Vec<String>,
 }
 
@@ -546,19 +769,9 @@ impl Engine {
             return Err("superseded (provider switched mid-utterance)".to_string());
         }
 
-        // Snippets from settings (desktop deliver parity; hydrated
-        // from the store on load, comma-triggers expanded).
-        let pairs: Vec<(String, String)> = self
-            .settings
-            .dictionary
-            .snippets
-            .iter()
-            .flat_map(|s| s.triggers().into_iter().map(|t| (t, s.replacement.clone())))
-            .collect();
-        let expanded = expand_snippets(&raw, &pairs);
         self.cleanup_and_deliver(
             &raw,
-            &expanded,
+            &raw,
             &engine,
             duration_secs,
             &words,
@@ -568,8 +781,9 @@ impl Engine {
 
     /// Finish an utterance the platform already transcribed on-device
     /// (Android `LocalStt`): `raw` is the decoder output, `text` the
-    /// platform-post-processed text (snippets + word boost). Runs the
-    /// same LLM cleanup chain and history write as the server path,
+    /// platform-post-processed text (word boost only; snippets are
+    /// recognized and protected here). Runs the same snippet, LLM
+    /// cleanup and history path as the server path,
     /// and ends the utterance so reconciles stop deferring. The PCM
     /// buffered for the server path is dropped.
     pub fn finish_with_text(
@@ -599,20 +813,32 @@ impl Engine {
         out
     }
 
-    /// Shared tail: LLM cleanup → witness recheck → history.
+    /// Shared tail: snippets + LLM cleanup → witness recheck → history.
+    /// `text` is the transcript before snippet expansion (`raw` on the
+    /// server path, the platform's word-boosted decode on the local one).
     fn cleanup_and_deliver(
         &mut self,
         raw: &str,
-        expanded: &str,
+        text: &str,
         engine: &str,
         duration_secs: i64,
         words: &[String],
         generation_at_entry: u64,
     ) -> Result<FinishOutcome, String> {
-        let (text, cleanup) = post_process(
-            expanded,
+        // Snippets keyed per trigger (comma-separated aliases flatten to
+        // one entry each), recognized before cleanup and restored after.
+        let snips: Vec<(String, String)> = self
+            .settings
+            .dictionary
+            .snippets
+            .iter()
+            .flat_map(|s| s.triggers().into_iter().map(|t| (t, s.replacement.clone())))
+            .collect();
+        let (text, cleanup) = finalize_transcript(
+            text,
             &self.settings.language_models,
             words,
+            &snips,
             generation_at_entry,
             &self._dir,
         );
@@ -1338,6 +1564,59 @@ mod tests {
         let history: serde_json::Value = serde_json::from_str(&eng.history_json(10)).unwrap();
         assert_eq!(history.as_array().unwrap().len(), 1);
         llm_stub.join().unwrap();
+    }
+
+    #[test]
+    fn snippet_placeholders_restore_literally_or_reject_any_breach() {
+        let (t, reps) = ("ab12", vec!["go now".to_string(), "Best, A".to_string()]);
+        let (p0, p1) = (snippet_placeholder(t, 0), snippet_placeholder(t, 1));
+        // Restored verbatim, never re-matched (go → go now stays once).
+        assert_eq!(
+            restore_protected(&format!("Ok, {p0}. Then {p1}"), t, &reps).as_deref(),
+            Some("Ok, go now. Then Best, A")
+        );
+        for broken in [
+            format!("Ok, {p0}."),                               // missing
+            format!("{p1} {p0}"),                               // reordered
+            format!("{p0} {p0} {p1}"),                          // duplicated
+            format!("{p0} {}", snippet_placeholder("ffff", 1)), // foreign token
+            format!("{p0} {p1} __msg snippet_ab12_2"),          // malformed fragment
+        ] {
+            assert_eq!(restore_protected(&broken, t, &reps), None, "{broken}");
+        }
+        assert!(contains_marker_like("say MSG__ snippet now"));
+        assert!(!contains_marker_like("message snippet"));
+    }
+
+    #[test]
+    fn snippet_token_skips_namespaces_present_in_the_input() {
+        let mut seq = ["dead", "beef", "cafe"].into_iter().map(String::from);
+        assert_eq!(
+            snippet_token_with("dead beef", &mut || seq.next().unwrap_or_default()).as_deref(),
+            Some("cafe")
+        );
+        assert_eq!(snippet_token_with("x", &mut || "x".to_string()), None);
+    }
+
+    #[test]
+    fn snippets_expand_once_when_cleanup_is_off_or_input_looks_like_a_marker() {
+        let lm = crate::settings::LanguageModelSettings {
+            cleanup_enabled: false,
+            ..Default::default()
+        };
+        let snips = vec![("go".to_string(), "go now".to_string())];
+        let dir = std::env::temp_dir();
+        let (text, _) = finalize_transcript("go", &lm, &[], &snips, 0, &dir);
+        assert_eq!(text, "go now");
+        // Accent- and case-insensitive recognition (desktop #13 folding).
+        let snips = vec![("cafe".to_string(), "☕".to_string())];
+        assert_eq!(
+            finalize_transcript("Café time", &lm, &[], &snips, 0, &dir).0,
+            "☕ time"
+        );
+        let (text, notes) = finalize_transcript("cafe MSG_SNIPPET", &lm, &[], &snips, 0, &dir);
+        assert_eq!(text, "☕ MSG_SNIPPET");
+        assert!(notes[0].contains("marker-like"));
     }
 
     #[test]

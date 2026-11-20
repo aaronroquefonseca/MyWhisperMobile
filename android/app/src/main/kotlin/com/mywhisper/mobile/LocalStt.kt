@@ -125,112 +125,14 @@ object LocalStt {
         return out
     }
 
-    /**
-     * Snippet trigger pairs for [expandSnippets]: comma-split, trimmed,
-     * empties dropped. Mirrors core `Snippet::triggers` flatMap in
-     * `engine.rs::finish_inner` — Kotlin `CoreBridge.getSnippets`
-     * returns the whole trigger field per row, so the split must happen
-     * here for parity (a "ask, aks" row yields two pairs).
-     * Pure: no Android calls, JVM-testable.
-     */
-    fun snippetPairs(snippets: List<Pair<String, String>>): List<Pair<String, String>> =
-        snippets.flatMap { (trigger, replacement) ->
-            trigger.split(',').map { it.trim() }.filter { it.isNotEmpty() }.map { it to replacement }
-        }
-
-    private data class SnippetTrigger(
-        val pattern: List<Char>,
-        val dotlessOk: List<Boolean>,
-        val replacement: String,
-    )
-
-    private fun foldTextChar(c: Char): Char =
-        if (c == 'İ') 'i' else c.lowercaseChar()
-
-    private fun compileTrigger(trigger: String, replacement: String): SnippetTrigger? {
-        val folded = trigger.trim().replace('İ', 'i')
-        if (folded.isEmpty()) return null
-        val lowered = folded.lowercase().toList()
-        val raw = trigger.trim().toList()
-        val pattern = mutableListOf<Char>()
-        val dotlessOk = mutableListOf<Boolean>()
-        lowered.forEachIndexed { ri, c ->
-            val r = raw.getOrNull(ri) ?: '?'
-            pattern.add(c)
-            dotlessOk.add(r == 'i' || r == 'I')
-        }
-        return SnippetTrigger(pattern, dotlessOk, replacement)
-    }
-
     private fun isWordChar(c: Char): Boolean = c.isLetterOrDigit() || c == '_'
-
-    /**
-     * Snippet expansion over STT text. Byte-for-byte port of core
-     * `textnorm::expand_snippets`: longest-first single pass, word
-     * boundaries (start/end or non-`[alphanumeric_]`),
-     * case-insensitive with Turkish dotted/dotless-i readings.
-     * Pure: no Android calls, JVM-testable. Unit vectors mirror the
-     * Rust tests — any drift there must land here too.
-     */
-    fun expandSnippets(text: String, pairs: List<Pair<String, String>>): String {
-        val triggers = pairs.mapNotNull { (t, r) -> compileTrigger(t, r) }
-            .sortedByDescending { it.pattern.size }
-        if (triggers.isEmpty()) return text
-        val chars = text.toList()
-        val out = StringBuilder(text.length)
-        var i = 0
-        while (i < chars.size) {
-            val atBoundary = i == 0 || !isWordChar(chars[i - 1])
-            var hit: SnippetTrigger? = null
-            var hitLen = 0
-            if (atBoundary) {
-                for (tr in triggers) {
-                    val n = tr.pattern.size
-                    if (i + n > chars.size) continue
-                    var ok = true
-                    for (k in 0 until n) {
-                        val p = tr.pattern[k]
-                        val t = foldTextChar(chars[i + k])
-                        val match = t == p ||
-                            (tr.dotlessOk[k] && ((p == 'i' && t == 'ı') || (p == 'ı' && t == 'i')))
-                        if (!match) {
-                            ok = false
-                            break
-                        }
-                    }
-                    if (ok && (i + n == chars.size || !isWordChar(chars[i + n]))) {
-                        hit = tr
-                        hitLen = n
-                        break
-                    }
-                }
-            }
-            if (hit != null) {
-                out.append(hit.replacement)
-                i += hitLen
-            } else {
-                out.append(chars[i])
-                i++
-            }
-        }
-        return out.toString()
-    }
-
-    private fun loadSnippetsOrEmpty(): List<Pair<String, String>> =
-        try {
-            CoreBridge.getSnippets()
-        } catch (_: Throwable) {
-            // JVM unit tests / missing native lib: Throwable (not just
-            // Exception — UnsatisfiedLinkError is an Error). Passthrough.
-            emptyList()
-        }
 
     private fun loadWordsOrEmpty(): List<String> =
         try {
             CoreBridge.getWords()
         } catch (_: Throwable) {
-            // Same loader hazard as snippets above (getWords only
-            // catches Exception; native-link failures are Errors).
+            // JVM unit tests / missing native lib: getWords only
+            // catches Exception; native-link failures are Errors.
             emptyList()
         }
 
@@ -372,28 +274,24 @@ object LocalStt {
     }
 
     /**
-     * Local-path dictionary post-process: the same snippet expansion
-     * the server path gets in `engine.rs::finish_inner`
-     * (`expand_snippets` over comma-split pairs), followed by the
-     * WORD word-boost ([applyWordBoost]). Applied EXACTLY once, in
-     * [Dictation.finish] on local hits only — server text is already
-     * expanded in Rust, and double application would diverge on nested
-     * triggers. Never throws (loader failures → passthrough).
+     * Local-path dictionary post-process: the WORD word-boost
+     * ([applyWordBoost]), applied EXACTLY once, in [Dictation.finish]
+     * on local hits only. Snippets are not expanded here: the core
+     * (`engine.rs::finalize_transcript`) recognizes them on the text
+     * passed to `finishLocalUtterance`, protects them through cleanup
+     * and restores them literally, the same as the server path. Never
+     * throws (loader failures → passthrough).
      *
      * Bias channels: Whisper also gets the words as its decoder initial
      * prompt ([dictionaryPrompt]); Parakeet has no prompt input. This
      * post-process near-miss repair runs for both; a word the decoder
      * drops entirely is NOT recovered here.
      */
-    fun postProcessLocal(
-        text: String,
-        snippets: List<Pair<String, String>>,
-        words: List<String> = emptyList(),
-    ): String = applyWordBoost(expandSnippets(text, snippetPairs(snippets)), words)
+    fun postProcessLocal(text: String, words: List<String>): String = applyWordBoost(text, words)
 
     fun postProcessLocal(text: String): String =
         try {
-            postProcessLocal(text, loadSnippetsOrEmpty(), loadWordsOrEmpty())
+            postProcessLocal(text, loadWordsOrEmpty())
         } catch (_: Throwable) {
             text
         }

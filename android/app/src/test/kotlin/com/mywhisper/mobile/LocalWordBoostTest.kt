@@ -165,13 +165,10 @@ class LocalWordBoostTest {
     }
 
     @Test
-    fun postProcessLocal_appliesSnippetsThenBoost() {
-        val out = LocalStt.postProcessLocal(
-            "omw to kuberrnetes",
-            listOf("omw" to "on my way"),
-            listOf("Kubernetes"),
-        )
-        assertEquals("on my way to Kubernetes", out)
+    fun postProcessLocal_boostsWordsAndLeavesSnippetsToCore() {
+        // Snippet triggers ("omw") stay for the core's protected expansion.
+        val out = LocalStt.postProcessLocal("omw to kuberrnetes", listOf("Kubernetes"))
+        assertEquals("omw to Kubernetes", out)
     }
 
     @Test
@@ -202,7 +199,7 @@ class LocalWordBoostTest {
                 cancelTranscription = {},
                 finishLocal = { _, text, engine, _ -> text to engine },
                 localTranscribe = { "deploy to kuberrnetes" to "local moonshine-v2-tiny.en" },
-                localPostProcess = { LocalStt.postProcessLocal(it, emptyList(), words) },
+                localPostProcess = { LocalStt.postProcessLocal(it, words) },
                 pushPcm = { _, _ -> },
                 log = {},
                 workers = executor,

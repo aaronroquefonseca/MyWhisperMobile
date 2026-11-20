@@ -70,12 +70,11 @@ class Dictation(
     private val localTranscribe: ((ShortArray) -> Pair<String, String>?) = { null },
     /**
      * Local-hit dictionary post-process (default
-     * `LocalStt.postProcessLocal`: same snippet expansion the server
-     * path gets in Rust `finish_inner`, plus the WORD word-boost
-     * near-miss repair; see `LocalStt.postProcessLocal`). Injected so JVM unit
-     * tests can supply pairs without the native lib. Applied to LOCAL
-     * hits only, exactly once — server text is already expanded in
-     * Rust. Any throw falls back to the server chain (applied inside
+     * `LocalStt.postProcessLocal`: the WORD word-boost near-miss
+     * repair). Snippets are handled by the core in [finishLocal], the
+     * same as on the server path. Injected so JVM unit tests run
+     * without the native lib. Applied to LOCAL hits only, exactly
+     * once. Any throw falls back to the server chain (applied inside
      * the guarded local block in [finish]).
      */
     private val localPostProcess: (String) -> String = { LocalStt.postProcessLocal(it) },
@@ -396,10 +395,9 @@ class Dictation(
                         return null
                     }
                     return try {
-                        // Local hits get the server's dictionary treatment
-                        // (snippet expansion + WORD word-boost via
-                        // [localPostProcess]) — raw on-device decode
-                        // bypasses Rust `finish_inner`.
+                        // Local hits get the WORD word-boost here
+                        // ([localPostProcess]); the core applies snippets
+                        // in [finishLocal], as on the server path.
                         localTranscribe(pcm)?.let { (raw, engine) -> LocalHit(raw, localPostProcess(raw), engine) }
                     } catch (_: Throwable) {
                         // Local hook miss on ANY throw (incl. OOM Error).
