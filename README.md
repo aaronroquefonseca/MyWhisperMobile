@@ -4,9 +4,11 @@
   <p>Voice typing for Android, powered by the MyWhisper engine.</p>
 </div>
 
-Dictate into other apps using a floating microphone button or the
-MyWhisper input method. Configure speech recognition, text cleanup, and
-other settings from the app.
+Dictate into other apps using a floating microphone button. Configure
+speech recognition, text cleanup, and other settings from the app. Your
+dictionary and history sync over your LAN with
+[MyWhisper for desktop](https://github.com/aaronroquefonseca/MyWhisper)
+and your other MyWhisper devices.
 
 ## Install
 
@@ -183,6 +185,8 @@ between one release and the next.
 
 ## Bringing desktop updates over
 
-See `core/README.md`. Rule of thumb: `settings.rs`, `audio.rs`,
+The shared engine comes from
+[MyWhisper desktop](https://github.com/aaronroquefonseca/MyWhisper). See
+`core/README.md`. Rule of thumb: `settings.rs`, `audio.rs`,
 `textnorm.rs`, `store.rs` are byte-ports — re-copy the desktop file,
 re-apply the marked `ANDROID PORT` patches, run `cargo test`.
