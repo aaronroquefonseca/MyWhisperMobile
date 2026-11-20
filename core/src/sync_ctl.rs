@@ -24,6 +24,8 @@ pub struct SyncManager {
     discovered: Arc<Mutex<HashMap<String, net::Discovered>>>,
     port: u16,
     reports: Arc<Mutex<Vec<String>>>,
+    /// Joined on stop, so a restart can bind the same port again.
+    listener: Option<std::thread::JoinHandle<()>>,
 }
 
 static SYNC: OnceLock<Mutex<Option<SyncManager>>> = OnceLock::new();
@@ -100,21 +102,21 @@ pub fn sync_start(dir: PathBuf) -> Result<String, String> {
 
     // Listener (port 0 = disabled).
     let listener = net::listen(port).map_err(|e| format!("listen {port}: {e}"))?;
-    if let Some(l) = listener {
+    let listener = if let Some(l) = listener {
         let db = db_path.clone();
         let c = creds.clone();
         let n = name.clone();
         let s = stop.clone();
         let r = reports.clone();
-        let addrs = vec![];
-        std::thread::spawn(move || {
-            net::serve(l, db, c, n, addrs, &s);
-            push_report(&r, "listener stopped".to_string());
-        });
         push_report(&reports, format!("listening on port {port}"));
+        Some(std::thread::spawn(move || {
+            net::serve(l, db, c, n, &s);
+            push_report(&r, "listener stopped".to_string());
+        }))
     } else {
         push_report(&reports, "listening disabled (port 0)".to_string());
-    }
+        None
+    };
 
     // mDNS advertise + browse.
     match net::start_mdns(
@@ -134,13 +136,20 @@ pub fn sync_start(dir: PathBuf) -> Result<String, String> {
                 discovered,
                 port,
                 reports,
+                listener,
             };
             mgr.spawn_loops(&name);
             let summary = format!("sync on (port {port})");
             *slot().lock().unwrap() = Some(mgr);
             Ok(summary)
         }
-        Err(e) => Err(format!("mDNS: {e}")),
+        Err(e) => {
+            stop.store(true, Ordering::Relaxed);
+            if let Some(listener) = listener {
+                let _ = listener.join();
+            }
+            Err(format!("mDNS: {e}"))
+        }
     }
 }
 
@@ -176,6 +185,11 @@ pub fn sync_stop() {
         m.stop.store(true, Ordering::Relaxed);
         if let Some(h) = m.mdns {
             h.shutdown();
+        }
+        // The accept loop polls `stop` every 100 ms; wait for it to drop
+        // the socket so an immediate restart can rebind (desktop R42).
+        if let Some(listener) = m.listener {
+            let _ = listener.join();
         }
     }
 }
@@ -263,7 +277,8 @@ pub fn sync_peers_json(dir: &std::path::Path) -> String {
 }
 
 fn short_id(id: &str) -> String {
-    if id.len() > 12 {
+    // Byte slicing is safe only on canonical (ASCII hex) ids.
+    if crate::store::valid_node_id(id) {
         format!("{}…{}", &id[..8], &id[id.len() - 4..])
     } else {
         id.to_string()
