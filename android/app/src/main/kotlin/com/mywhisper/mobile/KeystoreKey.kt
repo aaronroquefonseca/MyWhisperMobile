@@ -34,6 +34,12 @@ object KeystoreKey {
     internal fun isValidHexKey(s: String): Boolean =
         s.length == 64 && s.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }
 
+    /**
+     * Synchronized so the app and overlay service never mint two keys on
+     * first run; the new key is returned only after it is committed and
+     * read back (desktop #65, R07).
+     */
+    @Synchronized
     fun getOrCreateHex(ctx: Context): String {
         val p = prefs(ctx)
         // Fail closed: length-only check would hand a non-hex string to
@@ -41,7 +47,9 @@ object KeystoreKey {
         p.getString(KEY, null)?.let { if (isValidHexKey(it)) return it }
         val raw = ByteArray(32).also { SecureRandom().nextBytes(it) }
         val hex = raw.hex()
-        p.edit().putString(KEY, hex).apply()
+        check(p.edit().putString(KEY, hex).commit() && p.getString(KEY, null) == hex) {
+            "Keystore did not keep the new db key"
+        }
         return hex
     }
 }

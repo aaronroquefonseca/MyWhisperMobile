@@ -9,8 +9,24 @@
 //!   Legacy 32-byte key files gain a fresh x25519 key on first load.
 
 use ed25519_dalek::{SigningKey, VerifyingKey};
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
+
+/// Write `bytes` to a fresh 0600 temp file, fsync, then rename it over
+/// `path`: the key is never readable by others, nor seen half-written.
+fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let tmp = path.with_extension("key.tmp");
+    let _ = std::fs::remove_file(&tmp);
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&tmp)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    std::fs::rename(&tmp, path)
+}
 
 pub struct DeviceIdentity {
     pub node_id: String,
@@ -28,29 +44,40 @@ pub struct SyncCreds {
 
 impl DeviceIdentity {
     /// Load the node key, creating and persisting one on first run.
+    /// `device.key.lock` serializes racing first runs, and the key is
+    /// written to a 0600 temp file then renamed into place, so no
+    /// reader ever sees a partial or second identity (desktop R06).
     pub fn load_or_create(path: &Path) -> std::io::Result<Self> {
-        if path.exists() {
-            let bytes = std::fs::read(path)?;
-            if bytes.len() == 32 {
-                // Legacy file: keep the identity, append a fresh
-                // transport key.
-                let mut both = [0u8; 64];
+        let _lock = crate::store::lock_path(&path.with_extension("key.lock"))?;
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(e) => return Err(e),
+        };
+        let mut both = [0u8; 64];
+        match bytes.len() {
+            64 => both.copy_from_slice(&bytes),
+            // Legacy file: keep the identity, append a fresh transport key.
+            32 => {
                 both[..32].copy_from_slice(&bytes);
                 getrandom::fill(&mut both[32..])
                     .map_err(|e| std::io::Error::other(format!("rng: {e}")))?;
-                std::fs::write(path, both)?;
-                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-                return Ok(Self::from_keys(&both));
+                write_private(path, &both)?;
             }
-            let both: [u8; 64] = bytes.try_into().map_err(|_| {
-                std::io::Error::new(std::io::ErrorKind::InvalidData, "bad device key length")
-            })?;
-            return Ok(Self::from_keys(&both));
+            // An existing empty file is corruption, never a new identity.
+            0 if path.exists() => return Err(std::io::Error::other("empty device key")),
+            0 => {
+                getrandom::fill(&mut both)
+                    .map_err(|e| std::io::Error::other(format!("rng: {e}")))?;
+                write_private(path, &both)?;
+            }
+            _ => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "bad device key length",
+                ));
+            }
         }
-        let mut both = [0u8; 64];
-        getrandom::fill(&mut both).map_err(|e| std::io::Error::other(format!("rng: {e}")))?;
-        std::fs::write(path, both)?;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
         Ok(Self::from_keys(&both))
     }
 
@@ -251,5 +278,50 @@ pub fn display_name(settings_name: &str, node_id: &str) -> String {
         default_device_name(node_id)
     } else {
         settings_name.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("mywhisper-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("device.key")
+    }
+
+    #[test]
+    fn racing_first_runs_share_one_identity() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = scratch("identity-race");
+        let gate = std::sync::Barrier::new(6);
+        let ids: Vec<String> = std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..6)
+                .map(|_| {
+                    scope.spawn(|| {
+                        gate.wait();
+                        DeviceIdentity::load_or_create(&path).unwrap().node_id
+                    })
+                })
+                .collect();
+            workers.into_iter().map(|w| w.join().unwrap()).collect()
+        });
+        assert!(ids.iter().all(|id| *id == ids[0]), "{ids:?}");
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[test]
+    fn legacy_key_keeps_its_identity_and_empty_key_is_refused() {
+        let path = scratch("identity-legacy");
+        let seed = [7u8; 32];
+        std::fs::write(&path, seed).unwrap();
+        let id = DeviceIdentity::load_or_create(&path).unwrap().node_id;
+        assert_eq!(std::fs::read(&path).unwrap().len(), 64);
+        assert_eq!(DeviceIdentity::load_or_create(&path).unwrap().node_id, id);
+        std::fs::write(&path, b"").unwrap();
+        assert!(DeviceIdentity::load_or_create(&path).is_err());
     }
 }
