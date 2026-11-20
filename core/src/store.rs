@@ -188,7 +188,7 @@ fn has_column(conn: &Connection, table: &str, column: &str) -> bool {
 /// Local copy of the desktop `device::valid_node_id` check so peer
 /// bookkeeping never stores a malformed identity (device.rs is outside
 /// this port's owned files).
-fn valid_node_id(id: &str) -> bool {
+pub(crate) fn valid_node_id(id: &str) -> bool {
     id.len() == 64 && id.chars().all(|c| c.is_ascii_hexdigit())
 }
 
@@ -426,7 +426,51 @@ fn migrate_schema(conn: &Connection) -> rusqlite::Result<()> {
         "UPDATE history SET raw_text = text WHERE raw_text = '' AND text <> ''",
         [],
     )?;
+    // Tombstones from builds that kept deleted text: redact them
+    // (desktop #34, R03). A no-op scan once clean.
+    conn.execute(
+        "UPDATE history SET text = '', raw_text = '', words = 0, duration_secs = 0
+         WHERE deleted = 1 AND (text <> '' OR raw_text <> '')",
+        [],
+    )?;
+    ensure_change_seq(conn)?;
     conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))
+}
+
+/// Change tracking for incremental sync (desktop #67, R44): every
+/// insert or update of a synced row takes the next value of one
+/// counter, so a peer asks only for rows changed after the last value
+/// it merged. Triggers keep this true for every write path. `store_id`
+/// names this database, so a mark from another (or a replaced) store
+/// never skips rows.
+fn ensure_change_seq(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        "INSERT OR IGNORE INTO sync_meta (key, value) VALUES ('seq', '0');
+         INSERT OR IGNORE INTO sync_meta (key, value)
+           VALUES ('store_id', lower(hex(randomblob(16))));",
+    )?;
+    for table in ["words", "snippets", "history"] {
+        if !has_column(conn, table, "seq") {
+            conn.execute(
+                &format!("ALTER TABLE {table} ADD COLUMN seq INTEGER NOT NULL DEFAULT 0"),
+                [],
+            )?;
+        }
+        let bump = format!(
+            "UPDATE sync_meta SET value = CAST(value AS INTEGER) + 1 WHERE key = 'seq';
+             UPDATE {table} SET seq = (SELECT CAST(value AS INTEGER) FROM sync_meta
+                                       WHERE key = 'seq')
+             WHERE rowid = NEW.rowid;"
+        );
+        conn.execute_batch(&format!(
+            "CREATE INDEX IF NOT EXISTS {table}_seq ON {table} (seq);
+             CREATE TRIGGER IF NOT EXISTS {table}_seq_insert AFTER INSERT ON {table}
+             BEGIN {bump} END;
+             CREATE TRIGGER IF NOT EXISTS {table}_seq_update AFTER UPDATE ON {table}
+             WHEN NEW.seq = OLD.seq BEGIN {bump} END;"
+        ))?;
+    }
+    Ok(())
 }
 
 /// Encrypt a legacy plaintext database in place via a temp file:
@@ -759,6 +803,11 @@ impl Store {
              ON CONFLICT (key) DO UPDATE SET value = excluded.value",
             [&json],
         )?;
+        // Switch-off and its epoch bump commit together, so a round in
+        // flight aborts even if sync is switched back on (desktop #34).
+        if !settings.sync.enabled {
+            Self::invalidate_sync(&tx)?;
+        }
         tx.commit()
     }
 
@@ -1129,6 +1178,8 @@ impl Store {
             [],
         )?;
         tx.execute("DELETE FROM devices", [])?;
+        // Forget what we merged from peers: after a reset they resend.
+        tx.execute("DELETE FROM sync_meta WHERE key LIKE 'since:%'", [])?;
         Self::invalidate_sync(&tx)?;
         tx.execute("DELETE FROM kv", [])?;
         let mut defaults = AppSettings::default();
@@ -1158,10 +1209,50 @@ impl Store {
     // -- sync: export + LWW apply --------------------------------------------
 
     pub fn export_words(&self) -> rusqlite::Result<Vec<WordRecord>> {
+        self.words_since(-1)
+    }
+
+    pub fn export_snippets(&self) -> rusqlite::Result<Vec<SnippetRecord>> {
+        self.snippets_since(-1)
+    }
+
+    pub fn export_history(&self) -> rusqlite::Result<Vec<HistoryRecord>> {
+        self.history_since(-1)
+    }
+
+    /// This store's id and current change counter.
+    fn current_mark(conn: &Connection) -> rusqlite::Result<SyncMark> {
+        conn.query_row(
+            "SELECT (SELECT value FROM sync_meta WHERE key = 'store_id'),
+                    (SELECT CAST(value AS INTEGER) FROM sync_meta WHERE key = 'seq')",
+            [],
+            |r| {
+                Ok(SyncMark {
+                    store: r.get(0)?,
+                    seq: r.get(1)?,
+                })
+            },
+        )
+    }
+
+    /// The mark of the last complete merge from `node_id`, if any.
+    pub fn peer_mark(&self, node_id: &str) -> rusqlite::Result<Option<SyncMark>> {
+        let raw: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM sync_meta WHERE key = 'since:' || ?1",
+                [node_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(raw.and_then(|raw| serde_json::from_str(&raw).ok()))
+    }
+
+    fn words_since(&self, since: i64) -> rusqlite::Result<Vec<WordRecord>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT word, updated_at, updated_by, deleted FROM words")?;
-        stmt.query_map([], |row| {
+            .prepare("SELECT word, updated_at, updated_by, deleted FROM words WHERE seq > ?1")?;
+        stmt.query_map([since], |row| {
             Ok(WordRecord {
                 word: row.get(0)?,
                 updated_at: row.get(1)?,
@@ -1172,11 +1263,12 @@ impl Store {
         .collect()
     }
 
-    pub fn export_snippets(&self) -> rusqlite::Result<Vec<SnippetRecord>> {
+    fn snippets_since(&self, since: i64) -> rusqlite::Result<Vec<SnippetRecord>> {
         let mut stmt = self.conn.prepare(
-            "SELECT trigger, replacement, updated_at, updated_by, deleted FROM snippets",
+            "SELECT trigger, replacement, updated_at, updated_by, deleted FROM snippets
+             WHERE seq > ?1",
         )?;
-        stmt.query_map([], |row| {
+        stmt.query_map([since], |row| {
             Ok(SnippetRecord {
                 trigger: row.get(0)?,
                 replacement: row.get(1)?,
@@ -1188,12 +1280,18 @@ impl Store {
         .collect()
     }
 
-    pub fn export_history(&self) -> rusqlite::Result<Vec<HistoryRecord>> {
+    /// Tombstones never carry content on the wire (desktop #34, R03).
+    fn history_since(&self, since: i64) -> rusqlite::Result<Vec<HistoryRecord>> {
         let mut stmt = self.conn.prepare(
-            "SELECT uuid, text, raw_text, words, duration_secs, deleted, discarded, recorded_at
-             FROM history",
+            "SELECT uuid,
+                    CASE WHEN deleted OR discarded THEN '' ELSE text END,
+                    CASE WHEN deleted OR discarded THEN '' ELSE raw_text END,
+                    CASE WHEN deleted OR discarded THEN 0 ELSE words END,
+                    CASE WHEN deleted THEN 0 ELSE duration_secs END,
+                    deleted, discarded, recorded_at
+             FROM history WHERE seq > ?1",
         )?;
-        stmt.query_map([], |row| {
+        stmt.query_map([since], |row| {
             Ok(HistoryRecord {
                 uuid: row.get(0)?,
                 text: row.get(1)?,
@@ -1386,19 +1484,31 @@ impl Store {
     /// (Desktop #18 `export_authorized`; the 16 MiB legacy single-shot
     /// cap is dropped — phone/desktop negotiate full payloads here —
     /// see PR description.)
+    ///
+    /// `since` is the mark the peer last merged from us: only rows
+    /// changed after it are exported (all rows when it names another
+    /// store or a counter ahead of ours). The returned `mark` covers
+    /// exactly the rows returned (desktop #67, R44).
     pub fn export_authorized(
         &self,
         peer_id: &str,
         epoch: i64,
+        since: Option<&SyncMark>,
     ) -> rusqlite::Result<ContentSnapshot> {
         let tx = self.conn.unchecked_transaction()?;
         self.check_sync_identity()?;
         Self::require_sync_authorized(&tx, peer_id, epoch)?;
+        let mark = Self::current_mark(&tx)?;
+        let from = match since {
+            Some(s) if s.store == mark.store && s.seq <= mark.seq => s.seq,
+            _ => -1,
+        };
         let snapshot = ContentSnapshot {
-            words: self.export_words()?,
-            snippets: self.export_snippets()?,
-            history: self.export_history()?,
+            words: self.words_since(from)?,
+            snippets: self.snippets_since(from)?,
+            history: self.history_since(from)?,
             peers: self.export_gossip()?,
+            mark,
         };
         tx.commit()?;
         Ok(snapshot)
@@ -1459,6 +1569,12 @@ impl Store {
     /// through), applies words/snippets/history/gossip atomically, and
     /// records the sync. Returns gossip-added peers.
     /// (Desktop #18 `apply_sync_round`.)
+    ///
+    /// Records dated beyond the clock horizon are refused one by one
+    /// (desktop #67, R20): the rest of the round still merges, but
+    /// `mark` (the peer's position after this payload) is stored only
+    /// when nothing was refused, so the next round resends from the
+    /// previous mark.
     pub fn apply_sync_round(
         &self,
         peer_id: &str,
@@ -1466,17 +1582,26 @@ impl Store {
         self_id: &str,
         content: (&[WordRecord], &[SnippetRecord], &[HistoryRecord]),
         gossip: &[PeerGossip],
+        mark: Option<&SyncMark>,
     ) -> rusqlite::Result<usize> {
         let tx = self.conn.unchecked_transaction()?;
         self.check_sync_identity()?;
         Self::require_sync_authorized(&tx, peer_id, epoch)?;
         // Remote entry: horizon-checked before anything commits.
-        for r in content.0 {
-            Self::validate_version(r.updated_at)?;
-        }
-        for r in content.1 {
-            Self::validate_version(r.updated_at)?;
-        }
+        let in_horizon = |v: i64| Self::validate_version(v).is_ok();
+        let words: Vec<WordRecord> = content
+            .0
+            .iter()
+            .filter(|r| in_horizon(r.updated_at))
+            .cloned()
+            .collect();
+        let snippets: Vec<SnippetRecord> = content
+            .1
+            .iter()
+            .filter(|r| in_horizon(r.updated_at))
+            .cloned()
+            .collect();
+        let refused = content.0.len() - words.len() + content.1.len() - snippets.len();
         let peer: Option<Peer> = tx
             .query_row(
                 "SELECT node_id, name, address, addresses, trusted, pending,
@@ -1486,8 +1611,8 @@ impl Store {
                 Self::peer_from_row,
             )
             .optional()?;
-        let changed = Self::apply_words_on(&tx, content.0)?
-            + Self::apply_snippets_on(&tx, content.1)?
+        let changed = Self::apply_words_on(&tx, &words)?
+            + Self::apply_snippets_on(&tx, &snippets)?
             + Self::apply_history_on(&tx, content.2)?;
         let added =
             Self::apply_gossip_on(&tx, gossip, peer.is_some_and(|p| p.introducer), self_id)?;
@@ -1495,6 +1620,15 @@ impl Store {
             "UPDATE devices SET last_seen = ?2, last_sync = ?2 WHERE node_id = ?1",
             (peer_id, now_ms() / 1000),
         )?;
+        if let Some(mark) = mark.filter(|_| refused == 0) {
+            let raw = serde_json::to_string(mark)
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))?;
+            tx.execute(
+                "INSERT INTO sync_meta (key, value) VALUES ('since:' || ?1, ?2)
+                 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                (peer_id, raw),
+            )?;
+        }
         if changed > 0 || added > 0 {
             bump_gen(&tx);
         }
@@ -1516,13 +1650,23 @@ impl Store {
     }
 }
 
-/// One authorized content snapshot exchanged in a sync round.
-#[derive(Debug, Clone, Default)]
+/// One authorized content snapshot exchanged in a sync round, and the
+/// mark it brings a peer up to.
+#[derive(Debug, Clone)]
 pub struct ContentSnapshot {
     pub words: Vec<WordRecord>,
     pub snippets: Vec<SnippetRecord>,
     pub history: Vec<HistoryRecord>,
     pub peers: Vec<PeerGossip>,
+    pub mark: SyncMark,
+}
+
+/// Incremental sync position: a store's random id and a value of its
+/// change counter (desktop #67 wire shape).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SyncMark {
+    pub store: String,
+    pub seq: i64,
 }
 
 /// Versioned word row exchanged between nodes.
@@ -1606,7 +1750,7 @@ fn dump_addresses(addresses: &[String]) -> String {
 /// Merge new observations into a stored address list (dedup, cap 8).
 /// Fresh observations win the front slots; empty or oversized entries
 /// never reach storage (bounded input from the network).
-fn merge_addresses(current: &[String], seen: &[String]) -> Vec<String> {
+pub(crate) fn merge_addresses(current: &[String], seen: &[String]) -> Vec<String> {
     let mut out: Vec<String> = seen
         .iter()
         .filter(|a| !a.is_empty() && a.len() <= 256)
@@ -2667,31 +2811,43 @@ mod tests {
         let peer = peer_id(0x11);
         // No settings blob yet: refuses (no permissive defaults).
         store.upsert_peer(&peer, "peer", "", true).unwrap();
-        assert!(store.export_authorized(&peer, store.sync_epoch()).is_err());
+        assert!(
+            store
+                .export_authorized(&peer, store.sync_epoch(), None)
+                .is_err()
+        );
         enable_sync(&store);
         let epoch = store.sync_epoch();
         store
             .add_history("raw", "hello", 2, 5, &peer_id(0x22))
             .unwrap();
         assert_eq!(
-            store.export_authorized(&peer, epoch).unwrap().history.len(),
+            store
+                .export_authorized(&peer, epoch, None)
+                .unwrap()
+                .history
+                .len(),
             1
         );
 
         // Stale epoch fails after any trust/topology change.
         trust(&store, &peer_id(0x33));
         assert_ne!(store.sync_epoch(), epoch);
-        assert!(store.export_authorized(&peer, epoch).is_err());
+        assert!(store.export_authorized(&peer, epoch, None).is_err());
 
         // Unknown peer fails even with the fresh epoch.
         let fresh = store.sync_epoch();
-        assert!(store.export_authorized(&peer_id(0x44), fresh).is_err());
+        assert!(
+            store
+                .export_authorized(&peer_id(0x44), fresh, None)
+                .is_err()
+        );
 
         // Disabled sync fails.
         let mut s = store.load_settings();
         s.sync.enabled = false;
         store.save_settings(&s).unwrap();
-        assert!(store.export_authorized(&peer, fresh).is_err());
+        assert!(store.export_authorized(&peer, fresh, None).is_err());
     }
 
     #[test]
@@ -2704,13 +2860,13 @@ mod tests {
         trust(&store, &intro);
         store.set_peer_introducer(&intro, true).unwrap();
         let epoch = store.sync_epoch();
-        assert!(store.export_authorized(&peer, epoch).is_ok());
+        assert!(store.export_authorized(&peer, epoch, None).is_ok());
 
         store.remove_peer(&peer).unwrap();
         assert!(store.is_revoked(&peer).unwrap());
         let epoch = store.sync_epoch();
         // Export, re-contact and gossip repair all refuse.
-        assert!(store.export_authorized(&peer, epoch).is_err());
+        assert!(store.export_authorized(&peer, epoch, None).is_err());
         assert!(store.record_seen(&peer, "peer", &[]).is_err());
         let gossip = vec![PeerGossip {
             node_id: peer.clone(),
@@ -2730,7 +2886,11 @@ mod tests {
         // Explicit re-trust clears the revocation.
         store.upsert_peer(&peer, "peer", "", true).unwrap();
         assert!(!store.is_revoked(&peer).unwrap());
-        assert!(store.export_authorized(&peer, store.sync_epoch()).is_ok());
+        assert!(
+            store
+                .export_authorized(&peer, store.sync_epoch(), None)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -2873,7 +3033,7 @@ mod tests {
             recorded_at: now_ms() / 1000,
         }];
         let added = b
-            .apply_sync_round(&pa, epoch_b, &pb, (&words, &[], &history), &[])
+            .apply_sync_round(&pa, epoch_b, &pb, (&words, &[], &history), &[], None)
             .unwrap();
         assert_eq!(added, 0);
         assert!(b.load_words().unwrap().contains(&"kwyjibo".to_string()));
@@ -2888,10 +3048,115 @@ mod tests {
         }];
         b.upsert_peer(&peer_id(0xc1), "churn", "", true).unwrap();
         assert!(
-            b.apply_sync_round(&pa, epoch_b, &pb, (&stale_words, &[], &[]), &[])
+            b.apply_sync_round(&pa, epoch_b, &pb, (&stale_words, &[], &[]), &[], None)
                 .is_err()
         );
         assert!(!b.load_words().unwrap().contains(&"evil".to_string()));
+    }
+
+    #[test]
+    fn exports_after_a_mark_send_only_changes() {
+        let store = Store::open_memory().unwrap();
+        enable_sync(&store);
+        let peer = peer_id(0x71);
+        trust(&store, &peer);
+        store.upsert_word("one", "n").unwrap();
+        store.add_history("r", "t", 1, 1, "n").unwrap();
+        let epoch = store.sync_epoch();
+        let full = store.export_authorized(&peer, epoch, None).unwrap();
+        assert_eq!((full.words.len(), full.history.len()), (1, 1));
+        // Nothing changed since the mark: an empty payload.
+        let none = store
+            .export_authorized(&peer, epoch, Some(&full.mark))
+            .unwrap();
+        assert!(none.words.is_empty() && none.history.is_empty());
+        assert_eq!(none.mark, full.mark);
+        // Only the edit travels, including a deletion's tombstone.
+        store.upsert_word("two", "n").unwrap();
+        store.delete_word("one", "n").unwrap();
+        let later = store
+            .export_authorized(&peer, epoch, Some(&full.mark))
+            .unwrap();
+        assert_eq!(later.words.len(), 2);
+        assert!(later.history.is_empty());
+        assert!(later.mark.seq > full.mark.seq);
+        // A mark from another store (or one ahead of ours) sends everything.
+        for foreign in [
+            SyncMark {
+                store: "elsewhere".into(),
+                seq: later.mark.seq,
+            },
+            SyncMark {
+                store: later.mark.store.clone(),
+                seq: later.mark.seq + 100,
+            },
+        ] {
+            let all = store
+                .export_authorized(&peer, epoch, Some(&foreign))
+                .unwrap();
+            assert_eq!((all.words.len(), all.history.len()), (2, 1));
+        }
+    }
+
+    #[test]
+    fn tombstone_text_never_leaves_the_device_and_old_text_is_scrubbed() {
+        let store = Store::open_memory().unwrap();
+        // A tombstone written by an older build that kept the text.
+        store
+            .conn
+            .execute(
+                "INSERT INTO history (uuid, text, raw_text, words, deleted)
+                 VALUES ('old', 'secret', 'secret raw', 2, 1)",
+                [],
+            )
+            .unwrap();
+        let exported = store.export_history().unwrap();
+        assert_eq!(
+            (exported[0].text.as_str(), exported[0].raw_text.as_str()),
+            ("", "")
+        );
+        migrate_schema(&store.conn).unwrap();
+        let content: (String, String) = store
+            .conn
+            .query_row(
+                "SELECT text, raw_text FROM history WHERE uuid = 'old'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(content, (String::new(), String::new()));
+    }
+
+    #[test]
+    fn switching_sync_off_moves_the_epoch_and_reset_forgets_marks() {
+        let store = Store::open_memory().unwrap();
+        enable_sync(&store);
+        let peer = peer_id(0x72);
+        trust(&store, &peer);
+        let epoch = store.sync_epoch();
+        let mark = SyncMark {
+            store: "p".into(),
+            seq: 3,
+        };
+        store
+            .apply_sync_round(
+                &peer,
+                epoch,
+                &peer_id(0x73),
+                (&[], &[], &[]),
+                &[],
+                Some(&mark),
+            )
+            .unwrap();
+        assert_eq!(store.peer_mark(&peer).unwrap(), Some(mark));
+        let mut settings = store.load_settings();
+        settings.sync.enabled = false;
+        store.save_settings(&settings).unwrap();
+        assert_ne!(store.sync_epoch(), epoch);
+        enable_sync(&store);
+        trust(&store, &peer);
+        store.reset_all_data().unwrap();
+        assert_eq!(store.peer_mark(&peer).unwrap(), None);
     }
 
     #[test]
@@ -2938,7 +3203,7 @@ mod tests {
         store.reset_all_data().unwrap();
         // Epoch advanced: stale authorized exports fail.
         assert_ne!(store.sync_epoch(), epoch);
-        assert!(store.export_authorized(&peer, epoch).is_err());
+        assert!(store.export_authorized(&peer, epoch, None).is_err());
         // Trust gone, revocation durable, sync back disabled.
         assert!(store.list_peers().unwrap().is_empty());
         assert!(store.is_revoked(&peer).unwrap());
@@ -3050,23 +3315,50 @@ mod tests {
         let peer = peer_id(0xf2);
         trust(&store, &peer);
         let epoch = store.sync_epoch();
-        let bad = vec![WordRecord {
+        let bad = [WordRecord {
             word: "round-poison".to_string(),
             updated_at: poisoned,
             updated_by: peer.clone(),
             deleted: false,
         }];
-        assert!(
-            store
-                .apply_sync_round(&peer, epoch, &peer_id(0xf3), (&bad, &[], &[]), &[])
-                .is_err()
-        );
-        assert!(
-            !store
-                .load_words()
-                .unwrap()
-                .contains(&"round-poison".to_string())
-        );
+        // A poisoned record is refused alone; the rest of the round
+        // merges, and the peer's mark does not advance (resent later).
+        let ok = vec![WordRecord {
+            word: "round-ok".to_string(),
+            updated_at: now_ms(),
+            updated_by: peer.clone(),
+            deleted: false,
+        }];
+        let mark = SyncMark {
+            store: "peer-store".into(),
+            seq: 9,
+        };
+        let both: Vec<WordRecord> = bad.iter().chain(&ok).cloned().collect();
+        store
+            .apply_sync_round(
+                &peer,
+                epoch,
+                &peer_id(0xf3),
+                (&both, &[], &[]),
+                &[],
+                Some(&mark),
+            )
+            .unwrap();
+        let words = store.load_words().unwrap();
+        assert!(!words.contains(&"round-poison".to_string()));
+        assert!(words.contains(&"round-ok".to_string()));
+        assert_eq!(store.peer_mark(&peer).unwrap(), None);
+        store
+            .apply_sync_round(
+                &peer,
+                epoch,
+                &peer_id(0xf3),
+                (&ok, &[], &[]),
+                &[],
+                Some(&mark),
+            )
+            .unwrap();
+        assert_eq!(store.peer_mark(&peer).unwrap(), Some(mark));
     }
 
     #[test]

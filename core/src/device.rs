@@ -127,8 +127,9 @@ impl DeviceIdentity {
     }
 
     /// Verify a peer's session proof against its claimed node id.
+    /// `verify_strict` rejects weak (small-order) keys, which could
+    /// otherwise make one signature verify for any message (desktop #34).
     pub fn verify_session(node_id_hex: &str, handshake_hash: &[u8], sig: &[u8; 64]) -> bool {
-        use ed25519_dalek::Verifier;
         let raw = match hex_decode(node_id_hex) {
             Some(b) => b,
             None => return false,
@@ -138,7 +139,7 @@ impl DeviceIdentity {
             Err(_) => return false,
         };
         verifying
-            .verify(handshake_hash, &ed25519_dalek::Signature::from_bytes(sig))
+            .verify_strict(handshake_hash, &ed25519_dalek::Signature::from_bytes(sig))
             .is_ok()
     }
 

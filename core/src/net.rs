@@ -21,9 +21,15 @@
 //!
 //! * hello both ways: `{"v":1,"node_id":"…","name":"…",
 //!   "addresses":[],"introducer":false,"sig":[…]}`
-//! * verdict from responder: `{"ok":true}` or `{"error":"…"}`
+//! * verdict from responder: `{"ok":true,"since":{…}}` or `{"error":"…"}`
 //! * records both ways: `{"words":[…],"snippets":[…],
-//!   "history":[…],"peers":[…]}`
+//!   "history":[…],"peers":[…],"since":{…},"mark":{…}}`
+//!
+//! `since`/`mark` (desktop #67) are optional: `since` is the sender's
+//! mark of what it last merged from the receiver, so the receiver
+//! sends only later changes; `mark` is the position the sender's
+//! payload brings the receiver to. Older builds omit both and get (and
+//! send) full payloads.
 //!
 //! Reachability v1: same LAN (mDNS/discovered/gossiped addresses),
 //! VPN, or internet with a known address. Hole punching and relays
@@ -31,25 +37,44 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::collections::{BTreeSet, HashSet};
 use std::io::{Read, Write};
-use std::net::{IpAddr, TcpListener, TcpStream, ToSocketAddrs, UdpSocket};
+use std::net::{
+    IpAddr, SocketAddr, SocketAddrV6, TcpListener, TcpStream, ToSocketAddrs, UdpSocket,
+};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::device::{DeviceIdentity, SyncCreds};
-use crate::store::{HistoryRecord, PeerGossip, SnippetRecord, Store, WordRecord};
+use crate::store::{
+    HistoryRecord, PeerGossip, SnippetRecord, Store, SyncMark, WordRecord, valid_node_id,
+};
 
 const PROTOCOL_V: u32 = 1;
 const NOISE_PARAMS: &str = "Noise_XX_25519_ChaChaPoly_BLAKE2s";
 const NOISE_BUF: usize = 65535;
 const CHUNK: usize = 60000;
-const FRAME_CAP: usize = 4 * 1024 * 1024;
+/// A Noise message never exceeds 65535 bytes, so no valid frame (from
+/// any build) is larger; checked before allocating.
+const FRAME_CAP: usize = NOISE_BUF;
 const IO_TIMEOUT: Duration = Duration::from_secs(15);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Anyone can open a Noise session, so until the peer is proven and
+/// trusted the session gets a total deadline and small messages only.
+const PREAUTH_DEADLINE: Duration = Duration::from_secs(30);
+const PREAUTH_MSG_CAP: usize = 64 * 1024;
+const MSG_CAP: usize = 256 * 1024 * 1024;
+/// After trust, every message gets its own deadline: this floor plus
+/// `POSTAUTH_MIN_RATE`, so a stalled peer frees its worker.
+const POSTAUTH_BASE: Duration = Duration::from_secs(120);
+const POSTAUTH_MIN_RATE: u64 = 256 * 1024;
+/// Concurrent inbound connections; extras are closed on accept.
+const MAX_INBOUND: usize = 8;
 const AUTO_SYNC_SECS: u64 = 60;
 const MDNS_SERVICE: &str = "_mywhisper._tcp.local.";
+const NODE_MISMATCH: &str = "peer node id mismatch";
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Hello {
@@ -70,6 +95,8 @@ struct Verdict {
     ok: bool,
     #[serde(default)]
     error: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    since: Option<SyncMark>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -82,6 +109,10 @@ struct Payload {
     history: Vec<HistoryRecord>,
     #[serde(default)]
     peers: Vec<PeerGossip>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    since: Option<SyncMark>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mark: Option<SyncMark>,
 }
 
 #[derive(Debug)]
@@ -104,30 +135,70 @@ pub struct Discovered {
 
 // -- Noise framing --------------------------------------------------------
 
-fn write_frame(stream: &mut TcpStream, bytes: &[u8]) -> Result<(), String> {
+/// Time left before `deadline`, per-call capped at `IO_TIMEOUT`.
+fn time_left(deadline: Instant, what: &str) -> Result<Duration, String> {
+    let left = deadline.saturating_duration_since(Instant::now());
+    if left.is_zero() {
+        return Err(format!("{what}: deadline passed"));
+    }
+    Ok(left.min(IO_TIMEOUT))
+}
+
+/// `write_all` bounded by a total `deadline`, so a peer reading one
+/// byte at a time cannot hold the connection forever.
+fn write_frame(stream: &mut TcpStream, bytes: &[u8], deadline: Instant) -> Result<(), String> {
     if bytes.len() > FRAME_CAP {
         return Err("frame too large".to_string());
     }
-    stream
-        .write_all(&(bytes.len() as u32).to_be_bytes())
-        .map_err(|e| format!("write: {e}"))?;
-    stream.write_all(bytes).map_err(|e| format!("write: {e}"))
+    let mut out = (bytes.len() as u32).to_be_bytes().to_vec();
+    out.extend_from_slice(bytes);
+    let mut sent = 0;
+    while sent < out.len() {
+        stream
+            .set_write_timeout(Some(time_left(deadline, "write")?))
+            .map_err(|e| format!("timeout: {e}"))?;
+        match stream.write(&out[sent..]) {
+            Ok(0) => return Err("write: connection closed".to_string()),
+            Ok(n) => sent += n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(format!("write: {e}")),
+        }
+    }
+    Ok(())
 }
 
-fn read_frame(stream: &mut TcpStream) -> Result<Vec<u8>, String> {
+/// `read_exact` that also honours a total `deadline`, so a peer
+/// trickling bytes cannot outlast the per-read timeout forever.
+fn read_full(stream: &mut TcpStream, buf: &mut [u8], deadline: Instant) -> Result<(), String> {
+    let mut filled = 0;
+    while filled < buf.len() {
+        stream
+            .set_read_timeout(Some(time_left(deadline, "read")?))
+            .map_err(|e| format!("timeout: {e}"))?;
+        match stream.read(&mut buf[filled..]) {
+            Ok(0) => return Err("read: connection closed".to_string()),
+            Ok(n) => filled += n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(format!("read: {e}")),
+        }
+    }
+    Ok(())
+}
+
+fn read_frame(stream: &mut TcpStream, deadline: Instant) -> Result<Vec<u8>, String> {
     let mut len = [0u8; 4];
-    stream
-        .read_exact(&mut len)
-        .map_err(|e| format!("read: {e}"))?;
+    read_full(stream, &mut len, deadline)?;
     let len = u32::from_be_bytes(len) as usize;
     if len == 0 || len > FRAME_CAP {
         return Err("bad frame length".to_string());
     }
     let mut buf = vec![0u8; len];
-    stream
-        .read_exact(&mut buf)
-        .map_err(|e| format!("read: {e}"))?;
+    read_full(stream, &mut buf, deadline)?;
     Ok(buf)
+}
+
+fn message_deadline(len: usize) -> Instant {
+    Instant::now() + POSTAUTH_BASE + Duration::from_secs(len as u64 / POSTAUTH_MIN_RATE)
 }
 
 /// One encrypted session: Noise_XX handshake, then length-framed
@@ -136,6 +207,10 @@ pub struct NoiseStream {
     stream: TcpStream,
     transport: snow::TransportState,
     rbuf: Vec<u8>,
+    /// Pre-auth: one deadline for the whole phase. After
+    /// `authenticated`: reset per message (`message_deadline`).
+    deadline: Instant,
+    authed: bool,
 }
 
 impl NoiseStream {
@@ -161,9 +236,7 @@ impl NoiseStream {
         private_key: &[u8; 32],
         initiator: bool,
     ) -> Result<(Self, Vec<u8>, [u8; 32]), String> {
-        stream
-            .set_read_timeout(Some(IO_TIMEOUT))
-            .map_err(|e| format!("timeout: {e}"))?;
+        let deadline = Instant::now() + PREAUTH_DEADLINE;
         let mut hs = Self::builder(private_key, initiator)?;
         let mut buf = vec![0u8; NOISE_BUF];
         let mut payload = vec![0u8; NOISE_BUF];
@@ -173,11 +246,11 @@ impl NoiseStream {
                 let n = hs
                     .write_message(&[], &mut buf)
                     .map_err(|e| format!("handshake write: {e}"))?;
-                write_frame(&mut stream, &buf[..n])?;
+                write_frame(&mut stream, &buf[..n], deadline)?;
                 if hs.is_handshake_finished() {
                     break;
                 }
-                let msg = read_frame(&mut stream)?;
+                let msg = read_frame(&mut stream, deadline)?;
                 hs.read_message(&msg, &mut payload)
                     .map_err(|e| format!("handshake read: {e}"))?;
                 if hs.is_handshake_finished() {
@@ -186,7 +259,7 @@ impl NoiseStream {
             }
         } else {
             loop {
-                let msg = read_frame(&mut stream)?;
+                let msg = read_frame(&mut stream, deadline)?;
                 hs.read_message(&msg, &mut payload)
                     .map_err(|e| format!("handshake read: {e}"))?;
                 if hs.is_handshake_finished() {
@@ -195,7 +268,7 @@ impl NoiseStream {
                 let n = hs
                     .write_message(&[], &mut buf)
                     .map_err(|e| format!("handshake write: {e}"))?;
-                write_frame(&mut stream, &buf[..n])?;
+                write_frame(&mut stream, &buf[..n], deadline)?;
             }
         }
         let hash = hs.get_handshake_hash().to_vec();
@@ -212,10 +285,18 @@ impl NoiseStream {
                 stream,
                 transport,
                 rbuf: vec![0u8; NOISE_BUF],
+                deadline,
+                authed: false,
             },
             hash,
             remote,
         ))
+    }
+
+    /// The peer is proven and trusted: lift the pre-auth limits.
+    fn authenticated(&mut self) {
+        self.authed = true;
+        self.deadline = message_deadline(0);
     }
 
     fn write_chunk(&mut self, plaintext: &[u8]) -> Result<(), String> {
@@ -224,11 +305,14 @@ impl NoiseStream {
             .transport
             .write_message(plaintext, &mut buf)
             .map_err(|e| format!("encrypt: {e}"))?;
-        write_frame(&mut self.stream, &buf[..n])
+        write_frame(&mut self.stream, &buf[..n], self.deadline)
     }
 
     /// Send one logical message (chunked at 60 KiB plaintext).
     pub fn send_msg(&mut self, data: &[u8]) -> Result<(), String> {
+        if self.authed {
+            self.deadline = message_deadline(data.len());
+        }
         let total = data.len() as u64;
         self.write_chunk(&total.to_be_bytes())?;
         for chunk in data.chunks(CHUNK) {
@@ -243,7 +327,7 @@ impl NoiseStream {
     }
 
     fn read_chunk(&mut self) -> Result<Vec<u8>, String> {
-        let frame = read_frame(&mut self.stream)?;
+        let frame = read_frame(&mut self.stream, self.deadline)?;
         let n = self
             .transport
             .read_message(&frame, &mut self.rbuf)
@@ -253,17 +337,32 @@ impl NoiseStream {
 
     /// Receive one logical message, reassembling chunks.
     pub fn recv_msg(&mut self) -> Result<Vec<u8>, String> {
+        if self.authed {
+            self.deadline = message_deadline(0);
+        }
         let head = self.read_chunk()?;
         if head.len() != 8 {
             return Err("bad message header".to_string());
         }
         let total = u64::from_be_bytes(head[..8].try_into().unwrap()) as usize;
-        if total > 256 * 1024 * 1024 {
+        let cap = if self.authed {
+            MSG_CAP
+        } else {
+            PREAUTH_MSG_CAP
+        };
+        if total > cap {
             return Err("message too large".to_string());
+        }
+        if self.authed {
+            self.deadline = message_deadline(total);
         }
         let mut out = Vec::with_capacity(total.min(1024 * 1024));
         while out.len() < total {
-            out.extend_from_slice(&self.read_chunk()?);
+            let chunk = self.read_chunk()?;
+            if chunk.is_empty() {
+                return Err("empty chunk".to_string());
+            }
+            out.extend_from_slice(&chunk);
         }
         if out.len() != total {
             return Err("message truncated".to_string());
@@ -279,15 +378,6 @@ impl NoiseStream {
 
 // -- exchange ---------------------------------------------------------------
 
-fn gossip_out(store: &Store, self_id: &str) -> Vec<PeerGossip> {
-    store
-        .export_gossip()
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|g| g.node_id != self_id)
-        .collect()
-}
-
 /// Run one side of an exchange over an encrypted session.
 ///
 /// * `initiator` -- dialer sends first at every step (strict
@@ -295,11 +385,16 @@ fn gossip_out(store: &Store, self_id: &str) -> Vec<PeerGossip> {
 /// * `expect_node` -- when set, the proven session must belong to
 ///   exactly this node id (client side).
 /// * `remote` -- dial-back address observed for this contact.
+///
+/// The responder opens `db_path` only after the peer proved its id.
+/// Records move only through `export_authorized`/`apply_sync_round`,
+/// which re-check the sync switch, our own trust in the peer and the
+/// permission epoch inside their transactions (desktop #34, R01/R02).
 #[allow(clippy::too_many_arguments)]
 pub fn exchange(
     session: &mut NoiseStream,
     session_hash: &[u8],
-    store: &Store,
+    db_path: &Path,
     creds: &SyncCreds,
     name: &str,
     addresses: &[String],
@@ -307,6 +402,16 @@ pub fn exchange(
     expect_node: Option<&str>,
     remote: Option<String>,
 ) -> Result<SyncReport, String> {
+    let open = || Store::open(db_path).map_err(|e| format!("open db: {e}"));
+    let dialer_store = if initiator {
+        let store = open()?;
+        if !store.sync_enabled_explicit() {
+            return Err("sync is off".to_string());
+        }
+        Some(store)
+    } else {
+        None
+    };
     let hello = Hello {
         v: PROTOCOL_V,
         node_id: creds.node_id.clone(),
@@ -333,9 +438,17 @@ pub fn exchange(
     // first, so the dialer gets a clean rejection instead of a hang.
     // Spoofed ids are never recorded (no pending row for forgeries).
     let mut sig = [0u8; 64];
-    let proof_ok = peer.sig.len() == 64 && {
+    let proof_ok = valid_node_id(&peer.node_id) && peer.sig.len() == 64 && {
         sig.copy_from_slice(&peer.sig);
         DeviceIdentity::verify_session(&peer.node_id, session_hash, &sig)
+    };
+    let reject = |session: &mut NoiseStream, error: &str| -> Result<SyncReport, String> {
+        session.send_json(&Verdict {
+            ok: false,
+            error: error.to_string(),
+            since: None,
+        })?;
+        Err(error.to_string())
     };
     if initiator {
         if peer.v != PROTOCOL_V {
@@ -344,19 +457,20 @@ pub fn exchange(
         if !proof_ok {
             return Err("identity proof failed".to_string());
         }
-    } else {
-        if peer.v != PROTOCOL_V || !proof_ok {
-            session.send_json(&Verdict {
-                ok: false,
-                error: "identity proof failed".to_string(),
-            })?;
-            return Err("identity proof failed".to_string());
-        }
+    } else if peer.v != PROTOCOL_V || !proof_ok {
+        return reject(session, "identity proof failed");
+    }
+    let store = match dialer_store {
+        Some(store) => store,
+        None => open()?,
+    };
+    if !initiator && !store.sync_enabled_explicit() {
+        return reject(session, "sync is off");
     }
     if let Some(expected) = expect_node
         && peer.node_id != expected
     {
-        return Err("peer node id mismatch".to_string());
+        return Err(NODE_MISMATCH.to_string());
     }
 
     // Contact bookkeeping: unknown nodes become pending requests,
@@ -370,13 +484,15 @@ pub fn exchange(
     let is_new = store
         .record_seen(&peer.node_id, &peer.name, &contact_addrs)
         .map_err(|e| format!("record contact: {e}"))?;
+    let peer_row = |store: &Store| {
+        store
+            .get_peer(&peer.node_id)
+            .map_err(|e| format!("peer lookup: {e}"))
+    };
     // Re-read below: mutual-consent completion can flip it.
-    let mut trusted = store
-        .get_peer(&peer.node_id)
-        .map_err(|e| format!("peer lookup: {e}"))?
-        .map(|p| p.trusted)
-        .unwrap_or(false);
+    let mut trusted = peer_row(&store)?.is_some_and(|p| p.trusted);
 
+    let mut their_since = None;
     if initiator {
         let verdict: Verdict = session.recv_json()?;
         if !verdict.ok {
@@ -385,6 +501,19 @@ pub fn exchange(
             } else {
                 verdict.error
             });
+        }
+        their_since = verdict.since;
+        // Mutual consent, dialer side: we requested them (outgoing) and
+        // their verdict accepts us, so complete trust locally (same as
+        // the responder-side dial-back completion below).
+        if !trusted && peer_row(&store)?.is_some_and(|p| p.outgoing) {
+            store
+                .decide_request(&peer.node_id, true)
+                .map_err(|e| format!("trust peer: {e}"))?;
+            trusted = true;
+        }
+        if !trusted {
+            return Err("peer not trusted".to_string());
         }
     } else {
         if !trusted {
@@ -399,11 +528,7 @@ pub fn exchange(
             // dialed back — complete trust now (desktop accept flow:
             // trusted + introducer, markers cleared), no local Accept
             // needed. Strangers stay pending and are rejected below.
-            let mutual = store
-                .get_peer(&peer.node_id)
-                .map_err(|e| format!("peer lookup: {e}"))?
-                .is_some_and(|p| p.outgoing && !p.trusted);
-            if mutual {
+            if peer_row(&store)?.is_some_and(|p| p.outgoing && !p.trusted) {
                 store
                     .decide_request(&peer.node_id, true)
                     .map_err(|e| format!("trust peer: {e}"))?;
@@ -414,6 +539,7 @@ pub fn exchange(
             session.send_json(&Verdict {
                 ok: false,
                 error: "not trusted: request recorded, ask them to accept".to_string(),
+                since: None,
             })?;
             return Err(if is_new {
                 format!("new pairing request from {}", short(&peer.node_id))
@@ -422,55 +548,65 @@ pub fn exchange(
             });
         }
     }
+    // What we already merged from this peer: it sends only later changes.
+    let our_since = store
+        .peer_mark(&peer.node_id)
+        .map_err(|e| format!("sync mark: {e}"))?;
     if !initiator {
         session.send_json(&Verdict {
             ok: true,
             error: String::new(),
+            since: our_since.clone(),
         })?;
     }
+    session.authenticated();
+    // Captured once: any switch-off, distrust, revocation or reset
+    // after this point fails the export or the merge transaction.
+    let epoch = store.sync_epoch();
 
-    // Records, strict alternation again.
-    let ours = Payload {
-        words: store.export_words().map_err(|e| format!("export: {e}"))?,
-        snippets: store
-            .export_snippets()
-            .map_err(|e| format!("export: {e}"))?,
-        history: store.export_history().map_err(|e| format!("export: {e}"))?,
-        peers: gossip_out(store, &creds.node_id),
+    // Records, strict alternation again. The responder learns the
+    // dialer's `since` from its records, so it exports after reading them.
+    let export = |their_since: Option<SyncMark>| -> Result<Vec<u8>, String> {
+        let snapshot = store
+            .export_authorized(&peer.node_id, epoch, their_since.as_ref())
+            .map_err(|e| format!("export: {e}"))?;
+        serde_json::to_vec(&Payload {
+            words: snapshot.words,
+            snippets: snapshot.snippets,
+            history: snapshot.history,
+            peers: snapshot
+                .peers
+                .into_iter()
+                .filter(|g| g.node_id != creds.node_id)
+                .collect(),
+            since: our_since.clone(),
+            mark: Some(snapshot.mark),
+        })
+        .map_err(|e| format!("encode: {e}"))
     };
     let theirs: Payload = if initiator {
-        session.send_json(&ours)?;
+        session.send_msg(&export(their_since)?)?;
         session.recv_json()?
     } else {
         let theirs: Payload = session.recv_json()?;
-        session.send_json(&ours)?;
+        session.send_msg(&export(theirs.since.clone())?)?;
         theirs
     };
 
-    // Merge content.
-    store
-        .apply_words(&theirs.words)
-        .map_err(|e| format!("merge words: {e}"))?;
-    store
-        .apply_snippets(&theirs.snippets)
-        .map_err(|e| format!("merge snippets: {e}"))?;
-    store
-        .apply_history(&theirs.history)
-        .map_err(|e| format!("merge history: {e}"))?;
-    // Merge introductions: strangers they vouch for join only when we
-    // marked the sender an introducer.
-    let sender_introducer = store
-        .get_peer(&peer.node_id)
-        .map_err(|e| format!("peer lookup: {e}"))?
-        .map(|p| p.introducer)
-        .unwrap_or(false);
+    // One atomic merge, re-authorized inside its transaction. Strangers
+    // they vouch for join only when we marked the sender an introducer.
+    // The mark advances only when every record merged, so an
+    // interrupted or partly refused round is sent again.
     let introduced = store
-        .apply_gossip(&theirs.peers, sender_introducer, &creds.node_id)
-        .map_err(|e| format!("merge peers: {e}"))?;
-
-    store
-        .touch_peer_synced(&peer.node_id, &peer.name)
-        .map_err(|e| format!("record sync: {e}"))?;
+        .apply_sync_round(
+            &peer.node_id,
+            epoch,
+            &creds.node_id,
+            (&theirs.words, &theirs.snippets, &theirs.history),
+            &theirs.peers,
+            theirs.mark.as_ref(),
+        )
+        .map_err(|e| format!("merge: {e}"))?;
     Ok(SyncReport {
         peer_node: peer.node_id,
         peer_name: peer.name,
@@ -481,17 +617,24 @@ pub fn exchange(
     })
 }
 
+/// Display form of a canonical node id (ASCII hex, so byte slicing is
+/// safe); anything else is shown whole.
 fn short(node_id: &str) -> String {
-    if node_id.len() > 12 {
+    if valid_node_id(node_id) {
         format!("{}…{}", &node_id[..8], &node_id[node_id.len() - 4..])
     } else {
         node_id.to_string()
     }
 }
 
-/// Dial a peer's known addresses in order; first success wins.
-/// Runs the Noise handshake, then requires the proven session to
-/// belong to `expect_node` before any record moves.
+/// Peers with a dialed round running in this process.
+static DIALING: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
+
+/// Dial a peer's known addresses (every resolved address of each) in
+/// order; first success wins. Runs the Noise handshake, then requires
+/// the proven session to belong to `expect_node` before any record
+/// moves. A round already running with that peer makes this one a
+/// no-op error instead of a duplicate exchange (desktop #67, R42).
 /// `own_addresses` advertises our listen address in hello so the peer
 /// stores a dialable address and can dial back (see
 /// [`own_listen_addrs`]).
@@ -506,67 +649,99 @@ pub fn sync_now(
     if addresses.is_empty() {
         return Err("no known address for peer".to_string());
     }
+    // No contact at all while sync is off (exchange re-checks).
+    if !Store::open(db_path)
+        .map_err(|e| format!("open db: {e}"))?
+        .sync_enabled_explicit()
+    {
+        return Err("sync is off".to_string());
+    }
+    struct Dialing(String);
+    impl Drop for Dialing {
+        fn drop(&mut self) {
+            DIALING.lock().unwrap().remove(&self.0);
+        }
+    }
+    if !DIALING.lock().unwrap().insert(expect_node.to_string()) {
+        return Err("a round with this peer is already running".to_string());
+    }
+    let _dialing = Dialing(expect_node.to_string());
     let mut last_err = String::new();
     for address in addresses {
-        // ANDROID PORT: a single unresolvable entry must not abort
-        // the whole round (desktop `?` here); skip and try the next.
-        let addr = match address.to_socket_addrs() {
-            Ok(mut it) => match it.next() {
-                Some(a) => a,
-                None => {
-                    last_err = format!("no address for {address}");
-                    continue;
-                }
-            },
+        // ANDROID PORT: a single unresolvable entry must not abort the
+        // whole round; skip it and try the next.
+        let resolved = match address.to_socket_addrs() {
+            Ok(resolved) => resolved,
             Err(e) => {
                 last_err = format!("resolve {address}: {e}");
                 continue;
             }
         };
-        let stream = match TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT) {
-            Ok(s) => s,
-            Err(e) => {
-                last_err = format!("dial {address}: {e}");
-                continue;
+        for addr in resolved {
+            let session = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT)
+                .map_err(|e| format!("dial {address}: {e}"))
+                .and_then(|stream| NoiseStream::handshake(stream, &creds.noise_static, true));
+            let (mut session, hash, _remote_static) = match session {
+                Ok(session) => session,
+                Err(e) => {
+                    last_err = e;
+                    continue;
+                }
+            };
+            match exchange(
+                &mut session,
+                &hash,
+                db_path,
+                creds,
+                name,
+                own_addresses,
+                true,
+                Some(expect_node),
+                None,
+            ) {
+                // A reassigned address can reach another device: keep dialing.
+                Err(e) if e == NODE_MISMATCH => last_err = format!("{address}: {e}"),
+                Ok(report) => {
+                    // ANDROID PORT: persist the working address so the next
+                    // round tries the live one first.
+                    if let Ok(store) = Store::open(db_path) {
+                        let _ = store.record_seen(
+                            expect_node,
+                            &report.peer_name,
+                            std::slice::from_ref(address),
+                        );
+                    }
+                    return Ok(report);
+                }
+                Err(e) => return Err(e),
             }
-        };
-        let (mut session, hash, _remote_static) =
-            NoiseStream::handshake(stream, &creds.noise_static, true)?;
-        let store = Store::open(db_path).map_err(|e| format!("open db: {e}"))?;
-        let report = exchange(
-            &mut session,
-            &hash,
-            &store,
-            creds,
-            name,
-            own_addresses,
-            true,
-            Some(expect_node),
-            None,
-        )?;
-        // ANDROID PORT: persist the working address so the next round
-        // tries the live one first instead of a stale stored entry.
-        let _ = store.record_seen(
-            expect_node,
-            &report.peer_name,
-            std::slice::from_ref(address),
-        );
-        return Ok(report);
+        }
+    }
+    if last_err.is_empty() {
+        last_err = "no address for peer".to_string();
     }
     Err(last_err)
 }
 
 /// Accept loop: one thread per connection, each with its own DB
 /// handle (WAL allows concurrent readers/writers across connections).
+/// At most `MAX_INBOUND` connections run at once (desktop #34, R16).
 pub fn serve(
     listener: TcpListener,
     db_path: PathBuf,
     creds: SyncCreds,
     name: String,
-    addresses: Vec<String>,
     stop: &AtomicBool,
 ) {
     let _ = listener.set_nonblocking(true);
+    let active = Arc::new(AtomicUsize::new(0));
+    /// Frees one inbound slot when its connection thread ends.
+    struct Slot(Arc<AtomicUsize>);
+    impl Drop for Slot {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
     for conn in listener.incoming() {
         if stop.load(Ordering::Relaxed) {
             break;
@@ -581,6 +756,19 @@ pub fn serve(
                     .peer_addr()
                     .map(|a| a.to_string())
                     .unwrap_or_else(|_| String::new());
+                if active.fetch_add(1, Ordering::SeqCst) >= MAX_INBOUND {
+                    active.fetch_sub(1, Ordering::SeqCst);
+                    eprintln!("[sync] {remote}: busy, connection dropped");
+                    continue;
+                }
+                let slot = Slot(active.clone());
+                let _ = stream.set_nonblocking(false);
+                // The address the dialer reached: current after a network change.
+                let addresses: Vec<String> = stream
+                    .local_addr()
+                    .map(|a| a.to_string())
+                    .into_iter()
+                    .collect();
                 let remote = if remote.is_empty() {
                     None
                 } else {
@@ -589,16 +777,15 @@ pub fn serve(
                 let db_path = db_path.clone();
                 let creds = creds.clone();
                 let name = name.clone();
-                let addresses = addresses.clone();
                 std::thread::spawn(move || {
+                    let _slot = slot;
                     let res = (|| -> Result<SyncReport, String> {
                         let (mut session, hash, _remote_static) =
                             NoiseStream::handshake(stream, &creds.noise_static, false)?;
-                        let store = Store::open(&db_path).map_err(|e| format!("open db: {e}"))?;
                         exchange(
                             &mut session,
                             &hash,
-                            &store,
+                            &db_path,
                             &creds,
                             &name,
                             &addresses,
@@ -610,7 +797,9 @@ pub fn serve(
                     match res {
                         Ok(report) => eprintln!(
                             "[sync] served {} ({} words in, {} introduced)",
-                            report.peer_node, report.words_in, report.introduced
+                            short(&report.peer_node),
+                            report.words_in,
+                            report.introduced
                         ),
                         Err(e) => {
                             eprintln!("[sync] {}: {e}", remote.unwrap_or_else(|| "?".to_string()))
@@ -718,13 +907,11 @@ pub fn start_mdns(
         txt.insert("node".to_string(), node_id.to_string());
         txt.insert("name".to_string(), name.to_string());
         let host = format!("mywhisper-{short_id}.local.");
-        let mut addrs: Vec<IpAddr> = Vec::new();
-        if let Some(ip) = lan_ip() {
-            addrs.push(ip);
-        }
-        let info =
-            mdns_sd::ServiceInfo::new(MDNS_SERVICE, short_id, &host, &addrs[..], port, Some(txt))
-                .map_err(|e| format!("mdns service: {e}"))?;
+        // The daemon tracks interface addresses, so a DHCP or network
+        // change re-advertises the new address (desktop #67, R42).
+        let info = mdns_sd::ServiceInfo::new(MDNS_SERVICE, short_id, &host, (), port, Some(txt))
+            .map_err(|e| format!("mdns service: {e}"))?
+            .enable_addr_auto();
         daemon
             .register(info)
             .map_err(|e| format!("mdns register: {e}"))?;
@@ -735,6 +922,8 @@ pub fn start_mdns(
         .map_err(|e| format!("mdns browse: {e}"))?;
     let self_id = node_id.to_string();
     std::thread::spawn(move || {
+        // Service instance name -> node id, to forget removed services.
+        let mut instances: HashMap<String, String> = HashMap::new();
         while let Ok(event) = browser.recv() {
             match event {
                 mdns_sd::ServiceEvent::ServiceResolved(info) => {
@@ -742,7 +931,8 @@ pub fn start_mdns(
                         .get_property_val_str("node")
                         .map(|s| s.to_string())
                         .unwrap_or_default();
-                    if node.is_empty() || node == self_id {
+                    // Unauthenticated LAN input: only canonical ids get in.
+                    if node == self_id || !valid_node_id(&node) {
                         continue;
                     }
                     let name = info
@@ -753,12 +943,13 @@ pub fn start_mdns(
                     let addresses: Vec<String> = info
                         .get_addresses()
                         .iter()
-                        .map(|ip| format!("{ip}:{port}"))
+                        .map(|ip| dial_address(ip, port))
                         .collect();
                     if addresses.is_empty() {
                         continue;
                     }
                     eprintln!("[sync] mdns found {name} {addresses:?}");
+                    instances.insert(info.get_fullname().to_string(), node.clone());
                     sink.lock().unwrap().insert(
                         node.clone(),
                         Discovered {
@@ -770,12 +961,26 @@ pub fn start_mdns(
                 }
                 mdns_sd::ServiceEvent::ServiceRemoved(_, full_name) => {
                     eprintln!("[sync] mdns lost {full_name}");
+                    // Forget it, so its return counts as a new appearance.
+                    if let Some(node) = instances.remove(&full_name) {
+                        sink.lock().unwrap().remove(&node);
+                    }
                 }
                 _ => {}
             }
         }
     });
     Ok(MdnsHandles { _daemon: daemon })
+}
+
+/// `ip:port` a dial can parse: IPv6 gets brackets and its numeric scope.
+fn dial_address(ip: &mdns_sd::ScopedIp, port: u16) -> String {
+    match ip {
+        mdns_sd::ScopedIp::V6(v6) => {
+            SocketAddrV6::new(*v6.addr(), port, 0, v6.scope_id().index).to_string()
+        }
+        other => SocketAddr::new(other.to_ip_addr(), port).to_string(),
+    }
 }
 
 // -- periodic and triggered rounds ------------------------------------------
@@ -789,6 +994,9 @@ pub fn sync_all_trusted(db_path: &Path, creds: &SyncCreds) -> Vec<String> {
         Ok(s) => s,
         Err(e) => return vec![format!("open db: {e}")],
     };
+    if !store.sync_enabled_explicit() {
+        return vec!["sync is off".to_string()];
+    }
     let settings = store.load_settings();
     let name = if settings.sync.device_name.is_empty() {
         creds.node_id.clone()
@@ -878,7 +1086,7 @@ pub fn watch_discovered(
     stop: Arc<AtomicBool>,
 ) {
     std::thread::spawn(move || {
-        let mut known_present: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut present = HashSet::new();
         loop {
             for _ in 0..10 {
                 if stop.load(Ordering::Relaxed) {
@@ -886,39 +1094,42 @@ pub fn watch_discovered(
                 }
                 std::thread::sleep(Duration::from_secs(1));
             }
-            let store = match Store::open(&db_path) {
-                Ok(s) => s,
-                Err(_) => continue,
+            let Ok(store) = Store::open(&db_path) else {
+                continue;
             };
-            let trusted: std::collections::HashSet<String> = store
-                .list_peers()
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|p| p.trusted)
-                .map(|p| p.node_id)
-                .collect();
-            let present: std::collections::HashSet<String> = discovered
-                .lock()
-                .unwrap()
-                .keys()
-                .filter(|id| trusted.contains(*id) && !known_present.contains(*id))
-                .cloned()
-                .collect();
-            if !present.is_empty() {
+            let snapshot = discovered.lock().unwrap().clone();
+            if note_discovered(&store, &snapshot, &mut present) {
                 eprintln!("[sync] peer appeared, syncing now");
                 for line in sync_all_trusted(&db_path, &creds) {
                     eprintln!("[sync] on-appear: {line}");
                 }
             }
-            known_present = discovered
-                .lock()
-                .unwrap()
-                .keys()
-                .filter(|id| trusted.contains(*id))
-                .cloned()
-                .collect();
         }
     });
+}
+
+/// One appear-watcher pass: store the addresses discovery found for
+/// trusted peers (a DHCP move needs no open UI), and report whether
+/// one appeared since the last pass (`present`).
+fn note_discovered(
+    store: &Store,
+    discovered: &HashMap<String, Discovered>,
+    present: &mut HashSet<String>,
+) -> bool {
+    let mut now_present = HashSet::new();
+    for peer in store.list_peers().unwrap_or_default() {
+        let Some(found) = discovered.get(&peer.node_id).filter(|_| peer.trusted) else {
+            continue;
+        };
+        let merged = crate::store::merge_addresses(&peer.addresses, &found.addresses);
+        if merged != peer.addresses {
+            let _ = store.set_peer_addresses(&peer.node_id, &merged);
+        }
+        now_present.insert(peer.node_id);
+    }
+    let appeared = now_present.iter().any(|id| !present.contains(id));
+    *present = now_present;
+    appeared
 }
 
 #[cfg(test)]
@@ -930,10 +1141,178 @@ mod tests {
 
     static TEST_SEQ: AtomicU64 = AtomicU64::new(0);
 
+    /// File-backed test store with sync explicitly switched on.
+    fn sync_db(path: &Path) -> Store {
+        let store = open_test_db(path).unwrap();
+        let mut settings = store.load_settings();
+        settings.sync.enabled = true;
+        store.save_settings(&settings).unwrap();
+        store
+    }
+
     fn temp_db(tag: &str) -> PathBuf {
         let n = TEST_SEQ.fetch_add(1, Ordering::SeqCst);
         let pid = std::process::id();
         std::env::temp_dir().join(format!("mywhisper-sync-test-{pid}-{n}-{tag}.db"))
+    }
+
+    /// One served round: `server` answers a single dial from `client`.
+    fn round(
+        server: (&Path, &DeviceIdentity),
+        client: (&Path, &DeviceIdentity),
+    ) -> (Result<SyncReport, String>, Result<SyncReport, String>) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (db, creds) = (server.0.to_path_buf(), server.1.creds());
+        let served = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let (mut session, hash, _) =
+                NoiseStream::handshake(stream, &creds.noise_static, false)?;
+            exchange(
+                &mut session,
+                &hash,
+                &db,
+                &creds,
+                "s",
+                &[],
+                false,
+                None,
+                None,
+            )
+        });
+        let dialed = sync_now(
+            &[format!("127.0.0.1:{port}")],
+            client.0,
+            &client.1.creds(),
+            "c",
+            &server.1.node_id,
+            &[],
+        );
+        (dialed, served.join().unwrap())
+    }
+
+    fn paired() -> (DeviceIdentity, DeviceIdentity, PathBuf, PathBuf) {
+        let (id_a, id_b) = (DeviceIdentity::ephemeral(), DeviceIdentity::ephemeral());
+        let (db_a, db_b) = (temp_db("pa"), temp_db("pb"));
+        sync_db(&db_a)
+            .upsert_peer(&id_b.node_id, "b", "", true)
+            .unwrap();
+        sync_db(&db_b)
+            .upsert_peer(&id_a.node_id, "a", "", true)
+            .unwrap();
+        (id_a, id_b, db_a, db_b)
+    }
+
+    #[test]
+    fn sync_off_moves_no_records_in_either_direction() {
+        let (id_a, id_b, db_a, db_b) = paired();
+        let store_a = open_test_db(&db_a).unwrap();
+        let store_b = open_test_db(&db_b).unwrap();
+        store_a.upsert_word("from-a", &id_a.node_id).unwrap();
+        store_b.upsert_word("from-b", &id_b.node_id).unwrap();
+        let off = |store: &Store| {
+            let mut settings = store.load_settings();
+            settings.sync.enabled = false;
+            store.save_settings(&settings).unwrap();
+        };
+        // Responder off: it refuses with a verdict, before any record.
+        off(&store_a);
+        let (dialed, served) = round((&db_a, &id_a), (&db_b, &id_b));
+        assert_eq!(dialed.unwrap_err(), "sync is off");
+        assert!(served.is_err());
+        // Dialer off: it never dials.
+        sync_db(&db_a);
+        off(&store_b);
+        let err = sync_now(
+            &["127.0.0.1:9".into()],
+            &db_b,
+            &id_b.creds(),
+            "b",
+            &id_a.node_id,
+            &[],
+        )
+        .unwrap_err();
+        assert_eq!(err, "sync is off");
+        assert_eq!(store_a.load_words().unwrap(), ["from-a"]);
+        assert_eq!(store_b.load_words().unwrap(), ["from-b"]);
+    }
+
+    #[test]
+    fn dialer_sends_nothing_to_a_peer_it_does_not_trust() {
+        let (id_a, id_b, db_a, db_b) = paired();
+        let store_b = open_test_db(&db_b).unwrap();
+        store_b.upsert_word("secret", &id_b.node_id).unwrap();
+        // B knows A only as a pending stranger; A trusts B.
+        store_b.decide_request(&id_a.node_id, false).unwrap();
+        let (dialed, served) = round((&db_a, &id_a), (&db_b, &id_b));
+        assert!(dialed.is_err() && served.is_err());
+        assert!(
+            open_test_db(&db_a)
+                .unwrap()
+                .load_words()
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn later_rounds_send_only_changes() {
+        let (id_a, id_b, db_a, db_b) = paired();
+        let store_a = open_test_db(&db_a).unwrap();
+        let store_b = open_test_db(&db_b).unwrap();
+        store_a.upsert_word("a1", &id_a.node_id).unwrap();
+        store_b.upsert_word("b1", &id_b.node_id).unwrap();
+        let (dialed, served) = round((&db_a, &id_a), (&db_b, &id_b));
+        assert_eq!(dialed.unwrap().words_in, 1);
+        assert_eq!(served.unwrap().words_in, 1);
+        // Second round: both sides know each other's marks. Only the
+        // new edit travels (merged rows echo once, then settle).
+        let _ = round((&db_a, &id_a), (&db_b, &id_b));
+        store_a.upsert_word("a2", &id_a.node_id).unwrap();
+        let (dialed, served) = round((&db_a, &id_a), (&db_b, &id_b));
+        assert_eq!(dialed.unwrap().words_in, 1);
+        assert_eq!(served.unwrap().words_in, 0);
+        let mut words = store_b.load_words().unwrap();
+        words.sort();
+        assert_eq!(words, ["a1", "a2", "b1"]);
+    }
+
+    #[test]
+    fn messages_without_marks_decode_and_none_marks_are_omitted() {
+        // An older build's payload and verdict carry no since/mark.
+        let old: Payload = serde_json::from_str(r#"{"words":[],"peers":[]}"#).unwrap();
+        assert!(old.since.is_none() && old.mark.is_none());
+        let verdict: Verdict = serde_json::from_str(r#"{"ok":true}"#).unwrap();
+        assert!(verdict.ok && verdict.since.is_none());
+        let sent = serde_json::to_value(Payload::default()).unwrap();
+        assert!(sent.get("since").is_none() && sent.get("mark").is_none());
+    }
+
+    #[test]
+    fn unauthenticated_peers_cannot_send_large_messages() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server_key = DeviceIdentity::ephemeral().creds().noise_static;
+        let served = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let (mut session, _, _) = NoiseStream::handshake(stream, &server_key, false).unwrap();
+            session.recv_msg()
+        });
+        let stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        let client_key = DeviceIdentity::ephemeral().creds().noise_static;
+        let (mut session, _, _) = NoiseStream::handshake(stream, &client_key, true).unwrap();
+        let _ = session.send_msg(&vec![b'x'; PREAUTH_MSG_CAP + 1]);
+        assert_eq!(served.join().unwrap().unwrap_err(), "message too large");
+    }
+
+    #[test]
+    fn mdns_addresses_are_dialable() {
+        let v4: IpAddr = "192.168.1.5".parse().unwrap();
+        let v6: IpAddr = "fe80::1".parse().unwrap();
+        assert_eq!(dial_address(&v4.into(), 7), "192.168.1.5:7");
+        let v6 = dial_address(&v6.into(), 7);
+        assert!(v6.starts_with("[fe80::1") && v6.ends_with("]:7"), "{v6}");
+        assert!(v6.to_socket_addrs().is_ok());
     }
 
     /// Full client/server round-trip over real loopback TCP with Noise
@@ -945,8 +1324,8 @@ mod tests {
         let id_b = DeviceIdentity::ephemeral();
         let db_a = temp_db("a");
         let db_b = temp_db("b");
-        let store_a = open_test_db(&db_a).unwrap();
-        let store_b = open_test_db(&db_b).unwrap();
+        let store_a = sync_db(&db_a);
+        let store_b = sync_db(&db_b);
 
         // A trusts B; B trusts A.
         store_a
@@ -975,11 +1354,10 @@ mod tests {
             let (stream, _) = listener.accept().unwrap();
             let (mut session, hash, _remote) =
                 NoiseStream::handshake(stream, &creds_a.noise_static, false).unwrap();
-            let store = open_test_db(&db_a2).unwrap();
             exchange(
                 &mut session,
                 &hash,
-                &store,
+                &db_a2,
                 &creds_a,
                 "a",
                 &[],
@@ -1019,7 +1397,7 @@ mod tests {
         // Untrusted dialer is rejected: fresh node C, trusted nowhere.
         let id_c = DeviceIdentity::ephemeral();
         let db_c = temp_db("c");
-        open_test_db(&db_c).unwrap();
+        sync_db(&db_c);
         let listener2 = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port2 = listener2.local_addr().unwrap().port();
         let db_a3 = db_a.clone();
@@ -1028,11 +1406,10 @@ mod tests {
             let (stream, _) = listener2.accept().unwrap();
             let (mut session, hash, _remote) =
                 NoiseStream::handshake(stream, &creds_a2.noise_static, false).unwrap();
-            let store = open_test_db(&db_a3).unwrap();
             exchange(
                 &mut session,
                 &hash,
-                &store,
+                &db_a3,
                 &creds_a2,
                 "a",
                 &[],
@@ -1083,8 +1460,8 @@ mod tests {
         let id_c = DeviceIdentity::ephemeral();
         let db_a = temp_db("ea");
         let db_b = temp_db("eb");
-        let store_a = open_test_db(&db_a).unwrap();
-        let store_b = open_test_db(&db_b).unwrap();
+        let store_a = sync_db(&db_a);
+        let store_b = sync_db(&db_b);
 
         // A sent B a pairing request: WAITING, never Accepted on A.
         store_a
@@ -1118,11 +1495,10 @@ mod tests {
             let (stream, _) = listener_b.accept().unwrap();
             let (mut session, hash, _remote) =
                 NoiseStream::handshake(stream, &creds_b.noise_static, false).unwrap();
-            let store = open_test_db(&db_b2).unwrap();
             let res = exchange(
                 &mut session,
                 &hash,
-                &store,
+                &db_b2,
                 &creds_b,
                 "b",
                 &[],
@@ -1169,11 +1545,10 @@ mod tests {
             let (stream, _) = listener_a.accept().unwrap();
             let (mut session, hash, _remote) =
                 NoiseStream::handshake(stream, &creds_a.noise_static, false).unwrap();
-            let store = open_test_db(&db_a2).unwrap();
             exchange(
                 &mut session,
                 &hash,
-                &store,
+                &db_a2,
                 &creds_a,
                 "a",
                 &[],
@@ -1232,7 +1607,7 @@ mod tests {
         let id_victim = DeviceIdentity::ephemeral();
         let id_attacker = DeviceIdentity::ephemeral();
         let db_v = temp_db("v");
-        let store_v = open_test_db(&db_v).unwrap();
+        let store_v = sync_db(&db_v);
         // Victim trusts... nobody relevant; attacker dials claiming
         // to BE the victim's trusted peer would need that peer's key.
         // Here the attacker claims victim's own id to a fresh server
@@ -1251,11 +1626,10 @@ mod tests {
             let (stream, _) = listener.accept().unwrap();
             let (mut session, hash, _remote) =
                 NoiseStream::handshake(stream, &creds_vk.noise_static, false).unwrap();
-            let store = open_test_db(&db_v2).unwrap();
             exchange(
                 &mut session,
                 &hash,
-                &store,
+                &db_v2,
                 &creds_vk,
                 "v",
                 &[],
@@ -1269,7 +1643,7 @@ mod tests {
         // sign with their own key: build the exchange manually with a
         // forged hello over a valid attacker handshake.
         let db_x = temp_db("x");
-        open_test_db(&db_x).unwrap();
+        sync_db(&db_x);
         let stream = TcpStream::connect_timeout(
             &format!("127.0.0.1:{port}")
                 .to_socket_addrs()

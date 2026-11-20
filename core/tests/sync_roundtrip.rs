@@ -18,6 +18,10 @@ fn setup(dir: &std::path::Path) -> (Store, DeviceIdentity) {
         )
     };
     let store = Store::open(&dir.join("state.db")).unwrap();
+    // Sync runs only after an explicit opt-in.
+    let mut settings = store.load_settings();
+    settings.sync.enabled = true;
+    store.save_settings(&settings).unwrap();
     let id = DeviceIdentity::load_or_create(&dir.join("device.key")).unwrap();
     (store, id)
 }
@@ -33,7 +37,7 @@ fn untrusted_dialer_gets_clean_rejection_and_pending_row() {
     let s = stop.clone();
     let db = base.join("alice").join("state.db");
     let creds = alice_id.creds();
-    std::thread::spawn(move || net::serve(listener, db, creds, "alice".into(), vec![], &s));
+    std::thread::spawn(move || net::serve(listener, db, creds, "alice".into(), &s));
 
     let bob_db = base.join("bob").join("state.db");
     let err = net::sync_now(
@@ -59,17 +63,21 @@ fn untrusted_dialer_gets_clean_rejection_and_pending_row() {
 fn unresolvable_first_address_does_not_abort_round() {
     let base = std::env::temp_dir().join(format!("mw-sync-skip-{}", std::process::id()));
     let (alice_store, alice_id) = setup(&base.join("alice"));
-    let (_bob_store, bob_id) = setup(&base.join("bob"));
+    let (bob_store, bob_id) = setup(&base.join("bob"));
 
     alice_store
         .upsert_peer(&bob_id.node_id, "bob", "127.0.0.1:44976", true)
+        .unwrap();
+    // The dialer sends records only to a peer it trusts itself.
+    bob_store
+        .upsert_peer(&alice_id.node_id, "alice", "", true)
         .unwrap();
     let listener = net::listen(44976).unwrap().unwrap();
     let stop = Arc::new(AtomicBool::new(false));
     let s = stop.clone();
     let db = base.join("alice").join("state.db");
     let creds = alice_id.creds();
-    std::thread::spawn(move || net::serve(listener, db, creds, "alice".into(), vec![], &s));
+    std::thread::spawn(move || net::serve(listener, db, creds, "alice".into(), &s));
     std::thread::sleep(std::time::Duration::from_millis(200));
 
     // Garbage first: must be skipped, live second tried.
@@ -115,7 +123,7 @@ fn trusted_peers_merge_words_and_history_both_ways() {
     let s = stop.clone();
     let db = base.join("alice").join("state.db");
     let creds = alice_id.creds();
-    std::thread::spawn(move || net::serve(listener, db, creds, "alice".into(), vec![], &s));
+    std::thread::spawn(move || net::serve(listener, db, creds, "alice".into(), &s));
     std::thread::sleep(std::time::Duration::from_millis(200));
 
     let bob_db = base.join("bob").join("state.db");
