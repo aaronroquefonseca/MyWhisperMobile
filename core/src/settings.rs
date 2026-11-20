@@ -134,7 +134,7 @@ pub enum PasteCombo {
 }
 
 /// Pill visualizer preferences. Defaults mirror the service runtime
-/// (tape, 11 bars, 18px lane, no ornament, still idle).
+/// (bloom, 11 bars, 18px lane, no ornament, still idle).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PillPrefs {
     pub position: FloatingPosition,
@@ -150,7 +150,7 @@ impl Default for PillPrefs {
     fn default() -> Self {
         Self {
             position: FloatingPosition::BottomCenter,
-            viz_mode: VizMode::Tape,
+            viz_mode: VizMode::Bloom,
             bars: 11,
             lane_max: 18.0,
             theme: VizTheme::White,
@@ -898,6 +898,15 @@ pub struct HistoryEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pill_viz_mode_matches_desktop_bloom_default() {
+        assert_eq!(PillPrefs::default().viz_mode, VizMode::Bloom);
+        // Desktop writes the variant name; older "Tape" stays valid.
+        for (raw, mode) in [("\"Bloom\"", VizMode::Bloom), ("\"Tape\"", VizMode::Tape)] {
+            assert_eq!(serde_json::from_str::<VizMode>(raw).unwrap(), mode);
+        }
+    }
 
     #[test]
     fn black_background_preserves_compatible_theme_and_defaults_off_for_older_settings() {
