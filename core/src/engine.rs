@@ -179,23 +179,8 @@ fn llm_cleanup_one(
         // through to Ollama/cloud (default order unchanged). Never STT.
         LlmKind::Local => crate::local_llm::try_local_cleanup(entry, system, raw, data_dir),
         LlmKind::Ollama => {
-            let mut body = serde_json::json!({
-                "model": entry.model,
-                "stream": false,
-                "options": {
-                    "temperature": 0.0,
-                    "top_p": 0.9,
-                    "top_k": 40,
-                    "repeat_penalty": 1.1,
-                },
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-            });
-            if let Some(think) = entry.thinking {
-                body["think"] = serde_json::Value::Bool(think);
-            }
+            let mut body =
+                crate::server_stt::ollama_request(&entry.model, entry.thinking, system, &user);
             if let Some(nctx) = entry.num_ctx {
                 body["options"]["num_ctx"] = serde_json::Value::from(nctx);
             }
@@ -217,27 +202,11 @@ fn llm_cleanup_one(
             let text = http_post_json(&url, headers, &body)?;
             let v: serde_json::Value =
                 serde_json::from_str(&text).map_err(|e| format!("ollama json: {e}"))?;
-            v.pointer("/message/content")
-                .and_then(|t| t.as_str())
-                .map(|t| t.to_string())
-                .ok_or_else(|| "ollama reply has no message.content".to_string())
+            crate::server_stt::ollama_answer(&v)
         }
         LlmKind::Cloud => match entry.provider {
             CloudLlm::Google => {
-                let mut body = serde_json::json!({
-                    "contents": [{
-                        "parts": [
-                            {"text": system},
-                            {"text": user},
-                        ],
-                    }],
-                    "generationConfig": {"temperature": 0.0},
-                });
-                if let Some(think) = entry.thinking {
-                    body["generationConfig"]["thinkingConfig"] = serde_json::json!({
-                        "thinkingBudget": if think { -1 } else { 0 }
-                    });
-                }
+                let body = crate::server_stt::gemini_request(entry.thinking, system, &user);
                 let url = format!(
                     "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
                     entry.model
@@ -246,28 +215,11 @@ fn llm_cleanup_one(
                     http_post_json(&url, &[("x-goog-api-key", entry.api_key.trim())], &body)?;
                 let v: serde_json::Value =
                     serde_json::from_str(&text).map_err(|e| format!("gemini json: {e}"))?;
-                Ok(v.pointer("/candidates/0/content/parts")
-                    .and_then(|p| p.as_array())
-                    .map(|parts| {
-                        parts
-                            .iter()
-                            .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
-                            .collect::<Vec<_>>()
-                            .join("")
-                    })
-                    .unwrap_or_default())
+                crate::server_stt::gemini_answer(&v)
             }
             CloudLlm::Claude => {
-                let mut body = serde_json::json!({
-                    "model": entry.model,
-                    "max_tokens": 1024,
-                    "system": system,
-                    "messages": [{"role": "user", "content": user}],
-                });
-                if entry.thinking == Some(true) {
-                    body["thinking"] =
-                        serde_json::json!({"type": "enabled", "budget_tokens": 10000});
-                }
+                let body =
+                    crate::server_stt::claude_request(&entry.model, entry.thinking, system, &user);
                 let text = http_post_json(
                     "https://api.anthropic.com/v1/messages",
                     &[
@@ -278,10 +230,7 @@ fn llm_cleanup_one(
                 )?;
                 let v: serde_json::Value =
                     serde_json::from_str(&text).map_err(|e| format!("claude json: {e}"))?;
-                Ok(v.pointer("/content/0/text")
-                    .and_then(|t| t.as_str())
-                    .unwrap_or_default()
-                    .to_string())
+                crate::server_stt::claude_answer(&v)
             }
             _ => {
                 let body = serde_json::json!({
@@ -300,10 +249,7 @@ fn llm_cleanup_one(
                 )?;
                 let v: serde_json::Value =
                     serde_json::from_str(&text).map_err(|e| format!("chat json: {e}"))?;
-                v.pointer("/choices/0/message/content")
-                    .and_then(|t| t.as_str())
-                    .map(|t| t.to_string())
-                    .ok_or_else(|| "chat reply has no content".to_string())
+                crate::server_stt::chat_answer(&v)
             }
         },
     }
@@ -1212,7 +1158,7 @@ mod tests {
                 }
                 buf.extend_from_slice(&tmp[..n]);
             }
-            let body = r#"{"message":{"content":"Hello world."}}"#;
+            let body = r#"{"done":true,"done_reason":"stop","message":{"content":"Hello world."}}"#;
             let resp = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()

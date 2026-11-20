@@ -49,27 +49,25 @@ pub fn prompt_budget_for(provider: &str) -> usize {
 // Truncation, refusals, malformed blocks and tool calls are `Err`
 // (runner falls back, never dictates partial output).
 //
-// NOTE: `engine.rs::llm_cleanup_one` still uses its pre-#17 inline
-// parsing (owned by a sibling thread); these helpers are the ported
-// contract source the cleanup chain adopts next. STT wiring below
-// already uses `prompt_budget_for`.
+// `engine.rs::llm_cleanup_one` builds and parses every cleanup call
+// through these helpers; STT wiring below uses `prompt_budget_for`.
 // ---------------------------------------------------------------------------
 
 /// Claude Messages request. `max_tokens` 16384 leaves room for the
 /// 1024 thinking budget plus the answer (budget must be < max_tokens,
 /// minimum 1024). Adaptive models decide themselves; enabled models
-/// need the explicit budget; unknown models error so the caller keeps
-/// the model default instead of sending a rejected request.
+/// need the explicit budget; unknown models omit `thinking` (model
+/// default) instead of sending a request the API may reject.
 ///
 /// Adaptive (per 2026 docs): 4-6/4-7/4-8, 5.x, Mythos/Fable families.
-/// Enabled-only: 4-5 family + 3.7 Sonnet. Everything else → Err.
+/// Enabled-only: 4-5 family + 3.7 Sonnet. Everything else → omitted.
 /// `Some(false)` sends `disabled`.
 pub fn claude_request(
     model: &str,
     thinking: Option<bool>,
     system: &str,
     user: &str,
-) -> Result<serde_json::Value, String> {
+) -> serde_json::Value {
     use serde_json::json;
     let mut body = json!({"model":model,"max_tokens":16384,"system":system,"messages":[{"role":"user","content":user}]});
     if let Some(enabled) = thinking {
@@ -102,13 +100,9 @@ pub fn claude_request(
         .any(|prefix| model.starts_with(prefix))
         {
             body["thinking"] = json!({"type":"enabled","budget_tokens":1024});
-        } else {
-            return Err(
-                "thinking capabilities unknown for this Claude model; select model default".into(),
-            );
         }
     }
-    Ok(body)
+    body
 }
 
 /// Ollama `/api/chat` request (stream:false, pinned sampling mirrors
@@ -329,6 +323,16 @@ pub(crate) fn capped_text(
     String::from_utf8(bytes).map_err(|_| format!("{description}: response is not UTF-8"))
 }
 
+/// OpenAI-style `{text}` (tolerates `data.text`). whisper.cpp's server
+/// joins segments with "\n" at timing cuts, not speaker intent; fold
+/// all whitespace runs into single spaces (desktop #33).
+fn transcription_text(v: &serde_json::Value) -> Option<String> {
+    v.get("text")
+        .and_then(|t| t.as_str())
+        .or_else(|| v.pointer("/data/text").and_then(|t| t.as_str()))
+        .map(|s| s.split_whitespace().collect::<Vec<_>>().join(" "))
+}
+
 fn post_openai_compat(
     url: &str,
     api_key: &str,
@@ -372,16 +376,12 @@ fn post_openai_compat(
     }
     let v: serde_json::Value =
         serde_json::from_str(&body).map_err(|e| format!("parse json: {e}"))?;
-    v.get("text")
-        .and_then(|t| t.as_str())
-        .or_else(|| v.pointer("/data/text").and_then(|t| t.as_str()))
-        .map(|s| s.to_string())
-        .ok_or_else(|| {
-            format!(
-                "no text in reply: {}",
-                body.chars().take(200).collect::<String>()
-            )
-        })
+    transcription_text(&v).ok_or_else(|| {
+        format!(
+            "no text in reply: {}",
+            body.chars().take(200).collect::<String>()
+        )
+    })
 }
 
 fn post_deepgram(
@@ -1256,7 +1256,7 @@ mod tests {
             "claude-opus-4-5",
             "claude-3-7-sonnet-20250219",
         ] {
-            let v = claude_request(model, Some(true), "system", "user").unwrap();
+            let v = claude_request(model, Some(true), "system", "user");
             assert_eq!(v["thinking"]["type"], "enabled");
             assert!(v["thinking"]["budget_tokens"].as_u64().unwrap() >= 1024);
             assert!(v["thinking"]["budget_tokens"].as_u64() < v["max_tokens"].as_u64());
@@ -1276,18 +1276,18 @@ mod tests {
             "claude-fable-5",
         ] {
             assert_eq!(
-                claude_request(model, Some(true), "s", "u").unwrap()["thinking"],
+                claude_request(model, Some(true), "s", "u")["thinking"],
                 json!({"type":"adaptive"}),
                 "model {model}"
             );
             assert_eq!(
-                claude_request(model, Some(false), "s", "u").unwrap()["thinking"]["type"],
+                claude_request(model, Some(false), "s", "u")["thinking"]["type"],
                 "disabled",
                 "model {model}"
             );
         }
-        // Unknown capabilities must not guess a mode: error so the
-        // caller keeps the model default.
+        // Unknown capabilities must not guess a mode: omit `thinking`
+        // so the model default applies.
         for model in [
             "future-model",
             "claude-sonnet-4-4",
@@ -1298,19 +1298,19 @@ mod tests {
             "",
         ] {
             assert!(
-                claude_request(model, Some(true), "s", "u").is_err(),
+                claude_request(model, Some(true), "s", "u")
+                    .get("thinking")
+                    .is_none(),
                 "model {model}"
             );
         }
         assert!(
             claude_request("future-model", None, "s", "u")
-                .unwrap()
                 .get("thinking")
                 .is_none()
         );
         assert!(
             claude_request("claude-sonnet-4-5", None, "s", "u")
-                .unwrap()
                 .get("thinking")
                 .is_none()
         );
@@ -2043,6 +2043,19 @@ mod tests {
             began.elapsed()
         );
         server.join().unwrap();
+    }
+
+    #[test]
+    fn transcription_text_folds_segment_newlines() {
+        assert_eq!(
+            transcription_text(&json!({"text":" open for this\n project.\n You can\n"})),
+            Some("open for this project. You can".into())
+        );
+        assert_eq!(
+            transcription_text(&json!({"data":{"text":" hi "}})),
+            Some("hi".into())
+        );
+        assert_eq!(transcription_text(&json!({})), None);
     }
 
     #[test]
