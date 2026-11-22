@@ -74,6 +74,9 @@ jobs:
           ")
           echo "Simulator: $UDID"
           xcrun simctl boot "$UDID"
+          # Boot first: screenshots during first boot only catch the Apple logo.
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID"
           xcrun simctl install "$UDID" "$APP"
           shot() {
             xcrun simctl launch --terminate-running-process "$UDID" com.mywhisper.mobile "$@" >/dev/null
