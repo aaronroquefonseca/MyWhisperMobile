@@ -23,6 +23,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/ios/Libs"
 
+# Match the Xcode target (IPHONEOS_DEPLOYMENT_TARGET = 17.0). Rust's
+# default Apple deployment target is ancient; modern Xcode toolchains
+# (16+, and Xcode 26 on CI) cannot link the cdylib against it
+# (missing compiler-rt symbols like ___chkstk_darwin). Pinning the same
+# floor the app targets keeps device + sim links working.
+export IPHONEOS_DEPLOYMENT_TARGET=17.0
+
 # The sim leg follows the host arch (arm64 on Apple Silicon,
 # x86_64 on Intel Macs).
 SIM_TRIPLE="aarch64-apple-ios-sim"
