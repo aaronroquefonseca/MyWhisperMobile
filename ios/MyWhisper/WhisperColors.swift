@@ -52,6 +52,20 @@ extension View {
         whisperGlass(cornerRadius: cornerRadius)
     }
 
+    /// iOS 26 minimize-on-scroll tab bar; no-op on older SDKs (and on
+    /// toolchains that can't see the API at all).
+    @ViewBuilder
+    func whisperTabBarMinimize() -> some View {
+        #if compiler(>=6.2)
+        if #available(iOS 26, *) {
+            self.tabBarMinimizeBehavior(.automatic)
+        } else {
+            self
+        }
+        #else
+        self
+        #endif
+    }
     /// Frosted glass in the given rounded shape: `.glassEffect` where the
     /// SDK has it, ultra-thin material + hairline where it doesn't.
     @ViewBuilder

@@ -47,7 +47,6 @@
 		EE11000000000000000010 /* WhisperColors.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE11000000000000000011 /* WhisperColors.swift */; };
 		EE1100000000000000000008 /* KeyboardViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE1100000000000000000002 /* KeyboardViewController.swift */; };
 		EE11000000000000000012 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE11000000000000000013 /* OnboardingView.swift */; };
-		EE11000000000000000014 /* FloatingTabBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE11000000000000000015 /* FloatingTabBar.swift */; };
 		EE110000000000000000000F /* MyWhisperKeyboard.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = EE1100000000000000000001 /* MyWhisperKeyboard.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		A55055AA55055055005502 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A55055AA55055055005501 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
@@ -116,7 +115,6 @@
 		EE1100000000000000000001 /* MyWhisperKeyboard.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = MyWhisperKeyboard.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		EE1100000000000000000002 /* KeyboardViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardViewController.swift; sourceTree = "<group>"; };
 		EE11000000000000000013 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
-		EE11000000000000000015 /* FloatingTabBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloatingTabBar.swift; sourceTree = "<group>"; };
 		EE1100000000000000000003 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		8965188E778D2EEAECC16395 /* MyWhisperTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MyWhisperTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A55055AA55055055005501 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -173,7 +171,6 @@
 				EE11000000000000000011 /* WhisperColors.swift */,
 				CC0100CC0100CC03000001 /* Strings.swift */,
 				EE11000000000000000013 /* OnboardingView.swift */,
-				EE11000000000000000015 /* FloatingTabBar.swift */,
 				5E77110000000000000001 /* SttSettingsView.swift */,
 				5E77120000000000000001 /* CleanupSettingsView.swift */,
 				5E77130000000000000001 /* DictionaryView.swift */,
@@ -380,7 +377,6 @@
 				CC11CC11CC11CC11CC11CC05 /* DevicesView.swift in Sources */,
 				DD0100DD0100DD01000002 /* AppFlow.swift in Sources */,
 				EE11000000000000000012 /* OnboardingView.swift in Sources */,
-				EE11000000000000000014 /* FloatingTabBar.swift in Sources */,
 				EE11000000000000000010 /* WhisperColors.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

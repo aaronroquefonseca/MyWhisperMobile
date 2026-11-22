@@ -48,14 +48,11 @@ struct ContentView: View {
                         tabContent(for: tab)
                     }
                 }
+                .tabItem { Label(tab == .setup ? (languageCode == "es" ? "Más" : "More") : tab.title(using: tabStrings), systemImage: tab == .setup ? "ellipsis" : tab.systemImage) }
                 .tag(tab)
             }
         }
-        .toolbar(.hidden, for: .tabBar)
-        .safeAreaInset(edge: .bottom) {
-            FloatingTabBar(selected: $flow.selectedTab, strings: tabStrings, languageCode: languageCode)
-                .padding(.bottom, 8)
-        }
+        .whisperTabBarMinimize()
         .tint(WhisperColors.primary(colorScheme))
         .preferredColorScheme(flow.theme.colorScheme)
         .onAppear {
