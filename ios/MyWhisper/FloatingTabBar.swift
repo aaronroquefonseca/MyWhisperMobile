@@ -9,6 +9,8 @@ struct FloatingTabBar: View {
     var strings: TabStrings
     var languageCode: String?
 
+    private var tabs: [AppTab] { [.record, .speech, .history, .setup] }
+
     private func iconName(for tab: AppTab) -> String {
         switch tab {
         case .record: return "mic.fill"
