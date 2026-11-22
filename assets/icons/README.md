@@ -17,6 +17,27 @@ adaptive-icon XML also uses the foreground alpha for themed monochrome icons.
 
 Notification and IME action icons are independent assets.
 
+## iOS AppIcon (iPhone)
+
+Source of truth is the same `launcher-mark-mask.png` silhouette and the
+stable Navy (`#142234`) / cyan (`#5CD9EC`) palette, so the iPhone icon
+matches the Android mark geometry (56 dp wide on the 108 dp layer).
+
+Regenerate the Apple-spec asset with Python 3 and Pillow installed:
+
+```sh
+python3 scripts/make-ios-icon.py
+```
+
+Output: `ios/MyWhisper/Assets.xcassets/AppIcon.appiconset/Icon-1024.png`,
+wired as `ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon`. Per Apple's
+Human Interface Guidelines / App Store rules the file is a single
+1024 × 1024 PNG, sRGB, opaque RGB, full-bleed edge to edge: no alpha,
+no pre-rounded corners, no shadow. iOS applies the squircle mask
+itself, so artwork stays centered in the safe zone. Xcode thins the
+universal 1024 px icon down to every iPhone/iPad/Spotlight/Settings
+size at build time.
+
 ## Channel defaults and overrides
 
 Stable/debug uses Navy / cyan; nightly uses Cobalt / white. All styles use

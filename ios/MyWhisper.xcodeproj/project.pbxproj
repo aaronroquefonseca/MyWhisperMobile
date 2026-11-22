@@ -44,6 +44,7 @@
 		CC11CC11CC11CC11CC11CC06 /* SyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC11CC11CC11CC11CC11CC03 /* SyncTests.swift */; };
 		DD0100DD0100DD01000002 /* AppFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD0100DD0100DD01000001 /* AppFlow.swift */; };
 		DD0100DD0100DD02000002 /* IntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD0100DD0100DD02000001 /* IntegrationTests.swift */; };
+		A55055AA55055055005502 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A55055AA55055055005501 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -100,6 +101,7 @@
 		602A6F78559E7FAC27690B4A /* Tests Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		D82908387D374745193668C2 /* MyWhisper.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MyWhisper.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		8965188E778D2EEAECC16395 /* MyWhisperTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MyWhisperTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A55055AA55055055005501 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -158,6 +160,7 @@
 				E2E720B20000000000000003 /* HistoryView.swift */,
 				CC11CC11CC11CC11CC11CC01 /* SyncDiscovery.swift */,
 				CC11CC11CC11CC11CC11CC02 /* DevicesView.swift */,
+				A55055AA55055055005501 /* Assets.xcassets */,
 				7EB0EE73123791A0202B4796 /* MyWhisper.entitlements */,
 				658CB18E2E567D501D0E64F8 /* Info.plist */,
 				F32B3BDBD273F3BCD8875B1B /* PrivacyInfo.xcprivacy */,
@@ -281,6 +284,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				4D2DCE83303D7ED85DCD61B5 /* PrivacyInfo.xcprivacy in Resources */,
+				A55055AA55055055005502 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -372,6 +376,7 @@
 		DC77B2482CB5BC00ADF1F4BC /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = MyWhisper/MyWhisper.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -395,6 +400,7 @@
 		DEDA658B833B862DC30C3BB0 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = MyWhisper/MyWhisper.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				FRAMEWORK_SEARCH_PATHS = (
