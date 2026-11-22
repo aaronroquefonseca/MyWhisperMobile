@@ -8,6 +8,9 @@ struct FloatingTabBar: View {
     @Binding var selected: AppTab
     var strings: TabStrings
     var languageCode: String?
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var capsuleColor: Color { WhisperColors.primary(colorScheme) }
 
     private var tabs: [AppTab] { [.record, .speech, .history, .setup] }
 
@@ -33,22 +36,21 @@ struct FloatingTabBar: View {
                     }
                 } label: {
                     HStack(spacing: 6) {
-                        Text(String(describing: tab).prefix(1).uppercased())
-                            .font(.system(size: 19, weight: selected == tab ? .semibold : .regular))
+                        Image(systemName: iconName(for: tab))
+                            .font(.system(size: 19, weight: .semibold))
                             .foregroundStyle(selected == tab ? .white : .secondary)
-                        if selected == tab {
-                            Text(label(for: tab))
-                                .font(.subheadline).bold()
-                        }
+                        Text(label(for: tab))
+                            .font(.subheadline).bold()
+                            .foregroundStyle(.white)
+                            .opacity(selected == tab ? 1 : 0)
                     }
-                    .foregroundStyle(selected == tab ? .white : .secondary)
                     .padding(.vertical, 10)
-                    .padding(.horizontal, selected == tab ? 16 : 12)
+                    .padding(.horizontal, 16)
                     .background {
                         if selected == tab {
                             Capsule(style: .continuous)
-                                .fill(WhisperColors.primary(.dark))
-                                .shadow(color: WhisperColors.primary(.dark).opacity(0.45), radius: 12)
+                                .fill(capsuleColor)
+                                .shadow(color: capsuleColor.opacity(0.45), radius: 12)
                         }
                     }
                     .animation(.spring(response: 0.32, dampingFraction: 0.8), value: selected)
