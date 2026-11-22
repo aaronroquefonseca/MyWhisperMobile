@@ -245,11 +245,7 @@ struct OnboardingView: View {
                 content()
             }
             .padding(24)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .stroke(.white.opacity(0.18), lineWidth: 1)
-            )
+            .whisperGlass()
             .padding(.horizontal, 20)
             Spacer()
         }

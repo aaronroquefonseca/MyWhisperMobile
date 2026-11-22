@@ -44,11 +44,7 @@ struct FloatingTabBar: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .background(.ultraThinMaterial, in: Capsule(style: .continuous))
-        .overlay(
-            Capsule(style: .continuous)
-                .stroke(.white.opacity(0.22), lineWidth: 1)
-        )
+        .whisperGlass(cornerRadius: 100)
         .shadow(color: .black.opacity(0.25), radius: 18, y: 8)
         .padding(.horizontal, 20)
     }

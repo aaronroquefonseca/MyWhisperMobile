@@ -45,9 +45,39 @@ enum WhisperColors {
 }
 
 extension View {
-    /// Card surface: system material in a rounded rect today (coherent on
-    /// iOS 17+), the single swap point for Liquid Glass once the SDK allows.
+    /// Card surface: real Liquid Glass on the iOS 26 SDK, system material
+    /// on older toolchains (the macOS VM still builds on Xcode 15.4).
+    /// Single swap point for the whole app.
     func whisperSurface(cornerRadius: CGFloat = 16) -> some View {
-        background(.regularMaterial, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        whisperGlass(cornerRadius: cornerRadius)
+    }
+
+    /// Frosted glass in the given rounded shape: `.glassEffect` where the
+    /// SDK has it, ultra-thin material + hairline where it doesn't.
+    @ViewBuilder
+    func whisperGlass(cornerRadius: CGFloat = 24) -> some View {
+        #if compiler(>=6.2)
+        if #available(iOS 26, *) {
+            self.glassEffect(.regular, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        } else {
+            self.modifier(GlassFallback(cornerRadius: cornerRadius))
+        }
+        #else
+        self.modifier(GlassFallback(cornerRadius: cornerRadius))
+        #endif
+    }
+}
+
+/// Pre-glass fallback: frosted material + hairline, same shape language.
+struct GlassFallback: ViewModifier {
+    var cornerRadius: CGFloat = 24
+
+    func body(content: Content) -> some View {
+        content
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(.white.opacity(0.22), lineWidth: 1)
+            )
     }
 }
