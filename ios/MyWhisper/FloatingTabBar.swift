@@ -38,7 +38,7 @@ struct FloatingTabBar: View {
                     HStack(spacing: 6) {
                         Image(systemName: iconName(for: tab))
                             .font(.system(size: 19, weight: .semibold))
-                            .foregroundStyle(selected == tab ? .white : .secondary)
+                            .foregroundStyle(selected == tab ? .white : .red)
                         Text(label(for: tab))
                             .font(.subheadline).bold()
                             .foregroundStyle(.white)
