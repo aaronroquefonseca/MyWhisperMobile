@@ -131,30 +131,47 @@ struct ContentView: View {
     }
 
     private var recordTab: some View {
-        List {
-            if let error = flow.coreError {
-                Section("Core") {
-                    Text("Core error: \(error)")
-                        .foregroundStyle(.red)
-                        .textSelection(.enabled)
-                    Button("Retry") { flow.openCore() }
+        ScrollView {
+            VStack(spacing: 16) {
+                if let error = flow.coreError {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Core error: \(error)")
+                            .foregroundStyle(WhisperColors.error)
+                            .textSelection(.enabled)
+                        Button("Retry") { flow.openCore() }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+                    .whisperSurface()
                 }
-            }
-            Section {
-                RecordView(
-                    state: flow.recordState,
-                    toggled: flow.toggled,
-                    micMode: flow.micMode,
-                    levels: flow.levels,
-                    onPressDown: { flow.pressDown() },
-                    onPressUp: { flow.pressUp() },
-                    onCancel: { flow.cancelRecording() }
+                VStack {
+                    RecordView(
+                        state: flow.recordState,
+                        toggled: flow.toggled,
+                        micMode: flow.micMode,
+                        levels: flow.levels,
+                        onPressDown: { flow.pressDown() },
+                        onPressUp: { flow.pressUp() },
+                        onCancel: { flow.cancelRecording() }
+                    )
+                    .frame(maxWidth: .infinity, alignment: .center)
+                }
+                .padding(.vertical, 12)
+                .background(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0x14 / 255, green: 0x22 / 255, blue: 0x34 / 255),
+                            Color(red: 0x07 / 255, green: 0x0E / 255, blue: 0x18 / 255),
+                        ],
+                        startPoint: .topLeading, endPoint: .bottomTrailing
+                    ),
+                    in: RoundedRectangle(cornerRadius: 24, style: .continuous)
                 )
-                .frame(maxWidth: .infinity, alignment: .center)
-                .listRowBackground(Color.clear)
-            }
-            if let content = flow.result {
-                Section("Result") {
+                .overlay(
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .stroke(.white.opacity(0.14), lineWidth: 1)
+                )
+                if let content = flow.result {
                     ResultView(
                         content: content,
                         onCopy: { flow.copyResult() },
@@ -162,9 +179,13 @@ struct ContentView: View {
                         onRetry: { flow.retryResult() },
                         strings: SttStrings.current(languageCode: languageCode)
                     )
+                    .padding()
+                    .whisperSurface()
                 }
             }
+            .padding()
         }
+        .background(WhisperColors.background(colorScheme))
         .navigationTitle("MyWhisper")
     }
 

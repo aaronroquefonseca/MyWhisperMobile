@@ -32,6 +32,8 @@ final class LevelStore: ObservableObject {
 /// Symmetric bar visualizer driven by a `LevelStore`.
 struct LevelMeter: View {
     @ObservedObject var levels: LevelStore
+    /// Bar ink; callers pass brand cyan on dark heroes, primary elsewhere.
+    var color: Color = .primary
 
     static let barWidth: CGFloat = 3
     static let barGap: CGFloat = 3
@@ -42,7 +44,7 @@ struct LevelMeter: View {
         HStack(spacing: Self.barGap) {
             ForEach(0..<LevelStore.barCount, id: \.self) { index in
                 RoundedRectangle(cornerRadius: Self.barWidth / 2)
-                    .fill(Color.primary)
+                    .fill(color)
                     .frame(
                         width: Self.barWidth,
                         height: Self.restingHeight + CGFloat(levels.bars[index]) * Self.maxExtraHeight
@@ -76,15 +78,16 @@ struct RecordView: View {
     @State private var pressed = false
 
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 14) {
             Text(hint)
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.white.opacity(0.75))
                 .accessibilityLabel(hint)
             ZStack {
                 Circle()
                     .fill(buttonColor)
                     .frame(width: buttonDiameter, height: buttonDiameter)
+                    .shadow(color: buttonColor.opacity(state == .idle ? 0 : 0.55), radius: state == .recording ? 28 : 14)
                 if state == .working {
                     ProgressView()
                         .tint(.white)
@@ -92,7 +95,7 @@ struct RecordView: View {
                         .accessibilityLabel("Transcribing")
                 } else {
                     Image(systemName: state == .recording ? "mic.fill" : "mic")
-                        .font(.system(size: 30))
+                        .font(.system(size: 32))
                         .foregroundStyle(.white)
                 }
             }
@@ -100,16 +103,18 @@ struct RecordView: View {
             .accessibilityAddTraits(.isButton)
             .accessibilityLabel(micVoiceOverLabel)
             .accessibilityHint(micVoiceOverHint)
-            LevelMeter(levels: levels)
+            LevelMeter(levels: levels, color: Color(red: 0x5C / 255, green: 0xD9 / 255, blue: 0xEC / 255))
                 .frame(height: 36)
                 .opacity(state == .recording ? 1 : 0.25)
             if state != .idle {
                 Button("Cancel", action: { onCancel() })
                     .buttonStyle(.bordered)
+                    .tint(.white)
                     .accessibilityLabel("Cancel dictation")
                     .accessibilityHint("Discards this recording without transcribing")
             }
         }
+        .padding(.vertical, 8)
     }
 
     // MARK: - Gesture
