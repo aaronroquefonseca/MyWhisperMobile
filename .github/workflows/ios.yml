@@ -75,7 +75,8 @@ jobs:
           echo "Simulator: $UDID"
           xcrun simctl boot "$UDID"
           # Boot first: screenshots during first boot only catch the Apple logo.
-          xcrun simctl boot "$UDID"
+          # boot fails with 405 when already booted — not an error here.
+          xcrun simctl boot "$UDID" || true
           xcrun simctl bootstatus "$UDID"
           xcrun simctl install "$UDID" "$APP"
           shot() {
