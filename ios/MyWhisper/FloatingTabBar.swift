@@ -28,6 +28,9 @@ struct FloatingTabBar: View {
                                 .font(.subheadline).bold()
                         }
                     }
+                    #if DEBUG
+                    .border(.red)
+                    #endif
                     .foregroundStyle(selected == tab ? .white : .secondary)
                     .padding(.vertical, 10)
                     .padding(.horizontal, selected == tab ? 16 : 12)
