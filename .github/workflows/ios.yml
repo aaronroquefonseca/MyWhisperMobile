@@ -66,10 +66,10 @@ jobs:
           UDID=$(xcrun simctl list devices available -j | python3 -c "
           import json,sys
           devs = json.load(sys.stdin)['devices']
-          for runtime, ds in devs.items():
-              for d in ds:
-                  if d['name'] == 'iPhone 17 Pro' and d['availability'] == '(available)':
-                      print(d['udid']); raise SystemExit
+          cands = [d for ds in devs.values() for d in ds if d.get('isAvailable') and 'iPhone' in d.get('name', '')]
+          if not cands: raise SystemExit('no available iPhone simulator')
+          pick = next((d for d in cands if d['name'] == 'iPhone 17 Pro'), cands[0])
+          print(pick['udid'])
           ")
           echo "Simulator: $UDID"
           xcrun simctl boot "$UDID"

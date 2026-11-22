@@ -11,6 +11,7 @@ struct FloatingTabBar: View {
     @Environment(\.colorScheme) private var colorScheme
 
     private var capsuleColor: Color { WhisperColors.primary(colorScheme) }
+    private var selectedForeground: Color { colorScheme == .dark ? .black : .white }
 
     private var tabs: [AppTab] { [.record, .speech, .history, .setup] }
 
@@ -55,7 +56,7 @@ struct FloatingTabBar: View {
             Label(label(for: tab), systemImage: iconName(for: tab))
                 .labelStyle(.titleAndIcon)
                 .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(selectedForeground)
                 .padding(.vertical, 10)
                 .padding(.horizontal, 16)
                 .background {

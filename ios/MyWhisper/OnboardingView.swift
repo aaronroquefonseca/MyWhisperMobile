@@ -28,7 +28,7 @@ struct OnboardingStrings: Equatable {
         next: "Continue",
         start: "Get started",
         welcomeTitle: "Type with your voice, anywhere",
-        welcomeBody: "MyWhisper adds a keyboard with a mic key. Switch to it in any chat, talk, and your words land at the cursor.",
+        welcomeBody: "MyWhisper adds a keyboard with a mic key. Switch to it in any chat and type — voice dictation lights up in the next update.",
         micTitle: "Microphone first",
         micBody: "Dictation needs the mic. Audio goes only to the speech provider you choose — nothing else.",
         micGrant: "Grant microphone access",
@@ -38,12 +38,11 @@ struct OnboardingStrings: Equatable {
         keyboardSteps: [
             "Open Settings → General → Keyboard → Keyboards → Add New Keyboard",
             "Pick MyWhisper Keyboard",
-            "Tap it and turn on Allow Full Access (needed for voice later)",
         ],
-        keyboardNote: "Typing works right away. Voice dictation lights up in the next update. Some password fields always use the system keyboard.",
+        keyboardNote: "Typing works right away with no extra permissions. Voice dictation — and its Full Access prompt — arrive in the next update. Some password fields always use the system keyboard.",
         openSettings: "Open Settings",
         serverTitle: "Point it at speech",
-        serverBody: "After this, open the Speech tab and pick a provider (self-hosted or cloud). Then dictate from any app."
+        serverBody: "After this, open the Speech tab and pick a provider. It powers dictation in the Record tab today; the keyboard’s mic key follows in the next update."
     )
 
     static let spanish = OnboardingStrings(
@@ -52,7 +51,7 @@ struct OnboardingStrings: Equatable {
         next: "Continuar",
         start: "Empezar",
         welcomeTitle: "Escribe con tu voz, donde sea",
-        welcomeBody: "MyWhisper añade un teclado con tecla de micrófono. Cámbiate a él en cualquier chat, habla y tus palabras aparecen en el cursor.",
+        welcomeBody: "MyWhisper añade un teclado con tecla de micrófono. Cámbiate a él en cualquier chat y escribe: el dictado por voz llega en la próxima actualización.",
         micTitle: "Primero el micrófono",
         micBody: "El dictado necesita el micrófono. El audio solo va al proveedor de voz que elijas — a nada más.",
         micGrant: "Permitir acceso al micrófono",
@@ -62,12 +61,11 @@ struct OnboardingStrings: Equatable {
         keyboardSteps: [
             "Abre Ajustes → General → Teclado → Teclados → Añadir nuevo teclado",
             "Elige MyWhisper Keyboard",
-            "Tócalo y activa Permitir acceso total (para la voz más adelante)",
         ],
-        keyboardNote: "Escribir funciona desde ya. El dictado por voz llega en la próxima actualización. Algunos campos de contraseña siempre usan el teclado del sistema.",
+        keyboardNote: "Escribir funciona desde ya, sin permisos extra. El dictado por voz —y su aviso de acceso total— llega en la próxima actualización. Algunos campos de contraseña siempre usan el teclado del sistema.",
         openSettings: "Abrir Ajustes",
         serverTitle: "Conéctalo a la voz",
-        serverBody: "Después, abre la pestaña Voz y elige un proveedor (propio o en la nube). Luego dicta desde cualquier app."
+        serverBody: "Después, abre la pestaña Voz y elige un proveedor. Da voz a la pestaña Grabar hoy; la tecla de micrófono del teclado llega en la próxima actualización."
     )
 
     static func current(languageCode: String?) -> OnboardingStrings {

@@ -97,11 +97,17 @@ final class KeyboardViewController: UIInputViewController {
         return (word, scalars.count - i)
     }
 
-    private func refreshPredictions() {
+    @discardableResult
+    private func refreshPredictions() -> Bool {
+        let old = predictions
         let (word, _) = currentWord()
-        guard word.count >= 2 else { predictions = []; return }
-        let range = NSRange(location: 0, length: (word as NSString).length)
-        predictions = Array(checker.completions(forPartialWordRange: range, in: word, language: "en_US")?.prefix(3) ?? [])
+        if word.count >= 2 {
+            let range = NSRange(location: 0, length: (word as NSString).length)
+            predictions = Array(checker.completions(forPartialWordRange: range, in: word, language: "en_US")?.prefix(3) ?? [])
+        } else {
+            predictions = []
+        }
+        return predictions != old
     }
 
     private func applyPrediction(_ p: String) {
@@ -343,7 +349,8 @@ final class KeyboardViewController: UIInputViewController {
         b.titleLabel?.font = .systemFont(ofSize: 22)
         b.setTitleColor(labelColor, for: [])
         b.addTarget(self, action: #selector(keyTouchDown(_:)), for: .touchDown)
-        b.addTarget(self, action: #selector(keyTouchUp(_:)), for: [.touchUpInside, .touchUpOutside, .touchCancel])
+        b.addTarget(self, action: #selector(keyTouchUp(_:)), for: .touchUpInside)
+        b.addTarget(self, action: #selector(keyTouchCancel(_:)), for: [.touchUpOutside, .touchCancel])
         b.accessibilityIdentifier = insert
         rowsView.addSubview(b)
     }
@@ -366,7 +373,8 @@ final class KeyboardViewController: UIInputViewController {
     private func deleteKey() -> UIButton {
         let b = symbolKey("delete.left", size: 21)
         b.addTarget(self, action: #selector(deleteDown(_:)), for: .touchDown)
-        b.addTarget(self, action: #selector(deleteUp), for: [.touchUpInside, .touchUpOutside, .touchCancel])
+        b.addTarget(self, action: #selector(deleteUp), for: .touchUpInside)
+        b.addTarget(self, action: #selector(deleteCancel), for: [.touchUpOutside, .touchCancel])
         return b
     }
 
@@ -385,22 +393,28 @@ final class KeyboardViewController: UIInputViewController {
     private func insert(_ k: String) {
         playClick()
         textDocumentProxy.insertText(k)
-        if shift == .on {
+        let wasShifted = shift == .on
+        if wasShifted {
             shift = .off
+        }
+        let autoShifted = autoShiftCheck(inserted: k)
+        if wasShifted || autoShifted || refreshPredictions() {
             rebuild()
         }
-        autoShiftCheck(inserted: k)
-        refreshPredictions()
     }
 
-    private func autoShiftCheck(inserted: String) {
+    /// Sentence-start auto-caps. Returns true when it flipped shift state
+    /// (callers redraw); never rebuilds itself.
+    @discardableResult
+    private func autoShiftCheck(inserted: String) -> Bool {
         if inserted == " ", let before = textDocumentProxy.documentContextBeforeInput, before.count >= 2 {
             let two = String(before.suffix(2))
             if [". ", "? ", "! "].contains(two), shift == .off {
                 shift = .on
-                rebuild()
+                return true
             }
         }
+        return false
     }
 
     @objc private func keyTouchDown(_ b: UIButton) {
@@ -411,6 +425,10 @@ final class KeyboardViewController: UIInputViewController {
         hidePopup()
         guard let k = b.accessibilityIdentifier, !k.isEmpty, b.title(for: []) != nil else { return }
         insert(k)
+    }
+
+    @objc private func keyTouchCancel(_ b: UIButton) {
+        hidePopup()
     }
 
     @objc private func shiftTapped() {
@@ -440,12 +458,16 @@ final class KeyboardViewController: UIInputViewController {
         showPopup(for: b)
         textDocumentProxy.deleteBackward()
         playClick()
-        refreshPredictions()
+        if refreshPredictions() {
+            rebuild()
+        }
         deleteTimer?.invalidate()
         deleteTimer = Timer.scheduledTimer(withTimeInterval: 0.45, repeats: false) { [weak self] _ in
             self?.deleteTimer = Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { [weak self] _ in
                 self?.textDocumentProxy.deleteBackward()
-                self?.refreshPredictions()
+                if self?.refreshPredictions() == true {
+                    self?.rebuild()
+                }
             }
         }
     }
@@ -456,11 +478,18 @@ final class KeyboardViewController: UIInputViewController {
         deleteTimer = nil
     }
 
+    @objc private func deleteCancel() {
+        hidePopup()
+        deleteTimer?.invalidate()
+        deleteTimer = nil
+    }
+
     @objc private func spaceTapped() {
         playClick()
         let now = Date()
         if let last = lastSpaceAt, now.timeIntervalSince(last) < 0.4,
-           let before = textDocumentProxy.documentContextBeforeInput, before.hasSuffix(" ") == false {
+           let before = textDocumentProxy.documentContextBeforeInput,
+           before.hasSuffix(" "), !before.hasSuffix("  ") {
             textDocumentProxy.deleteBackward()
             textDocumentProxy.insertText(". ")
             lastSpaceAt = nil
@@ -470,8 +499,9 @@ final class KeyboardViewController: UIInputViewController {
         }
         textDocumentProxy.insertText(" ")
         lastSpaceAt = now
-        autoShiftCheck(inserted: " ")
-        refreshPredictions()
+        if autoShiftCheck(inserted: " ") || refreshPredictions() {
+            rebuild()
+        }
     }
 
     @objc private func returnTapped() {

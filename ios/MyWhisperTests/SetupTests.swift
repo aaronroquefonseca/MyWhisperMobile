@@ -149,13 +149,13 @@ final class SetupTests: XCTestCase {
     }
 
     func testSetupStringsDocumentNoIme() {
-        // Both locales must explain why there are no IME steps.
+        // Both locales must explain the keyboard install (no dead IME steps).
         for strings in [SetupStrings.english, SetupStrings.spanish] {
             XCTAssertFalse(strings.noImeTitle.isEmpty)
             XCTAssertFalse(strings.noImeBody.isEmpty)
         }
-        XCTAssertTrue(SetupStrings.english.noImeBody.contains("iOS"))
-        XCTAssertTrue(SetupStrings.spanish.noImeBody.contains("iOS"))
+        XCTAssertTrue(SetupStrings.english.noImeBody.contains("Add New Keyboard"))
+        XCTAssertTrue(SetupStrings.spanish.noImeBody.contains("Añadir nuevo teclado"))
     }
 
     func testProgressTitleLocalizesCount() {
