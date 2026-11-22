@@ -61,6 +61,7 @@ jobs:
             -scheme MyWhisper -configuration Debug \
             -sdk iphonesimulator \
             -derivedDataPath build/sim \
+            EXCLUDED_ARCHS=x86_64 \
             CODE_SIGNING_ALLOWED=NO build
           APP=$(ls -d "$PWD"/build/sim/Build/Products/Debug-iphonesimulator/MyWhisper.app)
           UDID=$(xcrun simctl list devices available -j | python3 -c "

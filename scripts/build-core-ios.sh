@@ -30,11 +30,12 @@ OUT="$ROOT/ios/Libs"
 # floor the app targets keeps device + sim links working.
 export IPHONEOS_DEPLOYMENT_TARGET=17.0
 
-# The sim leg follows the host arch (arm64 on Apple Silicon,
-# x86_64 on Intel Macs).
+# The sim leg follows the host arch (arm64 on Apple Silicon).
+# NOTE: for x86_64 the simulator triple is x86_64-apple-ios itself —
+# there is no -sim suffix (it never shipped as a separate target).
 SIM_TRIPLE="aarch64-apple-ios-sim"
 if [ "$(uname -m)" = "x86_64" ]; then
-  SIM_TRIPLE="x86_64-apple-ios-sim"
+  SIM_TRIPLE="x86_64-apple-ios"
 fi
 DEVICE_TRIPLE="aarch64-apple-ios"
 
