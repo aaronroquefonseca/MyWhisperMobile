@@ -271,7 +271,7 @@ struct WordForm: View {
                         } catch let validation as DictionaryError {
                             error = dictionaryErrorText(validation)
                         } catch {
-                            error = error.localizedDescription
+                            self.error = error.localizedDescription
                         }
                     }
                 }
@@ -328,7 +328,7 @@ struct SnippetForm: View {
                         } catch let validation as DictionaryError {
                             error = dictionaryErrorText(validation)
                         } catch {
-                            error = error.localizedDescription
+                            self.error = error.localizedDescription
                         }
                     }
                 }

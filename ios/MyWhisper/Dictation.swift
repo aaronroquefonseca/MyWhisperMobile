@@ -43,7 +43,7 @@ final class Dictation {
     /// Production shape: (onPcm, onError, onLevel) -> capture handle.
     /// Stored plain (stored closures are escaping); the init takes it
     /// optional, which is escaping by construction.
-    typealias StartCapture = (PcmHandler, (String) -> Void, (Float) -> Void) -> (any DictationCapture)?
+    typealias StartCapture = (@escaping PcmHandler, @escaping (String) -> Void, @escaping (Float) -> Void) -> (any DictationCapture)?
 
     weak var listener: (any Listener)?
     /// Live mic peaks for the pill visualizer (capture thread).
