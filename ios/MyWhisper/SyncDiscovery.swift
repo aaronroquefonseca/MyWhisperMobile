@@ -432,8 +432,8 @@ extension SyncDiscovery: NetServiceDelegate {
         onMain { [weak self] in
             guard let strong = self else { return }
             strong.resolving.removeAll(where: { $0 === sender })
-            guard let txt = sender.txtRecordData(),
-                let record = NetService.dictionary(fromTXTRecord: txt) else { return }
+            guard let txt = sender.txtRecordData() else { return }
+            let record = NetService.dictionary(fromTXTRecord: txt)
             guard let nodeData = record[syncTxtNodeKey],
                 let nodeId = String(data: nodeData, encoding: .utf8),
                 !nodeId.isEmpty,

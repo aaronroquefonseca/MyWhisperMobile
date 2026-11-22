@@ -392,6 +392,8 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.mywhisper.mobile;
 				PRODUCT_NAME = MyWhisper;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -416,6 +418,8 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.mywhisper.mobile;
 				PRODUCT_NAME = MyWhisper;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
