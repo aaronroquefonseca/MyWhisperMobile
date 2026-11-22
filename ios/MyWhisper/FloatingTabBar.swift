@@ -35,19 +35,7 @@ struct FloatingTabBar: View {
                         selected = tab
                     }
                 } label: {
-                    Label(label(for: tab), systemImage: iconName(for: tab))
-                        .labelStyle(selected == tab ? .titleAndIcon : .iconOnly)
-                        .font(.system(size: 17, weight: selected == tab ? .semibold : .regular))
-                        .foregroundStyle(selected == tab ? .white : Color.primary.opacity(0.55))
-                        .padding(.vertical, 10)
-                        .padding(.horizontal, 16)
-                        .background {
-                            if selected == tab {
-                                Capsule(style: .continuous)
-                                    .fill(capsuleColor)
-                                    .shadow(color: capsuleColor.opacity(0.45), radius: 12)
-                            }
-                        }
+                    tabLabel(for: tab, selected: selected == tab)
                         .animation(.spring(response: 0.32, dampingFraction: 0.8), value: selected)
                 }
                 .accessibilityLabel(label(for: tab))
@@ -63,6 +51,30 @@ struct FloatingTabBar: View {
         )
         .shadow(color: .black.opacity(0.25), radius: 18, y: 8)
         .padding(.horizontal, 20)
+    }
+
+    @ViewBuilder
+    private func tabLabel(for tab: AppTab, selected: Bool) -> some View {
+        if selected {
+            Label(label(for: tab), systemImage: iconName(for: tab))
+                .labelStyle(.titleAndIcon)
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(.vertical, 10)
+                .padding(.horizontal, 16)
+                .background {
+                    Capsule(style: .continuous)
+                        .fill(capsuleColor)
+                        .shadow(color: capsuleColor.opacity(0.45), radius: 12)
+                }
+        } else {
+            Label(label(for: tab), systemImage: iconName(for: tab))
+                .labelStyle(.iconOnly)
+                .font(.system(size: 19, weight: .regular))
+                .foregroundStyle(Color.primary.opacity(0.55))
+                .padding(.vertical, 10)
+                .padding(.horizontal, 16)
+        }
     }
 
     private func label(for tab: AppTab) -> String {
