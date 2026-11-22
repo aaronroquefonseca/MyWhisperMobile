@@ -33,7 +33,7 @@ struct FloatingTabBar: View {
                     }
                 } label: {
                     HStack(spacing: 6) {
-                        Image(systemName: iconName(for: tab))
+                        Text(String(describing: tab).prefix(1).uppercased())
                             .font(.system(size: 19, weight: selected == tab ? .semibold : .regular))
                             .foregroundStyle(selected == tab ? .white : .secondary)
                         if selected == tab {
