@@ -101,8 +101,9 @@ struct OnboardingView: View {
     var onRequestMic: () -> Void = {}
     var onOpenSettings: () -> Void = {}
     var onDone: () -> Void = {}
+    var initialPage: Int = 0
 
-    @State private var page = 0
+    @State private var page: Int = -1
 
     var body: some View {
         ZStack {
@@ -131,6 +132,7 @@ struct OnboardingView: View {
                     server.tag(3)
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
+                .onAppear { if page < 0 { page = min(max(initialPage, 0), 3) } }
                 HStack(spacing: 8) {
                     ForEach(0..<4, id: \.self) { i in
                         Circle()

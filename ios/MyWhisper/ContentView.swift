@@ -8,7 +8,12 @@ import SwiftUI
 struct ContentView: View {
     @Environment(\.colorScheme) private var colorScheme
     @StateObject private var flow = AppFlow()
-    @State private var showOnboarding = !UserDefaults.standard.bool(forKey: "mw.onboarded.v1")
+    @State private var showOnboarding = {
+        #if DEBUG
+        if CommandLine.arguments.contains("-mwSkipOnboarding") { return false }
+        #endif
+        return !UserDefaults.standard.bool(forKey: "mw.onboarded.v1")
+    }()
     @State private var voiceCleanup = false
     @StateObject private var speechStore = SttSettingsStore()
     @StateObject private var cleanupStore = CleanupSettingsStore()
@@ -53,6 +58,19 @@ struct ContentView: View {
         }
         .tint(WhisperColors.primary(colorScheme))
         .preferredColorScheme(flow.theme.colorScheme)
+        .onAppear {
+            #if DEBUG
+            let args = CommandLine.arguments
+            if let i = args.firstIndex(of: "-mwTab"), i + 1 < args.count {
+                switch args[i + 1] {
+                case "speech": flow.selectedTab = .speech
+                case "history": flow.selectedTab = .history
+                case "setup": flow.selectedTab = .setup
+                default: break
+                }
+            }
+            #endif
+        }
         .fullScreenCover(isPresented: $showOnboarding) {
             OnboardingView(
                 micGranted: flow.micGranted,
@@ -62,7 +80,15 @@ struct ContentView: View {
                 onDone: {
                     UserDefaults.standard.set(true, forKey: "mw.onboarded.v1")
                     showOnboarding = false
-                }
+                },
+                initialPage: {
+                    #if DEBUG
+                    let args = CommandLine.arguments
+                    if let i = args.firstIndex(of: "-mwOnboardingPage"), i + 1 < args.count,
+                       let n = Int(args[i + 1]) { return n }
+                    #endif
+                    return 0
+                }()
             )
         }
         .sheet(isPresented: shareVisible) {
