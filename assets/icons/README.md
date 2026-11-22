@@ -20,8 +20,10 @@ Notification and IME action icons are independent assets.
 ## iOS AppIcon (iPhone)
 
 Source of truth is the same `launcher-mark-mask.png` silhouette and the
-stable Navy (`#142234`) / cyan (`#5CD9EC`) palette, so the iPhone icon
-matches the Android mark geometry (56 dp wide on the 108 dp layer).
+stable Navy (`#142234`) / cyan (`#5CD9EC`) palette. The mark is drawn at
+68% of the canvas width — larger than Android's 56 dp / 108 dp adaptive
+geometry, since a full-bleed iOS icon has no launcher mask shrinking
+the visible area; it stays centered inside the squircle safe zone.
 
 Regenerate the Apple-spec asset with Python 3 and Pillow installed:
 
