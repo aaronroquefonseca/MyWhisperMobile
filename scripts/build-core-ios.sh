@@ -62,11 +62,18 @@ DEVICE_LIB="$ROOT/core/target/$DEVICE_TRIPLE/release/libmywhisper_core.a"
 SIM_LIB="$ROOT/core/target/$SIM_TRIPLE/release/libmywhisper_core.a"
 
 mkdir -p "$OUT"
-# -create-xcframework refuses when the output already exists.
+# -create-xcframework refuses when the output already exists, and refuses
+# a single headers dir shared by both slices ("item couldn't be saved").
+# Stage the same header per slice in temp dirs instead.
+DEVICE_HEADERS="$(mktemp -d)"
+SIM_HEADERS="$(mktemp -d)"
+trap 'rm -rf "$DEVICE_HEADERS" "$SIM_HEADERS"' EXIT
+cp "$OUT/mywhisper_core.h" "$DEVICE_HEADERS/"
+cp "$OUT/mywhisper_core.h" "$SIM_HEADERS/"
 rm -rf "$OUT/libmywhisper_core.xcframework"
 xcodebuild -create-xcframework \
-  -library "$DEVICE_LIB" -headers "$OUT" \
-  -library "$SIM_LIB" -headers "$OUT" \
+  -library "$DEVICE_LIB" -headers "$DEVICE_HEADERS" \
+  -library "$SIM_LIB" -headers "$SIM_HEADERS" \
   -output "$OUT/libmywhisper_core.xcframework"
 
 echo "build-core-ios: staged $OUT/libmywhisper_core.xcframework"
