@@ -251,7 +251,7 @@ enum CoreBridge {
         add.removeValue(forKey: kSecMatchLimit as String)
         let status = SecItemAdd(add as CFDictionary, nil)
         if status == errSecDuplicateItem { return try dbKeyHex() }
-        guard status == errSecSuccess else { throw CoreError.coreError("keychain store failed") }
+        guard status == errSecSuccess else { throw CoreError.coreError("keychain store failed (\(status))") }
         return hex
     }
 

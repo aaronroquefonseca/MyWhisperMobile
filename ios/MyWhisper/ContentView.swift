@@ -165,7 +165,11 @@ struct ContentView: View {
             VStack(spacing: 16) {
                 if let error = flow.coreError {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Core error: \(error)")
+                        Text("Couldn't start the speech engine. Check the Speech tab, then retry.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        Text(error)
+                            .font(.caption)
                             .foregroundStyle(WhisperColors.error)
                             .textSelection(.enabled)
                         Button("Retry") { flow.openCore() }

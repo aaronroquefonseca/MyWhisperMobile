@@ -9,8 +9,6 @@ struct FloatingTabBar: View {
     var strings: TabStrings
     var languageCode: String?
 
-    @Namespace private var capsule
-
     private var tabs: [AppTab] { [.record, .speech, .history, .setup] }
 
     var body: some View {
@@ -37,10 +35,10 @@ struct FloatingTabBar: View {
                         if selected == tab {
                             Capsule(style: .continuous)
                                 .fill(WhisperColors.primary(.dark))
-                                .matchedGeometryEffect(id: "tabcapsule", in: capsule)
                                 .shadow(color: WhisperColors.primary(.dark).opacity(0.45), radius: 12)
                         }
                     }
+                    .animation(.spring(response: 0.32, dampingFraction: 0.8), value: selected)
                 }
                 .accessibilityLabel(label(for: tab))
                 .accessibilityAddTraits(selected == tab ? [.isButton, .isSelected] : .isButton)
