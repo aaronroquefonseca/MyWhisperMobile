@@ -68,10 +68,10 @@ struct SetupStrings: Equatable {
         actionChange: "Change",
         actionGotIt: "Got it",
         actionRefresh: "Refresh",
-        noImeTitle: "No keyboard setup needed",
-        noImeBody: "Unlike Android, iOS does not allow third-party input methods to replace the system keyboard, "
-            + "so there are no enable-and-switch steps here — you dictate from inside MyWhisper and paste or share "
-            + "the result where you need it.",
+        noImeTitle: "MyWhisper keyboard",
+        noImeBody: "Install the MyWhisper keyboard to dictate right inside any chat: Settings → General → Keyboard → "
+            + "Add New Keyboard → MyWhisper Keyboard, then switch to it with the globe key. Typing works immediately; "
+            + "voice dictation arrives in the next update.",
         progress: "Setup progress",
         progressFormat: "Setup progress: %d of %d",
         ready: "You're ready to dictate.",
@@ -112,10 +112,10 @@ struct SetupStrings: Equatable {
         actionChange: "Cambiar",
         actionGotIt: "Entendido",
         actionRefresh: "Actualizar",
-        noImeTitle: "Sin configuración de teclado",
-        noImeBody: "A diferencia de Android, iOS no permite que métodos de entrada de terceros reemplacen el "
-            + "teclado del sistema, así que aquí no hay pasos de activación — dictas dentro de MyWhisper y pegas o "
-            + "compartes el resultado donde lo necesites.",
+        noImeTitle: "Teclado MyWhisper",
+        noImeBody: "Instala el teclado MyWhisper para dictar dentro de cualquier chat: Ajustes → General → Teclado → "
+            + "Añadir nuevo teclado → MyWhisper Keyboard, y cámbiate a él con la tecla del globo. Escribir funciona "
+            + "desde ya; el dictado por voz llega en la próxima actualización.",
         progress: "Progreso de configuración",
         progressFormat: "Progreso de configuración: %d de %d",
         ready: "Ya puedes dictar.",

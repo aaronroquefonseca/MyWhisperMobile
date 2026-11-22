@@ -8,6 +8,7 @@ import SwiftUI
 struct ContentView: View {
     @Environment(\.colorScheme) private var colorScheme
     @StateObject private var flow = AppFlow()
+    @State private var showOnboarding = !UserDefaults.standard.bool(forKey: "mw.onboarded.v1")
     @State private var voiceCleanup = false
     @StateObject private var speechStore = SttSettingsStore()
     @StateObject private var cleanupStore = CleanupSettingsStore()
@@ -48,6 +49,18 @@ struct ContentView: View {
         }
         .tint(WhisperColors.primary(colorScheme))
         .preferredColorScheme(flow.theme.colorScheme)
+        .fullScreenCover(isPresented: $showOnboarding) {
+            OnboardingView(
+                micGranted: flow.micGranted,
+                strings: OnboardingStrings.current(languageCode: languageCode),
+                onRequestMic: { flow.requestMic() },
+                onOpenSettings: { flow.openSystemSettings() },
+                onDone: {
+                    UserDefaults.standard.set(true, forKey: "mw.onboarded.v1")
+                    showOnboarding = false
+                }
+            )
+        }
         .sheet(isPresented: shareVisible) {
             if let text = flow.shareText {
                 ShareSheet(items: [text])
