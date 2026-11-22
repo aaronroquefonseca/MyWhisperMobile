@@ -44,6 +44,7 @@
 		CC11CC11CC11CC11CC11CC06 /* SyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC11CC11CC11CC11CC11CC03 /* SyncTests.swift */; };
 		DD0100DD0100DD01000002 /* AppFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD0100DD0100DD01000001 /* AppFlow.swift */; };
 		DD0100DD0100DD02000002 /* IntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD0100DD0100DD02000001 /* IntegrationTests.swift */; };
+		EE11000000000000000010 /* WhisperColors.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE11000000000000000011 /* WhisperColors.swift */; };
 		EE1100000000000000000008 /* KeyboardViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE1100000000000000000002 /* KeyboardViewController.swift */; };
 		EE110000000000000000000F /* MyWhisperKeyboard.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = EE1100000000000000000001 /* MyWhisperKeyboard.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		A55055AA55055055005502 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A55055AA55055055005501 /* Assets.xcassets */; };
@@ -106,6 +107,7 @@
 		CC11CC11CC11CC11CC11CC02 /* DevicesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevicesView.swift; sourceTree = "<group>"; };
 		CC11CC11CC11CC11CC11CC03 /* SyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncTests.swift; sourceTree = "<group>"; };
 		DD0100DD0100DD01000001 /* AppFlow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppFlow.swift; sourceTree = "<group>"; };
+		EE11000000000000000011 /* WhisperColors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhisperColors.swift; sourceTree = "<group>"; };
 		DD0100DD0100DD02000001 /* IntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntegrationTests.swift; sourceTree = "<group>"; };
 		602A6F78559E7FAC27690B4A /* Tests Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		D82908387D374745193668C2 /* MyWhisper.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MyWhisper.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -164,6 +166,7 @@
 				E4C4A10000000000000000A1 /* KeychainStore.swift */,
 				CC0100CC0100CC01000001 /* SetupView.swift */,
 				CC0100CC0100CC02000001 /* Theme.swift */,
+				EE11000000000000000011 /* WhisperColors.swift */,
 				CC0100CC0100CC03000001 /* Strings.swift */,
 				5E77110000000000000001 /* SttSettingsView.swift */,
 				5E77120000000000000001 /* CleanupSettingsView.swift */,
@@ -370,6 +373,7 @@
 				CC11CC11CC11CC11CC11CC04 /* SyncDiscovery.swift in Sources */,
 				CC11CC11CC11CC11CC11CC05 /* DevicesView.swift in Sources */,
 				DD0100DD0100DD01000002 /* AppFlow.swift in Sources */,
+				EE11000000000000000010 /* WhisperColors.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

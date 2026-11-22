@@ -6,6 +6,7 @@ import SwiftUI
 /// copy/share); history rows land via the core and HistoryView refreshes
 /// on tab-appear.
 struct ContentView: View {
+    @Environment(\.colorScheme) private var colorScheme
     @StateObject private var flow = AppFlow()
     @State private var voiceCleanup = false
     @StateObject private var speechStore = SttSettingsStore()
@@ -45,7 +46,7 @@ struct ContentView: View {
                 .tag(tab)
             }
         }
-        .tint(Color(red: 0.14, green: 0.36, blue: 0.77))
+        .tint(WhisperColors.primary(colorScheme))
         .preferredColorScheme(flow.theme.colorScheme)
         .sheet(isPresented: shareVisible) {
             if let text = flow.shareText {
