@@ -20,6 +20,20 @@
                ReferencedContainer = "container:MyWhisper.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "YES"
+            buildForProfiling = "YES"
+            buildForArchiving = "YES"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "EE11000000000000000005"
+               BuildableName = "MyWhisperKeyboard.appex"
+               BlueprintName = "MyWhisperKeyboard"
+               ReferencedContainer = "container:MyWhisper.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
       </BuildActionEntries>
    </BuildAction>
    <TestAction

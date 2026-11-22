@@ -44,10 +44,19 @@
 		CC11CC11CC11CC11CC11CC06 /* SyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC11CC11CC11CC11CC11CC03 /* SyncTests.swift */; };
 		DD0100DD0100DD01000002 /* AppFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD0100DD0100DD01000001 /* AppFlow.swift */; };
 		DD0100DD0100DD02000002 /* IntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD0100DD0100DD02000001 /* IntegrationTests.swift */; };
+		EE1100000000000000000008 /* KeyboardViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE1100000000000000000002 /* KeyboardViewController.swift */; };
+		EE110000000000000000000F /* MyWhisperKeyboard.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = EE1100000000000000000001 /* MyWhisperKeyboard.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		A55055AA55055055005502 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A55055AA55055055005501 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		EE110000000000000000000C /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 9E54FEBF9200AEA4F8A3F04A /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = EE1100000000000000000005;
+			remoteInfo = MyWhisperKeyboard;
+		};
 		8DCCA0E2D1DC0FE1F5BA8369 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 9E54FEBF9200AEA4F8A3F04A /* Project object */;
@@ -100,6 +109,9 @@
 		DD0100DD0100DD02000001 /* IntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntegrationTests.swift; sourceTree = "<group>"; };
 		602A6F78559E7FAC27690B4A /* Tests Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		D82908387D374745193668C2 /* MyWhisper.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MyWhisper.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		EE1100000000000000000001 /* MyWhisperKeyboard.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = MyWhisperKeyboard.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		EE1100000000000000000002 /* KeyboardViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardViewController.swift; sourceTree = "<group>"; };
+		EE1100000000000000000003 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		8965188E778D2EEAECC16395 /* MyWhisperTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MyWhisperTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A55055AA55055055005501 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -127,6 +139,7 @@
 			isa = PBXGroup;
 			children = (
 				631820A24D0CAC3FCAC2C8BC /* MyWhisper */,
+				EE1100000000000000000004 /* Keyboard */,
 				4625E7473F669A17F3F9CA47 /* MyWhisperTests */,
 				186885C9452190BC9E1949AF /* Libs */,
 				33F9C1A9DA6731C8C06E8090 /* Products */,
@@ -187,6 +200,15 @@
 			path = MyWhisperTests;
 			sourceTree = "<group>";
 		};
+		EE1100000000000000000004 /* Keyboard */ = {
+			isa = PBXGroup;
+			children = (
+				EE1100000000000000000002 /* KeyboardViewController.swift */,
+				EE1100000000000000000003 /* Info.plist */,
+			);
+			path = Keyboard;
+			sourceTree = "<group>";
+		};
 		186885C9452190BC9E1949AF /* Libs */ = {
 			isa = PBXGroup;
 			children = (
@@ -215,15 +237,32 @@
 				84B0EE461E4A38913734693C /* Sources */,
 				0C909331FAA822E6377952A7 /* Frameworks */,
 				234F4E7CACFAA508BC9FF148 /* Resources */,
+				EE110000000000000000000E /* Embed App Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				EE110000000000000000000D /* PBXTargetDependency */,
 			);
 			name = MyWhisper;
 			productName = MyWhisper;
 			productReference = D82908387D374745193668C2 /* MyWhisper.app */;
 			productType = "com.apple.product-type.application";
+		};
+		EE1100000000000000000005 /* MyWhisperKeyboard */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = EE1100000000000000000009 /* Build configuration list for PBXNativeTarget "MyWhisperKeyboard" */;
+			buildPhases = (
+				EE1100000000000000000006 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = MyWhisperKeyboard;
+			productName = MyWhisperKeyboard;
+			productReference = EE1100000000000000000001 /* MyWhisperKeyboard.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 		78DA65A2C7786A54A5976B57 /* MyWhisperTests */ = {
 			isa = PBXNativeTarget;
@@ -273,6 +312,7 @@
 			projectRoot = "";
 			targets = (
 				82372756D9743AB52A3AF44F /* MyWhisper */,
+				EE1100000000000000000005 /* MyWhisperKeyboard */,
 				78DA65A2C7786A54A5976B57 /* MyWhisperTests */,
 			);
 		};
@@ -286,6 +326,17 @@
 				4D2DCE83303D7ED85DCD61B5 /* PrivacyInfo.xcprivacy in Resources */,
 				A55055AA55055055005502 /* Assets.xcassets in Resources */,
 			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EE110000000000000000000E /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				EE110000000000000000000F /* MyWhisperKeyboard.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
@@ -322,6 +373,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		EE1100000000000000000006 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EE1100000000000000000008 /* KeyboardViewController.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		D9C79732A6D8F08A153912AB /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -343,6 +402,11 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		EE110000000000000000000D /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = EE1100000000000000000005 /* MyWhisperKeyboard */;
+			targetProxy = EE110000000000000000000C /* PBXContainerItemProxy */;
+		};
 		7917B6F1DC0FEEABBE126BF7 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 82372756D9743AB52A3AF44F /* MyWhisper */;
@@ -373,6 +437,29 @@
 			};
 			name = Release;
 		};
+		EE110000000000000000000A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Keyboard/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.mywhisper.mobile.keyboard;
+				PRODUCT_NAME = MyWhisperKeyboard;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
 		DC77B2482CB5BC00ADF1F4BC /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -398,6 +485,29 @@
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
+		};
+		EE110000000000000000000B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Keyboard/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.mywhisper.mobile.keyboard;
+				PRODUCT_NAME = MyWhisperKeyboard;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
 		};
 		DEDA658B833B862DC30C3BB0 /* Release */ = {
 			isa = XCBuildConfiguration;
@@ -482,6 +592,15 @@
 			buildConfigurations = (
 				DC77B2482CB5BC00ADF1F4BC /* Debug */,
 				DEDA658B833B862DC30C3BB0 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		EE1100000000000000000009 /* Build configuration list for PBXNativeTarget "MyWhisperKeyboard" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				EE110000000000000000000A /* Debug */,
+				EE110000000000000000000B /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
