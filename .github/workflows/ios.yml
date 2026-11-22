@@ -3,7 +3,7 @@ name: iOS
 on:
   push:
     branches: [feat/ios-keyboard-prototype]
-    paths: [ios/**, core/**, .github/workflows/ios.yml]
+    paths: [ios/**, core/**, scripts/build-core-ios.sh, .github/workflows/ios.yml]
   workflow_dispatch:
 
 permissions:
