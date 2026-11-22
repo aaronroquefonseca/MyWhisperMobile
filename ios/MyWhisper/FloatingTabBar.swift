@@ -35,26 +35,20 @@ struct FloatingTabBar: View {
                         selected = tab
                     }
                 } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: iconName(for: tab))
-                            .font(.system(size: 19, weight: .semibold))
-                            .foregroundStyle(selected == tab ? .white : Color.primary.opacity(0.55))
-                        Text(label(for: tab))
-                            .font(.subheadline).bold()
-                            .foregroundStyle(.white)
-                            .opacity(selected == tab ? 1 : 0)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-                    .padding(.horizontal, 16)
-                    .background {
-                        if selected == tab {
-                            Capsule(style: .continuous)
-                                .fill(capsuleColor)
-                                .shadow(color: capsuleColor.opacity(0.45), radius: 12)
+                    Label(label(for: tab), systemImage: iconName(for: tab))
+                        .labelStyle(selected == tab ? .titleAndIcon : .iconOnly)
+                        .font(.system(size: 17, weight: selected == tab ? .semibold : .regular))
+                        .foregroundStyle(selected == tab ? .white : Color.primary.opacity(0.55))
+                        .padding(.vertical, 10)
+                        .padding(.horizontal, 16)
+                        .background {
+                            if selected == tab {
+                                Capsule(style: .continuous)
+                                    .fill(capsuleColor)
+                                    .shadow(color: capsuleColor.opacity(0.45), radius: 12)
+                            }
                         }
-                    }
-                    .animation(.spring(response: 0.32, dampingFraction: 0.8), value: selected)
+                        .animation(.spring(response: 0.32, dampingFraction: 0.8), value: selected)
                 }
                 .accessibilityLabel(label(for: tab))
                 .accessibilityAddTraits(selected == tab ? [.isButton, .isSelected] : .isButton)
