@@ -44,6 +44,7 @@ struct FloatingTabBar: View {
                             .foregroundStyle(.white)
                             .opacity(selected == tab ? 1 : 0)
                     }
+                    .frame(maxWidth: .infinity)
                     .padding(.vertical, 10)
                     .padding(.horizontal, 16)
                     .background {
