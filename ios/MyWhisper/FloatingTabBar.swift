@@ -9,7 +9,17 @@ struct FloatingTabBar: View {
     var strings: TabStrings
     var languageCode: String?
 
-    private var tabs: [AppTab] { [.record, .speech, .history, .setup] }
+    private func iconName(for tab: AppTab) -> String {
+        switch tab {
+        case .record: return "mic.fill"
+        case .speech: return "waveform"
+        case .history: return "clock.fill"
+        case .setup: return "ellipsis.circle"
+        case .cleanup: return "wand.and.stars"
+        case .dictionary: return "book.fill"
+        case .devices: return "antenna.radiowaves.left.and.right"
+        }
+    }
 
     var body: some View {
         HStack(spacing: 4) {
@@ -21,16 +31,14 @@ struct FloatingTabBar: View {
                     }
                 } label: {
                     HStack(spacing: 6) {
-                        Image(systemName: tab.systemImage)
+                        Image(systemName: iconName(for: tab))
                             .font(.system(size: 19, weight: selected == tab ? .semibold : .regular))
+                            .foregroundStyle(selected == tab ? .white : .secondary)
                         if selected == tab {
                             Text(label(for: tab))
                                 .font(.subheadline).bold()
                         }
                     }
-                    #if DEBUG
-                    .border(.red)
-                    #endif
                     .foregroundStyle(selected == tab ? .white : .secondary)
                     .padding(.vertical, 10)
                     .padding(.horizontal, selected == tab ? 16 : 12)
