@@ -312,7 +312,7 @@ final class KeyboardViewController: UIInputViewController {
         space.setTitleColor(labelColor.withAlphaComponent(0.85), for: [])
         space.addTarget(self, action: #selector(spaceTapped), for: .touchUpInside)
         space.addTarget(self, action: #selector(keyTouchDown(_:)), for: .touchDown)
-        space.addTarget(self, action: #selector(keyTouchCancel(_:)), for: [.touchUpOutside, .touchCancel]
+        space.addTarget(self, action: #selector(keyTouchCancel(_:)), for: [.touchUpOutside, .touchCancel])
         space.accessibilityIdentifier = " "
         rowsView.addSubview(space)
         x += spaceW + 6
