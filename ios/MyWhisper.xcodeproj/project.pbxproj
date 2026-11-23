@@ -167,9 +167,9 @@
 		EE11000000000000000016 /* emoji.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = emoji.json; sourceTree = "<group>"; };
 		8965188E778D2EEAECC16395 /* MyWhisperTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MyWhisperTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A55055AA55055055005501 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		EE1100000000000000000085 /* hunzip.cxx */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = hunspell/hunzip.cxx; sourceTree = "<group>"; };
-		EE1100000000000000000086 /* hunzip.hxx */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = hunspell/hunzip.hxx; sourceTree = "<group>"; };
-		EE1100000000000000000087 /* hunvisapi.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = hunspell/hunvisapi.h; sourceTree = "<group>"; };
+		EE1100000000000000000085 /* hunzip.cxx */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = Keyboard/hunspell/hunzip.cxx; sourceTree = "<group>"; };
+		EE1100000000000000000086 /* hunzip.hxx */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Keyboard/hunspell/hunzip.hxx; sourceTree = "<group>"; };
+		EE1100000000000000000087 /* hunvisapi.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Keyboard/hunspell/hunvisapi.h; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
