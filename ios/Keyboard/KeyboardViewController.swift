@@ -20,6 +20,8 @@ final class KeyboardViewController: UIInputViewController {
     private var deleteTimer: Timer?
     private var lastSpaceAt: Date?
     private var toast: UILabel?
+    override var needsInputModeSwitchKey: Bool { false }
+
     private var isDark = false
     private var predictions: [String] = []
     private let checker = UITextChecker()
@@ -233,16 +235,19 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     @objc private func predictionTapped(_ b: UIButton) {
+        hidePopup()
         guard let p = b.accessibilityIdentifier, !p.isEmpty else { return }
         applyPrediction(p)
     }
 
     @objc private func menuTapped() {
+        hidePopup()
         playClick()
         showToast("Providers and settings live in the app")
     }
 
     @objc private func modeTapped() {
+        hidePopup()
         playClick()
         showToast("Voice modes arrive with the mic update")
     }
@@ -287,7 +292,7 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     private func addBottomRow(y: CGFloat, h: CGFloat, width: CGFloat, pad: CGFloat, leftTitle: String) {
-        // Units: page 1.5, globe 1, space 5, return 1.5 (total 9).
+        // Units: page 1.5, globe 1, space 4, period 1, return 1.5 (total 9).
         let u = unitWidth(keys: 9, width: width, pad: pad)
         var x = pad
         let page = pageKey(leftTitle)
@@ -299,18 +304,37 @@ final class KeyboardViewController: UIInputViewController {
         globe.addTarget(self, action: #selector(nextKeyboard), for: .touchUpInside)
         rowsView.addSubview(globe)
         x += u + 6
-        let spaceW = u * 5
+        let spaceW = u * 4
         let space = makeKey(bg: keyColor)
         space.frame = CGRect(x: x, y: y, width: spaceW, height: h)
         space.setTitle("MyWhisper", for: [])
         space.titleLabel?.font = .systemFont(ofSize: 15)
         space.setTitleColor(labelColor.withAlphaComponent(0.85), for: [])
         space.addTarget(self, action: #selector(spaceTapped), for: .touchUpInside)
+        space.addTarget(self, action: #selector(keyTouchDown(_:)), for: .touchDown)
+        space.addTarget(self, action: #selector(keyTouchCancel(_:)), for: [.touchUpOutside, .touchCancel]
+        space.accessibilityIdentifier = " "
         rowsView.addSubview(space)
         x += spaceW + 6
-        let ret = symbolKey("return", size: 19)
+        let period = makeKey(bg: keyColor)
+        period.frame = CGRect(x: x, y: y, width: u, height: h)
+        period.setTitle(".", for: [])
+        period.titleLabel?.font = .systemFont(ofSize: 22)
+        period.setTitleColor(labelColor, for: [])
+        period.addTarget(self, action: #selector(keyTouchUp(_:)), for: .touchUpInside)
+        period.addTarget(self, action: #selector(keyTouchDown(_:)), for: .touchDown)
+        period.addTarget(self, action: #selector(keyTouchCancel(_:)), for: [.touchUpOutside, .touchCancel])
+        period.accessibilityIdentifier = "."
+        rowsView.addSubview(period)
+        x += u + 6
+        let ret = makeKey(bg: specialColor)
         ret.frame = CGRect(x: x, y: y, width: u * 1.5, height: h)
+        ret.setTitle("return", for: [])
+        ret.titleLabel?.font = .systemFont(ofSize: 15)
+        ret.setTitleColor(labelColor, for: [])
         ret.addTarget(self, action: #selector(returnTapped), for: .touchUpInside)
+        ret.addTarget(self, action: #selector(keyTouchDown(_:)), for: .touchDown)
+        ret.addTarget(self, action: #selector(keyTouchCancel(_:)), for: [.touchUpOutside, .touchCancel])
         rowsView.addSubview(ret)
     }
 
@@ -433,18 +457,21 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     @objc private func shiftTapped() {
+        hidePopup()
         playClick()
         shift = shift == .off ? .on : .off
         rebuild()
     }
 
     @objc private func shiftDoubleTapped() {
+        hidePopup()
         playClick()
         shift = .locked
         rebuild()
     }
 
     @objc private func pageTapped(_ b: UIButton) {
+        hidePopup()
         playClick()
         switch b.accessibilityIdentifier {
         case "123": page = .symbols
@@ -486,6 +513,7 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     @objc private func spaceTapped() {
+        hidePopup()
         playClick()
         let now = Date()
         if let last = lastSpaceAt, now.timeIntervalSince(last) < 0.4,
@@ -506,16 +534,19 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     @objc private func returnTapped() {
+        hidePopup()
         playClick()
         textDocumentProxy.insertText("\n")
     }
 
     @objc private func nextKeyboard() {
+        hidePopup()
         playClick()
         advanceToNextInputMode()
     }
 
     @objc private func micTapped() {
+        hidePopup()
         playClick()
         showToast("Voice dictation coming soon")
     }
