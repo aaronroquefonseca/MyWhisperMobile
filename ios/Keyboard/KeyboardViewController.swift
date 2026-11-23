@@ -127,10 +127,11 @@ final class KeyboardViewController: UIInputViewController {
         hidePopup()
         let w = view.bounds.width > 0 ? view.bounds.width : 390
         let pad: CGFloat = 6
-        let gap: CGFloat = 6
+        var gap: CGFloat = 6
         var y: CGFloat = 6
         addUtilityStrip(y: y, width: w, pad: pad)
         y += 46 + gap
+        gap = 11
         if !predictions.isEmpty {
             addPredictionRow(y: y, width: w, pad: pad)
             y += 36 + gap
@@ -286,7 +287,7 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     private func addBottomRow(y: CGFloat, h: CGFloat, width: CGFloat, pad: CGFloat, leftTitle: String) {
-        // Units: page 1.5, globe 1, space 4.5, return 2 (total 9).
+        // Units: page 1.5, globe 1, space 5, return 1.5 (total 9).
         let u = unitWidth(keys: 9, width: width, pad: pad)
         var x = pad
         let page = pageKey(leftTitle)
@@ -298,7 +299,7 @@ final class KeyboardViewController: UIInputViewController {
         globe.addTarget(self, action: #selector(nextKeyboard), for: .touchUpInside)
         rowsView.addSubview(globe)
         x += u + 6
-        let spaceW = u * 4.5
+        let spaceW = u * 5
         let space = makeKey(bg: keyColor)
         space.frame = CGRect(x: x, y: y, width: spaceW, height: h)
         space.setTitle("MyWhisper", for: [])
@@ -308,7 +309,7 @@ final class KeyboardViewController: UIInputViewController {
         rowsView.addSubview(space)
         x += spaceW + 6
         let ret = symbolKey("return", size: 19)
-        ret.frame = CGRect(x: x, y: y, width: u * 2, height: h)
+        ret.frame = CGRect(x: x, y: y, width: u * 1.5, height: h)
         ret.addTarget(self, action: #selector(returnTapped), for: .touchUpInside)
         rowsView.addSubview(ret)
     }
@@ -319,7 +320,7 @@ final class KeyboardViewController: UIInputViewController {
     private func makeKey(bg: UIColor, glass: Bool = false) -> UIButton {
         let b = UIButton(type: .custom)
         b.backgroundColor = bg
-        b.layer.cornerRadius = 9
+        b.layer.cornerRadius = 5.5
         if glass {
             b.layer.borderColor = UIColor.white.withAlphaComponent(0.22).cgColor
             b.layer.borderWidth = 1
@@ -523,17 +524,29 @@ final class KeyboardViewController: UIInputViewController {
 
     private func showPopup(for b: UIButton) {
         hidePopup()
+        let highlight = UIView(frame: b.bounds)
+        highlight.backgroundColor = isDark
+            ? UIColor(white: 1, alpha: 0.22)
+            : UIColor(white: 0, alpha: 0.12)
+        highlight.layer.cornerRadius = 5.5
+        highlight.isUserInteractionEnabled = false
+        highlight.tag = 991
+        b.addSubview(highlight)
         guard let title = b.title(for: []), title.count <= 3 else { return }
         let label = UILabel()
         label.text = title
-        label.font = .systemFont(ofSize: 30)
+        label.font = .systemFont(ofSize: 34)
         label.textAlignment = .center
         label.textColor = labelColor
-        label.backgroundColor = keyColor
-        label.layer.cornerRadius = 8
+        label.backgroundColor = isDark ? UIColor(white: 0.42, alpha: 1) : .white
+        label.layer.cornerRadius = 10
         label.clipsToBounds = true
-        let w = max(b.frame.width + 16, 52)
-        label.frame = CGRect(x: b.frame.midX - w / 2, y: b.frame.minY - 58, width: w, height: 52)
+        label.layer.shadowColor = UIColor.black.withAlphaComponent(0.3).cgColor
+        label.layer.shadowOffset = CGSize(width: 0, height: 1)
+        label.layer.shadowOpacity = 1
+        label.layer.shadowRadius = 0
+        let w = max(b.frame.width + 18, 56)
+        label.frame = CGRect(x: b.frame.midX - w / 2, y: b.frame.minY - 70, width: w, height: 64)
         rowsView.addSubview(label)
         popup = label
     }
@@ -541,6 +554,7 @@ final class KeyboardViewController: UIInputViewController {
     private func hidePopup() {
         popup?.removeFromSuperview()
         popup = nil
+        rowsView.subviews.forEach { $0.viewWithTag(991)?.removeFromSuperview() }
     }
 
     private func showToast(_ s: String) {
