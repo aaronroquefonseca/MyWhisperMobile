@@ -156,7 +156,7 @@ final class AppFlow: ObservableObject, Dictation.Listener {
             coreError = nil
             reloadSettings()
         } catch {
-            coreError = String(describing: error)
+            coreError = CoreError.displayMessage(for: error)
         }
     }
 
@@ -169,7 +169,7 @@ final class AppFlow: ObservableObject, Dictation.Listener {
                 micMode = mode
             }
         } catch {
-            coreError = String(describing: error)
+            coreError = CoreError.displayMessage(for: error)
         }
     }
 
@@ -236,7 +236,7 @@ final class AppFlow: ObservableObject, Dictation.Listener {
             settings = updated
             theme = next
         } catch {
-            coreError = String(describing: error)
+            coreError = CoreError.displayMessage(for: error)
         }
     }
 
@@ -247,7 +247,7 @@ final class AppFlow: ObservableObject, Dictation.Listener {
             try CoreBridge.putSettings(updated)
             settings = updated
         } catch {
-            coreError = String(describing: error)
+            coreError = CoreError.displayMessage(for: error)
         }
     }
 

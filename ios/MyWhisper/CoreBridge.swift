@@ -324,4 +324,19 @@ enum CoreError: Error, Equatable {
     case coreError(String)
     case badReply(String)
     case nullReply
+
+    /// User-facing message: avoids leaking `String(describing:)` output
+    /// like `coreError("...")` into the UI (see `AppFlow.coreError`).
+    var message: String {
+        switch self {
+        case .coreError(let text), .badReply(let text):
+            return text
+        case .nullReply:
+            return "empty reply from speech engine"
+        }
+    }
+
+    static func displayMessage(for error: Error) -> String {
+        (error as? CoreError)?.message ?? error.localizedDescription
+    }
 }
