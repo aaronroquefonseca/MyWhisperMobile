@@ -10,6 +10,34 @@ permissions:
   contents: read
 
 jobs:
+  test:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust iOS targets
+        run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+
+      - name: Select Xcode 26
+        run: |
+          ls /Applications | grep -i xcode
+          XCODE=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          if [ -z "$XCODE" ]; then XCODE=/Applications/Xcode.app; fi
+          echo "Using $XCODE"
+          sudo xcode-select --switch "$XCODE/Contents/Developer"
+          xcodebuild -version
+
+      - name: Build core xcframework
+        run: ./scripts/build-core-ios.sh
+
+      - name: Run iOS unit tests
+        run: >
+          xcodebuild test -project ios/MyWhisper.xcodeproj
+          -scheme MyWhisper -configuration Debug
+          -sdk iphonesimulator
+          -destination "platform=iOS Simulator,name=iPhone 17 Pro"
+          CODE_SIGNING_ALLOWED=NO
+
   build:
     runs-on: macos-26
     steps:
