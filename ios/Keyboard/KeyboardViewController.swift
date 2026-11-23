@@ -87,6 +87,12 @@ final class KeyboardViewController: UIInputViewController {
 
     private var labelColor: UIColor { isDark ? .white : .black }
 
+    /// Dimmer key ink for function keys (page switch, return).
+    private var specialColor: UIColor {
+        isDark ? UIColor(white: 0.24, alpha: 1)
+            : UIColor(red: 0xAB / 255, green: 0xB1 / 255, blue: 0xBB / 255, alpha: 1)
+    }
+
     // MARK: - Predictions (system lexicon completions)
 
     private func currentWord() -> (word: String, length: Int) {
