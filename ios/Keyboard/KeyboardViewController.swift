@@ -44,6 +44,7 @@ final class KeyboardViewController: UIInputViewController {
     private var shift: Shift = .off
     private var showingSettings = false
     private var settings = KeyboardSettings.load()
+    private var pendingUndo: (original: String, replacement: String)?
     private var emojiMode = false
     private var emojiCategory = 0
     private var emojiGroups: (order: [String], groups: [String: [String]])?
