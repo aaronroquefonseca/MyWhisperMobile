@@ -333,11 +333,8 @@ final class KeyboardViewController: UIInputViewController {
         period.accessibilityIdentifier = "."
         rowsView.addSubview(period)
         x += u + 6
-        let ret = makeKey(bg: specialColor)
+        let ret = symbolKey("return", size: 20)
         ret.frame = CGRect(x: x, y: y, width: u * 1.5, height: h)
-        ret.setTitle("return", for: [])
-        ret.titleLabel?.font = .systemFont(ofSize: 15)
-        ret.setTitleColor(labelColor, for: [])
         ret.addTarget(self, action: #selector(returnTapped), for: .touchUpInside)
         ret.addTarget(self, action: #selector(keyTouchDown(_:)), for: .touchDown)
         ret.addTarget(self, action: #selector(keyTouchCancel(_:)), for: [.touchUpOutside, .touchCancel])
