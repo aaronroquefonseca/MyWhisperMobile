@@ -64,13 +64,13 @@ final class SettingsTests: XCTestCase {
 
     func testSttSelfHostedAndCloudShapes() {
         let hostedJSON = #"{"id":"s1","name":"Self-hosted (m)","kind":"SelfHosted","enabled":true,"# +
-            #"provider":"","url":"http://x:8000","model":"m","api_key":"","streaming":false}"#
+            #""provider":"","url":"http://x:8000","model":"m","api_key":"","streaming":false}"#
         let hosted = SttChainEntry(dict: dict(hostedJSON))
         XCTAssertEqual(hosted?.kind, .selfHosted)
         XCTAssertEqual(hosted?.streaming, false)
         XCTAssertEqual(hosted?.summary, "http://x:8000 · m")
         let cloudJSON = #"{"id":"c1","name":"OpenAI (whisper-1)","kind":"Cloud","enabled":false,"# +
-            #"provider":"OpenAI","url":"","model":"whisper-1","api_key":"k"}"#
+            #""provider":"OpenAI","url":"","model":"whisper-1","api_key":"k"}"#
         let cloud = SttChainEntry(dict: dict(cloudJSON))
         XCTAssertEqual(cloud?.kind, .cloud)
         XCTAssertEqual(cloud?.enabled, false)

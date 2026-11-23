@@ -273,7 +273,7 @@ final class HistoryViewModel: ObservableObject {
         return RetentionPolicy.parse(settings: settings)
     }
 
-    static func footer(policy: RetentionPolicy) -> String {
+    nonisolated static func footer(policy: RetentionPolicy) -> String {
         var parts: [String] = []
         if policy.historyEnabled == false {
             parts.append("History is off — new dictations are not stored.")
