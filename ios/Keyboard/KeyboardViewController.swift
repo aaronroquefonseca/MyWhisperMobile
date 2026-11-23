@@ -146,14 +146,45 @@ final class KeyboardViewController: UIInputViewController {
         let (word, _) = currentWord()
         if word.count >= 2 {
             let range = NSRange(location: 0, length: (word as NSString).length)
-            predictions = Array(checker.completions(forPartialWordRange: range, in: word, language: "en_US")?.prefix(3) ?? [])
+            let found = checker.completions(forPartialWordRange: range, in: word, language: "en_US")?.prefix(3) ?? []
+            if found.isEmpty, !HunspellSuggester.shared.isCorrect(word) {
+                predictions = Array(HunspellSuggester.shared.suggest(word, max: 1))
+            } else {
+                predictions = Array(found)
+            }
         } else {
             predictions = []
         }
         return predictions != old
     }
 
+    private func autocorrection() -> (original: String, correction: String, length: Int)? {
+        let (word, length) = currentWord()
+        guard length >= 2,
+              settings.autoCorrection,
+              !HunspellSuggester.shared.isCorrect(word),
+              let cand = HunspellSuggester.shared.suggest(word, max: 1).first,
+              cand.lowercased().first == word.lowercased().first,
+              levenshtein(word.lowercased(), cand.lowercased()) <= 2
+        else { return nil }
+        return (word, cand, length)
+    }
+
+    private func performDelete() {
+        if let u = pendingUndo,
+           let before = textDocumentProxy.documentContextBeforeInput,
+           before.hasSuffix(u.replacement) {
+            for _ in 0 ..< u.replacement.count { textDocumentProxy.deleteBackward() }
+            textDocumentProxy.insertText(u.original)
+            pendingUndo = nil
+            return
+        }
+        pendingUndo = nil
+        textDocumentProxy.deleteBackward()
+    }
+
     private func applyPrediction(_ p: String) {
+        pendingUndo = nil
         let (_, len) = currentWord()
         for _ in 0..<len { textDocumentProxy.deleteBackward() }
         textDocumentProxy.insertText(p + " ")
@@ -541,6 +572,7 @@ final class KeyboardViewController: UIInputViewController {
     // MARK: - Actions
 
     private func insert(_ k: String) {
+        pendingUndo = nil
         playClick()
         textDocumentProxy.insertText(k)
         let wasShifted = shift == .on
@@ -618,7 +650,7 @@ final class KeyboardViewController: UIInputViewController {
 
     @objc private func deleteDown(_ b: UIButton) {
         showPopup(for: b)
-        textDocumentProxy.deleteBackward()
+        performDelete()
         playClick()
         if refreshPredictions() {
             rebuild()
@@ -626,7 +658,7 @@ final class KeyboardViewController: UIInputViewController {
         deleteTimer?.invalidate()
         deleteTimer = Timer.scheduledTimer(withTimeInterval: 0.45, repeats: false) { [weak self] _ in
             self?.deleteTimer = Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { [weak self] _ in
-                self?.textDocumentProxy.deleteBackward()
+                self?.performDelete()
                 if self?.refreshPredictions() == true {
                     self?.rebuild()
                 }
@@ -658,8 +690,20 @@ final class KeyboardViewController: UIInputViewController {
             textDocumentProxy.insertText(". ")
             lastSpaceAt = nil
             shift = .on
+            pendingUndo = nil
             rebuild()
             return
+        }
+        if settings.autoCorrection, let fix = autocorrection() {
+            for _ in 0..<fix.length { textDocumentProxy.deleteBackward() }
+            var corrected = fix.correction
+            if shift != .off, let first = corrected.first {
+                corrected = String(first).uppercased() + corrected.dropFirst()
+            }
+            textDocumentProxy.insertText(corrected)
+            pendingUndo = (original: fix.original, replacement: corrected)
+        } else {
+            pendingUndo = nil
         }
         textDocumentProxy.insertText(" ")
         lastSpaceAt = now
@@ -855,4 +899,60 @@ final class KeyboardViewController: UIInputViewController {
         heightConstraint?.constant = y + 8
     }
 
+}
+import Foundation
+
+/// Hunspell-backed spelling for the keyboard (en + es bundles).
+/// UITextChecker stays the completions source; Hunspell decides
+/// "is this a word" and proposes corrections for autocorrect.
+final class HunspellSuggester {
+    static let shared = HunspellSuggester()
+
+    private var bridges: [String: HunspellBridge] = [:]
+    private let available = ["en", "es"]
+
+    private func langCode() -> String {
+        let preferred = Locale.preferredLanguages.map { String($0.prefix(2)) }
+        return preferred.first(where: { available.contains($0) }) ?? "en"
+    }
+
+    private func bridge() -> HunspellBridge? {
+        let lang = langCode()
+        if let b = bridges[lang] { return b }
+        let base = lang == "es" ? "es_ES" : "en_US"
+        guard let dir = Bundle(for: KeyboardViewController.self).resourceURL else { return nil }
+        guard let b = HunspellBridge(affPath: dir.appendingPathComponent(base + ".aff").path, dicPath: dir.appendingPathComponent(base + ".dic").path) else { return nil }
+        bridges[lang] = b
+        return b
+    }
+
+    func isCorrect(_ word: String) -> Bool {
+        guard word.rangeOfCharacter(from: .letters) != nil else { return true }
+        return bridge()?.spell(word) ?? true
+    }
+
+    func suggest(_ word: String, max: Int = 3) -> [String] {
+        guard word.count >= 2 else { return [] }
+        return bridge()?.suggest(word, max: max) ?? []
+    }
+
+    func learn(_ word: String) {
+        bridge()?.addWord(word)
+    }
+}
+
+func levenshtein(_ a: String, _ b: String) -> Int {
+    let x = Array(a), y = Array(b)
+    if x.isEmpty { return y.count }
+    if y.isEmpty { return x.count }
+    var prev = Array(0...y.count)
+    var cur = [Int](repeating: 0, count: y.count + 1)
+    for i in 1...x.count {
+        cur[0] = i
+        for j in 1...y.count {
+            cur[j] = min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (x[i - 1] == y[j - 1] ? 0 : 1))
+        }
+        swap(&prev, &cur)
+    }
+    return prev[y.count]
 }

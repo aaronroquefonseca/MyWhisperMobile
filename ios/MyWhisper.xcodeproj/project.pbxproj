@@ -46,7 +46,21 @@
 		DD0100DD0100DD02000002 /* IntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD0100DD0100DD02000001 /* IntegrationTests.swift */; };
 		EE11000000000000000010 /* WhisperColors.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE11000000000000000011 /* WhisperColors.swift */; };
 		EE1100000000000000000008 /* KeyboardViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE1100000000000000000002 /* KeyboardViewController.swift */; };
+		EE1100000000000000000077 /* HunspellBridge.mm in Sources */ = {isa = PBXBuildFile; fileRef = EE1100000000000000000071 /* HunspellBridge.mm */; };
+		EE1100000000000000000078 /* affentry.cxx in Sources */ = {isa = PBXBuildFile; fileRef = EE1100000000000000000040 /* affentry.cxx */; };
+		EE1100000000000000000079 /* affixmgr.cxx in Sources */ = {isa = PBXBuildFile; fileRef = EE1100000000000000000041 /* affixmgr.cxx */; };
+		EE110000000000000000007A /* csutil.cxx in Sources */ = {isa = PBXBuildFile; fileRef = EE1100000000000000000042 /* csutil.cxx */; };
+		EE110000000000000000007B /* filemgr.cxx in Sources */ = {isa = PBXBuildFile; fileRef = EE1100000000000000000043 /* filemgr.cxx */; };
+		EE110000000000000000007C /* hashmgr.cxx in Sources */ = {isa = PBXBuildFile; fileRef = EE1100000000000000000044 /* hashmgr.cxx */; };
+		EE110000000000000000007D /* hunspell.cxx in Sources */ = {isa = PBXBuildFile; fileRef = EE1100000000000000000045 /* hunspell.cxx */; };
+		EE110000000000000000007E /* phonet.cxx in Sources */ = {isa = PBXBuildFile; fileRef = EE1100000000000000000046 /* phonet.cxx */; };
+		EE110000000000000000007F /* replist.cxx in Sources */ = {isa = PBXBuildFile; fileRef = EE1100000000000000000047 /* replist.cxx */; };
+		EE1100000000000000000080 /* suggestmgr.cxx in Sources */ = {isa = PBXBuildFile; fileRef = EE1100000000000000000048 /* suggestmgr.cxx */; };
 		EE11000000000000000017 /* emoji.json in Resources */ = {isa = PBXBuildFile; fileRef = EE11000000000000000016 /* emoji.json */; };
+		EE1100000000000000000081 /* en_US.aff in Resources */ = {isa = PBXBuildFile; fileRef = EE1100000000000000000073 /* en_US.aff */; };
+		EE1100000000000000000082 /* en_US.dic in Resources */ = {isa = PBXBuildFile; fileRef = EE1100000000000000000074 /* en_US.dic */; };
+		EE1100000000000000000083 /* es_ES.aff in Resources */ = {isa = PBXBuildFile; fileRef = EE1100000000000000000075 /* es_ES.aff */; };
+		EE1100000000000000000084 /* es_ES.dic in Resources */ = {isa = PBXBuildFile; fileRef = EE1100000000000000000076 /* es_ES.dic */; };
 		EE11000000000000000012 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE11000000000000000013 /* OnboardingView.swift */; };
 		EE110000000000000000000F /* MyWhisperKeyboard.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = EE1100000000000000000001 /* MyWhisperKeyboard.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		A55055AA55055055005502 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A55055AA55055055005501 /* Assets.xcassets */; };
@@ -114,6 +128,38 @@
 		602A6F78559E7FAC27690B4A /* Tests Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		D82908387D374745193668C2 /* MyWhisper.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MyWhisper.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		EE1100000000000000000001 /* MyWhisperKeyboard.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = MyWhisperKeyboard.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		EE1100000000000000000070 /* HunspellBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = HunspellBridge.h; sourceTree = "<group>"; };
+		EE1100000000000000000071 /* HunspellBridge.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = HunspellBridge.mm; sourceTree = "<group>"; };
+		EE1100000000000000000072 /* MyWhisperKeyboard-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MyWhisperKeyboard-Bridging-Header.h; sourceTree = "<group>"; };
+		EE1100000000000000000073 /* en_US.aff */ = {isa = PBXFileReference; lastKnownFileType = text; path = dicts/en_US.aff; sourceTree = "<group>"; };
+		EE1100000000000000000074 /* en_US.dic */ = {isa = PBXFileReference; lastKnownFileType = text; path = dicts/en_US.dic; sourceTree = "<group>"; };
+		EE1100000000000000000075 /* es_ES.aff */ = {isa = PBXFileReference; lastKnownFileType = text; path = dicts/es_ES.aff; sourceTree = "<group>"; };
+		EE1100000000000000000076 /* es_ES.dic */ = {isa = PBXFileReference; lastKnownFileType = text; path = dicts/es_ES.dic; sourceTree = "<group>"; };
+		EE1100000000000000000040 /* affentry.cxx */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = hunspell/affentry.cxx; sourceTree = "<group>"; };
+		EE1100000000000000000041 /* affixmgr.cxx */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = hunspell/affixmgr.cxx; sourceTree = "<group>"; };
+		EE1100000000000000000042 /* csutil.cxx */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = hunspell/csutil.cxx; sourceTree = "<group>"; };
+		EE1100000000000000000043 /* filemgr.cxx */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = hunspell/filemgr.cxx; sourceTree = "<group>"; };
+		EE1100000000000000000044 /* hashmgr.cxx */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = hunspell/hashmgr.cxx; sourceTree = "<group>"; };
+		EE1100000000000000000045 /* hunspell.cxx */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = hunspell/hunspell.cxx; sourceTree = "<group>"; };
+		EE1100000000000000000046 /* phonet.cxx */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = hunspell/phonet.cxx; sourceTree = "<group>"; };
+		EE1100000000000000000047 /* replist.cxx */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = hunspell/replist.cxx; sourceTree = "<group>"; };
+		EE1100000000000000000048 /* suggestmgr.cxx */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = hunspell/suggestmgr.cxx; sourceTree = "<group>"; };
+		EE1100000000000000000049 /* affentry.hxx */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = hunspell/affentry.hxx; sourceTree = "<group>"; };
+		EE110000000000000000004A /* affixmgr.hxx */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = hunspell/affixmgr.hxx; sourceTree = "<group>"; };
+		EE110000000000000000004B /* atypes.hxx */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = hunspell/atypes.hxx; sourceTree = "<group>"; };
+		EE110000000000000000004C /* baseaffix.hxx */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = hunspell/baseaffix.hxx; sourceTree = "<group>"; };
+		EE110000000000000000004D /* csutil.hxx */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = hunspell/csutil.hxx; sourceTree = "<group>"; };
+		EE110000000000000000004E /* filemgr.hxx */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = hunspell/filemgr.hxx; sourceTree = "<group>"; };
+		EE110000000000000000004F /* hashmgr.hxx */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = hunspell/hashmgr.hxx; sourceTree = "<group>"; };
+		EE1100000000000000000050 /* htypes.hxx */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = hunspell/htypes.hxx; sourceTree = "<group>"; };
+		EE1100000000000000000051 /* hunspell.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = hunspell/hunspell.h; sourceTree = "<group>"; };
+		EE1100000000000000000052 /* hunspell.hxx */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = hunspell/hunspell.hxx; sourceTree = "<group>"; };
+		EE1100000000000000000053 /* langnum.hxx */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = hunspell/langnum.hxx; sourceTree = "<group>"; };
+		EE1100000000000000000054 /* phonet.hxx */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = hunspell/phonet.hxx; sourceTree = "<group>"; };
+		EE1100000000000000000055 /* replist.hxx */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = hunspell/replist.hxx; sourceTree = "<group>"; };
+		EE1100000000000000000056 /* suggestmgr.hxx */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = hunspell/suggestmgr.hxx; sourceTree = "<group>"; };
+		EE1100000000000000000057 /* utf_info.hxx */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = hunspell/utf_info.hxx; sourceTree = "<group>"; };
+		EE1100000000000000000058 /* w_char.hxx */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = hunspell/w_char.hxx; sourceTree = "<group>"; };
 		EE1100000000000000000002 /* KeyboardViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardViewController.swift; sourceTree = "<group>"; };
 		EE11000000000000000013 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
 		EE1100000000000000000003 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -213,6 +259,13 @@
 			children = (
 				EE1100000000000000000002 /* KeyboardViewController.swift */,
 				EE1100000000000000000003 /* Info.plist */,
+				EE1100000000000000000070 /* HunspellBridge.h */,
+				EE1100000000000000000071 /* HunspellBridge.mm */,
+				EE1100000000000000000072 /* MyWhisperKeyboard-Bridging-Header.h */,
+				EE1100000000000000000073 /* en_US.aff */,
+				EE1100000000000000000074 /* en_US.dic */,
+				EE1100000000000000000075 /* es_ES.aff */,
+				EE1100000000000000000076 /* es_ES.dic */,
 				EE11000000000000000016 /* emoji.json */,
 			);
 			path = Keyboard;
@@ -354,6 +407,10 @@
 			buildActionMask = 2147483647;
 			files = (
 				EE11000000000000000017 /* emoji.json in Resources */,
+				EE1100000000000000000081 /* en_US.aff */,
+				EE1100000000000000000082 /* en_US.dic */,
+				EE1100000000000000000083 /* es_ES.aff */,
+				EE1100000000000000000084 /* es_ES.dic */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -398,6 +455,16 @@
 			buildActionMask = 2147483647;
 			files = (
 				EE1100000000000000000008 /* KeyboardViewController.swift in Sources */,
+				EE1100000000000000000077 /* HunspellBridge.mm in Sources */,
+				EE1100000000000000000078 /* affentry.cxx in Sources */,
+				EE1100000000000000000079 /* affixmgr.cxx in Sources */,
+				EE110000000000000000007A /* csutil.cxx in Sources */,
+				EE110000000000000000007B /* filemgr.cxx in Sources */,
+				EE110000000000000000007C /* hashmgr.cxx in Sources */,
+				EE110000000000000000007D /* hunspell.cxx in Sources */,
+				EE110000000000000000007E /* phonet.cxx in Sources */,
+				EE110000000000000000007F /* replist.cxx in Sources */,
+				EE1100000000000000000080 /* suggestmgr.cxx in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -465,6 +532,8 @@
 				CODE_SIGN_STYLE = Automatic;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Keyboard/Info.plist;
+			HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/Keyboard/hunspell";
+			SWIFT_OBJC_BRIDGING_HEADER = Keyboard/MyWhisperKeyboard-Bridging-Header.h;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -514,6 +583,8 @@
 				CODE_SIGN_STYLE = Automatic;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Keyboard/Info.plist;
+			HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/Keyboard/hunspell";
+			SWIFT_OBJC_BRIDGING_HEADER = Keyboard/MyWhisperKeyboard-Bridging-Header.h;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
