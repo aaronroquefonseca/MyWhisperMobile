@@ -1,19 +1,49 @@
 import AudioToolbox
 import UIKit
 
-/// MyWhisper prototype keyboard: Wispr Flow visual language (borderless
+/// MyWhisper keyboard: Wispr Flow visual language (borderless
 /// translucent keys, utility strip with mode pill + round mic, brand space
-/// bar), Apple behavior (shift states, delete repeat, double-space period,
-/// auto-caps, symbol pages, globe switch). Completions come from the system
-/// lexicon via `UITextChecker` and appear as a strip row only while typing.
-/// Mic + menu are visual for now (toast); wiring needs Full Access.
+/// bar), Apple behavior (shift states incl. double-tap caps lock, delete
+/// repeat, double-space period, auto-caps incl. newlines, symbol pages,
+/// globe switch, in-keyboard settings). Completions come from the system
+/// lexicon via `UITextChecker` (Hunspell next) and appear as a strip row
+/// only while typing. Mic is a toast until Full Access + engine wiring.
 final class KeyboardViewController: UIInputViewController {
+
+    /// In-keyboard settings (extension-local defaults: no App Group exists
+    /// under free provisioning, so the main app cannot reach these yet).
+    struct KeyboardSettings: Codable, Equatable {
+        var autoCapitalization = true
+        var autoCorrection = true
+        var predictive = true
+        var periodShortcut = true
+        var enableCapsLock = true
+        var characterPreview = true
+        var keyClicks = true
+
+        static let defaultsKey = "mw.keyboard.settings.v1"
+
+        static func load() -> KeyboardSettings {
+            guard let data = UserDefaults.standard.data(forKey: defaultsKey),
+                  let decoded = try? JSONDecoder().decode(KeyboardSettings.self, from: data)
+            else { return KeyboardSettings() }
+            return decoded
+        }
+
+        func save() {
+            if let data = try? JSONEncoder().encode(self) {
+                UserDefaults.standard.set(data, forKey: Self.defaultsKey)
+            }
+        }
+    }
 
     private enum Page { case letters, symbols, more }
     private enum Shift { case off, on, locked }
 
     private var page: Page = .letters
     private var shift: Shift = .off
+    private var showingSettings = false
+    private var settings = KeyboardSettings.load()
     private var rowsView = UIView()
     private var heightConstraint: NSLayoutConstraint?
     private var popup: UILabel?
@@ -60,11 +90,12 @@ final class KeyboardViewController: UIInputViewController {
         super.textDidChange(textInput)
         refreshPredictions()
         rebuild()
-        if shift == .off, let before = textDocumentProxy.documentContextBeforeInput {
-            if before.isEmpty || (before.hasSuffix(" ") && [". ", "? ", "! "].contains(String(before.suffix(2)))) {
-                shift = .on
-                rebuild()
-            }
+        guard settings.autoCapitalization, shift == .off,
+              let before = textDocumentProxy.documentContextBeforeInput else { return }
+        if before.isEmpty || before.hasSuffix("\n")
+            || (before.hasSuffix(" ") && [". ", "? ", "! "].contains(String(before.suffix(2)))) {
+            shift = .on
+            rebuild()
         }
     }
 
@@ -108,6 +139,7 @@ final class KeyboardViewController: UIInputViewController {
     @discardableResult
     private func refreshPredictions() -> Bool {
         let old = predictions
+        guard settings.predictive else { predictions = []; return predictions != old }
         let (word, _) = currentWord()
         if word.count >= 2 {
             let range = NSRange(location: 0, length: (word as NSString).length)
@@ -135,6 +167,10 @@ final class KeyboardViewController: UIInputViewController {
         hidePopup()
         let w = view.bounds.width > 0 ? view.bounds.width : 390
         let pad: CGFloat = 6
+        if showingSettings {
+            addSettingsPane(width: w, pad: pad)
+            return
+        }
         var gap: CGFloat = 6
         var y: CGFloat = 6
         addUtilityStrip(y: y, width: w, pad: pad)
@@ -249,13 +285,85 @@ final class KeyboardViewController: UIInputViewController {
     @objc private func menuTapped() {
         hidePopup()
         playClick()
-        showToast("Providers and settings live in the app")
+        showingSettings.toggle()
+        rebuild()
     }
 
     @objc private func modeTapped() {
         hidePopup()
         playClick()
         showToast("Voice modes arrive with the mic update")
+    }
+
+    // MARK: - In-keyboard settings
+
+    private func addSettingsPane(width: CGFloat, pad: CGFloat) {
+        var y: CGFloat = 6
+        let back = plainButton(systemName: "chevron.left", size: 17)
+        back.frame = CGRect(x: pad, y: y, width: 110, height: 40)
+        back.setTitle(" Settings", for: [])
+        back.titleLabel?.font = .systemFont(ofSize: 17)
+        back.setTitleColor(labelColor, for: [])
+        back.addTarget(self, action: #selector(backFromSettings), for: .touchUpInside)
+        rowsView.addSubview(back)
+        let title = UILabel(frame: CGRect(x: pad + 118, y: y, width: width - 2 * pad - 118, height: 40))
+        title.text = "Keyboard"
+        title.font = .systemFont(ofSize: 17, weight: .semibold)
+        title.textColor = labelColor
+        rowsView.addSubview(title)
+        y += 48
+        let rows: [(String, Int, Bool)] = [
+            ("Auto-Capitalization", 1, settings.autoCapitalization),
+            ("Auto-Correction", 2, settings.autoCorrection),
+            ("Predictive", 3, settings.predictive),
+            ("Period Shortcut", 4, settings.periodShortcut),
+            ("Enable Caps Lock", 5, settings.enableCapsLock),
+            ("Character Preview", 6, settings.characterPreview),
+            ("Key Clicks", 7, settings.keyClicks),
+        ]
+        for (label, tag, value) in rows {
+            y = addToggleRow(title: label, tag: tag, value: value, y: y, width: width, pad: pad)
+            y += 4
+        }
+        heightConstraint?.constant = y + 8
+    }
+
+    private func addToggleRow(title: String, tag: Int, value: Bool, y: CGFloat, width: CGFloat, pad: CGFloat) -> CGFloat {
+        let h: CGFloat = 48
+        let label = UILabel(frame: CGRect(x: pad + 16, y: y, width: width - 2 * pad - 100, height: h))
+        label.text = title
+        label.font = .systemFont(ofSize: 17)
+        label.textColor = labelColor
+        rowsView.addSubview(label)
+        let toggle = UISwitch(frame: CGRect(x: width - pad - 16 - 51, y: y + (h - 31) / 2, width: 51, height: 31))
+        toggle.isOn = value
+        toggle.onTintColor = UIColor(red: 0x5C / 255, green: 0xD9 / 255, blue: 0xEC / 255, alpha: 1)
+        toggle.tag = tag
+        toggle.addTarget(self, action: #selector(settingChanged(_:)), for: .valueChanged)
+        rowsView.addSubview(toggle)
+        return y + h
+    }
+
+    @objc private func settingChanged(_ sender: UISwitch) {
+        playClick()
+        switch sender.tag {
+        case 1: settings.autoCapitalization = sender.isOn
+        case 2: settings.autoCorrection = sender.isOn
+        case 3: settings.predictive = sender.isOn
+        case 4: settings.periodShortcut = sender.isOn
+        case 5: settings.enableCapsLock = sender.isOn
+        case 6: settings.characterPreview = sender.isOn
+        default: settings.keyClicks = sender.isOn
+        }
+        settings.save()
+        rebuild()
+    }
+
+    @objc private func backFromSettings() {
+        hidePopup()
+        playClick()
+        showingSettings = false
+        rebuild()
     }
 
     private func cyan() -> UIColor {
@@ -391,9 +499,13 @@ final class KeyboardViewController: UIInputViewController {
         case .locked: name = "capslock.fill"
         }
         let b = symbolKey(name, size: 21)
-        b.addTarget(self, action: #selector(shiftTapped), for: .touchUpInside)
+        // Single tap waits for the double-tap recognizer, so a caps-lock
+        // double tap never toggles through off first.
+        let single = UITapGestureRecognizer(target: self, action: #selector(shiftTapped))
         let dbl = UITapGestureRecognizer(target: self, action: #selector(shiftDoubleTapped))
         dbl.numberOfTapsRequired = 2
+        single.require(toFail: dbl)
+        b.addGestureRecognizer(single)
         b.addGestureRecognizer(dbl)
         return b
     }
@@ -435,6 +547,7 @@ final class KeyboardViewController: UIInputViewController {
     /// (callers redraw); never rebuilds itself.
     @discardableResult
     private func autoShiftCheck(inserted: String) -> Bool {
+        guard settings.autoCapitalization else { return false }
         if inserted == " ", let before = textDocumentProxy.documentContextBeforeInput, before.count >= 2 {
             let two = String(before.suffix(2))
             if [". ", "? ", "! "].contains(two), shift == .off {
@@ -467,6 +580,7 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     @objc private func shiftDoubleTapped() {
+        guard settings.enableCapsLock else { return }
         hidePopup()
         playClick()
         shift = .locked
@@ -519,7 +633,8 @@ final class KeyboardViewController: UIInputViewController {
         hidePopup()
         playClick()
         let now = Date()
-        if let last = lastSpaceAt, now.timeIntervalSince(last) < 0.4,
+        if settings.periodShortcut,
+           let last = lastSpaceAt, now.timeIntervalSince(last) < 0.4,
            let before = textDocumentProxy.documentContextBeforeInput,
            before.hasSuffix(" "), !before.hasSuffix("  ") {
             textDocumentProxy.deleteBackward()
@@ -566,6 +681,7 @@ final class KeyboardViewController: UIInputViewController {
         highlight.isUserInteractionEnabled = false
         highlight.tag = 991
         b.addSubview(highlight)
+        guard settings.characterPreview else { return }
         guard let title = b.title(for: []), title.count <= 3 else { return }
         let label = UILabel()
         label.text = title
@@ -610,6 +726,7 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     private func playClick() {
+        guard settings.keyClicks else { return }
         AudioServicesPlaySystemSound(1104)
     }
 }
