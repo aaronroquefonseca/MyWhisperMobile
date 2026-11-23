@@ -346,6 +346,7 @@
 			buildPhases = (
 				EE1100000000000000000006 /* Sources */,
 				EE1100000000000000000018 /* Resources */,
+    EE1100000000000000000090 /* Copy Keyboard Resources */,
 			);
 			buildRules = (
 			);
@@ -442,6 +443,20 @@
 				EE1100000000000000000084 /* es_ES.dic */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EE1100000000000000000090 /* Copy Keyboard Resources */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "Copy Keyboard Resources";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "RES=\"$BUILT_PRODUCTS_DIR/$WRAPPER_NAME\"\ncp \"$SRCROOT/Keyboard/emoji.json\" \"$RES/\" || exit 1\ncp \"$SRCROOT/Keyboard/dicts/en_US.aff\" \"$RES/\" || exit 1\ncp \"$SRCROOT/Keyboard/dicts/en_US.dic\" \"$RES/\" || exit 1\ncp \"$SRCROOT/Keyboard/dicts/es_ES.aff\" \"$RES/\" || exit 1\ncp \"$SRCROOT/Keyboard/dicts/es_ES.dic\" \"$RES/\" || exit 1\n";
 		};
 /* End PBXResourcesBuildPhase section */
 
