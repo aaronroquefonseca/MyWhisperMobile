@@ -1,0 +1,5 @@
+#ifndef HUNVISAPI_H
+#define HUNVISAPI_H
+#define HUNSPELL_STATIC 1
+#define LIBHUNSPELL_DLL_EXPORTED
+#endif
