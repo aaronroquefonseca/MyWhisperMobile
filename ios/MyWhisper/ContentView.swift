@@ -19,6 +19,35 @@ struct ContentView: View {
     @StateObject private var cleanupStore = CleanupSettingsStore()
 
     var body: some View {
+        if showOnboarding {
+            onboardingView
+        } else {
+            mainView
+        }
+    }
+
+    private var onboardingView: some View {
+        OnboardingView(
+            micGranted: flow.micGranted,
+            strings: OnboardingStrings.current(languageCode: languageCode),
+            onRequestMic: { flow.requestMic() },
+            onOpenSettings: { flow.openSystemSettings() },
+            onDone: {
+                UserDefaults.standard.set(true, forKey: "mw.onboarded.v1")
+                showOnboarding = false
+            },
+            initialPage: {
+                #if DEBUG
+                let args = CommandLine.arguments
+                if let i = args.firstIndex(of: "-mwOnboardingPage"), i + 1 < args.count,
+                   let n = Int(args[i + 1]) { return n }
+                #endif
+                return 0
+            }()
+        )
+    }
+
+    private var mainView: some View {
         TabView(selection: $flow.selectedTab) {
             ForEach([AppTab.record, .speech, .history, .setup], id: \.self) { tab in
                 NavigationStack {
@@ -67,26 +96,6 @@ struct ContentView: View {
                 }
             }
             #endif
-        }
-        .fullScreenCover(isPresented: $showOnboarding) {
-            OnboardingView(
-                micGranted: flow.micGranted,
-                strings: OnboardingStrings.current(languageCode: languageCode),
-                onRequestMic: { flow.requestMic() },
-                onOpenSettings: { flow.openSystemSettings() },
-                onDone: {
-                    UserDefaults.standard.set(true, forKey: "mw.onboarded.v1")
-                    showOnboarding = false
-                },
-                initialPage: {
-                    #if DEBUG
-                    let args = CommandLine.arguments
-                    if let i = args.firstIndex(of: "-mwOnboardingPage"), i + 1 < args.count,
-                       let n = Int(args[i + 1]) { return n }
-                    #endif
-                    return 0
-                }()
-            )
         }
         .sheet(isPresented: shareVisible) {
             if let text = flow.shareText {
