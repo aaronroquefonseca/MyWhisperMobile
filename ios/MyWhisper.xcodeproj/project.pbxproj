@@ -46,6 +46,7 @@
 		DD0100DD0100DD02000002 /* IntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD0100DD0100DD02000001 /* IntegrationTests.swift */; };
 		EE11000000000000000010 /* WhisperColors.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE11000000000000000011 /* WhisperColors.swift */; };
 		EE1100000000000000000008 /* KeyboardViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE1100000000000000000002 /* KeyboardViewController.swift */; };
+		EE11000000000000000017 /* emoji.json in Resources */ = {isa = PBXBuildFile; fileRef = EE11000000000000000016 /* emoji.json */; };
 		EE11000000000000000012 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE11000000000000000013 /* OnboardingView.swift */; };
 		EE110000000000000000000F /* MyWhisperKeyboard.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = EE1100000000000000000001 /* MyWhisperKeyboard.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		A55055AA55055055005502 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A55055AA55055055005501 /* Assets.xcassets */; };
@@ -116,6 +117,7 @@
 		EE1100000000000000000002 /* KeyboardViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardViewController.swift; sourceTree = "<group>"; };
 		EE11000000000000000013 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
 		EE1100000000000000000003 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		EE11000000000000000016 /* emoji.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = emoji.json; sourceTree = "<group>"; };
 		8965188E778D2EEAECC16395 /* MyWhisperTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MyWhisperTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A55055AA55055055005501 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -211,6 +213,7 @@
 			children = (
 				EE1100000000000000000002 /* KeyboardViewController.swift */,
 				EE1100000000000000000003 /* Info.plist */,
+				EE11000000000000000016 /* emoji.json */,
 			);
 			path = Keyboard;
 			sourceTree = "<group>";
@@ -260,6 +263,7 @@
 			buildConfigurationList = EE1100000000000000000009 /* Build configuration list for PBXNativeTarget "MyWhisperKeyboard" */;
 			buildPhases = (
 				EE1100000000000000000006 /* Sources */,
+				EE1100000000000000000018 /* Resources */,
 			);
 			buildRules = (
 			);
@@ -343,6 +347,14 @@
 				EE110000000000000000000F /* MyWhisperKeyboard.appex in Embed App Extensions */,
 			);
 			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EE11000000000000000018 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EE11000000000000000017 /* emoji.json in Resources */,
+			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */

@@ -44,6 +44,9 @@ final class KeyboardViewController: UIInputViewController {
     private var shift: Shift = .off
     private var showingSettings = false
     private var settings = KeyboardSettings.load()
+    private var emojiMode = false
+    private var emojiCategory = 0
+    private var emojiGroups: (order: [String], groups: [String: [String]])?
     private var rowsView = UIView()
     private var heightConstraint: NSLayoutConstraint?
     private var popup: UILabel?
@@ -169,6 +172,10 @@ final class KeyboardViewController: UIInputViewController {
         let pad: CGFloat = 6
         if showingSettings {
             addSettingsPane(width: w, pad: pad)
+            return
+        }
+        if emojiMode {
+            addEmojiView(width: w, pad: pad)
             return
         }
         var gap: CGFloat = 6
@@ -416,6 +423,9 @@ final class KeyboardViewController: UIInputViewController {
         let globe = symbolKey("globe", size: 21)
         globe.frame = CGRect(x: x, y: y, width: u, height: h)
         globe.addTarget(self, action: #selector(nextKeyboard), for: .touchUpInside)
+        let globeHold = UILongPressGestureRecognizer(target: self, action: #selector(globeHeld(_:)))
+        globeHold.minimumPressDuration = 0.5
+        globe.addGestureRecognizer(globeHold)
         rowsView.addSubview(globe)
         x += u + 6
         let spaceW = u * 4
@@ -590,6 +600,13 @@ final class KeyboardViewController: UIInputViewController {
     @objc private func pageTapped(_ b: UIButton) {
         hidePopup()
         playClick()
+        if emojiMode {
+            emojiMode = false
+            if b.accessibilityIdentifier == "ABC" { page = .letters }
+            showingSettings = false
+            rebuild()
+            return
+        }
         switch b.accessibilityIdentifier {
         case "123": page = .symbols
         case "ABC": page = .letters
@@ -729,4 +746,113 @@ final class KeyboardViewController: UIInputViewController {
         guard settings.keyClicks else { return }
         AudioServicesPlaySystemSound(1104)
     }
+
+    // MARK: - Emoji picker
+
+    private var emojiCatalog: (order: [String], groups: [String: [String]]) {
+        if let g = emojiGroups { return g }
+        let loaded: (order: [String], groups: [String: [String]]) = {
+            guard let url = Bundle(for: KeyboardViewController.self).url(forResource: "emoji", withExtension: "json"),
+                  let data = try? Data(contentsOf: url),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let order = obj["order"] as? [String],
+                  let groups = obj["groups"] as? [String: [String]] else { return ([], [:]) }
+            return (order, groups)
+        }()
+        emojiGroups = loaded
+        return loaded
+    }
+
+    private var emojiRecents: [String] {
+        get { UserDefaults.standard.stringArray(forKey: "mw.emoji.recent.v1") ?? [] }
+        set { UserDefaults.standard.set(Array(newValue.prefix(30)), forKey: "mw.emoji.recent.v1") }
+    }
+
+    private var emojiCategories: [String] {
+        let recents = emojiRecents
+        return (recents.isEmpty ? [] : ["Recent"]) + emojiCatalog.order
+    }
+
+    private func emojiList(for category: String) -> [String] {
+        if category == "Recent" { return emojiRecents }
+        return emojiCatalog.groups[category] ?? []
+    }
+
+    @objc private func globeHeld(_ g: UILongPressGestureRecognizer) {
+        guard g.state == .began else { return }
+        hidePopup()
+        playClick()
+        showingSettings = false
+        emojiMode = true
+        emojiCategory = 0
+        rebuild()
+    }
+
+    @objc private func emojiCategoryTapped(_ b: UIButton) {
+        hidePopup()
+        playClick()
+        emojiCategory = b.tag
+        rebuild()
+    }
+
+    @objc private func emojiTapped(_ b: UIButton) {
+        hidePopup()
+        guard let e = b.accessibilityIdentifier, !e.isEmpty else { return }
+        textDocumentProxy.insertText(e)
+        var recents = emojiRecents.filter { $0 != e }
+        recents.insert(e, at: 0)
+        emojiRecents = recents
+        playClick()
+        lastSpaceAt = nil
+        rebuild()
+    }
+
+    private func addEmojiView(width: CGFloat, pad: CGFloat) {
+        var y: CGFloat = 6
+        let cats = emojiCategories
+        if emojiCategory >= cats.count { emojiCategory = 0 }
+        let tabs = UIScrollView(frame: CGRect(x: pad, y: y, width: width - 2 * pad, height: 40))
+        tabs.showsHorizontalScrollIndicator = false
+        var tx: CGFloat = 0
+        for (i, cat) in cats.enumerated() {
+            let icon: String
+            if cat == "Recent" { icon = "🕐" } else { icon = emojiCatalog.groups[cat]?.first ?? "?" }
+            let b = UIButton(type: .custom)
+            b.frame = CGRect(x: tx, y: 0, width: 44, height: 40)
+            b.setTitle(icon, for: [])
+            b.titleLabel?.font = .systemFont(ofSize: 22)
+            b.alpha = i == emojiCategory ? 1.0 : 0.45
+            b.tag = i
+            b.addTarget(self, action: #selector(emojiCategoryTapped(_:)), for: .touchUpInside)
+            tabs.addSubview(b)
+            tx += 48
+        }
+        tabs.contentSize = CGSize(width: max(tx, width - 2 * pad), height: 40)
+        rowsView.addSubview(tabs)
+        y += 48
+        let list = emojiList(for: cats.isEmpty ? "" : cats[emojiCategory])
+        let cols = 8
+        let cellW = (width - 2 * pad - CGFloat(cols - 1) * 6) / CGFloat(cols)
+        let cellH: CGFloat = 44
+        let rows = max(1, Int(ceil(Double(list.count) / Double(cols))))
+        let gridH = CGFloat(rows) * cellH + CGFloat(max(0, rows - 1)) * 6
+        let grid = UIScrollView(frame: CGRect(x: pad, y: y, width: width - 2 * pad, height: min(gridH, 232)))
+        grid.alwaysBounceVertical = true
+        for (i, e) in list.enumerated() {
+            let b = UIButton(type: .custom)
+            b.frame = CGRect(x: CGFloat(i % cols) * (cellW + 6), y: CGFloat(i / cols) * (cellH + 6), width: cellW, height: cellH)
+            b.setTitle(e, for: [])
+            b.titleLabel?.font = .systemFont(ofSize: 30)
+            b.accessibilityIdentifier = e
+            b.addTarget(self, action: #selector(emojiTapped(_:)), for: .touchUpInside)
+            grid.addSubview(b)
+        }
+        grid.contentSize = CGSize(width: width - 2 * pad, height: gridH)
+        rowsView.addSubview(grid)
+        y += min(gridH, 232) + 8
+        addBottomRow(y: y, h: 44, width: width, pad: pad, leftTitle: "ABC")
+        y += 44
+        heightConstraint?.constant = y + 8
+    }
+
 }
