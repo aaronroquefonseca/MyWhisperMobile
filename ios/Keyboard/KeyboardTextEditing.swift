@@ -1,3 +1,4 @@
+import CoreText
 import Foundation
 
 enum KeyboardTextEditing {
@@ -35,6 +36,44 @@ enum KeyboardTextEditing {
         let destinationEnd = destination + 1 < lineStarts.count ? lineStarts[destination + 1] - 1 : position
         let offset = destinationStart + min(column, destinationEnd - destinationStart) - caret
         return (offset, column)
+    }
+
+    /// The proxy exposes characters but no host geometry. Estimate visually
+    /// wrapped rows from the current paragraph when there is no explicit break.
+    static func wrappedCursorMove(
+        before: String, after: String, lines: Int, preferredColumn: Int?,
+        lineWidth: CGFloat, font: CTFont
+    ) -> (offset: Int, column: Int)? {
+        let preceding = String(before.suffix(512).reversed().prefix { !$0.isNewline }.reversed())
+        let following = String(after.prefix(512).prefix { !$0.isNewline })
+        let paragraph = preceding + following
+        guard !paragraph.isEmpty else { return nil }
+        let attributes = [NSAttributedString.Key(kCTFontAttributeName as String): font]
+        let text = NSAttributedString(string: paragraph, attributes: attributes)
+        let typesetter = CTTypesetterCreateWithAttributedString(text as CFAttributedString)
+        let length = paragraph.utf16.count
+        var breaks = [0]
+        var nextBreak = CTTypesetterSuggestLineBreak(typesetter, 0, Double(lineWidth))
+        guard nextBreak > 0, nextBreak < length else { return nil }
+        var characterIndex = 0
+        var characterEnd = 0
+        for character in paragraph {
+            characterEnd += String(character).utf16.count
+            characterIndex += 1
+            guard characterEnd >= nextBreak, nextBreak < length else { continue }
+            breaks.append(characterIndex)
+            let span = CTTypesetterSuggestLineBreak(typesetter, characterEnd, Double(lineWidth))
+            guard span > 0 else { break }
+            nextBreak = characterEnd + span
+        }
+
+        let caret = preceding.count
+        guard let row = breaks.lastIndex(where: { $0 <= caret }) else { return nil }
+        let target = min(max(row + lines, 0), breaks.count - 1)
+        guard row != target else { return nil }
+        let column = preferredColumn ?? caret - breaks[row]
+        let end = breaks.indices.contains(target + 1) ? breaks[target + 1] - 1 : paragraph.count
+        return (breaks[target] + min(column, end - breaks[target]) - caret, column)
     }
 
     static func trailingWordDeletionCount(in text: String) -> Int {

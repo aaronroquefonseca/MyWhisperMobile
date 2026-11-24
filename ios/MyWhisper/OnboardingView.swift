@@ -266,7 +266,7 @@ struct KeyboardSetupView: View {
             } header: {
                 WhisperSectionHeading(label("Languages", "Idiomas"))
             } footer: {
-                Text(label("Hold the spacebar to move the cursor. A quick sideways swipe changes the typing language.", "Mantén pulsada la barra espaciadora para mover el cursor. Desliza rápido hacia un lado para cambiar de idioma."))
+                Text(label("Hold the spacebar to move the cursor. Swipe up or down to move by line, or sideways to switch languages.", "Mantén pulsada la barra espaciadora para mover el cursor. Desliza hacia arriba o abajo para cambiar de línea, o hacia un lado para cambiar de idioma."))
             }
             .whisperRowSurface()
 

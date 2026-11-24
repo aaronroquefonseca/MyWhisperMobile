@@ -1,3 +1,4 @@
+import CoreText
 import UIKit
 
 /// MyWhisper keyboard with local predictions, autocorrect, and emoji.
@@ -575,6 +576,11 @@ class KeyboardViewController: UIInputViewController {
         let cursor = UILongPressGestureRecognizer(target: self, action: #selector(dragCursor(_:)))
         cursor.minimumPressDuration = 0.30
         space.addGestureRecognizer(cursor)
+        let vertical = UIPanGestureRecognizer(target: self, action: #selector(dragSpacebarVertically(_:)))
+        vertical.maximumNumberOfTouches = 1
+        vertical.delegate = self
+        vertical.require(toFail: cursor)
+        space.addGestureRecognizer(vertical)
         if settings.switchesLanguageBySwipe, settings.languages.count > 1 {
             for direction: UISwipeGestureRecognizer.Direction in [.left, .right] {
                 let swipe = UISwipeGestureRecognizer(target: self, action: #selector(swipeSpacebar(_:)))
@@ -961,6 +967,10 @@ class KeyboardViewController: UIInputViewController {
         moveCursor(for: gesture)
     }
 
+    @objc private func dragSpacebarVertically(_ gesture: UIPanGestureRecognizer) {
+        moveCursor(for: gesture, verticalOnly: true)
+    }
+
     @objc private func swipeSpacebar(_ gesture: UISwipeGestureRecognizer) {
         switchLanguage(movingRight: gesture.direction == .right)
     }
@@ -984,13 +994,16 @@ class KeyboardViewController: UIInputViewController {
         UIAccessibility.post(notification: .announcement, argument: language.title)
     }
 
-    private func moveCursor(for gesture: UIGestureRecognizer) {
-        let point = gesture.location(in: rowsView)
+    private func moveCursor(for gesture: UIGestureRecognizer, verticalOnly: Bool = false) {
+        let location = gesture.location(in: rowsView)
+        let point = verticalOnly ? CGPoint(x: 0, y: location.y) : location
         switch gesture.state {
         case .began:
             hidePopup()
             cursorGesture = gesture
-            startCursorDrag(at: point)
+            let travel = (gesture as? UIPanGestureRecognizer)?.translation(in: rowsView).y ?? 0
+            startCursorDrag(at: CGPoint(x: point.x, y: point.y - travel))
+            continueCursorDrag(to: point)
         case .changed:
             if cursorGesture === gesture { continueCursorDrag(to: point) }
         case .ended, .cancelled, .failed:
@@ -1024,19 +1037,38 @@ class KeyboardViewController: UIInputViewController {
             return
         }
         var offset = steps.characters
-        if steps.lines != 0, proxy.selectedText?.isEmpty != false,
-           let move = KeyboardTextEditing.verticalCursorMove(
-                before: proxy.documentContextBeforeInput ?? "",
-                after: proxy.documentContextAfterInput ?? "",
-                lines: steps.lines,
-                preferredColumn: drag.preferredColumn
-           ) {
-            offset += move.offset
-            drag.preferredColumn = move.column
+        if steps.lines != 0, proxy.selectedText?.isEmpty != false, !isAddressField {
+            let before = proxy.documentContextBeforeInput ?? ""
+            let after = proxy.documentContextAfterInput ?? ""
+            let move = KeyboardTextEditing.verticalCursorMove(
+                before: before, after: after, lines: steps.lines, preferredColumn: drag.preferredColumn
+            ) ?? wrappedCursorMove(before: before, after: after, lines: steps.lines, preferredColumn: drag.preferredColumn)
+            if let move {
+                offset += move.offset
+                drag.preferredColumn = move.column
+            } else if !before.isEmpty || !after.isEmpty || proxy.hasText {
+                // Some hosts stop their context at the paragraph boundary.
+                // Ask for a single character across that edge. iOS clamps at the document boundary.
+                let edge = steps.lines < 0 ? before.suffix(512).count : after.prefix(512).count
+                if edge < 512 { offset += steps.lines < 0 ? -edge - 1 : edge + 1 }
+                drag.preferredColumn = nil
+            }
         }
         if steps.characters != 0 { drag.preferredColumn = nil }
         cursorDrag = drag
         if offset != 0 { proxy.adjustTextPosition(byCharacterOffset: offset) }
+    }
+
+    private func wrappedCursorMove(
+        before: String, after: String, lines: Int, preferredColumn: Int?
+    ) -> (offset: Int, column: Int)? {
+        let font = UIFont.preferredFont(forTextStyle: .body)
+        let width = max(180, (layout?.width ?? 390) - 44)
+        let typesettingFont = CTFontCreateWithName(font.fontName as CFString, font.pointSize, nil)
+        return KeyboardTextEditing.wrappedCursorMove(
+            before: before, after: after, lines: lines, preferredColumn: preferredColumn,
+            lineWidth: width, font: typesettingFont
+        )
     }
 
     func finishCursorDrag() {
@@ -1347,8 +1379,11 @@ extension KeyboardViewController: UIGestureRecognizerDelegate {
 
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return true }
-        guard pan.view?.accessibilityLabel == "Delete" else { return true }
         let movement = pan.translation(in: rowsView)
-        return !deleteRepeated && movement.x < -abs(movement.y)
+        switch pan.view?.accessibilityLabel {
+        case "Space": return cursorDrag == nil && !isAddressField && abs(movement.y) > abs(movement.x) * 1.5
+        case "Delete": return !deleteRepeated && movement.x < -abs(movement.y)
+        default: return true
+        }
     }
 }

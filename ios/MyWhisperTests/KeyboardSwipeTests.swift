@@ -1,3 +1,4 @@
+import CoreText
 import UIKit
 import XCTest
 
@@ -130,6 +131,50 @@ final class KeyboardSwipeTests: XCTestCase {
         XCTAssertNil(KeyboardTextEditing.verticalCursorMove(before: "ab", after: "cd", lines: 1, preferredColumn: nil))
     }
 
+    func testWrappedRowsAllowMovementWithoutNewlines() throws {
+        let font = CTFontCreateWithName("Menlo" as CFString, 17, nil)
+        let text = String(repeating: "short words fit here ", count: 6)
+        let before = String(text.prefix(4))
+        let after = String(text.dropFirst(4))
+        let down = try XCTUnwrap(KeyboardTextEditing.wrappedCursorMove(
+            before: before, after: after, lines: 1, preferredColumn: nil, lineWidth: 216, font: font
+        ))
+        XCTAssertGreaterThan(down.offset, 4)
+        XCTAssertEqual(down.column, 4)
+        let moved = 4 + down.offset
+        let up = KeyboardTextEditing.wrappedCursorMove(
+            before: String(text.prefix(moved)), after: String(text.dropFirst(moved)),
+            lines: -1, preferredColumn: down.column, lineWidth: 216, font: font
+        )
+        XCTAssertEqual(up?.offset, -down.offset)
+    }
+
+    @MainActor
+    func testVerticalDragCrossesParagraphWhenHostHidesNewline() {
+        let controller = TestKeyboardController()
+        controller.document.text = "one\ntwo\nthree"
+        controller.document.caret = 5
+        controller.document.hidesNewlineContext = true
+        controller.startCursorDrag(at: .zero)
+        controller.continueCursorDrag(to: CGPoint(x: 0, y: -25))
+        XCTAssertEqual(controller.document.caret, 3)
+        controller.continueCursorDrag(to: .zero)
+        XCTAssertEqual(controller.document.caret, 4)
+        controller.finishCursorDrag()
+    }
+
+    @MainActor
+    func testVerticalDragLeavesBlankLineWithNoExposedContext() {
+        let controller = TestKeyboardController()
+        controller.document.text = "one\n\nthree"
+        controller.document.caret = 4
+        controller.document.hidesNewlineContext = true
+        controller.startCursorDrag(at: .zero)
+        controller.continueCursorDrag(to: CGPoint(x: 0, y: 25))
+        XCTAssertEqual(controller.document.caret, 5)
+        controller.finishCursorDrag()
+    }
+
     func testCursorDragConsumesSmallHorizontalWobbleDuringVerticalMotion() {
         var drag = KeyboardCursorDrag(origin: .zero)
         for index in 1...4 {
@@ -255,9 +300,16 @@ private final class TestKeyboardDocument: NSObject, UITextDocumentProxy {
     var caret: Int?
     private var insertionIndex: String.Index { text.index(text.startIndex, offsetBy: caret ?? text.count) }
     var hasText: Bool { !text.isEmpty }
-    var documentContextBeforeInput: String? { String(text[..<insertionIndex]) }
+    var hidesNewlineContext = false
+    var documentContextBeforeInput: String? {
+        let before = text[..<insertionIndex]
+        guard hidesNewlineContext else { return String(before) }
+        return String(before.reversed().prefix { !$0.isNewline }.reversed())
+    }
     var documentContextAfterInput: String? {
-        insertionIndex == text.endIndex ? nil : String(text[insertionIndex...])
+        guard insertionIndex != text.endIndex else { return nil }
+        let after = text[insertionIndex...]
+        return hidesNewlineContext ? String(after.prefix { !$0.isNewline }) : String(after)
     }
     var selectedText: String? { nil }
     var documentIdentifier = UUID()
