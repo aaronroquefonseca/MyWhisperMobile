@@ -4,8 +4,35 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 
-/** Local-hook PCM cap: 60s @ 16 kHz mono (utterance copy only). */
-internal const val MAX_LOCAL_PCM_SAMPLES = 16_000 * 60
+/** Longest single local decode: 60s @ 16 kHz mono. Longer utterances decode in ordered windows. */
+internal const val LOCAL_WINDOW_SAMPLES = 16_000 * 60
+
+/**
+ * Splits [pcm] into ordered, contiguous decode windows of at most
+ * [maxLen] samples that together cover every sample. Cuts land on
+ * [LocalStt.chunkPcm] boundaries (silence where possible); only a
+ * stretch with no boundary is hard-cut at [maxLen].
+ */
+internal fun localDecodeWindows(pcm: ShortArray, maxLen: Int = LOCAL_WINDOW_SAMPLES): List<IntRange> {
+    if (pcm.size <= maxLen) return listOf(pcm.indices)
+    val cuts = mutableListOf(0)
+    var lastBoundary = 0
+    for (r in LocalStt.chunkPcm(pcm)) {
+        if (r.last + 1 - cuts.last() > maxLen && lastBoundary > cuts.last()) cuts.add(lastBoundary)
+        lastBoundary = r.last + 1
+    }
+    cuts.add(pcm.size)
+    val out = mutableListOf<IntRange>()
+    for (i in 0 until cuts.size - 1) {
+        var s = cuts[i]
+        while (cuts[i + 1] - s > maxLen) {
+            out.add(s until s + maxLen)
+            s += maxLen
+        }
+        if (cuts[i + 1] > s) out.add(s until cuts[i + 1])
+    }
+    return out
+}
 
 /**
  * Mic-button controller: hold-to-talk / toggle / smart, mirroring the
@@ -111,19 +138,20 @@ class Dictation(
     /**
      * Utterance PCM copy for the local-first hook: primitive buffer,
      * no boxing (was `ArrayList<Short>`: one object per sample plus a
-     * second copy on snapshot). Grown by doubling, hard-capped at
-     * [MAX_LOCAL_PCM_SAMPLES]. Guarded by [pcmLock]; the buffer itself
-     * is retained across utterances to avoid realloc churn.
+     * second copy on snapshot). Grown by doubling with the utterance
+     * (the core recorder is unbounded too); decoded in
+     * [LOCAL_WINDOW_SAMPLES] windows. Guarded by [pcmLock]; the buffer
+     * itself is retained across utterances to avoid realloc churn.
      */
     private val pcmLock = Any()
     private var pcmBuf = ShortArray(16_000 * 10)
     private var pcmSize = 0
     /**
-     * True once the utterance outgrew [MAX_LOCAL_PCM_SAMPLES]. The
+     * True once the PCM copy could not grow (heap exhausted). The
      * overflow is never silently truncated: the local hook is skipped
      * for the utterance (its PCM would be incomplete) and the full
-     * audio falls back to the server chain, with a log line. Volatile;
-     * set under [pcmLock], read on the finish worker.
+     * audio goes to the server chain, with a log line. Volatile; set
+     * under [pcmLock], read on the finish worker.
      */
     @Volatile private var pcmOverflowed = false
 
@@ -197,20 +225,17 @@ class Dictation(
                 // Copy: the buffer is reused by the read loop.
                 val copy = buf.copyOf(n)
                 synchronized(pcmLock) {
-                    val take = minOf(n, MAX_LOCAL_PCM_SAMPLES - pcmSize).coerceAtLeast(0)
-                    if (pcmSize + take > pcmBuf.size) {
-                        pcmBuf = pcmBuf.copyOf(
-                            maxOf(pcmBuf.size * 2, pcmSize + take)
-                                .coerceAtMost(MAX_LOCAL_PCM_SAMPLES),
-                        )
-                    }
-                    if (take > 0) {
-                        System.arraycopy(copy, 0, pcmBuf, pcmSize, take)
-                        pcmSize += take
-                    }
-                    if (take < n && !pcmOverflowed) {
-                        pcmOverflowed = true
-                        log("local PCM capped at 60s, overflow falls back to server")
+                    if (!pcmOverflowed) {
+                        try {
+                            if (pcmSize + n > pcmBuf.size) {
+                                pcmBuf = pcmBuf.copyOf(maxOf(pcmBuf.size * 2, pcmSize + n))
+                            }
+                            System.arraycopy(copy, 0, pcmBuf, pcmSize, n)
+                            pcmSize += n
+                        } catch (_: OutOfMemoryError) {
+                            pcmOverflowed = true
+                            log("local PCM copy out of memory, overflow falls back to server")
+                        }
                     }
                 }
                 try {
@@ -368,23 +393,50 @@ class Dictation(
                 // drop) so cancel/shutdown during a blocked call still
                 // wins instead of retrying into a dead worker.
                 //
-                // An overflowed PCM copy is incomplete by construction,
-                // so the local hook is skipped outright (server owns the
-                // full audio) — truncation never commits silently.
+                // Over [LOCAL_WINDOW_SAMPLES] the utterance decodes in
+                // ordered windows joined into ONE hit (one cleanup, one
+                // history row). An overflowed PCM copy is incomplete by
+                // construction, so the local hook is skipped outright
+                // (server owns the full audio) — truncation never
+                // commits silently.
                 val (pcm, overflow) = synchronized(pcmLock) {
                     pcmBuf.copyOf(pcmSize) to pcmOverflowed
                 }
                 val secs = maxOf(1, pcm.size / 16_000)
                 fun decodeLocal(): LocalHit? {
                     if (overflow) {
-                        log("local PCM overflowed 60s cap, server only")
+                        log("local PCM overflowed, server only")
                         return null
                     }
                     return try {
+                        val windows = localDecodeWindows(pcm)
+                        val decoded = if (windows.size == 1) {
+                            localTranscribe(pcm)
+                        } else {
+                            log("local decode in ${windows.size} windows")
+                            val parts = mutableListOf<String>()
+                            var engine: String? = null
+                            for (w in windows) {
+                                // Cancelled between windows: stop decoding dead audio.
+                                if (gen != session.get()) return null
+                                val slice = pcm.copyOfRange(w.first, w.last + 1)
+                                val hit = localTranscribe(slice)
+                                if (hit == null) {
+                                    // A speech-free window decodes to nothing; any
+                                    // other miss misses the whole utterance so a
+                                    // gap never commits.
+                                    if (LocalStt.chunkPcm(slice).isEmpty()) continue
+                                    return null
+                                }
+                                hit.first.trim().takeIf { it.isNotEmpty() }?.let(parts::add)
+                                if (engine == null) engine = hit.second
+                            }
+                            if (engine == null || parts.isEmpty()) null else parts.joinToString(" ") to engine
+                        }
                         // Local hits get the WORD word-boost here
                         // ([localPostProcess]); the core applies snippets
                         // in [finishLocal], as on the server path.
-                        localTranscribe(pcm)?.let { (raw, engine) -> LocalHit(raw, localPostProcess(raw), engine) }
+                        decoded?.let { (raw, engine) -> LocalHit(raw, localPostProcess(raw), engine) }
                     } catch (_: Throwable) {
                         // Local hook miss on ANY throw (incl. OOM Error).
                         null

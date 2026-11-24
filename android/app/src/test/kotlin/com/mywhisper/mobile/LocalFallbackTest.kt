@@ -31,6 +31,7 @@ class LocalFallbackTest {
         /** (raw, text, engine) per core finish of a local hit. */
         val coreFinishes: MutableList<Triple<String, String, String>> =
             Collections.synchronizedList(mutableListOf())
+        val finishSecs = AtomicInteger(-1)
         val errors: MutableList<String> = Collections.synchronizedList(mutableListOf())
         val executor = Executors.newSingleThreadExecutor()
         val serverHit = AtomicBoolean(false)
@@ -55,7 +56,8 @@ class LocalFallbackTest {
             },
             cancelTranscription = {},
             localFirst = { localFirst },
-            finishLocal = { raw, text, engine, _ ->
+            finishLocal = { raw, text, engine, secs ->
+                finishSecs.set(secs)
                 coreFinishes.add(Triple(raw, text, engine))
                 coreCleanup(text) to engine
             },
@@ -214,25 +216,97 @@ class LocalFallbackTest {
         }
     }
 
+    /** Fake decoder: one word per distinct sample level, in order ("before" = 1000, "after" = 3000). */
+    private fun wordsFor(pcm: ShortArray): String =
+        pcm.distinct().joinToString(" ") { if (it == 3000.toShort()) "after" else "before" }
+
+    /** Records 60s at level 1000 then 1s at 3000 (speech past the 60s boundary). */
+    private fun recordLong(h: Harness) {
+        h.dictation.pressDown()
+        val feed = h.pcmSinks.single()
+        repeat(60) { feed(ShortArray(16_000) { 1000 }, 16_000) }
+        feed(ShortArray(16_000) { 3000 }, 16_000)
+        h.dictation.pressUp() // Push -> WORKING
+    }
+
     @Test
-    fun pcmOverflow_skipsLocalAndFallsBackToServer() {
-        // 61s of audio overflows the 60s local copy: the incomplete
-        // local PCM must never decode silently — local is skipped, the
-        // full utterance falls back to server, and the cap surfaces.
-        val h = Harness(local = { "local text" to "local moonshine-v2-tiny.en" })
+    fun localOnly_over60s_decodesEveryWindowIntoOneResult() {
+        // Local-only: no server configured, so any server call fails.
+        val h = Harness(
+            local = { pcm -> wordsFor(pcm) to "local parakeet" },
+            serverError = "no STT provider",
+            coreCleanup = { it.uppercase() },
+        )
         try {
-            h.dictation.pressDown()
-            val feed = h.pcmSinks.single()
-            repeat(61) { feed(ShortArray(16_000) { 1000 }, 16_000) }
-            h.dictation.pressUp() // Push -> WORKING
+            recordLong(h)
             h.executor.submit {}.get(10, TimeUnit.SECONDS)
-            assertEquals("overflowed PCM must skip local decode", 0, h.localCalls.get())
-            assertTrue(h.serverHit.get())
-            assertEquals(listOf("server text"), h.results)
-            assertTrue("cap must surface, got: ${h.logs}", h.logs.any { it.contains("60s") })
+            assertFalse("long local audio must not reach the server", h.serverHit.get())
+            assertTrue("decoded in windows, got ${h.localCalls.get()}", h.localCalls.get() >= 2)
+            assertEquals("one cleanup + history finish", 1, h.coreFinishes.size)
+            val raw = h.coreFinishes.single().first
+            assertTrue("speech after 60s must survive, got: $raw", raw.endsWith("after"))
+            assertTrue("window order kept, got: $raw", raw.startsWith("before"))
+            assertEquals(61, h.finishSecs.get())
+            assertEquals(listOf(raw.uppercase()), h.results)
+            assertTrue(h.errors.isEmpty())
         } finally {
             h.executor.shutdownNow()
         }
+    }
+
+    @Test
+    fun over60s_windowMiss_neverCommitsPartialText() {
+        // The window holding the post-60s speech fails: committing the
+        // first window alone would silently drop the tail.
+        val h = Harness(local = { pcm -> if (3000.toShort() in pcm) null else wordsFor(pcm) to "local parakeet" })
+        try {
+            recordLong(h)
+            h.executor.submit {}.get(10, TimeUnit.SECONDS)
+            assertTrue(h.coreFinishes.isEmpty())
+            assertTrue(h.serverHit.get())
+            assertEquals(listOf("server text"), h.results)
+        } finally {
+            h.executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun over60s_cancelBetweenWindows_stopsDecoding() {
+        val entered = CountDownLatch(1)
+        val proceed = CountDownLatch(1)
+        val h = Harness(local = { pcm ->
+            entered.countDown()
+            proceed.await(10, TimeUnit.SECONDS)
+            wordsFor(pcm) to "local parakeet"
+        })
+        try {
+            recordLong(h)
+            assertTrue(entered.await(10, TimeUnit.SECONDS))
+            h.dictation.cancel() // cancel wins during the first window
+            proceed.countDown()
+            h.executor.submit {}.get(10, TimeUnit.SECONDS)
+            assertEquals("no window decodes after cancel", 1, h.localCalls.get())
+            assertTrue(h.results.isEmpty())
+            assertTrue(h.coreFinishes.isEmpty())
+            assertFalse(h.serverHit.get())
+        } finally {
+            proceed.countDown()
+            h.executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun localDecodeWindows_coverAllSamplesInOrderWithinCap() {
+        val maxLen = 16_000 * 20
+        // 50s speech, 45s silence, 10s speech: silent stretch longer than a window.
+        val pcm = ShortArray(16_000 * 50) { 1000 } + ShortArray(16_000 * 45) + ShortArray(16_000 * 10) { 1000 }
+        val windows = localDecodeWindows(pcm, maxLen)
+        assertEquals(0, windows.first().first)
+        assertEquals(pcm.lastIndex, windows.last().last)
+        for (i in 1 until windows.size) assertEquals(windows[i - 1].last + 1, windows[i].first)
+        assertTrue(windows.all { it.last - it.first + 1 <= maxLen })
+        val short = ShortArray(maxLen)
+        assertEquals(listOf(short.indices), localDecodeWindows(short, maxLen))
     }
 
     @Test
