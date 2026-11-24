@@ -14,7 +14,8 @@
 //!
 //! Chain semantics mirror desktop `plans_for`: entries in order, first
 //! success wins, per-entry errors collected. `Local` entries are skipped
-//! on mobile until on-device inference lands.
+//! here: Android decodes them in Kotlin `LocalStt`, so it runs the chain
+//! in two [`ChainPart`]s around the first enabled `Local` entry.
 
 use crate::audio::wav_bytes_16k;
 use crate::settings::{SttChainEntry, SttEntryKind, SttSettings};
@@ -625,6 +626,31 @@ fn transcribe_entry(
     }
 }
 
+/// Which enabled entries one chain call walks, split at the first
+/// enabled `Local` entry so the platform can decode on-device in its
+/// Settings position (Self-hosted → Local → Cloud never reaches Cloud
+/// before Local).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChainPart {
+    /// Every enabled entry (iOS: no on-device decode).
+    All,
+    /// Entries above the first enabled `Local` (all of them when there is none).
+    BeforeLocal,
+    /// Entries below the first enabled `Local` (none when there is none).
+    AfterLocal,
+}
+
+impl ChainPart {
+    fn includes(self, index: usize, local_at: Option<usize>) -> bool {
+        match (self, local_at) {
+            (ChainPart::All, _) | (ChainPart::BeforeLocal, None) => true,
+            (ChainPart::AfterLocal, None) => false,
+            (ChainPart::BeforeLocal, Some(at)) => index < at,
+            (ChainPart::AfterLocal, Some(at)) => index > at,
+        }
+    }
+}
+
 /// Top-down chain with failover (mirrors desktop `plans_for`).
 /// Returns the first success; errors when every enabled entry failed
 /// (or no usable entry exists).
@@ -633,7 +659,13 @@ pub fn transcribe_chain(
     samples_16k_i16: &[i16],
     words: &[String],
 ) -> Result<Transcript, String> {
-    transcribe_chain_witnessed(stt, samples_16k_i16, words, server_generation())
+    transcribe_chain_witnessed(
+        stt,
+        ChainPart::All,
+        samples_16k_i16,
+        words,
+        server_generation(),
+    )
 }
 
 /// Witnessed chain (desktop #22 session-ownership port): `witness` is
@@ -645,6 +677,7 @@ pub fn transcribe_chain(
 /// witness (direct callers) still relies on the engine post-guard.
 pub fn transcribe_chain_witnessed(
     stt: &SttSettings,
+    part: ChainPart,
     samples_16k_i16: &[i16],
     words: &[String],
     witness: u64,
@@ -656,7 +689,12 @@ pub fn transcribe_chain_witnessed(
     let wav = wav_bytes_16k(samples_16k_i16);
     let mut errors: Vec<String> = Vec::new();
     let mut usable = 0;
-    for entry in stt.entries.iter().filter(|e| e.enabled) {
+    let local_at = stt
+        .entries
+        .iter()
+        .position(|e| e.enabled && e.kind == SttEntryKind::Local);
+    let entries = stt.entries.iter().enumerate();
+    for (_, entry) in entries.filter(|(i, e)| e.enabled && part.includes(*i, local_at)) {
         if entry.kind == SttEntryKind::Local {
             errors.push(format!(
                 "{}: on-device inference not supported yet",
@@ -1941,7 +1979,9 @@ mod tests {
         // Admission witness, then a cancel lands before the chain runs.
         let witness = server_generation();
         record_stop(&stt_fingerprint(&stt));
-        let err = transcribe_chain_witnessed(&stt, &vec![1000i16; 1600], &[], witness).unwrap_err();
+        let err =
+            transcribe_chain_witnessed(&stt, ChainPart::All, &vec![1000i16; 1600], &[], witness)
+                .unwrap_err();
         assert!(
             err.contains("superseded") || err.contains("cancelled"),
             "stale chain must abort, got: {err}"
@@ -1951,6 +1991,55 @@ mod tests {
         // Neither the admitted entry nor the fallback was ever uploaded to.
         assert_eq!(hits_a.load(Ordering::SeqCst), 0);
         assert_eq!(hits_b.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn chain_parts_split_at_first_enabled_local() {
+        use std::sync::atomic::Ordering;
+        let _guard = status_test_lock();
+        reset_status_state();
+        // Closed port: the entry above Local fails fast (connection refused).
+        let closed = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            format!("http://{}", l.local_addr().unwrap())
+        };
+        let (url_b, hits_b, srv_b) = stub_server(r#"{"text":"b"}"#);
+        let mut disabled_local = local_entry();
+        disabled_local.enabled = false;
+        // Settings order: (disabled Local) → A → Local → B.
+        let stt = stt_auto(
+            vec![
+                disabled_local,
+                self_hosted_entry("A", &closed),
+                local_entry(),
+                self_hosted_entry("B", &url_b),
+            ],
+            false,
+        );
+        let pcm = vec![1000i16; 1600];
+        let err = transcribe_chain_witnessed(
+            &stt,
+            ChainPart::BeforeLocal,
+            &pcm,
+            &[],
+            server_generation(),
+        )
+        .unwrap_err();
+        assert!(
+            err.starts_with("A: "),
+            "only A runs above Local, got: {err}"
+        );
+        assert_eq!(
+            hits_b.load(Ordering::SeqCst),
+            0,
+            "B must wait for the Local attempt"
+        );
+        let t =
+            transcribe_chain_witnessed(&stt, ChainPart::AfterLocal, &pcm, &[], server_generation())
+                .unwrap();
+        assert_eq!(t.text, "b");
+        srv_b.join().unwrap();
+        assert_eq!(hits_b.load(Ordering::SeqCst), 1);
     }
 
     #[test]
@@ -1967,8 +2056,14 @@ mod tests {
             ],
             false,
         );
-        let t = transcribe_chain_witnessed(&stt, &vec![1000i16; 1600], &[], server_generation())
-            .unwrap();
+        let t = transcribe_chain_witnessed(
+            &stt,
+            ChainPart::All,
+            &vec![1000i16; 1600],
+            &[],
+            server_generation(),
+        )
+        .unwrap();
         assert_eq!(t.text, "hello");
         srv_a.join().unwrap();
         srv_b.join().unwrap();

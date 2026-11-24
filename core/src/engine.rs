@@ -17,7 +17,7 @@
 
 use crate::audio::{self, MIN_SAMPLES_16K, Recorder};
 use crate::server_stt::{
-    TickOutcome, Transcript, capped_text, record_stop, server_status as chain_status,
+    ChainPart, TickOutcome, Transcript, capped_text, record_stop, server_status as chain_status,
     stt_fingerprint, stt_primary_id, stt_watcher_tick, transcribe_chain_witnessed,
 };
 use crate::settings::{AppSettings, HistoryEntry, LlmEntry};
@@ -558,6 +558,19 @@ pub struct Engine {
     /// transcribing). Mirrors the `ACTIVE_UTTERANCES` counter in
     /// `server_stt` so reconcile defers mid-utterance.
     utterance_active: bool,
+    /// Utterance audio kept after a failed [`ChainPart::BeforeLocal`]
+    /// pass so [`ChainPart::AfterLocal`] can retry it once the platform's
+    /// on-device decode misses. Dropped on start, cancel and local finish.
+    held: Option<HeldUtterance>,
+}
+
+/// Prepared (resampled + VAD) audio between the two chain passes.
+struct HeldUtterance {
+    pcm16: Vec<i16>,
+    duration_secs: i64,
+    /// Admission witness of the first pass: a cancel or provider switch
+    /// between the passes aborts the second one.
+    generation: u64,
 }
 
 impl Engine {
@@ -595,6 +608,7 @@ impl Engine {
             last_stt_primary,
             last_stt_auto,
             utterance_active: false,
+            held: None,
         })
     }
 
@@ -665,6 +679,7 @@ impl Engine {
     }
 
     pub fn start_utterance(&mut self, rate: u32) {
+        self.held = None;
         self.recorder.start(rate);
         self.rate = rate;
         self.started_at = Some(Instant::now());
@@ -685,6 +700,7 @@ impl Engine {
             .unwrap_or(0);
         self.recorder = Recorder::default();
         self.started_at = None;
+        self.held = None;
         if self.utterance_active {
             self.utterance_active = false;
             crate::server_stt::active_dec();
@@ -704,13 +720,20 @@ impl Engine {
     }
 
     pub fn finish_utterance(&mut self) -> Result<FinishOutcome, String> {
+        self.finish_utterance_part(ChainPart::All)
+    }
+
+    /// Android: run only the entries on one side of the `Local` entry
+    /// (see [`ChainPart`]). A failed `BeforeLocal` pass keeps the audio
+    /// for the `AfterLocal` pass that follows a local miss.
+    pub fn finish_utterance_part(&mut self, part: ChainPart) -> Result<FinishOutcome, String> {
         if !self.utterance_active {
             // Finish without start (or re-entrant): guard the transcribe
             // window the same way so reconcile still defers across it.
             self.utterance_active = true;
             crate::server_stt::active_inc();
         }
-        let out = self.finish_inner();
+        let out = self.finish_inner(part);
         if self.utterance_active {
             self.utterance_active = false;
             crate::server_stt::active_dec();
@@ -718,11 +741,75 @@ impl Engine {
         out
     }
 
-    fn finish_inner(&mut self) -> Result<FinishOutcome, String> {
-        let started = self.started_at.take();
+    fn finish_inner(&mut self, part: ChainPart) -> Result<FinishOutcome, String> {
         // Fresh settings every utterance (mirrors desktop deliver):
         // picks up UI edits and sync merges without a restart.
         self.settings = self.store.load_settings();
+        let (pcm16, duration_secs, generation_at_entry) = match self.held.take() {
+            Some(held) if part == ChainPart::AfterLocal => {
+                if crate::server_stt::server_generation() != held.generation {
+                    return Err("superseded (provider switched mid-utterance)".to_string());
+                }
+                (held.pcm16, held.duration_secs, held.generation)
+            }
+            _ => {
+                let (pcm16, secs) = self.prepare_utterance()?;
+                (pcm16, secs, crate::server_stt::server_generation())
+            }
+        };
+        let words = self.store.load_words().unwrap_or_default();
+        // On-device inference lives in Kotlin `LocalStt` (whisper.cpp
+        // runtime pack), never in Rust: the server chain below skips `Local`
+        // entries, so there is deliberately no pack hashing on this hot
+        // path (a full SHA256 over ~44MB per utterance would burn
+        // disk+CPU on every server-fallback dictate). Pack verification
+        // stays in `local_stt::verify_pack` for tests/meter only.
+        // Witness before the blocking chain: a provider switch or Stop
+        // applied mid-transcribe bumps the generation; stale results
+        // then settle instead of delivering for a dead chain.
+        let chain = transcribe_chain_witnessed(
+            &self.settings.stt,
+            part,
+            &pcm16,
+            &words,
+            generation_at_entry,
+        );
+        let Transcript { text: raw, engine } = match chain {
+            Ok(t) => t,
+            Err(e) => {
+                if part == ChainPart::BeforeLocal {
+                    self.held = Some(HeldUtterance {
+                        pcm16,
+                        duration_secs,
+                        generation: generation_at_entry,
+                    });
+                }
+                return Err(e);
+            }
+        };
+        // Test seam (cfg(test) only): park after a successful
+        // transcribe, before the guard, so a test can land a
+        // switch/Stop inside the window. Production builds contain no
+        // hook.
+        #[cfg(test)]
+        crate::server_stt::finish_guard_pause_point();
+        if crate::server_stt::server_generation() != generation_at_entry {
+            return Err("superseded (provider switched mid-utterance)".to_string());
+        }
+
+        self.cleanup_and_deliver(
+            &raw,
+            &raw,
+            &engine,
+            duration_secs,
+            &words,
+            generation_at_entry,
+        )
+    }
+
+    /// Recorder → 16 kHz → VAD: the chain input and the utterance length.
+    fn prepare_utterance(&mut self) -> Result<(Vec<i16>, i64), String> {
+        let started = self.started_at.take();
         self.recorder.settle_release(Instant::now());
         let (samples, rate) = self.recorder.finish();
         let duration_secs = started
@@ -744,39 +831,7 @@ impl Engine {
         } else {
             resampled
         };
-        let pcm16 = audio::f32_to_i16(&selected);
-
-        let words = self.store.load_words().unwrap_or_default();
-        // On-device inference lives in Kotlin `LocalStt` (whisper.cpp
-        // runtime pack), never in Rust: the server chain below skips `Local`
-        // entries, so there is deliberately no pack hashing on this hot
-        // path (a full SHA256 over ~44MB per utterance would burn
-        // disk+CPU on every server-fallback dictate). Pack verification
-        // stays in `local_stt::verify_pack` for tests/meter only.
-        // Witness before the blocking chain: a provider switch or Stop
-        // applied mid-transcribe bumps the generation; stale results
-        // then settle instead of delivering for a dead chain.
-        let generation_at_entry = crate::server_stt::server_generation();
-        let Transcript { text: raw, engine } =
-            transcribe_chain_witnessed(&self.settings.stt, &pcm16, &words, generation_at_entry)?;
-        // Test seam (cfg(test) only): park after a successful
-        // transcribe, before the guard, so a test can land a
-        // switch/Stop inside the window. Production builds contain no
-        // hook.
-        #[cfg(test)]
-        crate::server_stt::finish_guard_pause_point();
-        if crate::server_stt::server_generation() != generation_at_entry {
-            return Err("superseded (provider switched mid-utterance)".to_string());
-        }
-
-        self.cleanup_and_deliver(
-            &raw,
-            &raw,
-            &engine,
-            duration_secs,
-            &words,
-            generation_at_entry,
-        )
+        Ok((audio::f32_to_i16(&selected), duration_secs))
     }
 
     /// Finish an utterance the platform already transcribed on-device
@@ -795,6 +850,7 @@ impl Engine {
     ) -> Result<FinishOutcome, String> {
         self.started_at = None;
         self.recorder = Recorder::default();
+        self.held = None;
         self.settings = self.store.load_settings();
         let words = self.store.load_words().unwrap_or_default();
         let generation_at_entry = crate::server_stt::server_generation();
@@ -1334,6 +1390,77 @@ mod tests {
         // before the history write, never after it.
         assert_eq!(history_before, "[]");
         assert_eq!(eng.history_json(10), "[]");
+    }
+
+    /// Self-hosted (closed port, fails fast) → Local → `below`.
+    fn split_chain_settings(below_url: &str) -> String {
+        let closed = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let mut settings: AppSettings = serde_json::from_str(&settings_with(self_hosted_entry(
+            "Above",
+            &format!("http://127.0.0.1:{closed}"),
+        )))
+        .unwrap();
+        let mut local = self_hosted_entry("Local", "");
+        local.kind = SttEntryKind::Local;
+        settings.stt.entries.push(local);
+        settings
+            .stt
+            .entries
+            .push(self_hosted_entry("Below", below_url));
+        settings.language_models.cleanup_enabled = false;
+        serde_json::to_string(&settings).unwrap()
+    }
+
+    #[test]
+    fn after_local_pass_reuses_audio_held_by_failed_before_pass() {
+        let _guard = status_test_lock();
+        reset_status_state();
+        let (port, stub) = stub_transcription_server();
+        let mut eng = open_engine();
+        eng.put_settings(&split_chain_settings(&format!("http://127.0.0.1:{port}")))
+            .unwrap();
+        assert_eq!(eng.poll_stt(), TickOutcome::Unchanged);
+        eng.start_utterance(16000);
+        eng.push_pcm(&vec![1000i16; 8000]);
+        let err = eng
+            .finish_utterance_part(ChainPart::BeforeLocal)
+            .err()
+            .unwrap();
+        assert!(
+            err.starts_with("Above: "),
+            "only the entry above Local runs, got: {err}"
+        );
+        // The platform's local decode missed: the entry below Local gets the same audio.
+        let out = eng.finish_utterance_part(ChainPart::AfterLocal).unwrap();
+        assert_eq!(out.text, "hello world");
+        stub.join().unwrap();
+    }
+
+    #[test]
+    fn cancel_between_passes_drops_held_audio() {
+        let _guard = status_test_lock();
+        reset_status_state();
+        let mut eng = open_engine();
+        // No stub: an upload to Below would fail with a connection error, not "too short".
+        eng.put_settings(&split_chain_settings("http://127.0.0.1:9"))
+            .unwrap();
+        assert_eq!(eng.poll_stt(), TickOutcome::Unchanged);
+        eng.start_utterance(16000);
+        eng.push_pcm(&vec![1000i16; 8000]);
+        assert!(eng.finish_utterance_part(ChainPart::BeforeLocal).is_err());
+        eng.cancel_utterance();
+        let err = eng
+            .finish_utterance_part(ChainPart::AfterLocal)
+            .err()
+            .unwrap();
+        assert!(
+            err.contains("too short"),
+            "cancelled audio must not upload, got: {err}"
+        );
     }
 
     #[test]
