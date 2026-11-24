@@ -84,15 +84,30 @@ object CoreBridge {
     }
 
     /** Blocks on the server chain. Returns (text, engine) or throws. */
-    fun finishUtterance(): Pair<String, String> = finishReply(nativeFinishUtterance())
+    fun finishUtterance(): Pair<String, String> {
+        lastCleanup = DictationIssue.Cleanup.OK
+        return finishReply(nativeFinishUtterance())
+    }
+
+    /**
+     * Cleanup outcome of the last finish (failed or unconfigured means the
+     * text was delivered as transcribed).
+     * shortcut: one global value read by the single dictation listener; move into the
+     * finish result if a second concurrent dictation surface ever appears.
+     */
+    @Volatile
+    internal var lastCleanup = DictationIssue.Cleanup.OK
+        private set
 
     /**
      * On-device STT hit: run the same LLM cleanup chain + history
      * write as [finishUtterance]. Blocks on cleanup — worker thread
      * only. Returns (text, engine) or throws.
      */
-    fun finishLocalUtterance(raw: String, text: String, engine: String, durationSecs: Int): Pair<String, String> =
-        finishReply(nativeFinishLocalUtterance(raw, text, engine, durationSecs))
+    fun finishLocalUtterance(raw: String, text: String, engine: String, durationSecs: Int): Pair<String, String> {
+        lastCleanup = DictationIssue.Cleanup.OK
+        return finishReply(nativeFinishLocalUtterance(raw, text, engine, durationSecs))
+    }
 
     /** Wire the on-device LLM into the dictation cleanup chain (once per process). */
     fun setLocalLlmRunner(runner: LocalLlmCleanupRunner?) {
@@ -104,8 +119,10 @@ object CoreBridge {
         // Per-entry cleanup outcome ("Ollama: llm post: ..."): the only
         // trace of why cleanup did or did not apply.
         d.optJSONArray("cleanup")?.let { notes ->
+            val list = (0 until notes.length()).map { notes.optString(it) }
+            lastCleanup = DictationIssue.cleanupOutcome(list)
             try {
-                android.util.Log.i("MwCleanup", (0 until notes.length()).joinToString(" | ") { notes.optString(it) })
+                android.util.Log.i("MwCleanup", list.joinToString(" | "))
             } catch (_: Throwable) {
             }
         }

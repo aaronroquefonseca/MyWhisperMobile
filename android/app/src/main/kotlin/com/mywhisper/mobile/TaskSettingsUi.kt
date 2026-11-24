@@ -105,7 +105,7 @@ internal fun availableProviderKinds(kinds: List<String>, localSupported: Boolean
 internal fun LocalUnavailableNote() {
     ListItem(
         headlineContent = { Text(stringResource(R.string.stt_models_title)) },
-        supportingContent = { Text(stringResource(R.string.local_need_full)) },
+        supportingContent = { Text(stringResource(localUnavailableRes())) },
         modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
     )
 }

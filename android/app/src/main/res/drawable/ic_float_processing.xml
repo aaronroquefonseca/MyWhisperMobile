@@ -1,3 +1,86 @@
-<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
-    <path android:fillColor="#000000" android:pathData="M4,10a2,2 0,1 0,0 4a2,2 0,1 0,0 -4M12,10a2,2 0,1 0,0 4a2,2 0,1 0,0 -4M20,10a2,2 0,1 0,0 4a2,2 0,1 0,0 -4" />
-</vector>
+<!-- Typing-indicator dots: each lights up in turn (1.2s cycle, 200ms stagger). -->
+<animated-vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt">
+    <aapt:attr name="android:drawable">
+        <vector android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
+            <group android:name="g1" android:pivotX="4" android:pivotY="12" android:scaleX="0.85" android:scaleY="0.85">
+                <path android:name="d1" android:fillColor="#000000" android:fillAlpha="0.2"
+                    android:pathData="M4,10a2,2 0,1 0,0 4a2,2 0,1 0,0 -4" />
+            </group>
+            <group android:name="g2" android:pivotX="12" android:pivotY="12" android:scaleX="0.85" android:scaleY="0.85">
+                <path android:name="d2" android:fillColor="#000000" android:fillAlpha="0.2"
+                    android:pathData="M12,10a2,2 0,1 0,0 4a2,2 0,1 0,0 -4" />
+            </group>
+            <group android:name="g3" android:pivotX="20" android:pivotY="12" android:scaleX="0.85" android:scaleY="0.85">
+                <path android:name="d3" android:fillColor="#000000" android:fillAlpha="0.2"
+                    android:pathData="M20,10a2,2 0,1 0,0 4a2,2 0,1 0,0 -4" />
+            </group>
+        </vector>
+    </aapt:attr>
+    <target android:name="d1"><aapt:attr name="android:animation"><objectAnimator android:duration="1200" android:startOffset="0" android:repeatCount="infinite" android:interpolator="@android:anim/linear_interpolator">
+        <propertyValuesHolder android:propertyName="fillAlpha" android:valueType="floatType">
+            <keyframe android:fraction="0" android:value="0.2" />
+            <keyframe android:fraction="0.35" android:value="1" android:interpolator="@android:interpolator/fast_out_slow_in" />
+            <keyframe android:fraction="0.7" android:value="0.2" android:interpolator="@android:interpolator/fast_out_slow_in" />
+            <keyframe android:fraction="1" android:value="0.2" />
+        </propertyValuesHolder>
+    </objectAnimator></aapt:attr></target>
+    <target android:name="d2"><aapt:attr name="android:animation"><objectAnimator android:duration="1200" android:startOffset="200" android:repeatCount="infinite" android:interpolator="@android:anim/linear_interpolator">
+        <propertyValuesHolder android:propertyName="fillAlpha" android:valueType="floatType">
+            <keyframe android:fraction="0" android:value="0.2" />
+            <keyframe android:fraction="0.35" android:value="1" android:interpolator="@android:interpolator/fast_out_slow_in" />
+            <keyframe android:fraction="0.7" android:value="0.2" android:interpolator="@android:interpolator/fast_out_slow_in" />
+            <keyframe android:fraction="1" android:value="0.2" />
+        </propertyValuesHolder>
+    </objectAnimator></aapt:attr></target>
+    <target android:name="d3"><aapt:attr name="android:animation"><objectAnimator android:duration="1200" android:startOffset="400" android:repeatCount="infinite" android:interpolator="@android:anim/linear_interpolator">
+        <propertyValuesHolder android:propertyName="fillAlpha" android:valueType="floatType">
+            <keyframe android:fraction="0" android:value="0.2" />
+            <keyframe android:fraction="0.35" android:value="1" android:interpolator="@android:interpolator/fast_out_slow_in" />
+            <keyframe android:fraction="0.7" android:value="0.2" android:interpolator="@android:interpolator/fast_out_slow_in" />
+            <keyframe android:fraction="1" android:value="0.2" />
+        </propertyValuesHolder>
+    </objectAnimator></aapt:attr></target>
+    <target android:name="g1"><aapt:attr name="android:animation"><objectAnimator android:duration="1200" android:startOffset="0" android:repeatCount="infinite" android:interpolator="@android:anim/linear_interpolator">
+        <propertyValuesHolder android:propertyName="scaleX" android:valueType="floatType">
+            <keyframe android:fraction="0" android:value="0.85" />
+            <keyframe android:fraction="0.35" android:value="1" android:interpolator="@android:interpolator/fast_out_slow_in" />
+            <keyframe android:fraction="0.7" android:value="0.85" android:interpolator="@android:interpolator/fast_out_slow_in" />
+            <keyframe android:fraction="1" android:value="0.85" />
+        </propertyValuesHolder>
+        <propertyValuesHolder android:propertyName="scaleY" android:valueType="floatType">
+            <keyframe android:fraction="0" android:value="0.85" />
+            <keyframe android:fraction="0.35" android:value="1" android:interpolator="@android:interpolator/fast_out_slow_in" />
+            <keyframe android:fraction="0.7" android:value="0.85" android:interpolator="@android:interpolator/fast_out_slow_in" />
+            <keyframe android:fraction="1" android:value="0.85" />
+        </propertyValuesHolder>
+    </objectAnimator></aapt:attr></target>
+    <target android:name="g2"><aapt:attr name="android:animation"><objectAnimator android:duration="1200" android:startOffset="200" android:repeatCount="infinite" android:interpolator="@android:anim/linear_interpolator">
+        <propertyValuesHolder android:propertyName="scaleX" android:valueType="floatType">
+            <keyframe android:fraction="0" android:value="0.85" />
+            <keyframe android:fraction="0.35" android:value="1" android:interpolator="@android:interpolator/fast_out_slow_in" />
+            <keyframe android:fraction="0.7" android:value="0.85" android:interpolator="@android:interpolator/fast_out_slow_in" />
+            <keyframe android:fraction="1" android:value="0.85" />
+        </propertyValuesHolder>
+        <propertyValuesHolder android:propertyName="scaleY" android:valueType="floatType">
+            <keyframe android:fraction="0" android:value="0.85" />
+            <keyframe android:fraction="0.35" android:value="1" android:interpolator="@android:interpolator/fast_out_slow_in" />
+            <keyframe android:fraction="0.7" android:value="0.85" android:interpolator="@android:interpolator/fast_out_slow_in" />
+            <keyframe android:fraction="1" android:value="0.85" />
+        </propertyValuesHolder>
+    </objectAnimator></aapt:attr></target>
+    <target android:name="g3"><aapt:attr name="android:animation"><objectAnimator android:duration="1200" android:startOffset="400" android:repeatCount="infinite" android:interpolator="@android:anim/linear_interpolator">
+        <propertyValuesHolder android:propertyName="scaleX" android:valueType="floatType">
+            <keyframe android:fraction="0" android:value="0.85" />
+            <keyframe android:fraction="0.35" android:value="1" android:interpolator="@android:interpolator/fast_out_slow_in" />
+            <keyframe android:fraction="0.7" android:value="0.85" android:interpolator="@android:interpolator/fast_out_slow_in" />
+            <keyframe android:fraction="1" android:value="0.85" />
+        </propertyValuesHolder>
+        <propertyValuesHolder android:propertyName="scaleY" android:valueType="floatType">
+            <keyframe android:fraction="0" android:value="0.85" />
+            <keyframe android:fraction="0.35" android:value="1" android:interpolator="@android:interpolator/fast_out_slow_in" />
+            <keyframe android:fraction="0.7" android:value="0.85" android:interpolator="@android:interpolator/fast_out_slow_in" />
+            <keyframe android:fraction="1" android:value="0.85" />
+        </propertyValuesHolder>
+    </objectAnimator></aapt:attr></target>
+</animated-vector>

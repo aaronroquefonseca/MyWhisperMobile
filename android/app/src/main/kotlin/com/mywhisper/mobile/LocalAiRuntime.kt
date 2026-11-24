@@ -281,3 +281,7 @@ object LocalAiRuntime {
     /** Worker threads for CPU-side work: half the cores, 2..4. */
     fun threads(): Int = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(2, 4)
 }
+
+/** Why on-device models are unavailable: this build has no runtime download, or the phone is not arm64. */
+internal fun localUnavailableRes(): Int =
+    if (LocalAiRuntime.PACK.url.isBlank()) R.string.local_need_build else R.string.local_need_full
