@@ -266,7 +266,6 @@ class OverlayService : Service(), Dictation.Listener {
     private var holdUnstuck = false
     private var holdReturning = false
     private var processingTouch = false
-    private var processingAnimator: android.animation.ObjectAnimator? = null
     private var chromeState: Dictation.State? = null
     private var cancelGuide: View? = null
     private var snoozeTarget: android.widget.ImageView? = null
@@ -1653,12 +1652,11 @@ class OverlayService : Service(), Dictation.Listener {
         }
         holder = null
         haloView = null
+        (micBtn?.drawable as? android.graphics.drawable.Animatable)?.stop()
         micBtn = null
         dragHandle = null
         stopBtn = null
         spinner = null
-        processingAnimator?.cancel()
-        processingAnimator = null
         chromeState = null
     }
 
@@ -1669,8 +1667,7 @@ class OverlayService : Service(), Dictation.Listener {
         val processing = FloatState.isProcessing(state)
         val stateChanged = chromeState != state
         if (stateChanged) {
-            processingAnimator?.cancel()
-            processingAnimator = null
+            (micBtn?.drawable as? android.graphics.drawable.Animatable)?.stop()
             micBtn?.imageAlpha = 255
             chromeState = state
         }
@@ -1689,8 +1686,9 @@ class OverlayService : Service(), Dictation.Listener {
             minimumWidth = 0
             minimumHeight = 0
             adjustViewBounds = false
-            val logo = true
-            setImageResource(if (processing) R.drawable.ic_float_processing else if (logo) R.drawable.ic_stat_sync else R.drawable.ic_mic)
+            // Re-inflating the processing dots on every refresh would restart their animation.
+            if (!processing) setImageResource(R.drawable.ic_stat_sync)
+            else if (stateChanged) setImageResource(R.drawable.ic_float_processing)
             scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
             imageTintList = android.content.res.ColorStateList.valueOf(Color.BLACK)
             alpha = if (state == Dictation.State.RECORDING && !toggleRecording) 0f else 1f
@@ -1701,12 +1699,7 @@ class OverlayService : Service(), Dictation.Listener {
         if (stateChanged) {
             if (processing) {
                 micBtn?.contentDescription = getString(R.string.float_cancel_processing)
-                processingAnimator = android.animation.ObjectAnimator.ofInt(micBtn, "imageAlpha", 100, 255).apply {
-                    duration = 450L
-                    repeatMode = android.animation.ValueAnimator.REVERSE
-                    repeatCount = android.animation.ValueAnimator.INFINITE
-                    start()
-                }
+                (micBtn?.drawable as? android.graphics.drawable.Animatable)?.start()
             } else {
                 micBtn?.contentDescription = getString(R.string.ime_mic)
             }
