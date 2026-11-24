@@ -29,6 +29,12 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.size
@@ -957,10 +963,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // No phone landscape layout yet: phones stay portrait, tablets (sw600+) rotate freely.
-        if (resources.configuration.smallestScreenWidthDp < 600) {
-            requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-        }
         micDeniedBefore = getSharedPreferences("mw_state", MODE_PRIVATE)
             .getBoolean("mic_denied_before", false)
         // One-shot: recreations restore the saved tab (seed null),
@@ -1561,9 +1563,55 @@ class MainActivity : ComponentActivity() {
             var providersTab by rememberSaveable { mutableIntStateOf(1) }
             LaunchedEffect(tab) { if (tab == 1 || tab == 2) providersTab = tab }
             BackHandler(enabled = backStack.isNotEmpty()) { goBack() }
+            // Rail on wide windows (tablets) and short ones (phones in landscape);
+            // bottom bar otherwise. Same destinations, same rule for when it shows.
+            val window = androidx.compose.ui.platform.LocalConfiguration.current
+            val useRail = useNavigationRail(window.screenWidthDp, window.screenHeightDp)
+            val showNav = isRoot && backStack.isEmpty()
+            val navLabels = listOf(getString(R.string.tab_activity), getString(R.string.nav_providers),
+                getString(R.string.tab_dict), getString(R.string.nav_settings))
+            val navTargets = listOf(0, 1, 3, 17)
+            val navIcons = listOf(R.drawable.ic_nav_activity, R.drawable.ic_voice, R.drawable.ic_library, R.drawable.ic_nav_settings)
+            fun openRoot(index: Int) { tab = if (navTargets[index] == 1) providersTab else navTargets[index] }
+            // The rail runs the full height beside the Scaffold (header included);
+            // the Scaffold skips the start insets the rail already covers.
+            Row(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+                    if (showNav && useRail) androidx.compose.material3.NavigationRail(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                        windowInsets = androidx.compose.foundation.layout.WindowInsets.safeDrawing.only(
+                            androidx.compose.foundation.layout.WindowInsetsSides.Start + androidx.compose.foundation.layout.WindowInsetsSides.Vertical),
+                    ) {
+                        Spacer(Modifier.weight(1f))
+                        navLabels.forEachIndexed { index, label ->
+                            androidx.compose.material3.NavigationRailItem(
+                                selected = selectedTask == navTargets[index],
+                                onClick = { openRoot(index) },
+                                icon = { Icon(painterResource(navIcons[index]), contentDescription = null, modifier = Modifier.size(24.dp)) },
+                                colors = androidx.compose.material3.NavigationRailItemDefaults.colors(
+                                    selectedIconColor = MaterialTheme.colorScheme.onPrimary,
+                                    selectedTextColor = MaterialTheme.colorScheme.primary,
+                                    indicatorColor = MaterialTheme.colorScheme.primary,
+                                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                ),
+                                label = { Text(label) },
+                                modifier = Modifier.padding(vertical = 4.dp),
+                            )
+                        }
+                        Spacer(Modifier.weight(1f))
+                    }
             Scaffold(
+                modifier = Modifier.weight(1f).then(
+                    if (showNav && useRail) Modifier.consumeWindowInsets(
+                        androidx.compose.foundation.layout.WindowInsets.safeDrawing.only(androidx.compose.foundation.layout.WindowInsetsSides.Start))
+                    else Modifier),
+                // Landscape: keep content and the title clear of camera cutouts too.
+                contentWindowInsets = androidx.compose.material3.ScaffoldDefaults.contentWindowInsets
+                    .union(androidx.compose.foundation.layout.WindowInsets.displayCutout),
                 topBar = {
                     TopAppBar(
+                        windowInsets = androidx.compose.foundation.layout.WindowInsets.safeDrawing.only(
+                            androidx.compose.foundation.layout.WindowInsetsSides.Horizontal + androidx.compose.foundation.layout.WindowInsetsSides.Top),
                         title = { Text(titles[tab] ?: getString(R.string.setup_float)) },
                         navigationIcon = {
                             if (backStack.isNotEmpty()) {
@@ -1579,20 +1627,15 @@ class MainActivity : ComponentActivity() {
                 },
                 snackbarHost = { SnackbarHost(snackbarHost) },
                 bottomBar = {
-                    if (isRoot && backStack.isEmpty()) NavigationBar(
+                    if (showNav && !useRail) NavigationBar(
                         containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
                         tonalElevation = 0.dp,
                     ) {
-                        val labels = listOf(getString(R.string.tab_activity), getString(R.string.nav_providers),
-                            getString(R.string.tab_dict), getString(R.string.nav_settings))
-                        val targets = listOf(0, 1, 3, 17)
-                        labels.forEachIndexed { index, label ->
+                        navLabels.forEachIndexed { index, label ->
                             NavigationBarItem(
-                                selected = selectedTask == targets[index],
-                                onClick = { tab = if (targets[index] == 1) providersTab else targets[index] },
-                                icon = { Icon(painterResource(listOf(R.drawable.ic_nav_activity, R.drawable.ic_voice,
-                                    R.drawable.ic_library, R.drawable.ic_nav_settings)[index]),
-                                    contentDescription = null, modifier = Modifier.size(24.dp)) },
+                                selected = selectedTask == navTargets[index],
+                                onClick = { openRoot(index) },
+                                icon = { Icon(painterResource(navIcons[index]), contentDescription = null, modifier = Modifier.size(24.dp)) },
                                 colors = NavigationBarItemDefaults.colors(
                                     selectedIconColor = MaterialTheme.colorScheme.onPrimary,
                                     selectedTextColor = MaterialTheme.colorScheme.primary,
@@ -1606,10 +1649,18 @@ class MainActivity : ComponentActivity() {
                     }
                 },
             ) { pad ->
+                Row(Modifier.fillMaxSize().padding(pad)) {
+                // Pages keep a readable line length on wide windows; Activity lays out its own panes.
+                Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.TopCenter) {
                 Column(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .padding(pad),
+                        .widthIn(max = when (tab) {
+                            0 -> ACTIVITY_MAX_WIDTH
+                            // Swipeable pages: full width so pages slide edge to edge; each centers itself.
+                            1, 2, 3, 16 -> androidx.compose.ui.unit.Dp.Infinity
+                            else -> PAGE_MAX_WIDTH
+                        })
+                        .fillMaxSize(),
                 ) {
                     if (s == null) {
                         // Explicit recovery UI: boot/load failures keep
@@ -1656,6 +1707,9 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }
+                }
+                }
+            }
             }
         }
     }
@@ -2161,14 +2215,14 @@ class MainActivity : ComponentActivity() {
                 .collect { page -> if (page != currentTab - 1) onTab(page + 1) }
         }
         Column(Modifier.fillMaxSize()) {
-            TabRow(selectedTabIndex = pager.currentPage, containerColor = MaterialTheme.colorScheme.background) {
+            Centered { TabRow(selectedTabIndex = pager.currentPage, containerColor = MaterialTheme.colorScheme.background) {
                 Tab(selected = pager.currentPage == 0, onClick = { scope.launch { pager.animateScrollToPage(0) } },
                     text = { Text(stringResource(R.string.providers_speech)) })
                 Tab(selected = pager.currentPage == 1, onClick = { scope.launch { pager.animateScrollToPage(1) } },
                     text = { Text(stringResource(R.string.tab_cleanup)) })
-            }
+            } }
             androidx.compose.foundation.pager.HorizontalPager(pager, Modifier.weight(1f), verticalAlignment = Alignment.Top) { page ->
-                if (page == 1) CleanupScreen(s) else SttScreen(s)
+                Centered(Modifier.fillMaxHeight()) { if (page == 1) CleanupScreen(s) else SttScreen(s) }
             }
         }
     }
@@ -2263,7 +2317,7 @@ class MainActivity : ComponentActivity() {
         BackHandler(enabled = pager.currentPage > 0) { go(pager.currentPage - 1) }
         Column(Modifier.fillMaxSize()) {
             androidx.compose.foundation.pager.HorizontalPager(pager, Modifier.weight(1f), verticalAlignment = Alignment.Top) { p ->
-                TaskPage {
+                Centered(Modifier.fillMaxHeight()) { TaskPage {
                     when (p) {
                         0 -> {
                             OnboardingHeading(getString(R.string.task_onboarding_title))
@@ -2281,12 +2335,12 @@ class MainActivity : ComponentActivity() {
                         else -> OnboardingPracticePage(active = pager.currentPage == 3, s = s)
                     }
                     Spacer(Modifier.height(24.dp))
-                }
+                } }
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             val buttonShown by OverlayService.practiceButtonShown.collectAsState()
             StepDots(4, pager.currentPage, Modifier.align(Alignment.CenterHorizontally).padding(top = 12.dp))
-            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Centered { Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 if (pager.currentPage > 0) TextButton(onClick = { go(pager.currentPage - 1) }) { Text(getString(R.string.new_back)) }
                 Spacer(Modifier.weight(1f))
                 when {
@@ -2297,7 +2351,7 @@ class MainActivity : ComponentActivity() {
                         Text(getString(if (pager.currentPage == 0) R.string.task_get_started else R.string.onb_next))
                     }
                 }
-            }
+            } }
         }
         MicRationaleDialog()
     }
@@ -5219,16 +5273,17 @@ class MainActivity : ComponentActivity() {
         }
         val fieldShape = MaterialTheme.shapes.extraLarge
         Column(modifier = Modifier.fillMaxSize()) {
-            TabRow(selectedTabIndex = dictTab, containerColor = MaterialTheme.colorScheme.background) {
+            Centered { TabRow(selectedTabIndex = dictTab, containerColor = MaterialTheme.colorScheme.background) {
                 Tab(selected = dictTab == 0, onClick = { dictScope.launch { dictPager.animateScrollToPage(0) } },
                     text = { Text(stringResource(R.string.dict_tab_words) + " · ${words.size}") })
                 Tab(selected = dictTab == 1, onClick = { dictScope.launch { dictPager.animateScrollToPage(1) } },
                     text = { Text(stringResource(R.string.dict_tab_snippets) + " · ${snippets.size}") })
-            }
+            } }
             // Store-backed (desktop app_dictionary parity): edits hit the
             // sync tables directly, so transcription and sync see them
             // without a restart.
             androidx.compose.foundation.pager.HorizontalPager(dictPager, Modifier.weight(1f).fillMaxWidth(), verticalAlignment = Alignment.Top) { page ->
+                Centered(Modifier.fillMaxHeight()) {
                 LazyColumn(
                     Modifier.fillMaxSize(),
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 24.dp),
@@ -5340,6 +5395,7 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     }
+                }
                 }
             }
         }
@@ -5486,8 +5542,15 @@ class MainActivity : ComponentActivity() {
      */
     @Composable
     private fun Heatmap(days: List<Day>, onDayTap: (Day) -> Unit) {
+        // Wider cards show more weeks instead of stretching the cells.
+        androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth()) {
+            HeatmapGrid(days, heatmapWeeks(maxWidth.value), onDayTap)
+        }
+    }
+
+    @Composable
+    private fun HeatmapGrid(days: List<Day>, weeks: Int, onDayTap: (Day) -> Unit) {
         val byDay = days.associate { (it.dayStart / 86400) to it }
-        val weeks = 24
         val today = java.time.LocalDate.now().toEpochDay()
         // Saturday-anchored grid, same math as desktop cell_epoch_day.
         val saturday = today + (6 - Math.floorMod(today + 4, 7))
@@ -5617,7 +5680,7 @@ class MainActivity : ComponentActivity() {
             workers.execute {
                 try {
                     val st = CoreBridge.usageStats().getOrThrow()
-                    val arr = CoreBridge.dailyActivity(200).getOrThrow()
+                    val arr = CoreBridge.dailyActivity(371).getOrThrow()
                     val d = List(arr.length()) { i ->
                         val o = arr.getJSONObject(i)
                         Day(o.getLong("dayStart"), o.getInt("words"), o.getInt("utterances"))
@@ -5708,11 +5771,9 @@ class MainActivity : ComponentActivity() {
         val priv = s.optJSONObject("privacy") ?: JSONObject().also { s.put("privacy", it) }
         // Toggles write into [priv] before the committed reload lands; this re-reads them now.
         var privVersion by remember { mutableIntStateOf(0) }
-        LazyColumn(
-            Modifier.fillMaxSize(),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
+        // Overview (button, problems, stats) and history: one list on narrow
+        // windows, two independently scrolling panes on wide ones.
+        val overview: androidx.compose.foundation.lazy.LazyListScope.() -> Unit = {
             item(key = "float") { FloatingButtonQuick(s, setup, onNavigate, onOpenProviders) }
             val kind = issueKind
             if (kind != null) item(key = "issue") {
@@ -5751,20 +5812,26 @@ class MainActivity : ComponentActivity() {
                 val w = stats?.optLong("wordsSpoken", 0L) ?: 0L
                 val wpm = stats?.optDouble("wordsPerMinute", 0.0) ?: 0.0
                 val streak = stats?.optInt("streakDays", 0) ?: 0
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    // Intrinsic height: both cards in a row match the taller one.
-                    val pair = Modifier.fillMaxWidth().height(androidx.compose.foundation.layout.IntrinsicSize.Min)
-                    val cell = Modifier.fillMaxHeight()
-                    Row(pair, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        StatCard(stringResource(R.string.act_words), compactWords(w), stringResource(R.string.act_saved), Modifier.weight(1f).then(cell))
-                        StatCard(stringResource(R.string.act_wpm), if (wpm > 0) "${wpm.toInt()}" else stringResource(R.string.act_wpm_none),
-                            stringResource(R.string.act_wpm_cap), Modifier.weight(1f).then(cell))
-                    }
-                    Row(pair, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        StatCard(stringResource(R.string.act_dictations), "$u", stringResource(R.string.act_saved), Modifier.weight(1f).then(cell))
-                        StatCard(stringResource(R.string.act_streak),
-                            if (streak == 1) stringResource(R.string.act_streak_one) else stringResource(R.string.act_streak_n, streak),
-                            stringResource(R.string.act_streak_cap), Modifier.weight(1f).then(cell))
+                val cards: List<@Composable (Modifier) -> Unit> = listOf(
+                    { m -> StatCard(stringResource(R.string.act_words), compactWords(w), stringResource(R.string.act_saved), m) },
+                    { m -> StatCard(stringResource(R.string.act_wpm), if (wpm > 0) "${wpm.toInt()}" else stringResource(R.string.act_wpm_none),
+                        stringResource(R.string.act_wpm_cap), m) },
+                    { m -> StatCard(stringResource(R.string.act_dictations), "$u", stringResource(R.string.act_saved), m) },
+                    { m -> StatCard(stringResource(R.string.act_streak),
+                        if (streak == 1) stringResource(R.string.act_streak_one) else stringResource(R.string.act_streak_n, streak),
+                        stringResource(R.string.act_streak_cap), m) },
+                )
+                androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth()) {
+                    // Four across when there is room, else two rows of two. Intrinsic
+                    // height: cards in a row match the tallest one.
+                    val perRow = if (maxWidth >= 560.dp) 4 else 2
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        cards.chunked(perRow).forEach { row ->
+                            Row(Modifier.fillMaxWidth().height(androidx.compose.foundation.layout.IntrinsicSize.Min),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                row.forEach { card -> card(Modifier.weight(1f).fillMaxHeight()) }
+                            }
+                        }
                     }
                 }
             }
@@ -5812,8 +5879,10 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+        }
+        val history: androidx.compose.foundation.lazy.LazyListScope.(Boolean) -> Unit = { paned ->
             item(key = "historyHeader") {
-                Row(Modifier.fillMaxWidth().padding(top = 16.dp, start = 4.dp), verticalAlignment = Alignment.Bottom) {
+                Row(Modifier.fillMaxWidth().padding(top = if (paned) 0.dp else 16.dp, start = 4.dp), verticalAlignment = Alignment.Bottom) {
                     Column(Modifier.weight(1f)) {
                         Text(stringResource(R.string.tab_history), style = MaterialTheme.typography.titleLarge)
                         Text(stringResource(R.string.home_history_hint), style = MaterialTheme.typography.bodySmall,
@@ -5903,6 +5972,23 @@ class MainActivity : ComponentActivity() {
                         onCopyOriginal = { copyText(h.rawText, getString(R.string.home_copied_original)) },
                         onDelete = { deleteHist(h.uuid) },
                     )
+                }
+            }
+        }
+        val listPadding = androidx.compose.foundation.layout.PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 24.dp)
+        androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize()) {
+            if (maxWidth >= TWO_PANE_MIN_WIDTH) {
+                Row(Modifier.fillMaxSize()) {
+                    LazyColumn(Modifier.weight(0.42f).fillMaxHeight(), contentPadding = listPadding,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)) { overview() }
+                    LazyColumn(Modifier.weight(0.58f).fillMaxHeight(), contentPadding = listPadding,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)) { history(true) }
+                }
+            } else {
+                LazyColumn(Modifier.fillMaxSize(), contentPadding = listPadding,
+                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    overview()
+                    history(false)
                 }
             }
         }
