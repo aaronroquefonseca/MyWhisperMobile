@@ -2,4 +2,5 @@
 <resources>
     <!-- Material3 baseline error (dark). -->
     <color name="mw_error">#F2B8B5</color>
+    <color name="mw_window_bg">#121416</color>
 </resources>
