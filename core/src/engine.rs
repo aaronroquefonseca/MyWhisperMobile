@@ -755,7 +755,8 @@ impl Engine {
                 if crate::server_stt::server_generation() != held.generation {
                     return Err("superseded (provider switched mid-utterance)".to_string());
                 }
-                // A server disabled or removed during the decode gets no audio.
+                // Held order, current config: a server edited, disabled or
+                // removed during the decode never gets audio under its old setup.
                 let mut stt = held.stt;
                 let live = &self.settings.stt.entries;
                 for e in stt
@@ -763,7 +764,10 @@ impl Engine {
                     .iter_mut()
                     .filter(|e| e.kind != SttEntryKind::Local)
                 {
-                    e.enabled &= live.iter().any(|l| l.id == e.id && l.enabled);
+                    match live.iter().find(|l| l.id == e.id && l.kind == e.kind) {
+                        Some(current) => *e = current.clone(),
+                        None => e.enabled = false,
+                    }
                 }
                 (held.pcm16, held.duration_secs, held.generation, stt)
             }
@@ -1527,6 +1531,27 @@ mod tests {
             "disabled server must not upload, got: {err}"
         );
         assert!(err.contains("no server STT configured"), "got: {err}");
+    }
+
+    #[test]
+    fn server_edited_during_local_decode_uses_current_endpoint() {
+        let _guard = status_test_lock();
+        reset_status_state();
+        let (port, stub) = stub_transcription_server();
+        let mut eng = open_engine();
+        // Old Below endpoint is a closed port: the pass succeeds only via the new one.
+        let plan = split_chain_settings("http://127.0.0.1:9");
+        eng.put_settings(&plan).unwrap();
+        eng.start_utterance(16000);
+        eng.push_pcm(&vec![1000i16; 8000]);
+        assert!(eng.finish_utterance_part(ChainPart::BeforeLocal).is_err());
+        let mut edited: AppSettings = serde_json::from_str(&plan).unwrap();
+        edited.stt.entries[2].url = format!("http://127.0.0.1:{port}");
+        eng.put_settings(&serde_json::to_string(&edited).unwrap())
+            .unwrap();
+        let out = eng.finish_utterance_part(ChainPart::AfterLocal).unwrap();
+        assert_eq!(out.text, "hello world");
+        stub.join().unwrap();
     }
 
     #[test]
