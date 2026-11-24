@@ -78,24 +78,25 @@ struct ActivityView: View {
 
     private var usageSection: some View {
         Section {
-            let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: typeSize.isAccessibilitySize ? 1 : 2)
-            LazyVGrid(columns: columns, spacing: 8) {
-                usageMetric("Words spoken", model.stats?.wordsSpoken.formatted() ?? "0")
-                usageMetric("Words per minute", model.stats.flatMap {
-                    $0.wordsPerMinute > 0 ? $0.wordsPerMinute.formatted(.number.precision(.fractionLength(0))) : nil
-                } ?? "—")
-                usageMetric("Dictations", model.stats?.dictations.formatted() ?? "0")
-                let streak = model.stats?.streakDays ?? 0
-                usageMetric("Current streak", streak == 1 ? "1 day" : "\(streak) days")
+            VStack(spacing: 8) {
+                let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: typeSize.isAccessibilitySize ? 1 : 2)
+                LazyVGrid(columns: columns, spacing: 8) {
+                    usageMetric("Words spoken", model.stats?.wordsSpoken.formatted() ?? "0")
+                    usageMetric("Words per minute", model.stats.flatMap {
+                        $0.wordsPerMinute > 0 ? $0.wordsPerMinute.formatted(.number.precision(.fractionLength(0))) : nil
+                    } ?? "—")
+                    usageMetric("Dictations", model.stats?.dictations.formatted() ?? "0")
+                    let streak = model.stats?.streakDays ?? 0
+                    usageMetric("Current streak", streak == 1 ? "1 day" : "\(streak) days")
+                }
+
+                SpeakingActivityView(activity: model.activity)
+                    .padding(16)
+                    .background(WhisperColors.surface(colorScheme), in: RoundedRectangle(cornerRadius: 16))
             }
             .listRowInsets(EdgeInsets())
             .listRowBackground(Color.clear)
             .listRowSeparator(.hidden)
-
-            SpeakingActivityView(activity: model.activity)
-                .padding(.vertical, 4)
-                .whisperRowSurface()
-                .listRowSeparator(.hidden)
         } header: {
             WhisperSectionHeading("Usage")
         } footer: {

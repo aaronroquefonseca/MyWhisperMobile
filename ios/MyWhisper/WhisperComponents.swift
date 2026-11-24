@@ -7,6 +7,7 @@ private struct WhisperListStyle: ViewModifier {
         content
             .listStyle(.insetGrouped)
             .listSectionSpacing(16)
+            .contentMargins(.top, 12, for: .scrollContent)
             .scrollContentBackground(.hidden)
             .background(WhisperColors.background(colorScheme).ignoresSafeArea())
             .scrollDismissesKeyboard(.interactively)
