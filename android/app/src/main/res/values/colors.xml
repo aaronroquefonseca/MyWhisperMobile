@@ -2,4 +2,5 @@
 <resources>
     <!-- Material3 baseline error (light); night variant in values-night. -->
     <color name="mw_error">#B3261E</color>
+    <color name="mw_window_bg">#F6F7F8</color>
 </resources>

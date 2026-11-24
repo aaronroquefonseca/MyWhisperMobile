@@ -46,6 +46,7 @@ import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.animateContentSize
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -218,6 +219,10 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
+        /** Appearance cached in `mw_state` so a cold start paints the right theme before settings load. */
+        private const val PREF_THEME = "ui_theme"
+        private const val PREF_BLACK = "ui_black_background"
+
         /** Next step when the mic request is denied. Pure for unit tests. */
         internal enum class MicDenyOutcome { RATIONALE, SETTINGS, TRANSIENT }
 
@@ -975,7 +980,25 @@ class MainActivity : ComponentActivity() {
         )
         refreshPermStates()
         reload()
+        paintCachedWindowBackground()
         setContent { Root() }
+    }
+
+    /** The window shows before Compose draws: give it the cached theme's background, not the manifest default. */
+    private fun paintCachedWindowBackground() {
+        val prefs = getSharedPreferences("mw_state", MODE_PRIVATE)
+        val dark = when (prefs.getString(PREF_THEME, "System")) {
+            "Light" -> false
+            "Dark" -> true
+            else -> (resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+                android.content.res.Configuration.UI_MODE_NIGHT_YES
+        }
+        val color = when {
+            dark && prefs.getBoolean(PREF_BLACK, false) -> Color.Black
+            dark -> Color(0xFF121416)
+            else -> WhisperLightColors.background
+        }
+        window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(color.toArgb()))
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -1494,13 +1517,18 @@ class MainActivity : ComponentActivity() {
             },
         )
         val s = settingsState.value
-        val theme = s?.optJSONObject("preferences")?.optString("theme", "System") ?: "System"
+        // Until settings load, use the appearance cached from the last run: no wrong-theme first frame.
+        val themePrefs = getSharedPreferences("mw_state", MODE_PRIVATE)
+        val prefs = s?.optJSONObject("preferences")
+        val theme = if (s != null) prefs?.optString("theme", "System") ?: "System" else themePrefs.getString(PREF_THEME, "System")!!
+        val black = if (s != null) prefs?.optBoolean("black_background", false) == true else themePrefs.getBoolean(PREF_BLACK, false)
+        if (s != null) LaunchedEffect(theme, black) { themePrefs.edit { putString(PREF_THEME, theme); putBoolean(PREF_BLACK, black) } }
         val dark = when (theme) {
             "Light" -> false
             "Dark" -> true
             else -> androidx.compose.foundation.isSystemInDarkTheme()
         }
-        val colors = animatedColorScheme(whisperColorScheme(dark, black = s?.optJSONObject("preferences")?.optBoolean("black_background", false) == true))
+        val colors = animatedColorScheme(whisperColorScheme(dark, black = black))
         SideEffect {
             WindowCompat.getInsetsController(window, window.decorView).apply {
                 isAppearanceLightStatusBars = !dark
@@ -1667,7 +1695,9 @@ class MainActivity : ComponentActivity() {
                         })
                         .fillMaxSize(),
                 ) {
-                    if (s == null) {
+                    if (s == null && settingsError.value.isEmpty()) {
+                        LoadingBox()
+                    } else if (s == null) {
                         // Explicit recovery UI: boot/load failures keep
                         // the committed error visible with a retry that
                         // re-runs the generation-aware reload job.
@@ -2259,7 +2289,7 @@ class MainActivity : ComponentActivity() {
         try { LocalModelDownload.packFingerprint(files()) } catch (_: Exception) { null }
 
     @Composable
-    private fun bubbleSetupState(s: JSONObject): BubbleSetupState {
+    private fun bubbleSetupState(s: JSONObject, assumeWhileVerifying: Boolean = false): BubbleSetupState {
         val prefs = getSharedPreferences("mw_state", MODE_PRIVATE)
         val entries = s.optJSONObject("stt")?.optJSONArray("entries")
         val localEnabled = entries?.let {
@@ -2285,6 +2315,7 @@ class MainActivity : ComponentActivity() {
             stillSelected = { LocalStt.selectedEntry(prefs).id == selected.id },
             isVerified = { it.state == LocalModelDownload.RowState.PRESENT },
             verify = { LocalSttModels.inspect(filesDir, selected) },
+            whilePending = assumeWhileVerifying,
         )
 
         return BubbleSetupState(micGranted.value, overlayGranted.value, a11yOn.value,
@@ -5498,13 +5529,36 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun StatCard(label: String, value: String, caption: String, modifier: Modifier = Modifier) {
+    private fun StatCard(label: String, value: String?, caption: String, modifier: Modifier = Modifier) {
         Surface(modifier = modifier, shape = MaterialTheme.shapes.extraLarge, color = MaterialTheme.colorScheme.surfaceContainerLow) {
             Column(modifier = Modifier.padding(14.dp)) {
                 Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(value, style = MaterialTheme.typography.headlineSmall)
+                // null: still loading. A pulsing bar at the number's height, not a misleading 0.
+                if (value == null) LoadingBar(Modifier.padding(vertical = 6.dp).width(56.dp).height(20.dp))
+                else Text(value, style = MaterialTheme.typography.headlineSmall)
                 Text(caption, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+        }
+    }
+
+    /** Skeleton placeholder: a softly pulsing block where content is still loading. */
+    @Composable
+    private fun LoadingBar(modifier: Modifier = Modifier) {
+        val pulse by androidx.compose.animation.core.rememberInfiniteTransition(label = "loading").animateFloat(
+            0.35f, 0.8f,
+            androidx.compose.animation.core.infiniteRepeatable(
+                androidx.compose.animation.core.tween(700), androidx.compose.animation.core.RepeatMode.Reverse),
+            label = "pulse",
+        )
+        Box(modifier.graphicsLayer { alpha = pulse }
+            .background(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.shapes.small))
+    }
+
+    /** Centered spinner for a section whose data has not arrived yet. */
+    @Composable
+    private fun LoadingBox(modifier: Modifier = Modifier) {
+        Box(modifier.fillMaxWidth().padding(vertical = 24.dp), contentAlignment = Alignment.Center) {
+            androidx.compose.material3.CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 3.dp)
         }
     }
 
@@ -5673,6 +5727,8 @@ class MainActivity : ComponentActivity() {
         var statsErr by remember { mutableStateOf("") }
         var statsVersion by remember { mutableIntStateOf(0) }
         var items by remember { mutableStateOf(emptyList<Hist>()) }
+        // False until the first history load lands: an empty list means "loading", not "no history".
+        var histLoaded by remember { mutableStateOf(false) }
         var hasMore by remember { mutableStateOf(false) }
         var loadingMore by remember { mutableStateOf(false) }
         var confirmClear by remember { mutableStateOf(false) }
@@ -5722,6 +5778,7 @@ class MainActivity : ComponentActivity() {
                     runOnUiThread {
                         if (!jobApplies(histGen.get(), gen)) return@runOnUiThread
                         items = committed
+                        histLoaded = true
                         hasMore = committed.size == want
                         histError.value = ""
                         histBusy.value = false
@@ -5731,6 +5788,7 @@ class MainActivity : ComponentActivity() {
                     runOnUiThread {
                         if (!jobApplies(histGen.get(), gen)) return@runOnUiThread
                         histError.value = e.message ?: "failed"
+                        histLoaded = true
                         histBusy.value = false
                         onFail(e.message ?: "failed")
                     }
@@ -5794,7 +5852,8 @@ class MainActivity : ComponentActivity() {
 
         // Hoisted out of the list: computed in a lazy item, the async pack check
         // restarts each time the card scrolls back in and its height jumps.
-        val setup = bubbleSetupState(s)
+        // The cold-start hash check takes seconds: don't flash "no speech" meanwhile.
+        val setup = bubbleSetupState(s, assumeWhileVerifying = true)
         val zone = remember { java.time.ZoneId.systemDefault() }
         val today = java.time.LocalDate.now(zone)
         val todayWord = getString(R.string.home_today)
@@ -5807,6 +5866,7 @@ class MainActivity : ComponentActivity() {
         var privVersion by remember { mutableIntStateOf(0) }
         // Overview (button, problems, stats) and history: one list on narrow
         // windows, two independently scrolling panes on wide ones.
+        val statsLoading = stats == null && statsErr.isEmpty()
         val overview: androidx.compose.foundation.lazy.LazyListScope.() -> Unit = {
             item(key = "float") { FloatingButtonQuick(s, setup, onNavigate, onOpenProviders) }
             val kind = issueKind
@@ -5846,13 +5906,14 @@ class MainActivity : ComponentActivity() {
                 val w = stats?.optLong("wordsSpoken", 0L) ?: 0L
                 val wpm = stats?.optDouble("wordsPerMinute", 0.0) ?: 0.0
                 val streak = stats?.optInt("streakDays", 0) ?: 0
+                fun <T> shown(v: T): T? = if (statsLoading) null else v
                 val cards: List<@Composable (Modifier) -> Unit> = listOf(
-                    { m -> StatCard(stringResource(R.string.act_words), compactWords(w), stringResource(R.string.act_saved), m) },
-                    { m -> StatCard(stringResource(R.string.act_wpm), if (wpm > 0) "${wpm.toInt()}" else stringResource(R.string.act_wpm_none),
+                    { m -> StatCard(stringResource(R.string.act_words), shown(compactWords(w)), stringResource(R.string.act_saved), m) },
+                    { m -> StatCard(stringResource(R.string.act_wpm), shown(if (wpm > 0) "${wpm.toInt()}" else stringResource(R.string.act_wpm_none)),
                         stringResource(R.string.act_wpm_cap), m) },
-                    { m -> StatCard(stringResource(R.string.act_dictations), "$u", stringResource(R.string.act_saved), m) },
+                    { m -> StatCard(stringResource(R.string.act_dictations), shown("$u"), stringResource(R.string.act_saved), m) },
                     { m -> StatCard(stringResource(R.string.act_streak),
-                        if (streak == 1) stringResource(R.string.act_streak_one) else stringResource(R.string.act_streak_n, streak),
+                        shown(if (streak == 1) stringResource(R.string.act_streak_one) else stringResource(R.string.act_streak_n, streak)),
                         stringResource(R.string.act_streak_cap), m) },
                 )
                 androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth()) {
@@ -5880,7 +5941,9 @@ class MainActivity : ComponentActivity() {
                         if (statsErr.isNotEmpty()) {
                             Text(statsErr, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                         }
-                        if (days.isEmpty()) {
+                        if (statsLoading) {
+                            LoadingBar(Modifier.fillMaxWidth().height(96.dp))
+                        } else if (days.isEmpty()) {
                             Text(stringResource(R.string.act_empty), style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant)
                         } else {
@@ -5923,8 +5986,9 @@ class MainActivity : ComponentActivity() {
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     // Total from stats: the list only holds the pages loaded so far.
-                    val total = stats?.optLong("dictations", -1L)?.takeIf { it >= 0 && histQuery.isBlank() }?.toInt() ?: items.size
-                    Text(stringResource(R.string.hist_count, total), style = MaterialTheme.typography.labelMedium,
+                    val total = stats?.optLong("dictations", -1L)?.takeIf { it >= 0 && histQuery.isBlank() }?.toInt()
+                        ?: items.size.takeIf { histLoaded }
+                    if (total != null) Text(stringResource(R.string.hist_count, total), style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
@@ -5986,7 +6050,10 @@ class MainActivity : ComponentActivity() {
                 Text(histError.value, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             }
             if (items.isEmpty()) item(key = "histEmpty") {
-                Text(
+                // Skeleton rows shaped like history entries, pulsing like the stat cards.
+                if (!histLoaded) Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    repeat(3) { LoadingBar(Modifier.fillMaxWidth().height(64.dp)) }
+                } else Text(
                     stringResource(if (histQuery.isBlank()) R.string.home_history_empty else R.string.dict_no_match),
                     Modifier.fillMaxWidth().padding(vertical = 24.dp),
                     style = MaterialTheme.typography.bodyMedium,
