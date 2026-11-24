@@ -172,6 +172,19 @@ pub(crate) fn open_test_db(path: &std::path::Path) -> rusqlite::Result<Store> {
     Store::open(path)
 }
 
+/// `search_fold(text)`: the history-search key, NFC + full Unicode
+/// lowercase (`textnorm::dict_key`), so `ÁRBOL`, `árbol`, and
+/// `a` + U+0301 + `rbol` all match while `arbol` stays distinct.
+fn register_search_fold(conn: &Connection) -> rusqlite::Result<()> {
+    use rusqlite::functions::FunctionFlags;
+    conn.create_scalar_function(
+        "search_fold",
+        1,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        |ctx| Ok(crate::textnorm::dict_key(&ctx.get::<String>(0)?)),
+    )
+}
+
 pub struct Store {
     conn: Connection,
     file_identity: Option<(u64, u64)>,
@@ -567,6 +580,7 @@ impl Store {
         // when the file was replaced under us (desktop #18
         // file-identity check).
         let file_identity = file_identity_of(path);
+        register_search_fold(&conn)?;
         Ok(Self {
             conn,
             file_identity,
@@ -931,8 +945,10 @@ impl Store {
     /// One page of history, newest first. Keyset paging: `before` is the
     /// `(recorded_at, uuid)` of the last row already shown, so rows added
     /// meanwhile never shift or duplicate later pages (an OFFSET would).
-    /// `query` filters text or original text (case-insensitive for ASCII,
-    /// SQLite LIKE); empty means no filter.
+    /// `query` filters text or original text as a literal substring
+    /// after `search_fold` on both sides (Unicode case- and
+    /// normalization-insensitive, accent-sensitive; `%`, `_`, `\` are
+    /// plain characters); empty means no filter.
     pub fn load_history_page(
         &self,
         limit: usize,
@@ -940,29 +956,22 @@ impl Store {
         before: Option<(i64, &str)>,
         query: &str,
     ) -> rusqlite::Result<Vec<HistoryEntry>> {
-        let pattern = if query.is_empty() {
-            String::new()
-        } else {
-            let escaped = query
-                .replace('\\', "\\\\")
-                .replace('%', "\\%")
-                .replace('_', "\\_");
-            format!("%{escaped}%")
-        };
+        let needle = crate::textnorm::dict_key(query);
         let (before_ts, before_uuid) = before.unwrap_or((i64::MAX, ""));
         let mut stmt = self.conn.prepare(
             "SELECT uuid, text, raw_text, datetime(recorded_at, 'unixepoch'), words,
                     duration_secs, recorded_at, discarded
              FROM history WHERE deleted = 0 AND (discarded = 0 OR ?1)
                AND (?3 = '' OR recorded_at < ?2 OR (recorded_at = ?2 AND uuid < ?3))
-               AND (?4 = '' OR text LIKE ?4 ESCAPE '\\' OR raw_text LIKE ?4 ESCAPE '\\')
+               AND (?4 = '' OR instr(search_fold(text), ?4) > 0
+                    OR instr(search_fold(raw_text), ?4) > 0)
              ORDER BY recorded_at DESC, uuid DESC LIMIT ?5",
         )?;
         let params = rusqlite::params![
             include_discarded,
             before_ts,
             before_uuid,
-            pattern,
+            needle,
             limit as i64
         ];
         stmt.query_map(params, |row| {
@@ -1677,6 +1686,7 @@ impl Store {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch(PRAGMAS)?;
         migrate_schema(&conn)?;
+        register_search_fold(&conn)?;
         Ok(Self {
             conn,
             file_identity: None,
@@ -2538,6 +2548,72 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    /// History search folds Unicode case and canonical form on the
+    /// query, cleaned text, and original text, keeps accents distinct,
+    /// treats `%`, `_`, `\` literally, and pages newest-first across
+    /// the whole history, including rows saved before the reopen.
+    #[test]
+    fn history_search_folds_unicode_and_pages_full_history() {
+        let path =
+            std::env::temp_dir().join(format!("mywhisper-search-test-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let row = |ts: i64, id: &str, text: &str, raw: &str| HistoryRecord {
+            uuid: id.to_string(),
+            text: text.to_string(),
+            raw_text: raw.to_string(),
+            words: 2,
+            duration_secs: 1,
+            deleted: false,
+            discarded: false,
+            recorded_at: ts,
+        };
+        // Oldest row matches only through its decomposed, uppercase
+        // original text, behind 40 newer non-matching rows.
+        let mut rows = vec![row(10, "old", "cleaned", "A\u{301}RBOL viejo")];
+        rows.extend((0..40).map(|i| row(20 + i, &format!("fill{i:02}"), "filler", "filler")));
+        rows.extend([
+            row(60, "acc", "Árbol grande", ""),
+            row(61, "plain", "arbol sin tilde", ""),
+            row(62, "pct", "50% off_sale C:\\tmp", ""),
+            row(63, "under", "50 percent offXsale C:tmp", ""),
+        ]);
+        open_test_db(&path).unwrap().apply_history(&rows).unwrap();
+
+        let store = open_test_db(&path).unwrap();
+        let ids = |q: &str| {
+            store
+                .load_history_page(10, false, None, q)
+                .unwrap()
+                .into_iter()
+                .map(|h| h.uuid)
+                .collect::<Vec<_>>()
+        };
+        for q in ["árbol", "a\u{301}rbol", "ÁRBOL", "A\u{301}rBoL"] {
+            assert_eq!(ids(q), ["acc", "old"], "query {q:?}");
+        }
+        assert_eq!(ids("arbol"), ["plain"]);
+        assert_eq!(ids("%"), ["pct"]);
+        assert_eq!(ids("50%"), ["pct"]);
+        assert_eq!(ids("off_sale"), ["pct"]);
+        assert_eq!(ids("\\tmp"), ["pct"]);
+        assert!(ids("%off").is_empty());
+
+        // Paging a filtered query reaches the match past the filler.
+        let first = store.load_history_page(1, false, None, "Árbol").unwrap();
+        assert_eq!(first[0].uuid, "acc");
+        let next = store
+            .load_history_page(
+                1,
+                false,
+                Some((first[0].recorded_at, &first[0].uuid)),
+                "Árbol",
+            )
+            .unwrap();
+        assert_eq!(next[0].uuid, "old");
+        drop(store);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
