@@ -663,6 +663,7 @@ class OverlayService : Service(), Dictation.Listener {
                     startForegroundWithType(microphone = true)
                     val cap = AudioCapture(this, onPcm = onPcm, onError = onError, onLevel = onLevel)
                     if (cap.start()) object : Dictation.Capture {
+                        override val utterance = cap.utterance
                         override fun stop() {
                             cap.stop()
                             if (foregrounded) try { startForegroundWithType(microphone = false) } catch (_: Exception) { }
@@ -680,7 +681,7 @@ class OverlayService : Service(), Dictation.Listener {
             // throw → server chain. Pack-gated: null without the pack.
             localTranscribe = { pcm -> if (practiceMode) null else LocalStt.transcribeIfEnabled(this, pcm) },
             localFirst = { !practiceMode && LocalStt.isLocalFirst() },
-            finishTranscription = { if (practiceMode) practiceResult() else CoreBridge.finishUtterance() },
+            finishTranscription = { utterance -> if (practiceMode) practiceResult() else CoreBridge.finishUtterance(utterance) },
             // Shutdown releases the native recognizer (no resident ORT
             // session across service restarts in one process).
             releaseLocal = {

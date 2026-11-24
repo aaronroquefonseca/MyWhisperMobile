@@ -55,7 +55,7 @@ class LocalFallbackTest {
             },
             cancelTranscription = {},
             localFirst = { localFirst },
-            finishLocal = { raw, text, engine, _ ->
+            finishLocal = { raw, text, engine, _, _ ->
                 coreFinishes.add(Triple(raw, text, engine))
                 coreCleanup(text) to engine
             },

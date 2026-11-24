@@ -40,7 +40,7 @@ class LocalDictionaryParityTest {
                     "server" to "test-engine"
                 },
                 cancelTranscription = {},
-                finishLocal = { _, text, engine, _ ->
+                finishLocal = { _, text, engine, _, _ ->
                     toCore.add(text)
                     text to engine
                 },
@@ -75,7 +75,7 @@ class LocalDictionaryParityTest {
                 },
                 finishTranscription = { "server text" to "test-engine" },
                 cancelTranscription = {},
-                finishLocal = { _, text, engine, _ -> text to engine },
+                finishLocal = { _, text, engine, _, _ -> text to engine },
                 localTranscribe = { "local text" to "local moonshine-v2-tiny.en" },
                 localPostProcess = { throw RuntimeException("nope") },
                 pushPcm = { _, _ -> },

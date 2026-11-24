@@ -34,7 +34,7 @@ use jni::JNIEnv;
 #[cfg(target_os = "android")]
 use jni::objects::{JClass, JShortArray, JString};
 #[cfg(target_os = "android")]
-use jni::sys::{jint, jstring};
+use jni::sys::{jint, jlong, jstring};
 #[cfg(target_os = "android")]
 use std::path::PathBuf;
 #[cfg(target_os = "android")]
@@ -186,10 +186,7 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeStartUt
     sample_rate: jint,
 ) -> jstring {
     let out = with_engine(
-        |e| {
-            e.start_utterance(sample_rate as u32);
-            ok_json(serde_json::Value::Null)
-        },
+        |e| ok_json(serde_json::json!(e.start_utterance(sample_rate as u32))),
         || err_json("engine not open"),
     );
     jstr(&mut env, &out)
@@ -229,15 +226,16 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativePushPcm
 pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeFinishUtterance(
     mut env: JNIEnv,
     _cls: JClass,
+    utterance: jlong,
 ) -> jstring {
-    let out = finish_out(|e| e.begin_finish());
+    let out = finish_out(|e| e.begin_finish(utterance as u64));
     jstr(&mut env, &out)
 }
 
 /// Runs a finish without holding the engine lock across the network
 /// or cleanup (see `engine::finish_unlocked`).
 #[cfg(target_os = "android")]
-fn finish_out(begin: impl FnOnce(&mut Engine) -> engine::FinishJob) -> String {
+fn finish_out(begin: impl FnOnce(&mut Engine) -> Result<engine::FinishJob, String>) -> String {
     match ENGINE.get().map(|m| engine::finish_unlocked(m, begin)) {
         Some(Ok(o)) => finish_json(o),
         Some(Err(err)) => err_json(err),
@@ -267,12 +265,20 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeFinishL
     text: JString,
     engine_name: JString,
     duration_secs: jint,
+    utterance: jlong,
 ) -> jstring {
     let raw = get_string(&mut env, &raw).unwrap_or_default();
     let text = get_string(&mut env, &text).unwrap_or_default();
     let engine_name = get_string(&mut env, &engine_name).unwrap_or_default();
-    let out =
-        finish_out(|e| e.begin_finish_with_text(&raw, &text, &engine_name, duration_secs as i64));
+    let out = finish_out(|e| {
+        e.begin_finish_with_text(
+            utterance as u64,
+            &raw,
+            &text,
+            &engine_name,
+            duration_secs as i64,
+        )
+    });
     jstr(&mut env, &out)
 }
 

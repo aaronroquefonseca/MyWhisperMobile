@@ -31,13 +31,15 @@ class Dictation(
         val cap = AudioCapture(context, onPcm = onPcm, onError = onError, onLevel = onLevel)
         if (cap.start()) {
             object : Capture {
+                override val utterance = cap.utterance
                 override fun stop() = cap.stop()
             }
         } else {
             null
         }
     },
-    private val finishTranscription: () -> Pair<String, String> = { CoreBridge.finishUtterance() },
+    /** Server finish for the core utterance token ([Capture.utterance]) → (text, engine). */
+    private val finishTranscription: (Long) -> Pair<String, String> = { CoreBridge.finishUtterance(it) },
     private val cancelTranscription: () -> Unit = { CoreBridge.cancelUtterance() },
     /**
      * Forwards capture PCM to the core recorder. Injected (default
@@ -71,11 +73,12 @@ class Dictation(
     private val localFirst: () -> Boolean = { true },
     /**
      * Finishes a local hit through the core (LLM cleanup chain +
-     * history), args (raw, post-processed, engine, durationSecs) →
-     * (text, engine). Default `CoreBridge.finishLocalUtterance`.
+     * history), args (raw, post-processed, engine, durationSecs,
+     * utterance token) → (text, engine). Default
+     * `CoreBridge.finishLocalUtterance`.
      */
-    private val finishLocal: (String, String, String, Int) -> Pair<String, String> =
-        { raw, text, engine, secs -> CoreBridge.finishLocalUtterance(raw, text, engine, secs) },
+    private val finishLocal: (String, String, String, Int, Long) -> Pair<String, String> =
+        { raw, text, engine, secs, utterance -> CoreBridge.finishLocalUtterance(raw, text, engine, secs, utterance) },
     /**
      * Shutdown hook releasing the on-device recognizer
      * (`LocalStt.unload`). Injected (default no-op) so JVM unit tests
@@ -98,6 +101,8 @@ class Dictation(
 
     /** Stoppable mic handle (production: wraps [AudioCapture]; tests: fake). */
     interface Capture {
+        /** Core utterance token from `CoreBridge.startUtterance`; finishes present it. */
+        val utterance: Long get() = 0L
         fun stop()
     }
 
@@ -120,9 +125,10 @@ class Dictation(
      * [MAX_LOCAL_PCM_SAMPLES]. Guarded by [pcmLock]; the buffer itself
      * is retained across utterances to avoid realloc churn.
      *
-     * [pcmLock] also guards handing [capture] over together with the
-     * [session] token, so a stale finish can never take (and stop) a
-     * newer recording's mic or snapshot its PCM.
+     * [pcmLock] also orders every [session] transition (start, cancel,
+     * shutdown) against the finish worker's capture handoff, PCM
+     * snapshot and final delivery, so a stale finish can never take a
+     * newer recording's mic or PCM, paste, or set the state.
      */
     private val pcmLock = Any()
     private var pcmBuf = ShortArray(16_000 * 10)
@@ -234,7 +240,7 @@ class Dictation(
             },
         ) ?: return
         synchronized(pcmLock) {
-            // New token and capture publish together: a stale worker sees both or neither.
+            // New session and capture publish together: a stale worker sees both or neither.
             session.incrementAndGet()
             capture = cap
             pcmSize = 0
@@ -284,25 +290,23 @@ class Dictation(
         // Invalidate the finish worker FIRST so a blocked
         // finishTranscription that returns later drops, never commits.
         val was = state
-        session.incrementAndGet()
+        synchronized(pcmLock) { session.incrementAndGet() }
         log("cancel $was->IDLE session=${session.get()}")
-        hardStop()
+        // Then the core (lock-free), before the UI shows IDLE: a provider
+        // returning now can neither fall back nor save to History.
         try {
             cancelTranscription()
         } catch (_: Exception) {
         }
+        hardStop()
     }
 
     fun shutdown() {
         // Invalidate the finish worker FIRST, same as cancel(): a
         // transcription blocked at destroy time must drop, never commit
         // to a dead listener. State is left alone (terminal; no UI).
-        session.incrementAndGet()
-        try {
-            capture?.stop()
-        } catch (_: Exception) {
-        }
-        capture = null
+        synchronized(pcmLock) { session.incrementAndGet() }
+        takeCapture()?.let(::stopCapture)
         // Release the on-device recognizer: without this the native ORT
         // session stays resident across IME enable/disable cycles in a
         // surviving process. Never throws (hook is guarded).
@@ -313,12 +317,22 @@ class Dictation(
         workers.shutdownNow()
     }
 
-    private fun hardStop() {
-        val cap = synchronized(pcmLock) { capture.also { capture = null } }
+    private fun takeCapture(): Capture? = synchronized(pcmLock) { capture.also { capture = null } }
+
+    /**
+     * Stops are exclusive per capture: a cancel racing the finish
+     * worker's stop waits for it, so the old mic (and its foreground
+     * service downgrade) is fully done before a new recording starts.
+     */
+    private fun stopCapture(cap: Capture) = synchronized(cap) {
         try {
-            cap?.stop()
+            cap.stop()
         } catch (_: Exception) {
         }
+    }
+
+    private fun hardStop() {
+        takeCapture()?.let(::stopCapture)
         toggled = false
         secondDown = false
         set(State.IDLE)
@@ -354,17 +368,23 @@ class Dictation(
                 log("finish drop stale-tail gen=$gen session=${session.get()}")
                 return@execute
             }
-            val cap = synchronized(pcmLock) {
-                if (gen == session.get()) capture.also { capture = null } else null
-            }
+            val cap = synchronized(pcmLock) { if (gen == session.get()) capture else null }
             if (cap == null) {
                 log("finish drop stale-capture gen=$gen session=${session.get()}")
                 return@execute
             }
             // Outside pcmLock: stop() joins the capture thread, which takes it.
-            try {
-                cap.stop()
-            } catch (_: Exception) {
+            // [capture] stays set until the stop is done, so a cancel waits for it.
+            stopCapture(cap)
+            val utterance = cap.utterance
+            // Final delivery: atomic with cancel/start, so a stale worker never reports or sets state.
+            fun deliverIfCurrent(what: String, report: () -> Unit) = synchronized(pcmLock) {
+                if (gen != session.get()) {
+                    log("finish drop stale-$what gen=$gen session=${session.get()}")
+                } else {
+                    report()
+                    set(State.IDLE)
+                }
             }
             val text: String
             try {
@@ -383,8 +403,10 @@ class Dictation(
                 // so the local hook is skipped outright (server owns the
                 // full audio) — truncation never commits silently.
                 val (pcm, overflow) = synchronized(pcmLock) {
-                    if (gen != session.get()) null else pcmBuf.copyOf(pcmSize) to pcmOverflowed
-                } ?: return@execute
+                    if (gen != session.get()) return@execute
+                    if (capture === cap) capture = null
+                    pcmBuf.copyOf(pcmSize) to pcmOverflowed
+                }
                 val secs = maxOf(1, pcm.size / 16_000)
                 fun decodeLocal(): LocalHit? {
                     if (overflow) {
@@ -403,7 +425,7 @@ class Dictation(
                 }
                 fun commitLocal(hit: LocalHit): String =
                     try {
-                        finishLocal(hit.raw, hit.text, hit.engine, secs).first
+                        finishLocal(hit.raw, hit.text, hit.engine, secs, utterance).first
                     } catch (e: Exception) {
                         // Never lose a decoded utterance to a core
                         // failure: deliver it uncleaned (a cancel still
@@ -421,7 +443,7 @@ class Dictation(
                     commitLocal(local)
                 } else {
                     try {
-                        finishTranscription().first
+                        finishTranscription(utterance).first
                     } catch (e: Exception) {
                         // Local entry below the servers: fallback.
                         // Under 0.3 s the server already said "too short".
@@ -433,35 +455,27 @@ class Dictation(
                     }
                 }
             } catch (e: Exception) {
-                if (gen == session.get()) {
-                    listener?.onTranscriptionError(e.message ?: "transcription failed")
-                    set(State.IDLE)
-                } else {
-                    log("finish drop stale-error gen=$gen session=${session.get()}")
-                }
+                deliverIfCurrent("error") { listener?.onTranscriptionError(e.message ?: "transcription failed") }
                 return@execute
             }
             // Cancelled while blocked in transcription: the call above
             // returned after cancel() — drop, never commit to the IME.
-            if (gen != session.get()) {
-                log("finish drop stale-result gen=$gen session=${session.get()}")
-                return@execute
+            deliverIfCurrent("result") {
+                log("utterance max peak=%.2f".format(maxPeak))
+                log("utterance text len=${text.length} hasListener=${listener != null}")
+                if (text.isBlank()) {
+                    // Silence is never committed and never surfaced: the
+                    // "silence" tag maps to the empty state on every
+                    // surface (IME shows its idle hint, the bubble toast
+                    // filter already drops it). Only a real stop-with-
+                    // silence reaches here — a cancelled session drops
+                    // above, keeping its "Cancelled" note.
+                    log("finish blank gen=$gen: empty state, no commit")
+                    listener?.onError("silence")
+                } else {
+                    listener?.onResult(text)
+                }
             }
-            log("utterance max peak=%.2f".format(maxPeak))
-            log("utterance text len=${text.length} hasListener=${listener != null}")
-            if (text.isBlank()) {
-                // Silence is never committed and never surfaced: the
-                // "silence" tag maps to the empty state on every
-                // surface (IME shows its idle hint, the bubble toast
-                // filter already drops it). Only a real stop-with-
-                // silence reaches here — a cancelled session drops
-                // above, keeping its "Cancelled" note.
-                log("finish blank gen=$gen: empty state, no commit")
-                listener?.onError("silence")
-            } else {
-                listener?.onResult(text)
-            }
-            set(State.IDLE)
         }
     }
 }

@@ -268,6 +268,7 @@ class DictationCancelTest {
         val pastes: MutableList<String> = Collections.synchronizedList(mutableListOf())
         val errors: MutableList<String> = Collections.synchronizedList(mutableListOf())
         val nextPasted = CountDownLatch(1)
+        val order: MutableList<String> = Collections.synchronizedList(mutableListOf())
         val dictation = Dictation(
             mode = { "Push" },
             startCapture = { _, _, _ -> FakeCapture() },
@@ -282,11 +283,16 @@ class DictationCancelTest {
                 history.add(text)
                 text to "slow-provider"
             },
-            cancelTranscription = { generation.incrementAndGet() },
+            cancelTranscription = {
+                order.add("core-cancel")
+                generation.incrementAndGet()
+            },
             log = { if (it.startsWith("finish drop stale-error")) staleDropped.countDown() },
         )
         dictation.listener = object : Dictation.Listener {
-            override fun onState(s: Dictation.State, toggled: Boolean) {}
+            override fun onState(s: Dictation.State, toggled: Boolean) {
+                order.add("state-$s")
+            }
             override fun onResult(text: String) {
                 pastes.add(text)
                 nextPasted.countDown()
@@ -301,11 +307,13 @@ class DictationCancelTest {
             assertTrue(providerEntered.await(10, TimeUnit.SECONDS))
             assertEquals(Dictation.State.WORKING, dictation.current)
 
+            order.clear()
             val began = System.nanoTime()
             dictation.cancel()
             val cancelMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - began)
             assertTrue("cancel took ${cancelMs}ms", cancelMs < 200)
             assertEquals(Dictation.State.IDLE, dictation.current)
+            assertEquals("core revoked before the UI shows IDLE", listOf("core-cancel", "state-IDLE"), order)
 
             // Next dictation while the cancelled request is still blocked.
             dictation.pressDown()
@@ -322,6 +330,52 @@ class DictationCancelTest {
             assertEquals(Dictation.State.IDLE, dictation.current)
         } finally {
             providerRelease.countDown()
+            dictation.shutdown()
+        }
+    }
+
+    /**
+     * A cancel racing the finish worker's mic stop must wait for that
+     * stop, so the old capture is fully torn down before a new
+     * recording can start.
+     */
+    @Test
+    fun cancelDuringWorkerStop_waitsForTheOldMic() {
+        val stopEntered = CountDownLatch(1)
+        val stopRelease = CountDownLatch(1)
+        val stopped = AtomicBoolean(false)
+        val slowCapture = object : Dictation.Capture {
+            override fun stop() {
+                if (stopped.get()) return
+                stopEntered.countDown()
+                assertTrue(stopRelease.await(10, TimeUnit.SECONDS))
+                stopped.set(true)
+            }
+        }
+        val captures = mutableListOf<Dictation.Capture>(slowCapture, FakeCapture())
+        val dictation = Dictation(
+            mode = { "Push" },
+            startCapture = { _, _, _ -> captures.removeAt(0) },
+            finishTranscription = { "text" to "engine" },
+            cancelTranscription = {},
+            log = {},
+        )
+        try {
+            dictation.pressDown()
+            dictation.pressUp() // worker starts stopping the mic
+            assertTrue(stopEntered.await(10, TimeUnit.SECONDS))
+
+            val cancelled = CountDownLatch(1)
+            Thread { dictation.cancel(); cancelled.countDown() }.start()
+            assertFalse("cancel returned while the old mic was still stopping", cancelled.await(200, TimeUnit.MILLISECONDS))
+
+            stopRelease.countDown()
+            assertTrue(cancelled.await(10, TimeUnit.SECONDS))
+            assertTrue("old mic fully stopped before cancel returned", stopped.get())
+            dictation.pressDown()
+            assertEquals(Dictation.State.RECORDING, dictation.current)
+        } finally {
+            stopRelease.countDown()
             dictation.shutdown()
         }
     }

@@ -29,6 +29,10 @@ class AudioCapture(
     @Volatile var running = false
         private set
 
+    /** Core utterance token for this recording (set by [start]). */
+    var utterance = 0L
+        private set
+
     val actualRate: Int get() = sampleRate
 
     @SuppressLint("MissingPermission")
@@ -89,7 +93,7 @@ class AudioCapture(
                     }
                 }
             }, "mw-capture").also { it.start() }
-            CoreBridge.startUtterance(sampleRate)
+            utterance = CoreBridge.startUtterance(sampleRate)
             true
         } catch (e: SecurityException) {
             stop()

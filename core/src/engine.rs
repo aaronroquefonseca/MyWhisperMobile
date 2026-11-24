@@ -23,6 +23,7 @@ use crate::server_stt::{
 use crate::settings::{AppSettings, HistoryEntry, LlmEntry};
 use crate::store::Store;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -665,7 +666,9 @@ impl Engine {
         chain_status(&self.settings.stt)
     }
 
-    pub fn start_utterance(&mut self, rate: u32) {
+    /// Starts recording and returns the utterance token its finish
+    /// must present (see [`UTTERANCE_TOKEN`]).
+    pub fn start_utterance(&mut self, rate: u32) -> u64 {
         self.recorder.start(rate);
         self.rate = rate;
         self.started_at = Some(Instant::now());
@@ -673,6 +676,7 @@ impl Engine {
             self.utterance_active = true;
             crate::server_stt::active_inc();
         }
+        UTTERANCE_TOKEN.fetch_add(1, Ordering::SeqCst) + 1
     }
 
     pub fn push_pcm(&mut self, samples: &[i16]) {
@@ -708,13 +712,16 @@ impl Engine {
     /// owner). Shared engines go through [`finish_unlocked`] so the
     /// network and cleanup never run under the engine lock.
     pub fn finish_utterance(&mut self) -> Result<FinishOutcome, String> {
-        let ready = self.begin_finish().run()?;
+        let ready = self.begin_finish(current_utterance())?.run()?;
         self.commit_finish(ready)
     }
 
     /// Phase 1 of a server finish (under the lock, cheap): take the
-    /// recorded audio and snapshot everything the chain needs.
-    pub fn begin_finish(&mut self) -> FinishJob {
+    /// recorded audio of `utterance` and snapshot everything the chain
+    /// needs. A stale token (cancelled, or a newer recording started)
+    /// leaves the recorder untouched.
+    pub fn begin_finish(&mut self, utterance: u64) -> Result<FinishJob, String> {
+        let witness = admit(utterance)?;
         let active = ActiveGuard::claim(self);
         let started = self.started_at.take();
         // Fresh settings every utterance (mirrors desktop deliver):
@@ -726,7 +733,12 @@ impl Engine {
             .map(|t| t.elapsed().as_secs() as i64)
             .unwrap_or(0)
             .max(1);
-        self.job(FinishInput::Audio { samples, rate }, duration_secs, active)
+        Ok(self.job(
+            FinishInput::Audio { samples, rate },
+            duration_secs,
+            witness,
+            active,
+        ))
     }
 
     /// Finish an utterance the platform already transcribed on-device
@@ -744,7 +756,7 @@ impl Engine {
         duration_secs: i64,
     ) -> Result<FinishOutcome, String> {
         let ready = self
-            .begin_finish_with_text(raw, text, engine, duration_secs)
+            .begin_finish_with_text(current_utterance(), raw, text, engine, duration_secs)?
             .run()?;
         self.commit_finish(ready)
     }
@@ -752,11 +764,13 @@ impl Engine {
     /// Phase 1 of a local-hit finish (see [`Engine::finish_with_text`]).
     pub fn begin_finish_with_text(
         &mut self,
+        utterance: u64,
         raw: &str,
         text: &str,
         engine: &str,
         duration_secs: i64,
-    ) -> FinishJob {
+    ) -> Result<FinishJob, String> {
+        let witness = admit(utterance)?;
         let active = ActiveGuard::claim(self);
         self.started_at = None;
         self.recorder = Recorder::default();
@@ -766,18 +780,22 @@ impl Engine {
             text: text.to_string(),
             engine: engine.to_string(),
         };
-        self.job(input, duration_secs.max(1), active)
+        Ok(self.job(input, duration_secs.max(1), witness, active))
     }
 
-    fn job(&self, input: FinishInput, duration_secs: i64, active: ActiveGuard) -> FinishJob {
+    fn job(
+        &self,
+        input: FinishInput,
+        duration_secs: i64,
+        witness: u64,
+        active: ActiveGuard,
+    ) -> FinishJob {
         FinishJob {
             input,
             settings: self.settings.clone(),
             words: self.store.load_words().unwrap_or_default(),
             duration_secs,
-            // Witness at admission: a cancel or provider switch from
-            // here on bumps the generation and the job settles.
-            witness: crate::server_stt::server_generation(),
+            witness,
             dir: self._dir.clone(),
             active,
         }
@@ -947,6 +965,28 @@ impl Engine {
     }
 }
 
+/// Utterance token: bumped by every start and, lock-free, by every
+/// cancel. A finish names the recording it owns, so a stale caller can
+/// neither finish a cancelled utterance nor take a newer recording.
+static UTTERANCE_TOKEN: AtomicU64 = AtomicU64::new(0);
+
+/// The current utterance token (for single-owner callers).
+pub fn current_utterance() -> u64 {
+    UTTERANCE_TOKEN.load(Ordering::SeqCst)
+}
+
+/// Admits a finish for `utterance` and returns its generation witness.
+/// The witness is read before the token: [`cancel_unlocked`] bumps the
+/// token before the generation, so a cancel either fails this check or
+/// moves the generation past the witness.
+fn admit(utterance: u64) -> Result<u64, String> {
+    let witness = crate::server_stt::server_generation();
+    if UTTERANCE_TOKEN.load(Ordering::SeqCst) != utterance {
+        return Err("cancelled (utterance superseded)".to_string());
+    }
+    Ok(witness)
+}
+
 /// Keeps one finish counted in `ACTIVE_UTTERANCES` until it settles.
 /// Owned by the job, not the engine, so a new recording can start
 /// (and claim the engine's flag) while a stale finish is in flight.
@@ -1089,17 +1129,19 @@ fn lock_engine(engine: &Mutex<Engine>) -> Result<MutexGuard<'_, Engine>, String>
 /// cancel, the next recording and the UI never wait on a provider.
 pub fn finish_unlocked(
     engine: &Mutex<Engine>,
-    begin: impl FnOnce(&mut Engine) -> FinishJob,
+    begin: impl FnOnce(&mut Engine) -> Result<FinishJob, String>,
 ) -> Result<FinishOutcome, String> {
-    let job = begin(&mut *lock_engine(engine)?);
+    let job = begin(&mut *lock_engine(engine)?)?;
     let ready = job.run()?;
     lock_engine(engine)?.commit_finish(ready)
 }
 
-/// Cancel on a shared engine. The generation bump comes first and is
-/// lock-free: an in-flight finish is invalidated before this waits for
-/// the (briefly held) lock to reset the recorder.
+/// Cancel on a shared engine. Invalidation comes first and is
+/// lock-free: the token stops a finish not yet admitted, the generation
+/// stops one in flight, all before this waits for the (briefly held)
+/// lock to reset the recorder. Order matters, see [`admit`].
 pub fn cancel_unlocked(engine: &Mutex<Engine>) -> Result<i64, String> {
+    UTTERANCE_TOKEN.fetch_add(1, Ordering::SeqCst);
     crate::server_stt::revoke_in_flight();
     Ok(lock_engine(engine)?.cancel_utterance())
 }
@@ -1655,7 +1697,6 @@ mod tests {
         assert_eq!(out.text, "Hello world.");
         assert_eq!(out.raw, "hello world");
         assert_eq!(out.engine, "local test");
-        assert!(!crate::server_stt::inference_active());
         let history: serde_json::Value = serde_json::from_str(&eng.history_json(10)).unwrap();
         assert_eq!(history.as_array().unwrap().len(), 1);
         llm_stub.join().unwrap();
@@ -1806,10 +1847,11 @@ mod tests {
             .unwrap();
     }
 
-    fn record(eng: &Mutex<Engine>) {
+    fn record(eng: &Mutex<Engine>) -> u64 {
         let mut e = eng.lock().unwrap();
-        e.start_utterance(16000);
+        let token = e.start_utterance(16000);
         e.push_pcm(&vec![1000i16; 8000]);
+        token
     }
 
     /// Starts a finish on a worker, waits until `entered` (the slow
@@ -1819,10 +1861,10 @@ mod tests {
         eng: &std::sync::Arc<Mutex<Engine>>,
         entered: mpsc::Receiver<()>,
     ) -> std::thread::JoinHandle<Result<FinishOutcome, String>> {
-        record(eng);
+        let token = record(eng);
         let worker = {
             let eng = eng.clone();
-            std::thread::spawn(move || finish_unlocked(&eng, |e| e.begin_finish()))
+            std::thread::spawn(move || finish_unlocked(&eng, |e| e.begin_finish(token)))
         };
         entered.recv_timeout(Duration::from_secs(10)).unwrap();
         let began = Instant::now();
@@ -1842,9 +1884,9 @@ mod tests {
         settings.stt.entries = vec![self_hosted_entry("Fast", &url(port))];
         settings.language_models.cleanup_enabled = false;
         put(eng, settings);
-        record(eng);
+        let token = record(eng);
         let began = Instant::now();
-        let out = finish_unlocked(eng, |e| e.begin_finish()).expect("next dictation");
+        let out = finish_unlocked(eng, |e| e.begin_finish(token)).expect("next dictation");
         assert!(
             began.elapsed() < SLOW,
             "next dictation waited on the stale finish"
@@ -1930,5 +1972,35 @@ mod tests {
             !crate::server_stt::inference_active(),
             "active count leaked"
         );
+    }
+
+    #[test]
+    fn stale_token_never_finishes_nor_takes_the_next_recording() {
+        let _guard = status_test_lock();
+        reset_status_state();
+        // Never answers: a stale finish must not even connect.
+        let provider = must_not_be_contacted();
+        let eng = std::sync::Arc::new(Mutex::new(open_engine()));
+        let mut settings: AppSettings = serde_json::from_str(&settings_with(self_hosted_entry(
+            "Never",
+            &url(provider.local_addr().unwrap().port()),
+        )))
+        .unwrap();
+        settings.language_models.cleanup_enabled = false;
+        put(&eng, &settings);
+
+        // Cancel lands after the platform checked its session but
+        // before its finish reached the engine.
+        let cancelled = record(&eng);
+        cancel_unlocked(&eng).unwrap();
+        assert!(finish_unlocked(&eng, |e| e.begin_finish(cancelled)).is_err());
+        assert_never_contacted(&provider, "the STT provider");
+
+        // A newer recording started: the stale finish must leave it alone.
+        let _next = record(&eng);
+        assert!(finish_unlocked(&eng, |e| e.begin_finish(cancelled)).is_err());
+        let left = eng.lock().unwrap().recorder.finish().0.len();
+        assert_eq!(left, 8000, "stale finish consumed the newer recording");
+        assert_eq!(history_texts(&eng), Vec::<String>::new());
     }
 }

@@ -21,8 +21,8 @@ object CoreBridge {
     @JvmStatic external fun nativePutSettings(json: String): String
     @JvmStatic external fun nativeStartUtterance(sampleRate: Int): String
     @JvmStatic external fun nativePushPcm(data: ShortArray, length: Int): String
-    @JvmStatic external fun nativeFinishUtterance(): String
-    @JvmStatic external fun nativeFinishLocalUtterance(raw: String, text: String, engine: String, durationSecs: Int): String
+    @JvmStatic external fun nativeFinishUtterance(utterance: Long): String
+    @JvmStatic external fun nativeFinishLocalUtterance(raw: String, text: String, engine: String, durationSecs: Int, utterance: Long): String
     @JvmStatic external fun nativeSetLocalLlmRunner(runner: LocalLlmCleanupRunner?): String
     @JvmStatic external fun nativeCancelUtterance(): String
     @JvmStatic external fun nativeGetHistory(limit: Int): String
@@ -77,18 +77,22 @@ object CoreBridge {
         Unit
     }
 
-    fun startUtterance(rate: Int) {
-        nativeStartUtterance(rate)
-    }
+    /** Starts the core recorder; returns the utterance token its finish must present (0 on failure). */
+    fun startUtterance(rate: Int): Long =
+        runCatching { (dataOf(nativeStartUtterance(rate)) as Number).toLong() }.getOrDefault(0L)
 
     fun pushPcm(data: ShortArray, n: Int) {
         nativePushPcm(data, n)
     }
 
-    /** Blocks on the server chain. Returns (text, engine) or throws. */
-    fun finishUtterance(): Pair<String, String> {
+    /**
+     * Blocks on the server chain. Returns (text, engine) or throws. A
+     * stale [utterance] token (cancelled or superseded) throws without
+     * touching the current recording.
+     */
+    fun finishUtterance(utterance: Long): Pair<String, String> {
         lastCleanup = DictationIssue.Cleanup.OK
-        return finishReply(nativeFinishUtterance())
+        return finishReply(nativeFinishUtterance(utterance))
     }
 
     /**
@@ -106,9 +110,9 @@ object CoreBridge {
      * write as [finishUtterance]. Blocks on cleanup — worker thread
      * only. Returns (text, engine) or throws.
      */
-    fun finishLocalUtterance(raw: String, text: String, engine: String, durationSecs: Int): Pair<String, String> {
+    fun finishLocalUtterance(raw: String, text: String, engine: String, durationSecs: Int, utterance: Long): Pair<String, String> {
         lastCleanup = DictationIssue.Cleanup.OK
-        return finishReply(nativeFinishLocalUtterance(raw, text, engine, durationSecs))
+        return finishReply(nativeFinishLocalUtterance(raw, text, engine, durationSecs, utterance))
     }
 
     /** Wire the on-device LLM into the dictation cleanup chain (once per process). */

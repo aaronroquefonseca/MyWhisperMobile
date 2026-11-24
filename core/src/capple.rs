@@ -128,10 +128,9 @@ pub fn utterance_cancel_rs() -> String {
 }
 
 pub fn utterance_finish_rs() -> String {
-    match ENGINE
-        .get()
-        .map(|m| crate::engine::finish_unlocked(m, |e| e.begin_finish()))
-    {
+    match ENGINE.get().map(|m| {
+        crate::engine::finish_unlocked(m, |e| e.begin_finish(crate::engine::current_utterance()))
+    }) {
         Some(Ok(o)) => ok_json(serde_json::json!({
             "text": o.text, "raw": o.raw, "engine": o.engine,
             "durationSecs": o.duration_secs, "words": o.words,
