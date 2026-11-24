@@ -9,28 +9,32 @@ internal const val LOCAL_WINDOW_SAMPLES = 16_000 * 60
 
 /**
  * Splits [pcm] into ordered, contiguous decode windows of at most
- * [maxLen] samples that together cover every sample. Cuts land on
- * [LocalStt.chunkPcm] boundaries (silence where possible); only a
- * stretch with no boundary is hard-cut at [maxLen].
+ * [maxLen] samples that together cover every sample. Each cut lands
+ * after the quietest VAD frame in the window's second half (latest on
+ * ties), so it falls inside a pause rather than on a word or speech
+ * onset whenever the window has one.
  */
 internal fun localDecodeWindows(pcm: ShortArray, maxLen: Int = LOCAL_WINDOW_SAMPLES): List<IntRange> {
-    if (pcm.size <= maxLen) return listOf(pcm.indices)
-    val cuts = mutableListOf(0)
-    var lastBoundary = 0
-    for (r in LocalStt.chunkPcm(pcm)) {
-        if (r.last + 1 - cuts.last() > maxLen && lastBoundary > cuts.last()) cuts.add(lastBoundary)
-        lastBoundary = r.last + 1
-    }
-    cuts.add(pcm.size)
+    val frame = LocalStt.VAD_FRAME_SAMPLES
     val out = mutableListOf<IntRange>()
-    for (i in 0 until cuts.size - 1) {
-        var s = cuts[i]
-        while (cuts[i + 1] - s > maxLen) {
-            out.add(s until s + maxLen)
-            s += maxLen
+    var start = 0
+    while (pcm.size - start > maxLen) {
+        var cut = start + maxLen
+        var best = Long.MAX_VALUE
+        var f = start + maxLen - frame
+        while (f >= start + maxLen / 2) {
+            var energy = 0L
+            for (i in f until f + frame) energy += pcm[i].toLong() * pcm[i]
+            if (energy < best) {
+                best = energy
+                cut = f + frame
+            }
+            f -= frame
         }
-        if (cuts[i + 1] > s) out.add(s until cuts[i + 1])
+        out.add(start until cut)
+        start = cut
     }
+    out.add(start until pcm.size)
     return out
 }
 
@@ -399,8 +403,18 @@ class Dictation(
                 // construction, so the local hook is skipped outright
                 // (server owns the full audio) — truncation never
                 // commits silently.
+                // An overflowed copy is never snapshotted, and a snapshot that
+                // cannot be allocated overflows too: both go server-only.
                 val (pcm, overflow) = synchronized(pcmLock) {
-                    pcmBuf.copyOf(pcmSize) to pcmOverflowed
+                    if (pcmOverflowed) {
+                        ShortArray(0) to true
+                    } else {
+                        try {
+                            pcmBuf.copyOf(pcmSize) to false
+                        } catch (_: OutOfMemoryError) {
+                            ShortArray(0) to true
+                        }
+                    }
                 }
                 val secs = maxOf(1, pcm.size / 16_000)
                 fun decodeLocal(): LocalHit? {

@@ -255,6 +255,32 @@ class LocalFallbackTest {
     }
 
     @Test
+    fun localOnly_longSilenceThenSpeech_windowCutStaysInThePause() {
+        // 55s of silence, then 7s of speech: a cut on the speech onset
+        // would leave a few ms of speech in window one, which decodes
+        // blank and used to abort the whole utterance.
+        val h = Harness(
+            local = { pcm ->
+                // Under 1s of speech decodes blank (production: null).
+                if (pcm.count { it == 3000.toShort() } < 16_000) null else "after" to "local parakeet"
+            },
+            serverError = "no STT provider",
+        )
+        try {
+            h.dictation.pressDown()
+            val feed = h.pcmSinks.single()
+            repeat(55) { feed(ShortArray(16_000), 16_000) }
+            repeat(7) { feed(ShortArray(16_000) { 3000 }, 16_000) }
+            h.dictation.pressUp()
+            h.executor.submit {}.get(10, TimeUnit.SECONDS)
+            assertFalse(h.serverHit.get())
+            assertEquals(listOf("after"), h.results)
+        } finally {
+            h.executor.shutdownNow()
+        }
+    }
+
+    @Test
     fun over60s_windowMiss_neverCommitsPartialText() {
         // The window holding the post-60s speech fails: committing the
         // first window alone would silently drop the tail.
