@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -136,6 +137,7 @@ import androidx.work.WorkManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableSharedFlow
 import org.json.JSONArray
 import org.json.JSONObject
@@ -952,6 +954,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // No phone landscape layout yet: phones stay portrait, tablets (sw600+) rotate freely.
+        if (resources.configuration.smallestScreenWidthDp < 600) {
+            requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        }
         micDeniedBefore = getSharedPreferences("mw_state", MODE_PRIVATE)
             .getBoolean("mic_denied_before", false)
         // One-shot: recreations restore the saved tab (seed null),
@@ -1488,7 +1494,7 @@ class MainActivity : ComponentActivity() {
             fun goBack() {
                 if (backStack.isNotEmpty()) {
                     tab = backStack.last(); backStack = backStack.dropLast(1).toIntArray()
-                } else if (tab == 16) finishOnboarding()
+                }
             }
             // Notification deep-link: a warm tap re-routes the open app.
             // Consumed after routing (set null): without this a re-tap
@@ -1514,6 +1520,7 @@ class MainActivity : ComponentActivity() {
                 11 to getString(R.string.new_appearance),
                 13 to getString(R.string.diag_title),
                 16 to getString(R.string.task_welcome), 17 to getString(R.string.nav_settings),
+                18 to getString(R.string.task_resume_setup),
             )
             val pageState = rememberSaveableStateHolder()
             // Roots: Activity (0), Providers (1 speech / 2 cleanup), Dictionary (3), Settings (17).
@@ -1522,7 +1529,7 @@ class MainActivity : ComponentActivity() {
             // Providers remembers its last inner tab (speech / cleanup).
             var providersTab by rememberSaveable { mutableIntStateOf(1) }
             LaunchedEffect(tab) { if (tab == 1 || tab == 2) providersTab = tab }
-            BackHandler(enabled = backStack.isNotEmpty() || tab == 16) { goBack() }
+            BackHandler(enabled = backStack.isNotEmpty()) { goBack() }
             Scaffold(
                 topBar = {
                     TopAppBar(
@@ -1601,7 +1608,8 @@ class MainActivity : ComponentActivity() {
                         when (tab) {
                             0 -> ActivityHome(s, onNavigate = ::navigate, onOpenProviders = { tab = it })
                             9 -> BubbleScreen(s, onBehavior = { navigate(10) })
-                            16 -> OnboardingScreen(s, onSpeech = { navigate(1) }, onDone = ::finishOnboarding)
+                            16 -> OnboardingScreen(s, onFinish = { finishOnboarding(); navigate(9) })
+                            18 -> SetupScreen(s)
                             1, 2 -> ProvidersScreen(s, tab) { tab = it }
                             3 -> DictionaryScreen(s, onSync = { navigate(6) })
                             17 -> SettingsHome(onNavigate = ::navigate)
@@ -1949,7 +1957,7 @@ class MainActivity : ComponentActivity() {
     private fun localTestDisabledReason(runnerSupported: Boolean, packVerified: Boolean): String? =
         when (ProviderTest.localTestBlocked(runnerSupported, packVerified)) {
             ProviderTest.LocalBlocked.NONE -> null
-            ProviderTest.LocalBlocked.NEED_RUNNER -> getString(R.string.local_need_full)
+            ProviderTest.LocalBlocked.NEED_RUNNER -> getString(localUnavailableRes())
             ProviderTest.LocalBlocked.NEED_PACK -> getString(R.string.provider_test_need_pack)
         }
 
@@ -2065,7 +2073,7 @@ class MainActivity : ComponentActivity() {
 
     /** Floating button quick toggle; the card body opens its settings. */
     @Composable
-    private fun FloatingButtonQuick(s: JSONObject, onNavigate: (Int) -> Unit) {
+    private fun FloatingButtonQuick(s: JSONObject, onNavigate: (Int) -> Unit, onOpenProviders: (Int) -> Unit) {
         val setup = bubbleSetupState(s)
         val enabled = s.optJSONObject("preferences")?.optBoolean("float_enabled", true) ?: true
         val prefs = getSharedPreferences("mw_state", MODE_PRIVATE)
@@ -2081,25 +2089,37 @@ class MainActivity : ComponentActivity() {
             val remaining = snoozedUntil - System.currentTimeMillis()
             if (remaining > 0) { delay(remaining); snoozedUntil = 0 }
         }
-        val needsSetup = setup.next != BubbleSetupState.Step.COMPLETE
+        // Say exactly what is missing and go straight to the fix.
+        val missing = when {
+            !setup.microphone -> R.string.ux_microphone_access
+            !setup.overlay -> R.string.setup_float_overlay
+            !setup.dictationService -> R.string.setup_float_a11y
+            else -> null
+        }
+        val noSpeech = missing == null && !setup.speech
         val snoozed = snoozedUntil > System.currentTimeMillis()
         FloatingButtonCard(
             enabled = enabled,
             busy = settingsBusy.value,
-            status = getString(when {
-                !enabled -> R.string.setup_float_off
-                needsSetup -> R.string.task_setup_needed
-                snoozed -> R.string.task_snoozed
-                else -> R.string.task_ready_status
-            }),
+            status = when {
+                !enabled -> getString(R.string.setup_float_off)
+                missing != null -> getString(R.string.home_float_missing, getString(missing))
+                noSpeech -> getString(R.string.home_float_no_speech)
+                snoozed -> getString(R.string.task_snoozed)
+                else -> getString(R.string.task_ready_status)
+            },
             action = when {
-                needsSetup -> getString(R.string.task_resume_setup)
+                missing != null -> getString(R.string.task_resume_setup)
+                noSpeech -> getString(R.string.ux_speech_setup)
                 snoozed -> getString(R.string.float_resume)
                 else -> null
             },
             onAction = {
-                if (needsSetup) onNavigate(16)
-                else startService(Intent(this@MainActivity, OverlayService::class.java).setAction(OverlayService.ACTION_UNSNOOZE))
+                when {
+                    missing != null -> onNavigate(18)
+                    noSpeech -> onOpenProviders(1)
+                    else -> startService(Intent(this@MainActivity, OverlayService::class.java).setAction(OverlayService.ACTION_UNSNOOZE))
+                }
             },
             onToggle = { setFloatingEnabled(s, it) },
             onOpen = { onNavigate(9) },
@@ -2188,23 +2208,22 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Paged first run: welcome, a practice canvas (mock button, nothing
-     * recorded), the required setup, optional notifications, then done.
+     * First run: welcome, button setup (required: the pager stops there until
+     * microphone, overlay and dictation service are granted), optional
+     * notifications, then practice with the real floating button. Finishing
+     * lands on the floating button settings.
      */
     @Composable
-    private fun OnboardingScreen(s: JSONObject, onSpeech: () -> Unit, onDone: () -> Unit) {
-        val pages = 5
-        var page by rememberSaveable { mutableIntStateOf(0) }
+    private fun OnboardingScreen(s: JSONObject, onFinish: () -> Unit) {
         val setup = bubbleSetupState(s)
+        val permissionsDone = setup.microphone && setup.overlay && setup.dictationService
+        val pages = if (permissionsDone) 4 else 2
+        val pager = androidx.compose.foundation.pager.rememberPagerState { pages }
+        val scope = androidx.compose.runtime.rememberCoroutineScope()
+        fun go(page: Int) { scope.launch { pager.animateScrollToPage(page) } }
+        BackHandler(enabled = pager.currentPage > 0) { go(pager.currentPage - 1) }
         Column(Modifier.fillMaxSize()) {
-            androidx.compose.animation.AnimatedContent(
-                page, Modifier.weight(1f), label = "onboardingPage",
-                transitionSpec = {
-                    val dir = if (targetState > initialState) 1 else -1
-                    (androidx.compose.animation.slideInHorizontally { it / 4 * dir } + androidx.compose.animation.fadeIn()) togetherWith
-                        (androidx.compose.animation.slideOutHorizontally { -it / 4 * dir } + androidx.compose.animation.fadeOut())
-                },
-            ) { p ->
+            androidx.compose.foundation.pager.HorizontalPager(pager, Modifier.weight(1f), verticalAlignment = Alignment.Top) { p ->
                 TaskPage {
                     when (p) {
                         0 -> {
@@ -2218,32 +2237,9 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                         }
-                        1 -> {
-                            OnboardingHeading(getString(R.string.onb_try_title))
-                            Text(getString(R.string.onb_try_body), style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Spacer(Modifier.height(16.dp))
-                            DictationTutorial()
-                            Spacer(Modifier.height(12.dp))
-                            Text(getString(R.string.onb_try_note), style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        2 -> OnboardingSetupPage(s, setup, onSpeech)
-                        3 -> OnboardingNotificationsPage()
-                        else -> {
-                            OnboardingHeading(getString(if (setup.next == BubbleSetupState.Step.COMPLETE) R.string.onb_done_title else R.string.onb_done_title_partial))
-                            Text(getString(if (setup.next == BubbleSetupState.Step.COMPLETE) R.string.control_bubble_on_help else R.string.onb_done_partial_body),
-                                style = MaterialTheme.typography.bodyLarge)
-                            Spacer(Modifier.height(20.dp))
-                            Surface(shape = MaterialTheme.shapes.extraLarge, color = MaterialTheme.colorScheme.surfaceContainerLow) {
-                                Column(Modifier.fillMaxWidth().padding(16.dp)) {
-                                    Text(getString(R.string.onb_done_tip_title), style = MaterialTheme.typography.titleSmall)
-                                    Spacer(Modifier.height(4.dp))
-                                    Text(getString(R.string.onb_done_tip_body), style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                            }
-                        }
+                        1 -> ButtonSetupContent(setup)
+                        2 -> OnboardingNotificationsPage()
+                        else -> OnboardingPracticePage(active = pager.currentPage == 3, s = s)
                     }
                     Spacer(Modifier.height(24.dp))
                 }
@@ -2251,37 +2247,42 @@ class MainActivity : ComponentActivity() {
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.weight(1f)) {
-                    if (page == 0) TextButton(onClick = onDone) { Text(getString(R.string.onb_skip)) }
-                    else TextButton(onClick = { page-- }) { Text(getString(R.string.new_back)) }
+                    if (pager.currentPage > 0) TextButton(onClick = { go(pager.currentPage - 1) }) { Text(getString(R.string.new_back)) }
                 }
-                StepDots(pages, page)
+                StepDots(4, pager.currentPage)
                 Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
-                    if (page < pages - 1) {
-                        Button(onClick = { page++ }) { Text(getString(if (page == 0) R.string.task_get_started else R.string.onb_next)) }
-                    } else {
-                        Button(onClick = onDone) { Text(getString(R.string.onb_finish)) }
+                    when {
+                        pager.currentPage == 3 -> Button(onClick = onFinish) { Text(getString(R.string.onb_finish)) }
+                        pager.currentPage == 1 && !permissionsDone -> Button(onClick = {}, enabled = false) { Text(getString(R.string.onb_next)) }
+                        else -> Button(onClick = { go(pager.currentPage + 1) }) {
+                            Text(getString(if (pager.currentPage == 0) R.string.task_get_started else R.string.onb_next))
+                        }
                     }
                 }
             }
         }
-        if (micRationale.value) {
-            AlertDialog(
-                onDismissRequest = { micRationale.value = false },
-                title = { Text(stringResource(R.string.setup_step3)) },
-                text = { Text(stringResource(R.string.setup_mic_no)) },
-                confirmButton = {
-                    TextButton(onClick = {
-                        micRationale.value = false
-                        micPerm.launch(Manifest.permission.RECORD_AUDIO)
-                    }) { Text(stringResource(R.string.setup_mic_grant)) }
-                },
-                dismissButton = {
-                    TextButton(onClick = { micRationale.value = false }) {
-                        Text(stringResource(R.string.action_cancel))
-                    }
-                },
-            )
-        }
+        MicRationaleDialog()
+    }
+
+    @Composable
+    private fun MicRationaleDialog() {
+        if (!micRationale.value) return
+        AlertDialog(
+            onDismissRequest = { micRationale.value = false },
+            title = { Text(stringResource(R.string.setup_step3)) },
+            text = { Text(stringResource(R.string.setup_mic_no)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    micRationale.value = false
+                    micPerm.launch(Manifest.permission.RECORD_AUDIO)
+                }) { Text(stringResource(R.string.setup_mic_grant)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { micRationale.value = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+        )
     }
 
     @Composable
@@ -2289,16 +2290,17 @@ class MainActivity : ComponentActivity() {
         Text(text, style = MaterialTheme.typography.headlineMedium, modifier = Modifier.padding(top = 16.dp, bottom = 12.dp))
     }
 
+    /** The three grants the floating button needs, one at a time. Speech providers are set up separately. */
     @Composable
-    private fun OnboardingSetupPage(s: JSONObject, setup: BubbleSetupState, onSpeech: () -> Unit) {
+    private fun ButtonSetupContent(setup: BubbleSetupState) {
         OnboardingHeading(getString(R.string.onb_setup_title))
         Text(getString(R.string.onb_setup_body), style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant)
-        SettingsGroup(getString(R.string.task_setup_progress, setup.completed)) {
+        val steps = listOf(setup.microphone to R.string.ux_microphone_access, setup.overlay to R.string.setup_float_overlay,
+            setup.dictationService to R.string.setup_float_a11y)
+        SettingsGroup(getString(R.string.onb_setup_progress, steps.count { it.first })) {
             Column(Modifier.padding(16.dp)) {
-                listOf(setup.microphone to R.string.ux_microphone_access, setup.overlay to R.string.setup_float_overlay,
-                    setup.dictationService to R.string.setup_float_a11y, setup.speech to R.string.ux_speech_heading,
-                ).forEach { (done, label) ->
+                steps.forEach { (done, label) ->
                     Row(Modifier.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text(if (done) "✓" else "○", Modifier.width(24.dp),
                             color = if (done) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
@@ -2306,35 +2308,76 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 Spacer(Modifier.height(16.dp))
-                when (setup.next) {
-                    BubbleSetupState.Step.MICROPHONE -> {
+                when {
+                    !setup.microphone -> {
                         Text(getString(R.string.task_mic_reason))
+                        Text(getString(R.string.onb_mic_always), Modifier.padding(top = 6.dp), style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Spacer(Modifier.height(8.dp))
                         Button(onClick = { if (micBlocked.value) openAppSettings() else micPerm.launch(Manifest.permission.RECORD_AUDIO) }) { Text(getString(R.string.setup_mic_grant)) }
                     }
-                    BubbleSetupState.Step.OVERLAY -> {
+                    !setup.overlay -> {
                         Text(getString(R.string.task_overlay_reason))
                         Spacer(Modifier.height(8.dp))
                         Button(onClick = { startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))) }) { Text(getString(R.string.setup_float_overlay)) }
                     }
-                    BubbleSetupState.Step.DICTATION_SERVICE -> {
+                    !setup.dictationService -> {
                         Text(getString(R.string.control_service_help))
                         Spacer(Modifier.height(8.dp))
                         Button(onClick = { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }) { Text(getString(R.string.setup_float_a11y)) }
                     }
-                    BubbleSetupState.Step.SPEECH -> {
-                        Text(getString(R.string.task_speech_reason))
-                        Spacer(Modifier.height(8.dp))
-                        Button(onClick = onSpeech) { Text(getString(R.string.ux_speech_setup)) }
-                    }
-                    BubbleSetupState.Step.COMPLETE -> Text(getString(R.string.onb_setup_complete), color = MaterialTheme.colorScheme.primary)
+                    else -> Text(getString(R.string.onb_setup_complete), color = MaterialTheme.colorScheme.primary)
                 }
             }
         }
-        if (setup.next != BubbleSetupState.Step.COMPLETE) {
-            Text(getString(R.string.onb_setup_later), Modifier.padding(top = 12.dp), style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+
+    /** "Finish setup" from Activity: the same three steps outside onboarding. */
+    @Composable
+    private fun SetupScreen(s: JSONObject) {
+        val setup = bubbleSetupState(s)
+        TaskPage { ButtonSetupContent(setup) }
+        MicRationaleDialog()
+    }
+
+    /**
+     * Practice with the real floating button over a real text field. Only
+     * the transcription is fake ([OverlayService.practiceMode]), and only
+     * while this page is visible and the app is in the foreground.
+     */
+    @Composable
+    private fun OnboardingPracticePage(active: Boolean, s: JSONObject) {
+        val floatOn = s.optJSONObject("preferences")?.optBoolean("float_enabled", true) ?: true
+        if (active) {
+            androidx.lifecycle.compose.LifecycleResumeEffect(Unit) {
+                OverlayService.practiceMode = true
+                onPauseOrDispose { OverlayService.practiceMode = false }
+            }
         }
+        OnboardingHeading(getString(R.string.onb_try_title))
+        Text(getString(R.string.onb_try_body), style = MaterialTheme.typography.bodyMedium)
+        Spacer(Modifier.height(16.dp))
+        if (!floatOn) {
+            Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainerHigh) {
+                Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(getString(R.string.onb_try_float_off), Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                    TextButton(onClick = { setFloatingEnabled(s, true) }) { Text(getString(R.string.onb_try_turn_on)) }
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+        }
+        var practice by rememberSaveable { mutableStateOf("") }
+        OutlinedTextField(
+            value = practice, onValueChange = { practice = it },
+            placeholder = { Text(getString(R.string.tutorial_placeholder)) },
+            label = { Text(getString(R.string.tutorial_app_name)) },
+            minLines = 4,
+            shape = MaterialTheme.shapes.large,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(12.dp))
+        Text(getString(R.string.onb_try_note), style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 
     @Composable
@@ -2757,40 +2800,40 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** Collected on open (off the UI thread); copy or share it for support. */
     @Composable
     private fun DiagnosticsSettings() {
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-            Section(stringResource(R.string.diag_title)) {
-                var diag by remember { mutableStateOf("") }
-                var diagOpen by remember { mutableStateOf(false) }
-                TextButton(onClick = { diagOpen = !diagOpen }) {
-                    Text(
-                        if (diagOpen) {
-                            stringResource(R.string.diag_hide)
-                        } else {
-                            stringResource(R.string.diag_show)
-                        },
-                    )
-                }
-                if (diagOpen) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Button(onClick = { diag = collectDiagnostics() }) {
-                            Text(stringResource(R.string.diag_refresh))
-                        }
-                        Spacer(Modifier.width(8.dp))
-                        Button(
-                            onClick = { copyText(diag) },
-                            enabled = diag.isNotEmpty(),
-                        ) {
-                            Text(stringResource(R.string.diag_copy))
-                        }
+        var diag by remember { mutableStateOf<String?>(null) }
+        LaunchedEffect(Unit) {
+            diag = kotlinx.coroutines.withContext(Dispatchers.IO) { collectDiagnostics() }
+        }
+        TaskPage {
+            Text(stringResource(R.string.diag_intro), Modifier.padding(vertical = 8.dp), style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = { diag?.let { copyText(it) } }, enabled = diag != null) { Text(stringResource(R.string.diag_copy)) }
+                OutlinedButton(onClick = {
+                    diag?.let {
+                        startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
+                            .putExtra(Intent.EXTRA_TEXT, it), null))
                     }
-                    if (diag.isNotEmpty()) {
-                        Spacer(Modifier.height(8.dp))
-                        Text(diag, style = MaterialTheme.typography.bodySmall)
+                }, enabled = diag != null) { Text(stringResource(R.string.diag_share)) }
+            }
+            Spacer(Modifier.height(12.dp))
+            Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainerLow) {
+                val text = diag
+                if (text == null) {
+                    Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                        androidx.compose.material3.CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+                    }
+                } else {
+                    androidx.compose.foundation.text.selection.SelectionContainer {
+                        Text(text, Modifier.fillMaxWidth().padding(12.dp), style = MaterialTheme.typography.bodySmall,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
                     }
                 }
             }
+            Spacer(Modifier.height(16.dp))
         }
     }
 
@@ -2867,7 +2910,7 @@ class MainActivity : ComponentActivity() {
         runnerSupported: Boolean = true,
     ) {
         if (!runnerSupported) {
-            toast(getString(R.string.local_need_full))
+            toast(getString(localUnavailableRes()))
             bump()
             return
         }
@@ -2976,7 +3019,7 @@ class MainActivity : ComponentActivity() {
         fun startModelDownload(m: LocalSttModels.Entry) {
             // No runtime: downloads could never run — refuse fail-closed.
             if (!sttRunner) {
-                toast(getString(R.string.local_need_full))
+                toast(getString(localUnavailableRes()))
                 return
             }
             if (dlBusy.contains(m.id)) return
@@ -3112,7 +3155,7 @@ class MainActivity : ComponentActivity() {
                 ) { e, handle ->
                     val local = e.optString("kind") == "Local"
                     val id = e.optString("id")
-                    val localStatus = if (!sttRunner) getString(R.string.local_need_full) else when (selPack) {
+                    val localStatus = if (!sttRunner) getString(localUnavailableRes()) else when (selPack) {
                             LocalPackState.PRESENT -> getString(R.string.local_pack_present)
                             LocalPackState.MISSING -> getString(R.string.local_pack_missing)
                             LocalPackState.MISMATCH -> getString(R.string.local_pack_mismatch)
@@ -3189,7 +3232,7 @@ class MainActivity : ComponentActivity() {
                 )
                 if (!sttRunner) {
                     Text(
-                        stringResource(R.string.local_need_full),
+                        stringResource(localUnavailableRes()),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                     )
@@ -3487,7 +3530,7 @@ class MainActivity : ComponentActivity() {
                                     // No runtime: no Download offered (could
                                     // never run) — full-APK pointer instead.
                                     Text(
-                                        stringResource(R.string.local_need_full),
+                                        stringResource(localUnavailableRes()),
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.error,
                                     )
@@ -3539,29 +3582,27 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-            Section(stringResource(R.string.stt_capture)) {
-                var lang by remember { mutableStateOf(stt.optString("language", "auto")) }
-                DropDown(getString(R.string.stt_language), langs.firstOrNull { it.first == lang }?.second ?: lang,
-                    langs.map { it.second }) { label ->
-                    lang = langs.first { it.second == label }.first
-                    stt.put("language", lang); save()
-                }
-                val vad = stt.optBoolean("vad_enabled", false)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(stringResource(R.string.stt_vad), modifier = Modifier.weight(1f))
-                    FeedbackSwitch(modifier = Modifier.semantics { contentDescription = getString(R.string.stt_vad) }, checked = vad, onCheckedChange = {
+            // Language lives at the top; the rarely touched capture tuning stays folded away.
+            var advanced by rememberSaveable { mutableStateOf(false) }
+            Box(Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
+                CollapsibleCard(stringResource(R.string.bubble_advanced), stringResource(R.string.stt_advanced_sub),
+                    advanced, { advanced = !advanced }) {
+                    val vad = stt.optBoolean("vad_enabled", false)
+                    ToggleSetting(stringResource(R.string.stt_vad), stringResource(R.string.stt_vad_help), vad) {
                         stt.put("vad_enabled", it); save(); version++
-                    })
+                    }
+                    Column(Modifier.padding(horizontal = 16.dp)) {
+                        var gate by remember { mutableStateOf(stt.optDouble("vad_threshold", 0.1).toFloat()) }
+                        Text(stringResource(R.string.stt_vad_gate, gate), style = MaterialTheme.typography.bodyMedium)
+                        Slider(
+                            value = gate, onValueChange = { gate = it },
+                            onValueChangeFinished = {
+                                stt.put("vad_threshold", gate.toDouble()); save()
+                            },
+                            valueRange = 0f..0.5f,
+                        )
+                    }
                 }
-                var gate by remember { mutableStateOf(stt.optDouble("vad_threshold", 0.1).toFloat()) }
-                Text(stringResource(R.string.stt_vad_gate, gate))
-                Slider(
-                    value = gate, onValueChange = { gate = it },
-                    onValueChangeFinished = {
-                        stt.put("vad_threshold", gate.toDouble()); save()
-                    },
-                    valueRange = 0f..0.5f,
-                )
             }
         }
         if (localInfo) {
@@ -3574,7 +3615,7 @@ class MainActivity : ComponentActivity() {
                         Spacer(Modifier.height(4.dp))
                         if (!sttRunner) {
                             Text(
-                                stringResource(R.string.local_need_full),
+                                stringResource(localUnavailableRes()),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.error,
                             )
@@ -3815,7 +3856,7 @@ class MainActivity : ComponentActivity() {
                     }
                     if (isLocalKind) {
                         Text(
-                            stringResource(if (sttRunnerSupported()) R.string.stt_local_note else R.string.local_need_full),
+                            stringResource(if (sttRunnerSupported()) R.string.stt_local_note else localUnavailableRes()),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.error,
                         )
@@ -4043,7 +4084,7 @@ class MainActivity : ComponentActivity() {
         fun startLlmDownload(a: LocalLlmManager.ModelAsset) {
             // No runtime: downloads could never run — refuse fail-closed.
             if (!llmRunner) {
-                toast(getString(R.string.local_need_full))
+                toast(getString(localUnavailableRes()))
                 return
             }
             if (llmDlBusy.contains(a.id) || isPlaceholderSha(a.sha256)) return
@@ -4062,7 +4103,7 @@ class MainActivity : ComponentActivity() {
             // work runs on any network (CONNECTED, not UNMETERED).
             // Battery/storage constraints still apply.
             if (!llmRunner) {
-                toast(getString(R.string.local_need_full))
+                toast(getString(localUnavailableRes()))
                 return
             }
             if (llmDlBusy.contains(a.id) || isPlaceholderSha(a.sha256)) return
@@ -4319,7 +4360,7 @@ class MainActivity : ComponentActivity() {
                 ) { e, handle ->
                     val local = e.optString("kind") == "Local"
                     val id = e.optString("id")
-                    val localStatus = if (!llmRunner) getString(R.string.local_need_full) else when (llmSelPack) {
+                    val localStatus = if (!llmRunner) getString(localUnavailableRes()) else when (llmSelPack) {
                             LocalPackState.PRESENT -> getString(R.string.local_pack_present)
                             LocalPackState.MISSING -> getString(R.string.local_pack_missing)
                             LocalPackState.MISMATCH -> getString(R.string.local_pack_mismatch)
@@ -4408,7 +4449,7 @@ class MainActivity : ComponentActivity() {
                 )
                 if (!llmRunner) {
                     Text(
-                        stringResource(R.string.local_need_full),
+                        stringResource(localUnavailableRes()),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                     )
@@ -4639,7 +4680,7 @@ class MainActivity : ComponentActivity() {
                                     // No runtime: no Download offered (could never
                                     // run) — full-APK pointer instead.
                                     Text(
-                                        stringResource(R.string.local_need_full),
+                                        stringResource(localUnavailableRes()),
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.error,
                                     )
@@ -4832,7 +4873,7 @@ class MainActivity : ComponentActivity() {
                         Spacer(Modifier.height(4.dp))
                         if (!llmRunner) {
                             Text(
-                                stringResource(R.string.local_need_full),
+                                stringResource(localUnavailableRes()),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.error,
                             )
@@ -4995,7 +5036,7 @@ class MainActivity : ComponentActivity() {
                     }
                     if (kind == "Local") {
                         Text(
-                            stringResource(if (llmRunnerSupported()) R.string.llm_local_note else R.string.local_need_full),
+                            stringResource(if (llmRunnerSupported()) R.string.llm_local_note else localUnavailableRes()),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.error,
                         )
@@ -5341,11 +5382,11 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun StatCard(label: String, value: String, caption: String, modifier: Modifier = Modifier) {
-        Card(modifier = modifier) {
-            Column(modifier = Modifier.padding(12.dp)) {
-                Text(label, style = MaterialTheme.typography.bodySmall)
+        Surface(modifier = modifier, shape = MaterialTheme.shapes.extraLarge, color = MaterialTheme.colorScheme.surfaceContainerLow) {
+            Column(modifier = Modifier.padding(14.dp)) {
+                Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text(value, style = MaterialTheme.typography.headlineSmall)
-                Text(caption, style = MaterialTheme.typography.bodySmall)
+                Text(caption, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
@@ -5605,14 +5646,15 @@ class MainActivity : ComponentActivity() {
             contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            item(key = "float") { FloatingButtonQuick(s, onNavigate) }
+            item(key = "float") { FloatingButtonQuick(s, onNavigate, onOpenProviders) }
             val kind = issueKind
             if (kind != null) item(key = "issue") {
-                val cleanup = kind == DictationIssue.CLEANUP
+                val cleanup = kind == DictationIssue.CLEANUP || kind == DictationIssue.CLEANUP_SETUP
                 val cause = DictationIssue.causeOf(issueDetail.orEmpty())
                 DictationIssueCard(
                     title = getString(if (cleanup) R.string.issue_cleanup_title else R.string.issue_speech_title),
-                    body = getString(if (cleanup) R.string.issue_cleanup_body else when (cause) {
+                    body = getString(if (kind == DictationIssue.CLEANUP_SETUP) R.string.issue_cleanup_setup_body
+                        else if (cleanup) R.string.issue_cleanup_body else when (cause) {
                         DictationIssue.Cause.NO_PROVIDER -> R.string.issue_no_provider
                         DictationIssue.Cause.SIGN_IN -> R.string.issue_sign_in
                         DictationIssue.Cause.UNREACHABLE -> R.string.issue_unreachable
@@ -5643,16 +5685,19 @@ class MainActivity : ComponentActivity() {
                 val wpm = stats?.optDouble("wordsPerMinute", 0.0) ?: 0.0
                 val streak = stats?.optInt("streakDays", 0) ?: 0
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        StatCard(stringResource(R.string.act_words), compactWords(w), stringResource(R.string.act_saved), Modifier.weight(1f))
+                    // Intrinsic height: both cards in a row match the taller one.
+                    val pair = Modifier.fillMaxWidth().height(androidx.compose.foundation.layout.IntrinsicSize.Min)
+                    val cell = Modifier.fillMaxHeight()
+                    Row(pair, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        StatCard(stringResource(R.string.act_words), compactWords(w), stringResource(R.string.act_saved), Modifier.weight(1f).then(cell))
                         StatCard(stringResource(R.string.act_wpm), if (wpm > 0) "${wpm.toInt()}" else stringResource(R.string.act_wpm_none),
-                            stringResource(R.string.act_wpm_cap), Modifier.weight(1f))
+                            stringResource(R.string.act_wpm_cap), Modifier.weight(1f).then(cell))
                     }
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        StatCard(stringResource(R.string.act_dictations), "$u", stringResource(R.string.act_saved), Modifier.weight(1f))
+                    Row(pair, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        StatCard(stringResource(R.string.act_dictations), "$u", stringResource(R.string.act_saved), Modifier.weight(1f).then(cell))
                         StatCard(stringResource(R.string.act_streak),
                             if (streak == 1) stringResource(R.string.act_streak_one) else stringResource(R.string.act_streak_n, streak),
-                            stringResource(R.string.act_streak_cap), Modifier.weight(1f))
+                            stringResource(R.string.act_streak_cap), Modifier.weight(1f).then(cell))
                     }
                 }
             }

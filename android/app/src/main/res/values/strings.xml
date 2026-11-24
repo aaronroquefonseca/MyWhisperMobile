@@ -587,23 +587,16 @@
     <string name="issue_cleanup_toast">Cleanup didn’t work, so your text was typed as heard</string>
     <string name="tutorial_app_name">Notes · practice</string>
     <string name="tutorial_placeholder">Your words will appear here…</string>
-    <string name="tutorial_listening_tap">Listening… tap the button to finish</string>
-    <string name="tutorial_listening_hold">Listening… let go to finish</string>
-    <string name="tutorial_working">Writing it down…</string>
-    <string name="tutorial_hint">Tap the button, or hold it while you talk</string>
-    <string name="tutorial_clear">Clear and try again</string>
-    <string name="tutorial_button">Practice floating button</string>
     <string name="onb_welcome_body">MyWhisper adds a small microphone button next to wherever you type. Talk, and your words appear as text.</string>
     <string name="onb_welcome_point_1">Works in any app: messages, notes, email, search.</string>
     <string name="onb_welcome_point_2">Fixes punctuation and filler words for you, if you want.</string>
     <string name="onb_welcome_point_3">You choose where your voice is turned into text.</string>
     <string name="onb_try_title">Try the button</string>
-    <string name="onb_try_body">This is a practice area. Tap the button to start talking and tap it again to finish, or hold it while you speak and let go.</string>
-    <string name="onb_try_note">Nothing is recorded here, this is only a preview. Once you set up a voice provider, the real button works just like this in your other apps.</string>
+    <string name="onb_try_body">Tap the box below. The floating button appears next to the keyboard, exactly like in any other app. Tap it to start and tap again to finish, hold it while you talk, or drag it where you like.</string>
+    <string name="onb_try_note">Practice mode: whatever you say, it types an example sentence. Set up a transcription provider in Providers and it will type what you actually say.</string>
     <string name="onb_setup_title">Set up the button</string>
-    <string name="onb_setup_body">A few permissions let the button appear over other apps and type for you. MyWhisper only listens while you hold or tap the button.</string>
+    <string name="onb_setup_body">Three permissions let the button appear over other apps and type for you. MyWhisper only listens while you hold or tap the button.</string>
     <string name="onb_setup_complete">All set! The button is ready to use.</string>
-    <string name="onb_setup_later">You can skip this for now and finish it later from the Activity tab.</string>
     <string name="onb_notif_title">Notifications (optional)</string>
     <string name="onb_notif_body">MyWhisper works without them. If you allow them, you also get:</string>
     <string name="onb_notif_point_1">A quick way to bring the button back after you snooze it.</string>
@@ -614,14 +607,8 @@
     <string name="onb_notif_quiet_body">While the button is on, Android keeps a small notification visible. You can hide it; the button keeps working.</string>
     <string name="onb_notif_quiet_done">The always-on notification is hidden</string>
     <string name="onb_notif_quiet_action">Hide the always-on notification</string>
-    <string name="onb_done_title">You’re ready</string>
-    <string name="onb_done_title_partial">Almost there</string>
-    <string name="onb_done_partial_body">Finish setting up the button from the Activity tab whenever you like.</string>
-    <string name="onb_done_tip_title">Make the button yours</string>
-    <string name="onb_done_tip_body">Tap Floating button at the top of Activity to change its size, look and gestures. The switch next to it turns the button on or off.</string>
-    <string name="onb_skip">Skip</string>
     <string name="onb_next">Next</string>
-    <string name="onb_finish">Start dictating</string>
+    <string name="onb_finish">Customize the button</string>
     <string name="dict_sync_hint">Keep your words and snippets on all your devices</string>
     <string name="dict_snippet_say">Say “%1$s”</string>
     <string-array name="tutorial_samples">
@@ -629,4 +616,19 @@
         <item>Remember to buy milk, eggs and coffee on the way home.</item>
         <item>Thanks for the quick reply, that works perfectly for me.</item>
     </string-array>
+    <string name="home_float_missing">Finish setup: %1$s</string>
+    <string name="home_float_no_speech">Add a transcription provider to start dictating</string>
+    <string name="onb_setup_progress">%1$d of 3 done</string>
+    <string name="onb_mic_always">When Android asks, choose “While using the app”. “Only this time” stops the button from working once you leave MyWhisper.</string>
+    <string name="onb_try_float_off">The floating button is off.</string>
+    <string name="onb_try_turn_on">Turn on</string>
+    <string name="err_configure_stt">Configure a transcription provider first</string>
+    <string name="err_all_stt_failed">All transcription providers failed</string>
+    <string name="err_cleanup_unconfigured">No cleanup applied: configure a cleanup provider</string>
+    <string name="issue_cleanup_setup_body">Text cleanup is on, but no cleanup provider is set up, so your words were typed as heard.</string>
+    <string name="local_need_build">This build can’t download the on-device runtime. Install an official MyWhisper build to use on-device models.</string>
+    <string name="diag_intro">Technical details about this app and device. Share them when you report a problem.</string>
+    <string name="diag_share">Share</string>
+    <string name="stt_advanced_sub">Silence trimming and noise gate</string>
+    <string name="stt_vad_help">Cut silence at the start and end of each recording</string>
 </resources>

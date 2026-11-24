@@ -40,6 +40,28 @@ internal object DictationIssue {
     const val PREF_DETAIL = "dictation_issue_detail"
     const val SPEECH = "speech"
     const val CLEANUP = "cleanup"
+    /** Cleanup is on but no cleanup provider is enabled. */
+    const val CLEANUP_SETUP = "cleanup_setup"
+
+    /** How text cleanup went for one dictation. */
+    enum class Cleanup { OK, FAILED, UNCONFIGURED }
+
+    /** Cleanup outcome from the core's per-entry notes. Pure for unit tests. */
+    @JvmStatic
+    fun cleanupOutcome(notes: List<String>): Cleanup = when {
+        "no enabled cleanup entries" in notes -> Cleanup.UNCONFIGURED
+        cleanupAllFailed(notes) -> Cleanup.FAILED
+        else -> Cleanup.OK
+    }
+
+    /**
+     * Short bubble copy for a failed transcription: "set one up first" only
+     * when no speech provider exists at all, otherwise "all failed".
+     * Pure for unit tests.
+     */
+    @JvmStatic
+    fun needsProviderSetup(msg: String, anyProviderEnabled: Boolean): Boolean =
+        causeOf(msg) == Cause.NO_PROVIDER && !anyProviderEnabled
 
     /** Plain-language category for a speech failure. Pure for unit tests. */
     enum class Cause { NO_PROVIDER, SIGN_IN, UNREACHABLE, MISSING_ADDRESS, MICROPHONE, OTHER }

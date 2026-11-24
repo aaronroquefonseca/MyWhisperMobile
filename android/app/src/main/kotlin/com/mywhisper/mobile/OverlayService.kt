@@ -48,6 +48,15 @@ class OverlayService : Service(), Dictation.Listener {
         private const val KEY_GRAB = "float_grab"
         private const val KEY_PRESS_DELAY = "float_press_delay"
 
+        /**
+         * Onboarding practice: the real button records and animates as usual,
+         * but types an example sentence instead of transcribing.
+         * Set only while the practice page is visible and resumed.
+         */
+        @Volatile
+        var practiceMode = false
+        private var practiceIndex = 0
+
         fun start(ctx: Context) {
             // Behavior controls may refresh while disabled. Do not create a
             // service unless the persisted setting currently enables it.
@@ -657,8 +666,9 @@ class OverlayService : Service(), Dictation.Listener {
             },
             // On-device first (selected local model); miss or
             // throw → server chain. Pack-gated: null without the pack.
-            localTranscribe = { pcm -> LocalStt.transcribeIfEnabled(this, pcm) },
-            localFirst = { LocalStt.isLocalFirst() },
+            localTranscribe = { pcm -> if (practiceMode) null else LocalStt.transcribeIfEnabled(this, pcm) },
+            localFirst = { !practiceMode && LocalStt.isLocalFirst() },
+            finishTranscription = { if (practiceMode) practiceResult() else CoreBridge.finishUtterance() },
             // Shutdown releases the native recognizer (no resident ORT
             // session across service restarts in one process).
             releaseLocal = {
@@ -2080,17 +2090,59 @@ class OverlayService : Service(), Dictation.Listener {
 
     override fun onResult(text: String) {
         android.util.Log.i("MwFloat", "onResult len=${text.length}")
-        val cleanupFailed = CoreBridge.lastCleanupFailed
-        recordIssue(if (cleanupFailed) DictationIssue.CLEANUP else null, null)
-        if (cleanupFailed) {
-            mainHandler.post {
-                try {
-                    Toast.makeText(this, R.string.issue_cleanup_toast, Toast.LENGTH_SHORT).show()
-                } catch (_: Exception) {
+        if (!practiceMode) {
+            when (CoreBridge.lastCleanup) {
+                DictationIssue.Cleanup.OK -> recordIssue(null, null)
+                DictationIssue.Cleanup.FAILED -> {
+                    recordIssue(DictationIssue.CLEANUP, null)
+                    showToast(getString(R.string.issue_cleanup_toast), Toast.LENGTH_SHORT)
+                }
+                DictationIssue.Cleanup.UNCONFIGURED -> {
+                    recordIssue(DictationIssue.CLEANUP_SETUP, null)
+                    showToast(getString(R.string.err_cleanup_unconfigured), Toast.LENGTH_SHORT)
                 }
             }
         }
         deliver(text)
+    }
+
+    /** Practice dictation: drop the audio, pretend to work, return the next example. */
+    private fun practiceResult(): Pair<String, String> {
+        try { CoreBridge.cancelUtterance() } catch (_: Exception) { }
+        Thread.sleep(TUTORIAL_WORKING_MS)
+        val samples = resources.getStringArray(R.array.tutorial_samples)
+        return samples[practiceIndex++ % samples.size] to "practice"
+    }
+
+    private fun showToast(text: String, length: Int) {
+        mainHandler.post {
+            try {
+                Toast.makeText(this, text, length).show()
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    /** True when any speech provider is enabled (server entry with a model, or Local). */
+    private fun anySttProvider(): Boolean = try {
+        val s = CoreBridge.getSettings().getOrThrow()
+        val entries = s.optJSONObject("stt")?.optJSONArray("entries")
+        MainActivity.isServerConfigured(s) || (entries != null && (0 until entries.length()).any { i ->
+            val e = entries.optJSONObject(i)
+            e?.optString("kind") == "Local" && e.optBoolean("enabled", true)
+        })
+    } catch (_: Exception) {
+        false
+    }
+
+    override fun onTranscriptionError(msg: String) {
+        if (!shouldSurfaceError(msg)) return onError(msg)
+        micBtn?.post { refreshChrome(Dictation.State.IDLE) }
+        android.util.Log.w("MwFloat", onErrorLogMessage(msg))
+        // Short copy on the bubble; the raw cause goes to logcat and the Activity card.
+        recordIssue(DictationIssue.SPEECH, msg)
+        showToast(getString(if (DictationIssue.needsProviderSetup(msg, anySttProvider())) R.string.err_configure_stt
+            else R.string.err_all_stt_failed), Toast.LENGTH_LONG)
     }
 
     /** Last dictation problem for the Activity tab; null clears it after a clean run. */

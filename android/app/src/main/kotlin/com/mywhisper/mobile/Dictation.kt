@@ -8,22 +8,6 @@ import java.util.concurrent.atomic.AtomicInteger
 internal const val MAX_LOCAL_PCM_SAMPLES = 16_000 * 60
 
 /**
- * User-facing rewrite for a failed [Dictation.finish]: when on-device
- * missed and no server chain exists, the committed core copy still
- * claims on-device is unsupported ("Local/on-device is not supported
- * yet") — stale on Android, where the Kotlin local-first hook above
- * runs before the server chain. iOS keeps the raw copy (server-only
- * there). Pure for unit tests.
- */
-internal fun userFacingFinishError(msg: String): String =
-    if ("no server STT configured" in msg) {
-        "On-device found nothing and no server is configured — " +
-            "check the Local entry and its model, or add a server."
-    } else {
-        msg
-    }
-
-/**
  * Mic-button controller: hold-to-talk / toggle / smart, mirroring the
  * desktop activation modes. Mode comes from settings
  * (`preferences.mic_mode`): Push = hold talks, Tap = press toggles,
@@ -116,6 +100,8 @@ class Dictation(
         fun onState(s: State, toggled: Boolean)
         fun onResult(text: String)
         fun onError(msg: String)
+        /** A finished utterance could not be transcribed (raw core message). */
+        fun onTranscriptionError(msg: String) = onError(msg)
     }
 
     var listener: Listener? = null
@@ -437,7 +423,7 @@ class Dictation(
                 }
             } catch (e: Exception) {
                 if (gen == session.get()) {
-                    listener?.onError(userFacingFinishError(e.message ?: "transcription failed"))
+                    listener?.onTranscriptionError(e.message ?: "transcription failed")
                     set(State.IDLE)
                 } else {
                     log("finish drop stale-error gen=$gen session=${session.get()}")

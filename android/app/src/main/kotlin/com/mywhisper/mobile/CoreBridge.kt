@@ -85,18 +85,18 @@ object CoreBridge {
 
     /** Blocks on the server chain. Returns (text, engine) or throws. */
     fun finishUtterance(): Pair<String, String> {
-        lastCleanupFailed = false
+        lastCleanup = DictationIssue.Cleanup.OK
         return finishReply(nativeFinishUtterance())
     }
 
     /**
-     * True when the last finish attempted text cleanup and every provider
-     * failed (text was delivered as transcribed).
-     * shortcut: one global flag read by the single dictation listener; move into the
+     * Cleanup outcome of the last finish (failed or unconfigured means the
+     * text was delivered as transcribed).
+     * shortcut: one global value read by the single dictation listener; move into the
      * finish result if a second concurrent dictation surface ever appears.
      */
     @Volatile
-    var lastCleanupFailed = false
+    internal var lastCleanup = DictationIssue.Cleanup.OK
         private set
 
     /**
@@ -105,7 +105,7 @@ object CoreBridge {
      * only. Returns (text, engine) or throws.
      */
     fun finishLocalUtterance(raw: String, text: String, engine: String, durationSecs: Int): Pair<String, String> {
-        lastCleanupFailed = false
+        lastCleanup = DictationIssue.Cleanup.OK
         return finishReply(nativeFinishLocalUtterance(raw, text, engine, durationSecs))
     }
 
@@ -120,7 +120,7 @@ object CoreBridge {
         // trace of why cleanup did or did not apply.
         d.optJSONArray("cleanup")?.let { notes ->
             val list = (0 until notes.length()).map { notes.optString(it) }
-            lastCleanupFailed = DictationIssue.cleanupAllFailed(list)
+            lastCleanup = DictationIssue.cleanupOutcome(list)
             try {
                 android.util.Log.i("MwCleanup", list.joinToString(" | "))
             } catch (_: Throwable) {

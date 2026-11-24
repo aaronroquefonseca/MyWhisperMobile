@@ -588,23 +588,16 @@
     <string name="issue_cleanup_toast">La limpieza no funcionó; el texto se escribió tal cual se oyó</string>
     <string name="tutorial_app_name">Notas · práctica</string>
     <string name="tutorial_placeholder">Tus palabras aparecerán aquí…</string>
-    <string name="tutorial_listening_tap">Escuchando… toca el botón para terminar</string>
-    <string name="tutorial_listening_hold">Escuchando… suelta para terminar</string>
-    <string name="tutorial_working">Escribiéndolo…</string>
-    <string name="tutorial_hint">Toca el botón, o mantenlo pulsado mientras hablas</string>
-    <string name="tutorial_clear">Borrar y volver a probar</string>
-    <string name="tutorial_button">Botón flotante de práctica</string>
     <string name="onb_welcome_body">MyWhisper añade un pequeño botón de micrófono junto a donde escribes. Habla y tus palabras aparecen como texto.</string>
     <string name="onb_welcome_point_1">Funciona en cualquier app: mensajes, notas, correo, búsquedas.</string>
     <string name="onb_welcome_point_2">Corrige la puntuación y las muletillas por ti, si quieres.</string>
     <string name="onb_welcome_point_3">Tú eliges dónde se convierte tu voz en texto.</string>
     <string name="onb_try_title">Prueba el botón</string>
-    <string name="onb_try_body">Esto es una zona de práctica. Toca el botón para empezar a hablar y tócalo otra vez para terminar, o mantenlo pulsado mientras hablas y suéltalo.</string>
-    <string name="onb_try_note">Aquí no se graba nada, es solo una vista previa. Cuando configures un proveedor de voz, el botón real funciona igual en tus otras apps.</string>
+    <string name="onb_try_body">Toca el cuadro de abajo. El botón flotante aparece junto al teclado, igual que en cualquier otra app. Tócalo para empezar y otra vez para terminar, mantenlo pulsado mientras hablas, o arrástralo donde quieras.</string>
+    <string name="onb_try_note">Modo práctica: digas lo que digas, escribe una frase de ejemplo. Configura un proveedor de transcripción en Proveedores y escribirá lo que de verdad digas.</string>
     <string name="onb_setup_title">Prepara el botón</string>
-    <string name="onb_setup_body">Unos pocos permisos permiten que el botón aparezca sobre otras apps y escriba por ti. MyWhisper solo escucha mientras tocas o mantienes el botón.</string>
+    <string name="onb_setup_body">Tres permisos permiten que el botón aparezca sobre otras apps y escriba por ti. MyWhisper solo escucha mientras tocas o mantienes el botón.</string>
     <string name="onb_setup_complete">¡Listo! El botón ya se puede usar.</string>
-    <string name="onb_setup_later">Puedes saltarte esto y terminarlo más tarde desde la pestaña Actividad.</string>
     <string name="onb_notif_title">Notificaciones (opcional)</string>
     <string name="onb_notif_body">MyWhisper funciona sin ellas. Si las permites, además tendrás:</string>
     <string name="onb_notif_point_1">Una forma rápida de recuperar el botón después de pausarlo.</string>
@@ -615,14 +608,8 @@
     <string name="onb_notif_quiet_body">Mientras el botón está activo, Android mantiene visible una pequeña notificación. Puedes ocultarla; el botón sigue funcionando.</string>
     <string name="onb_notif_quiet_done">La notificación permanente está oculta</string>
     <string name="onb_notif_quiet_action">Ocultar la notificación permanente</string>
-    <string name="onb_done_title">Todo listo</string>
-    <string name="onb_done_title_partial">Casi listo</string>
-    <string name="onb_done_partial_body">Termina de preparar el botón desde la pestaña Actividad cuando quieras.</string>
-    <string name="onb_done_tip_title">Personaliza el botón</string>
-    <string name="onb_done_tip_body">Toca Botón flotante arriba en Actividad para cambiar su tamaño, aspecto y gestos. El interruptor de al lado lo activa o desactiva.</string>
-    <string name="onb_skip">Saltar</string>
     <string name="onb_next">Siguiente</string>
-    <string name="onb_finish">Empezar a dictar</string>
+    <string name="onb_finish">Personalizar el botón</string>
     <string name="dict_sync_hint">Mantén tus palabras y fragmentos en todos tus dispositivos</string>
     <string name="dict_snippet_say">Di «%1$s»</string>
     <string-array name="tutorial_samples">
@@ -630,4 +617,19 @@
         <item>Recuerda comprar leche, huevos y café de camino a casa.</item>
         <item>Gracias por la respuesta rápida, me viene perfecto.</item>
     </string-array>
+    <string name="home_float_missing">Termina la configuración: %1$s</string>
+    <string name="home_float_no_speech">Añade un proveedor de transcripción para empezar a dictar</string>
+    <string name="onb_setup_progress">%1$d de 3 hechos</string>
+    <string name="onb_mic_always">Cuando Android pregunte, elige «Mientras se usa la app». «Solo esta vez» hace que el botón deje de funcionar al salir de MyWhisper.</string>
+    <string name="onb_try_float_off">El botón flotante está desactivado.</string>
+    <string name="onb_try_turn_on">Activar</string>
+    <string name="err_configure_stt">Configura primero un proveedor de transcripción</string>
+    <string name="err_all_stt_failed">Fallaron todos los proveedores de transcripción</string>
+    <string name="err_cleanup_unconfigured">Sin limpieza: configura un proveedor de limpieza</string>
+    <string name="issue_cleanup_setup_body">La limpieza de texto está activada, pero no hay ningún proveedor de limpieza configurado, así que tus palabras se escribieron tal cual se oyeron.</string>
+    <string name="local_need_build">Esta compilación no puede descargar el motor del dispositivo. Instala una versión oficial de MyWhisper para usar modelos en el dispositivo.</string>
+    <string name="diag_intro">Detalles técnicos de la app y el dispositivo. Compártelos cuando informes de un problema.</string>
+    <string name="diag_share">Compartir</string>
+    <string name="stt_advanced_sub">Recorte de silencios y puerta de ruido</string>
+    <string name="stt_vad_help">Recorta el silencio al principio y al final de cada grabación</string>
 </resources>

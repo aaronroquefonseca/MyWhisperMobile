@@ -24,7 +24,7 @@ class HomeUiTest {
     @Test
     fun causeOf_mapsCommonFailures() {
         assertEquals(DictationIssue.Cause.NO_PROVIDER,
-            DictationIssue.causeOf(userFacingFinishError("no server STT configured: add a Self-hosted or Cloud entry")))
+            DictationIssue.causeOf("no server STT configured: add a Self-hosted or Cloud entry"))
         assertEquals(DictationIssue.Cause.SIGN_IN, DictationIssue.causeOf("Groq: HTTP 401 Unauthorized"))
         assertEquals(DictationIssue.Cause.UNREACHABLE, DictationIssue.causeOf("Home: request: reqwest::Error { kind: Connect }"))
         assertEquals(DictationIssue.Cause.MISSING_ADDRESS, DictationIssue.causeOf("self-hosted entry has no URL"))
