@@ -729,7 +729,8 @@ impl Engine {
 
     /// Android: run only the entries on one side of the `Local` entry
     /// (see [`ChainPart`]). A failed `BeforeLocal` pass keeps the audio
-    /// for the `AfterLocal` pass that follows a local miss.
+    /// and plan for the `AfterLocal` pass that follows a local miss; an
+    /// `AfterLocal` call with nothing held walks every server.
     pub fn finish_utterance_part(&mut self, part: ChainPart) -> Result<FinishOutcome, String> {
         if !self.utterance_active {
             // Finish without start (or re-entrant): guard the transcribe
@@ -745,7 +746,7 @@ impl Engine {
         out
     }
 
-    fn finish_inner(&mut self, part: ChainPart) -> Result<FinishOutcome, String> {
+    fn finish_inner(&mut self, mut part: ChainPart) -> Result<FinishOutcome, String> {
         // Fresh settings every utterance (mirrors desktop deliver):
         // picks up UI edits and sync merges without a restart.
         self.settings = self.store.load_settings();
@@ -757,6 +758,11 @@ impl Engine {
                 (held.pcm16, held.duration_secs, held.generation, held.stt)
             }
             _ => {
+                // No pass ran above Local (or it held nothing): walk every
+                // server, so one moved above Local during the decode still runs.
+                if part == ChainPart::AfterLocal {
+                    part = ChainPart::All;
+                }
                 let (pcm16, secs) = self.prepare_utterance()?;
                 let stt = self.settings.stt.clone();
                 (pcm16, secs, crate::server_stt::server_generation(), stt)
@@ -1460,6 +1466,28 @@ mod tests {
         reordered.stt.entries.swap(1, 2);
         eng.put_settings(&serde_json::to_string(&reordered).unwrap())
             .unwrap();
+        let out = eng.finish_utterance_part(ChainPart::AfterLocal).unwrap();
+        assert_eq!(out.text, "hello world");
+        stub.join().unwrap();
+    }
+
+    #[test]
+    fn local_first_pass_below_sees_server_moved_above_local() {
+        let _guard = status_test_lock();
+        reset_status_state();
+        let (port, stub) = stub_transcription_server();
+        let mut eng = open_engine();
+        // Kotlin saw Local → Below and skipped the first pass; Below was
+        // moved above Local during the decode.
+        let mut settings: AppSettings =
+            serde_json::from_str(&split_chain_settings(&format!("http://127.0.0.1:{port}")))
+                .unwrap();
+        settings.stt.entries.remove(0);
+        settings.stt.entries.swap(0, 1);
+        eng.put_settings(&serde_json::to_string(&settings).unwrap())
+            .unwrap();
+        eng.start_utterance(16000);
+        eng.push_pcm(&vec![1000i16; 8000]);
         let out = eng.finish_utterance_part(ChainPart::AfterLocal).unwrap();
         assert_eq!(out.text, "hello world");
         stub.join().unwrap();
