@@ -62,4 +62,15 @@ class HomeUiTest {
         assertEquals(100, historyReloadCount(100))
         assertEquals(300, historyReloadCount(201))
     }
+
+    @Test
+    fun fastScrollerMapsBothWays() {
+        assertEquals(0, scrollerRowAt(0f, 101))
+        assertEquals(50, scrollerRowAt(0.5f, 101))
+        assertEquals(100, scrollerRowAt(1.4f, 101))
+        assertEquals(0, scrollerRowAt(0.7f, 1))
+        assertEquals(0.5f, scrollerFractionOf(50, 101), 0.0001f)
+        assertEquals(0f, scrollerFractionOf(-3, 101), 0.0001f)
+        assertEquals(scrollerRowAt(scrollerFractionOf(37, 101), 101), 37)
+    }
 }

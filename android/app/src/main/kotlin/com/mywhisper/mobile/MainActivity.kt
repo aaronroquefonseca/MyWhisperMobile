@@ -6016,6 +6016,13 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+        // Fast scroller rows: each day header plus its entries, in list order. The
+        // history section starts after the overview items (single list only), then
+        // historyHeader, privacy, search and the optional error / empty rows.
+        val rowLabels = remember(grouped) { grouped.flatMap { (label, group) -> List(group.size + 1) { label } } }
+        val historyLead = 3 + (if (histError.value.isNotEmpty()) 1 else 0) + (if (items.isEmpty()) 1 else 0)
+        val overviewCount = 4 + (if (issueKind != null) 1 else 0)
+        val scrollerPadding = Modifier.padding(top = 8.dp, bottom = 72.dp)
         val listPadding = androidx.compose.foundation.layout.PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 24.dp)
         val singleState = androidx.compose.foundation.lazy.rememberLazyListState()
         val overviewState = androidx.compose.foundation.lazy.rememberLazyListState()
@@ -6056,6 +6063,8 @@ class MainActivity : ComponentActivity() {
                     Box(Modifier.weight(0.58f).fillMaxHeight()) {
                         LazyColumn(Modifier.fillMaxSize(), state = historyState, contentPadding = listPadding,
                             verticalArrangement = Arrangement.spacedBy(8.dp)) { history(true) }
+                        HistoryFastScroller(historyState, historyLead, rowLabels, showTop,
+                            Modifier.align(Alignment.TopEnd).then(scrollerPadding))
                         BackToTopButton(showTop, { scope.launch { historyState.scrollToTopTimed() } },
                             Modifier.align(Alignment.BottomEnd).padding(16.dp))
                     }
@@ -6068,6 +6077,8 @@ class MainActivity : ComponentActivity() {
                     overview()
                     history(false)
                 }
+                HistoryFastScroller(singleState, overviewCount + historyLead, rowLabels, showTop,
+                    Modifier.align(Alignment.TopEnd).then(scrollerPadding))
                 BackToTopButton(showTop, { scope.launch { singleState.scrollToTopTimed() } },
                     Modifier.align(Alignment.BottomEnd).padding(16.dp))
             }
