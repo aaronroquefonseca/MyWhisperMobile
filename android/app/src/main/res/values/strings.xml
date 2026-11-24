@@ -637,4 +637,5 @@
     <string name="onb_try_locked">Tap the box to bring up the button and continue.</string>
     <string name="settings_guide">Setup guide</string>
     <string name="settings_guide_sub">Walk through setup and practice with the button again</string>
+    <string name="providers_language_help">Auto-detect understands whichever language you speak, so you can switch languages from one dictation to the next. Pick a single language only if it guesses wrong.</string>
 </resources>

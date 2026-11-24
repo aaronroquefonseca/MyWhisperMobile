@@ -17,6 +17,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -193,27 +194,50 @@ internal fun DictationIssueCard(title: String, body: String, detail: String?, fi
     }
 }
 
-/** Collapsed-by-default card header; [content] reveals with an animated chevron. */
+/**
+ * Header row for every expandable section: the whole row is the touch
+ * target, so the ripple fills the card width instead of hugging the text.
+ */
+@Composable
+internal fun ExpandHeader(title: String, summary: String, expanded: Boolean, onToggle: () -> Unit, modifier: Modifier = Modifier) {
+    val chevron by animateFloatAsState(if (expanded) 180f else 0f, label = "expandChevron")
+    val state = stringResource(if (expanded) R.string.bubble_advanced_open else R.string.bubble_advanced_closed)
+    Row(
+        modifier.fillMaxWidth()
+            .clickable(role = Role.Button, onClick = onToggle)
+            .semantics { stateDescription = state }
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            Text(summary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Icon(Icons.Filled.KeyboardArrowDown, null, Modifier.padding(start = 8.dp).graphicsLayer { rotationZ = chevron },
+            tint = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+/** Collapsed-by-default card; [content] reveals under an [ExpandHeader]. */
 @Composable
 internal fun CollapsibleCard(title: String, summary: String, open: Boolean, onToggle: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
-    val chevron by animateFloatAsState(if (open) 180f else 0f, label = "collapsibleChevron")
     Surface(shape = MaterialTheme.shapes.extraLarge, color = MaterialTheme.colorScheme.surfaceContainerLow) {
         Column(Modifier.animateContentSize()) {
-            ListItem(
-                headlineContent = { Text(title) },
-                supportingContent = { Text(summary) },
-                trailingContent = {
-                    Icon(Icons.Filled.KeyboardArrowDown, null, Modifier.graphicsLayer { rotationZ = chevron },
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                },
-                colors = ListItemDefaults.colors(containerColor = androidx.compose.ui.graphics.Color.Transparent),
-                modifier = Modifier.clickable(role = Role.Button, onClick = onToggle).semantics {
-                    stateDescription = if (open) "expanded" else "collapsed"
-                },
-            )
-            if (open) Column(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp), content = content)
+            ExpandHeader(title, summary, open, onToggle)
+            if (open) Column(Modifier.padding(bottom = 12.dp), content = content)
         }
     }
+}
+
+/** Lets a child of a padded card reach the card edges (full-width ripple). */
+internal fun Modifier.bleedHorizontal(amount: androidx.compose.ui.unit.Dp): Modifier = layout { measurable, constraints ->
+    val extra = amount.roundToPx()
+    if (!constraints.hasBoundedWidth) {
+        val p = measurable.measure(constraints)
+        return@layout layout(p.width, p.height) { p.place(0, 0) }
+    }
+    val p = measurable.measure(constraints.copy(minWidth = constraints.minWidth + extra * 2, maxWidth = constraints.maxWidth + extra * 2))
+    layout(p.width - extra * 2, p.height) { p.place(-extra, 0) }
 }
 
 @Composable
@@ -258,12 +282,23 @@ internal fun HistoryEntryCard(
                     },
                 )
                 .animateContentSize()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+                .padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 12.dp),
         ) {
-            Text(text, style = MaterialTheme.typography.bodyLarge,
-                maxLines = if (expanded) Int.MAX_VALUE else 4, overflow = TextOverflow.Ellipsis)
-            Spacer(Modifier.height(6.dp))
-            Text(meta, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            val chevron by animateFloatAsState(if (expanded) 180f else 0f, label = "historyChevron")
+            Row {
+                Column(Modifier.weight(1f).padding(top = 4.dp)) {
+                    Text(text, style = MaterialTheme.typography.bodyLarge,
+                        maxLines = if (expanded) Int.MAX_VALUE else 4, overflow = TextOverflow.Ellipsis)
+                    Spacer(Modifier.height(6.dp))
+                    Text(meta, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                // Same as a long-press: reveal the original and the actions.
+                IconButton(onClick = onToggleExpanded, modifier = Modifier.offset(x = 4.dp, y = (-2).dp).size(40.dp)) {
+                    Icon(Icons.Filled.KeyboardArrowDown,
+                        stringResource(if (expanded) R.string.home_collapse else R.string.home_show_original),
+                        Modifier.graphicsLayer { rotationZ = chevron }, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
             if (expanded) {
                 HorizontalDivider(Modifier.padding(vertical = 12.dp), color = MaterialTheme.colorScheme.outlineVariant)
                 Text(stringResource(R.string.home_original), style = MaterialTheme.typography.labelMedium,

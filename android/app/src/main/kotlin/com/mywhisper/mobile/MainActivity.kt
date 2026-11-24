@@ -141,6 +141,7 @@ import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.drop
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -911,7 +912,7 @@ class MainActivity : ComponentActivity() {
 
     /** Speech language codes (stored code, shown label). */
     private val langs = listOf(
-        "auto" to "Auto-detect", "en" to "English", "es" to "Spanish",
+        "auto" to "Auto-detect (any language)", "en" to "English", "es" to "Spanish",
         "de" to "German", "fr" to "French", "it" to "Italian",
         "pt" to "Portuguese", "nl" to "Dutch", "pl" to "Polish",
         "ru" to "Russian", "uk" to "Ukrainian", "tr" to "Turkish",
@@ -1695,27 +1696,12 @@ class MainActivity : ComponentActivity() {
             prefs.edit { putBoolean(prefKey, expanded) }
         }
         // Same card as [Section] so collapsible and fixed sections line up.
-        val chevron by animateFloatAsState(if (expanded) 180f else 0f, label = "sectionChevron")
         Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
-            Column(modifier = Modifier.padding(16.dp).animateContentSize()) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().clickable(role = Role.Button) { toggle() }.semantics {
-                        stateDescription = getString(if (expanded) R.string.bubble_advanced_open else R.string.bubble_advanced_closed)
-                    },
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(title, style = MaterialTheme.typography.titleMedium)
-                        Text(summary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    Icon(Icons.Filled.KeyboardArrowDown, contentDescription = null,
-                        modifier = Modifier.padding(start = 8.dp).graphicsLayer { rotationZ = chevron },
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
+            Column(modifier = Modifier.animateContentSize()) {
+                ExpandHeader(title, summary, expanded, { toggle() })
                 if (expanded) {
-                    Spacer(Modifier.height(8.dp))
-                    body()
+                    Column(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 16.dp)) { body() }
                 }
             }
         }
@@ -2106,8 +2092,7 @@ class MainActivity : ComponentActivity() {
 
     /** Floating button quick toggle; the card body opens its settings. */
     @Composable
-    private fun FloatingButtonQuick(s: JSONObject, onNavigate: (Int) -> Unit, onOpenProviders: (Int) -> Unit) {
-        val setup = bubbleSetupState(s)
+    private fun FloatingButtonQuick(s: JSONObject, setup: BubbleSetupState, onNavigate: (Int) -> Unit, onOpenProviders: (Int) -> Unit) {
         val enabled = s.optJSONObject("preferences")?.optBoolean("float_enabled", true) ?: true
         val prefs = getSharedPreferences("mw_state", MODE_PRIVATE)
         var snoozedUntil by remember { mutableStateOf(prefs.getLong("float_snoozed_until", 0)) }
@@ -2164,9 +2149,15 @@ class MainActivity : ComponentActivity() {
     private fun ProvidersScreen(s: JSONObject, tab: Int, onTab: (Int) -> Unit) {
         val pager = androidx.compose.foundation.pager.rememberPagerState(initialPage = if (tab == 2) 1 else 0) { 2 }
         val scope = androidx.compose.runtime.rememberCoroutineScope()
-        // Swipes report the settled page; tab taps and deep links scroll the pager.
-        LaunchedEffect(pager.settledPage) { onTab(pager.settledPage + 1) }
-        LaunchedEffect(tab) { if (pager.currentPage != tab - 1) pager.animateScrollToPage(tab - 1) }
+        // The requested tab wins (Activity links, deep links, taps): the saved
+        // pager page must not overwrite it on entry, so only later swipes report back.
+        LaunchedEffect(tab) { if (pager.currentPage != tab - 1) pager.scrollToPage(tab - 1) }
+        val currentTab by androidx.compose.runtime.rememberUpdatedState(tab)
+        LaunchedEffect(pager) {
+            // drop(1): the restored page on entry is not a swipe.
+            androidx.compose.runtime.snapshotFlow { pager.settledPage }.drop(1)
+                .collect { page -> if (page != currentTab - 1) onTab(page + 1) }
+        }
         Column(Modifier.fillMaxSize()) {
             TabRow(selectedTabIndex = pager.currentPage, containerColor = MaterialTheme.colorScheme.background) {
                 Tab(selected = pager.currentPage == 0, onClick = { scope.launch { pager.animateScrollToPage(0) } },
@@ -2566,16 +2557,8 @@ class MainActivity : ComponentActivity() {
                 )
                 var advanced by rememberSaveable { mutableStateOf(false) }
                 HorizontalDivider(Modifier.padding(top = 8.dp))
-                val chevron by animateFloatAsState(if (advanced) 180f else 0f, label = "advancedChevron")
-                ListItem(
-                    headlineContent = { Text(stringResource(R.string.bubble_advanced), style = MaterialTheme.typography.titleMedium) },
-                    supportingContent = { Text(stringResource(R.string.bubble_advanced_sub)) },
-                    trailingContent = { Icon(Icons.Filled.KeyboardArrowDown, null, Modifier.graphicsLayer { rotationZ = chevron }, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
-                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                    modifier = Modifier.clickable(role = Role.Button) { advanced = !advanced }.semantics {
-                        stateDescription = getString(if (advanced) R.string.bubble_advanced_open else R.string.bubble_advanced_closed)
-                    },
-                )
+                ExpandHeader(stringResource(R.string.bubble_advanced), stringResource(R.string.bubble_advanced_sub), advanced,
+                    { advanced = !advanced }, Modifier.bleedHorizontal(16.dp))
                 Reveal(advanced) {
                     var followKeyboard by remember { mutableStateOf(setupPrefs.getBoolean("float_follow_keyboard", true)) }
                     ChoiceSetting(getString(R.string.float_visibility),
@@ -3197,6 +3180,8 @@ class MainActivity : ComponentActivity() {
                 .verticalScroll(rememberScrollState()),
         ) {
             Section(stringResource(R.string.providers_language_title)) {
+                Text(stringResource(R.string.providers_language_help), style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
                 val language = stt.optString("language", "auto")
                 DropDown(getString(R.string.stt_language), langs.firstOrNull { it.first == language }?.second ?: language,
                     langs.map { it.second }) { label ->
@@ -5706,9 +5691,19 @@ class MainActivity : ComponentActivity() {
             onDispose { statePrefs.unregisterOnSharedPreferenceChangeListener(listener) }
         }
 
-        val zone = java.time.ZoneId.systemDefault()
+        // Hoisted out of the list: computed in a lazy item, the async pack check
+        // restarts each time the card scrolls back in and its height jumps.
+        val setup = bubbleSetupState(s)
+        val zone = remember { java.time.ZoneId.systemDefault() }
         val today = java.time.LocalDate.now(zone)
-        val shown = items.filter { h -> histQuery.isBlank() || h.text.contains(histQuery, ignoreCase = true) || h.rawText.contains(histQuery, ignoreCase = true) }
+        val todayWord = getString(R.string.home_today)
+        val yesterdayWord = getString(R.string.home_yesterday)
+        val shown = remember(items, histQuery) {
+            items.filter { h -> histQuery.isBlank() || h.text.contains(histQuery, ignoreCase = true) || h.rawText.contains(histQuery, ignoreCase = true) }
+        }
+        val grouped = remember(shown, today) {
+            shown.groupBy { historyDayLabel(it.recordedAt, today, zone, todayWord, yesterdayWord) }
+        }
         val priv = s.optJSONObject("privacy") ?: JSONObject().also { s.put("privacy", it) }
         // Toggles write into [priv] before the committed reload lands; this re-reads them now.
         var privVersion by remember { mutableIntStateOf(0) }
@@ -5717,7 +5712,7 @@ class MainActivity : ComponentActivity() {
             contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            item(key = "float") { FloatingButtonQuick(s, onNavigate, onOpenProviders) }
+            item(key = "float") { FloatingButtonQuick(s, setup, onNavigate, onOpenProviders) }
             val kind = issueKind
             if (kind != null) item(key = "issue") {
                 val cleanup = kind == DictationIssue.CLEANUP || kind == DictationIssue.CLEANUP_SETUP
@@ -5890,9 +5885,7 @@ class MainActivity : ComponentActivity() {
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                 )
             }
-            val todayWord = getString(R.string.home_today)
-            val yesterdayWord = getString(R.string.home_yesterday)
-            shown.groupBy { historyDayLabel(it.recordedAt, today, zone, todayWord, yesterdayWord) }.forEach { (label, group) ->
+            grouped.forEach { (label, group) ->
                 item(key = "day-$label") { HistoryDayHeader(label) }
                 items(group, key = { it.uuid }) { h ->
                     HistoryEntryCard(
