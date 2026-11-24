@@ -4,8 +4,37 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-11-24
+
+### Added
+- Activity tab, now the default: a floating button quick toggle, usage stats with a speaking-activity heatmap, and history grouped by day (tap to copy, hold or expand to see the original transcription). It refreshes on its own when a dictation is saved.
+- Paged onboarding: welcome, floating button setup, optional notifications, then practice with the real floating button over a real text field. A bobbing arrow points at the button the first time it appears.
+- Tablet and landscape layout: a navigation rail replaces the bottom bar on wide windows and in phone landscape, pages keep a readable width, and from 840dp Activity shows overview and history side by side. Content stays clear of camera cutouts.
+- Failed dictations, and cleanup that failed on every provider, are reported on the Activity tab; cleanup failures also show a short toast.
+- Diagnostics can be copied or shared.
+
+### Changed
+- Tabs reorganized around Activity, Providers, Dictionary and Settings. Providers splits speech recognition and text cleanup into swipeable tabs; Settings holds the floating button, sync and app pages, with the setup guide at the top.
+- Snippets survive cleanup: triggers are matched ignoring case and accents, kept away from the cleanup model, and restored word for word afterwards.
+- Sync sends only what changed since the last complete round instead of everything each time.
+- Light and dark themes fade into each other instead of snapping.
+- The bubble's processing dots animate one after another, like a typing indicator.
+- Error bubbles are short and say what to do: configure a provider first, or all providers failed.
+- Pressing the floating button without microphone access explains why instead of doing nothing.
+- Granting overlay or accessibility access brings you back to MyWhisper.
+
+### Fixed
+- Claude cleanup requests no longer fail: the old request asked for a thinking budget larger than its token limit. Truncated, refused or tool-call replies are no longer pasted as text.
+- Line breaks from whisper.cpp servers no longer end up in transcripts.
+- Settings synced from a MyWhisper desktop using its new Bloom pill style no longer fail to load.
+- Sync respects the sync switch and per-device trust on every round, never sends the text of deleted entries, and restarts reliably. Records dated more than a week ahead are refused.
+- First launch, database upgrades and encryption key setup are safe against interruption and concurrent starts; one corrupted setting falls back to its default instead of resetting the rest.
+- Changing the app icon works in side-by-side test builds.
+- Activity no longer jumps while scrolling.
+
 ### Security
 - Dictated text is no longer written to the system log (logcat). Bug reports and `adb logcat` captures showed every transcription in full; the log now records only its length.
+- Sync connections are limited before authentication (count, time and message size) and only accept well-formed device ids.
 
 ## [1.3.0] - 2026-11-18
 
