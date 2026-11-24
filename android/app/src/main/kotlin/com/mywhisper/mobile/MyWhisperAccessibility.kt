@@ -180,9 +180,10 @@ class MyWhisperAccessibility : AccessibilityService() {
 
         /**
          * Insert [text] at the app's own cursor in [bound], which must
-         * still hold input focus. Returns MOVED when focus left it
-         * (nothing inserted, no clip published) and FAILED when there
-         * is no service, no focus, or the insert fails.
+         * still hold input focus. Returns MOVED when focus left it or
+         * no editor has focus now (nothing inserted, no clip published),
+         * and FAILED when there is no service, nothing was bound at
+         * record start, or the insert fails.
          *
          * Diagnostics record lengths and delivery path only, never field or transcript text.
          */
