@@ -6109,8 +6109,9 @@ class MainActivity : ComponentActivity() {
             ) { historyDayLabel(it, today, todayWord, yesterdayWord) }
         }
         // Whole pages through the entry at [row] (day headers are not entries).
-        val loadThrough: (Int) -> Boolean = { row ->
-            loadMore((historyReloadCount(historyEntriesThrough(scrollerRows, row)) - items.size).coerceAtLeast(HISTORY_PAGE))
+        val loadThrough: (Int) -> Int? = { row ->
+            // Live counter, not the composed one: a page may have ended since this frame.
+            if (loadMore((historyReloadCount(historyEntriesThrough(scrollerRows, row)) - items.size).coerceAtLeast(HISTORY_PAGE))) pagingDone else null
         }
         val historyLead = 3 + (if (histError.value.isNotEmpty()) 1 else 0) + (if (items.isEmpty()) 1 else 0)
         val overviewCount = 4 + (if (issueKind != null) 1 else 0)

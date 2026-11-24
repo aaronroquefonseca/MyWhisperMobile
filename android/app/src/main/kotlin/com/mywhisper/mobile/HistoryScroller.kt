@@ -86,7 +86,8 @@ internal fun HistoryFastScroller(
     rowLabels: List<String>,
     loadedRows: Int,
     canLoad: Boolean,
-    onLoadThrough: (row: Int) -> Boolean,
+    /** Live [pagingDone] when the load starts, null when refused. */
+    onLoadThrough: (row: Int) -> Int?,
     pagingDone: Int,
     visible: Boolean,
     modifier: Modifier = Modifier,
@@ -132,7 +133,7 @@ internal fun HistoryFastScroller(
             // Unloaded rows load once, on release.
             dragging || askedAt == pagingDone -> return@LaunchedEffect
             // Refused while paging is busy: that job's end advances pagingDone and retries.
-            askedAt == null && canLoad -> { if (load(row)) askedAt = pagingDone; return@LaunchedEffect }
+            askedAt == null && canLoad -> { askedAt = load(row); return@LaunchedEffect }
             // Nothing more to load, or our load ended short of the row: settle on the last loaded row.
         }
         state.scrollToItem(firstIndex + row.coerceAtMost(loadedRows - 1))
