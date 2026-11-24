@@ -381,4 +381,71 @@ class DictationCancelTest {
             dictation.shutdown()
         }
     }
+
+    /**
+     * Cancel paused after the core revoke (e.g. writing its discarded
+     * row): a server finish that fails because of that revoke must not
+     * start the Local fallback for the cancelled utterance.
+     */
+    @Test
+    fun cancelPausedAfterCoreRevoke_neverStartsLocalFallback() {
+        val providerEntered = CountDownLatch(1)
+        val providerRelease = CountDownLatch(1)
+        val revoked = CountDownLatch(1)
+        val bookkeepingRelease = CountDownLatch(1)
+        val localStarted = CountDownLatch(1)
+        val dictation = Dictation(
+            mode = { "Push" },
+            startCapture = { onPcm, _, _ ->
+                onPcm(ShortArray(8_000), 8_000) // enough audio for the fallback path
+                FakeCapture()
+            },
+            pushPcm = { _, _, _ -> },
+            localFirst = { false },
+            localTranscribe = {
+                localStarted.countDown()
+                "stale local" to "local"
+            },
+            localPostProcess = { it },
+            finishLocal = { _, text, engine, _, _ -> text to engine },
+            finishTranscription = {
+                providerEntered.countDown()
+                assertTrue(providerRelease.await(10, TimeUnit.SECONDS))
+                throw IllegalStateException("cancelled (chain superseded)")
+            },
+            cancelTranscription = {
+                revoked.countDown()
+                assertTrue(bookkeepingRelease.await(10, TimeUnit.SECONDS))
+            },
+            log = {},
+        )
+        val pastes: MutableList<String> = Collections.synchronizedList(mutableListOf())
+        dictation.listener = object : Dictation.Listener {
+            override fun onState(s: Dictation.State, toggled: Boolean) {}
+            override fun onResult(text: String) {
+                pastes.add(text)
+            }
+            override fun onError(msg: String) {}
+        }
+        try {
+            dictation.pressDown()
+            dictation.pressUp()
+            assertTrue(providerEntered.await(10, TimeUnit.SECONDS))
+
+            val cancelled = CountDownLatch(1)
+            Thread { dictation.cancel(); cancelled.countDown() }.start()
+            assertTrue(revoked.await(10, TimeUnit.SECONDS))
+            providerRelease.countDown() // provider fails because of the revoke
+            assertFalse("fallback started for a cancelled utterance", localStarted.await(300, TimeUnit.MILLISECONDS))
+
+            bookkeepingRelease.countDown()
+            assertTrue(cancelled.await(10, TimeUnit.SECONDS))
+            assertFalse("fallback started after cancel", localStarted.await(300, TimeUnit.MILLISECONDS))
+            assertTrue(pastes.isEmpty())
+        } finally {
+            providerRelease.countDown()
+            bookkeepingRelease.countDown()
+            dictation.shutdown()
+        }
+    }
 }

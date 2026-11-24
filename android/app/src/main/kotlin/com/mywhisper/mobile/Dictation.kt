@@ -42,11 +42,12 @@ class Dictation(
     private val finishTranscription: (Long) -> Pair<String, String> = { CoreBridge.finishUtterance(it) },
     private val cancelTranscription: () -> Unit = { CoreBridge.cancelUtterance() },
     /**
-     * Forwards capture PCM to the core recorder. Injected (default
+     * Forwards capture PCM to the core recorder for an utterance token
+     * (the core drops a stale one). Injected (default
      * `CoreBridge.pushPcm`) so JVM unit tests can fire the capture
      * path without the native lib.
      */
-    private val pushPcm: (ShortArray, Int) -> Unit = { buf, n -> CoreBridge.pushPcm(buf, n) },
+    private val pushPcm: (ShortArray, Int, Long) -> Unit = { buf, n, utterance -> CoreBridge.pushPcm(buf, n, utterance) },
     /**
      * Local-first hook (selected on-device model via LocalStt): receives
      * the utterance PCM (16 kHz i16) and returns (text, engine) on hit,
@@ -234,7 +235,7 @@ class Dictation(
             pcm@{ buf, n ->
                 // Copy: the buffer is reused by the read loop.
                 val copy = buf.copyOf(n)
-                synchronized(pcmLock) {
+                val utterance = synchronized(pcmLock) {
                     if (gen != session.get()) return@pcm
                     val take = minOf(n, MAX_LOCAL_PCM_SAMPLES - pcmSize).coerceAtLeast(0)
                     if (pcmSize + take > pcmBuf.size) {
@@ -251,10 +252,13 @@ class Dictation(
                         pcmOverflowed = true
                         log("local PCM capped at 60s, overflow falls back to server")
                     }
-                    try {
-                        pushPcm(copy, n)
-                    } catch (_: Exception) {
-                    }
+                    capture?.utterance ?: 0L
+                }
+                // Outside pcmLock (the core may wait on its own lock); the
+                // token keeps a chunk that lost a race out of a newer recording.
+                try {
+                    pushPcm(copy, n, utterance)
+                } catch (_: Exception) {
                 }
             },
             { listener?.onError(it); hardStop() },
@@ -380,7 +384,11 @@ class Dictation(
             // token rules — capture nullness alone races (worker may
             // have snapshotted non-null just before cancel). Return
             // silently: state already belongs to cancel()/a new press.
-            if (gen != session.get()) {
+            // Session checks take pcmLock: cancel holds it from the core
+            // revoke through the session bump, so a check never sees a
+            // revoked utterance as current.
+            fun stale() = synchronized(pcmLock) { gen != session.get() }
+            if (stale()) {
                 log("finish drop stale-tail gen=$gen session=${session.get()}")
                 return@execute
             }
@@ -454,7 +462,7 @@ class Dictation(
                 // Cancelled during the (blocking) local decode: the
                 // result below already drops post-call, but neither the
                 // server upload nor cleanup may run for a dead utterance.
-                if (gen != session.get()) return@execute
+                if (stale()) return@execute
                 text = if (local != null) {
                     commitLocal(local)
                 } else {
@@ -463,9 +471,9 @@ class Dictation(
                     } catch (e: Exception) {
                         // Local entry below the servers: fallback.
                         // Under 0.3 s the server already said "too short".
-                        if (first || pcm.size < 4_800 || gen != session.get()) throw e
+                        if (first || pcm.size < 4_800 || stale()) throw e
                         val fallback = decodeLocal() ?: throw e
-                        if (gen != session.get()) return@execute
+                        if (stale()) return@execute
                         log("server chain failed, local fallback")
                         commitLocal(fallback)
                     }

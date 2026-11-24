@@ -201,9 +201,15 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativePushPcm
     _cls: JClass,
     data: JShortArray,
     length: jint,
+    utterance: jlong,
 ) -> jstring {
     let out = with_engine(
         |e| {
+            // Checked under the engine lock, where every start takes its
+            // token: a chunk from an older capture never joins a newer one.
+            if engine::current_utterance() != utterance as u64 {
+                return ok_json(serde_json::Value::Null);
+            }
             let n = length.max(0) as usize;
             let mut buf = vec![0i16; n];
             if env.get_short_array_region(&data, 0, &mut buf).is_err() {

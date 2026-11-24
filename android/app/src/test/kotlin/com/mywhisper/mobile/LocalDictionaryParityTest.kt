@@ -46,7 +46,7 @@ class LocalDictionaryParityTest {
                 },
                 localTranscribe = { "the investor ask now" to "local moonshine-v2-tiny.en" },
                 localPostProcess = { LocalStt.postProcessLocal(it, emptyList()) },
-                pushPcm = { _, _ -> },
+                pushPcm = { _, _, _ -> },
                 log = {},
                 workers = localExecutor,
             )
@@ -78,7 +78,7 @@ class LocalDictionaryParityTest {
                 finishLocal = { _, text, engine, _, _ -> text to engine },
                 localTranscribe = { "local text" to "local moonshine-v2-tiny.en" },
                 localPostProcess = { throw RuntimeException("nope") },
-                pushPcm = { _, _ -> },
+                pushPcm = { _, _, _ -> },
                 log = {},
                 workers = executor,
             ).also {

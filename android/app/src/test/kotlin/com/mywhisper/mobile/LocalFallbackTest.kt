@@ -63,7 +63,7 @@ class LocalFallbackTest {
                 localCalls.incrementAndGet()
                 (local ?: { null })(pcm)
             },
-            pushPcm = { _, _ -> },
+            pushPcm = { _, _, _ -> },
             releaseLocal = { releases.incrementAndGet() },
             log = { logs.add(it) },
             workers = executor,

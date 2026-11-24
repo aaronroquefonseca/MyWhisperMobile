@@ -200,7 +200,7 @@ class LocalWordBoostTest {
                 finishLocal = { _, text, engine, _, _ -> text to engine },
                 localTranscribe = { "deploy to kuberrnetes" to "local moonshine-v2-tiny.en" },
                 localPostProcess = { LocalStt.postProcessLocal(it, words) },
-                pushPcm = { _, _ -> },
+                pushPcm = { _, _, _ -> },
                 log = {},
                 workers = executor,
             ).also {

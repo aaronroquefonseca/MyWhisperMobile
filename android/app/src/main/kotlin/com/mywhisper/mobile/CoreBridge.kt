@@ -20,7 +20,7 @@ object CoreBridge {
     @JvmStatic external fun nativeGetSettings(): String
     @JvmStatic external fun nativePutSettings(json: String): String
     @JvmStatic external fun nativeStartUtterance(sampleRate: Int): String
-    @JvmStatic external fun nativePushPcm(data: ShortArray, length: Int): String
+    @JvmStatic external fun nativePushPcm(data: ShortArray, length: Int, utterance: Long): String
     @JvmStatic external fun nativeFinishUtterance(utterance: Long): String
     @JvmStatic external fun nativeFinishLocalUtterance(raw: String, text: String, engine: String, durationSecs: Int, utterance: Long): String
     @JvmStatic external fun nativeSetLocalLlmRunner(runner: LocalLlmCleanupRunner?): String
@@ -82,8 +82,9 @@ object CoreBridge {
     fun startUtterance(rate: Int): Long =
         runCatching { (dataOf(nativeStartUtterance(rate)) as Number).toLong() }.getOrDefault(0L)
 
-    fun pushPcm(data: ShortArray, n: Int) {
-        nativePushPcm(data, n)
+    /** Appends to the core recorder only while [utterance] is the current recording. */
+    fun pushPcm(data: ShortArray, n: Int, utterance: Long) {
+        nativePushPcm(data, n, utterance)
     }
 
     /**
@@ -91,25 +92,29 @@ object CoreBridge {
      * stale [utterance] token (cancelled or superseded) throws without
      * touching the current recording.
      */
-    fun finishUtterance(utterance: Long): Pair<String, String> = finishReply(nativeFinishUtterance(utterance))
+    fun finishUtterance(utterance: Long): Pair<String, String> {
+        cleanup.set(DictationIssue.Cleanup.OK)
+        return finishReply(nativeFinishUtterance(utterance))
+    }
 
     /**
-     * Cleanup outcome of the last finish (failed or unconfigured means the
-     * text was delivered as transcribed).
-     * shortcut: one global value read by the single dictation listener; move into the
-     * finish result if a second concurrent dictation surface ever appears.
+     * Cleanup outcome of the last finish on the calling thread (failed or
+     * unconfigured means the text was delivered as transcribed). Per
+     * thread because finishes run concurrently and the dictation
+     * listener reads it on the worker thread that ran the finish.
      */
-    @Volatile
-    internal var lastCleanup = DictationIssue.Cleanup.OK
-        private set
+    internal val lastCleanup: DictationIssue.Cleanup get() = cleanup.get()
+    private val cleanup = ThreadLocal.withInitial { DictationIssue.Cleanup.OK }
 
     /**
      * On-device STT hit: run the same LLM cleanup chain + history
      * write as [finishUtterance]. Blocks on cleanup — worker thread
      * only. Returns (text, engine) or throws.
      */
-    fun finishLocalUtterance(raw: String, text: String, engine: String, durationSecs: Int, utterance: Long): Pair<String, String> =
-        finishReply(nativeFinishLocalUtterance(raw, text, engine, durationSecs, utterance))
+    fun finishLocalUtterance(raw: String, text: String, engine: String, durationSecs: Int, utterance: Long): Pair<String, String> {
+        cleanup.set(DictationIssue.Cleanup.OK)
+        return finishReply(nativeFinishLocalUtterance(raw, text, engine, durationSecs, utterance))
+    }
 
     /** Wire the on-device LLM into the dictation cleanup chain (once per process). */
     fun setLocalLlmRunner(runner: LocalLlmCleanupRunner?) {
@@ -119,16 +124,15 @@ object CoreBridge {
     private fun finishReply(raw: String): Pair<String, String> {
         val d = dataOf(raw) as JSONObject
         // Per-entry cleanup outcome ("Ollama: llm post: ..."): the only
-        // trace of why cleanup did or did not apply. Set only by a
-        // successful finish, so a stale or failed one never overwrites it.
-        lastCleanup = d.optJSONArray("cleanup")?.let { notes ->
+        // trace of why cleanup did or did not apply.
+        d.optJSONArray("cleanup")?.let { notes ->
             val list = (0 until notes.length()).map { notes.optString(it) }
+            cleanup.set(DictationIssue.cleanupOutcome(list))
             try {
                 android.util.Log.i("MwCleanup", list.joinToString(" | "))
             } catch (_: Throwable) {
             }
-            DictationIssue.cleanupOutcome(list)
-        } ?: DictationIssue.Cleanup.OK
+        }
         return d.getString("text") to d.optString("engine", "")
     }
 
