@@ -170,6 +170,13 @@ class Dictation(
      */
     private val session = AtomicInteger(0)
 
+    /**
+     * One on-device decode at a time (the recognizer is a single native
+     * engine anyway). A decode queued behind a cancelled one rechecks
+     * its session after the wait, so it never runs for a dead utterance.
+     */
+    private val localDecodeLock = Any()
+
     val current: State get() = state
 
     private fun set(s: State) {
@@ -438,14 +445,17 @@ class Dictation(
                         log("local PCM overflowed 60s cap, server only")
                         return null
                     }
-                    return try {
-                        // Local hits get the WORD word-boost here
-                        // ([localPostProcess]); the core applies snippets
-                        // in [finishLocal], as on the server path.
-                        localTranscribe(pcm)?.let { (raw, engine) -> LocalHit(raw, localPostProcess(raw), engine) }
-                    } catch (_: Throwable) {
-                        // Local hook miss on ANY throw (incl. OOM Error).
-                        null
+                    return synchronized(localDecodeLock) {
+                        if (stale()) return null
+                        try {
+                            // Local hits get the WORD word-boost here
+                            // ([localPostProcess]); the core applies snippets
+                            // in [finishLocal], as on the server path.
+                            localTranscribe(pcm)?.let { (raw, engine) -> LocalHit(raw, localPostProcess(raw), engine) }
+                        } catch (_: Throwable) {
+                            // Local hook miss on ANY throw (incl. OOM Error).
+                            null
+                        }
                     }
                 }
                 fun commitLocal(hit: LocalHit): String =

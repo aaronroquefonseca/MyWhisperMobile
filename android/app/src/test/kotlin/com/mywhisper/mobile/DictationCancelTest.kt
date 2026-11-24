@@ -493,4 +493,58 @@ class DictationCancelTest {
             dictation.shutdown()
         }
     }
+
+    /**
+     * A local decode queued behind a cancelled one must not run once its
+     * own utterance is cancelled too, so the next dictation is not delayed.
+     */
+    @Test
+    fun queuedLocalDecode_cancelledWhileWaiting_neverRuns() {
+        val decodes = AtomicInteger(0)
+        val firstDecoding = CountDownLatch(1)
+        val releaseFirst = CountDownLatch(1)
+        val secondAtLocalFirst = CountDownLatch(1)
+        val localFirstCalls = AtomicInteger(0)
+        val executor = Executors.newCachedThreadPool()
+        val dictation = Dictation(
+            mode = { "Push" },
+            startCapture = { _, _, _ -> FakeCapture() },
+            pushPcm = { _, _, _ -> },
+            localFirst = {
+                if (localFirstCalls.incrementAndGet() == 2) secondAtLocalFirst.countDown()
+                true
+            },
+            localTranscribe = {
+                if (decodes.incrementAndGet() == 1) {
+                    firstDecoding.countDown()
+                    assertTrue(releaseFirst.await(10, TimeUnit.SECONDS))
+                }
+                null
+            },
+            finishTranscription = { "x" to "y" },
+            cancelTranscription = {},
+            log = {},
+            workers = executor,
+        )
+        try {
+            dictation.pressDown()
+            dictation.pressUp()
+            assertTrue(firstDecoding.await(10, TimeUnit.SECONDS))
+            dictation.cancel() // first decode keeps running natively
+
+            dictation.pressDown()
+            dictation.pressUp()
+            assertTrue(secondAtLocalFirst.await(10, TimeUnit.SECONDS))
+            Thread.sleep(200) // let the second finish queue behind the first decode
+            dictation.cancel()
+            releaseFirst.countDown()
+
+            executor.shutdown() // both finishes drain
+            assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS))
+            assertEquals("queued decode ran for a cancelled utterance", 1, decodes.get())
+        } finally {
+            releaseFirst.countDown()
+            dictation.shutdown()
+        }
+    }
 }
