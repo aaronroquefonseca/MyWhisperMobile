@@ -35,6 +35,31 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 
+/** Max content widths: settings-style pages stay readable; Activity can split into panes. */
+internal val PAGE_MAX_WIDTH = 760.dp
+internal val ACTIVITY_MAX_WIDTH = 1280.dp
+
+/** Activity shows overview and history side by side from this width. */
+internal val TWO_PANE_MIN_WIDTH = 840.dp
+
+/**
+ * Navigation rail instead of a bottom bar: wide windows (tablets, unfolded)
+ * and short ones (phones in landscape, where a bottom bar eats the height).
+ * Pure for unit tests.
+ */
+internal fun useNavigationRail(widthDp: Int, heightDp: Int): Boolean = widthDp >= 600 || heightDp < 480
+
+/** Centers [content] at up to [max] wide; wide windows keep a readable line length. */
+@Composable
+internal fun Centered(modifier: Modifier = Modifier, max: androidx.compose.ui.unit.Dp = PAGE_MAX_WIDTH, content: @Composable () -> Unit) {
+    Box(modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+        Box(Modifier.widthIn(max = max).fillMaxWidth()) { content() }
+    }
+}
+
+/** Heatmap weeks for a card [widthDp] wide: 24 on phones, up to a year on wide panes. Pure for unit tests. */
+internal fun heatmapWeeks(widthDp: Float): Int = (widthDp / 19f).toInt().coerceIn(24, 53)
+
 /** Last dictation problem, shown on Activity until the next clean dictation. */
 internal object DictationIssue {
     const val PREF_KIND = "dictation_issue_kind"

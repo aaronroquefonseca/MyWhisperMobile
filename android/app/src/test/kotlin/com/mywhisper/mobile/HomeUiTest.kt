@@ -43,4 +43,15 @@ class HomeUiTest {
         val lastYear = historyDayLabel(secs(LocalDate.of(2025, 3, 2)), today, zone, "T", "Y")
         assertTrue(lastYear, lastYear.contains("2025"))
     }
+
+    @Test
+    fun responsiveRules() {
+        // Phone portrait: bottom bar. Phone landscape (short) and tablets: rail.
+        assertFalse(useNavigationRail(widthDp = 411, heightDp = 891))
+        assertTrue(useNavigationRail(widthDp = 891, heightDp = 411))
+        assertTrue(useNavigationRail(widthDp = 800, heightDp = 1280))
+        assertEquals(24, heatmapWeeks(328f))
+        assertEquals(40, heatmapWeeks(760f))
+        assertEquals(53, heatmapWeeks(2000f))
+    }
 }
