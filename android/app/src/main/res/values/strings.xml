@@ -97,7 +97,6 @@
     <string name="float_need_overlay">Allow display over other apps first</string>
     <string name="float_overlay_recovery">Overlay permission was revoked — re-enable “Display over other apps” to restore the floating button</string>
     <string name="float_drag_handle">Drag handle — move floating button, pull down to cancel</string>
-    <string name="float_move_hint">Drag the handle to move • pull it down to cancel • drop the mic on ✕ to cancel</string>
     <string name="float_stop">Cancel — discard dictation</string>
     <string name="float_processing">Transcribing…</string>
     <string name="float_no_field">No editable field focused — open one and dictate again</string>
@@ -587,12 +586,12 @@
     <string name="issue_cleanup_toast">Cleanup didn’t work, so your text was typed as heard</string>
     <string name="tutorial_app_name">Notes · practice</string>
     <string name="tutorial_placeholder">Your words will appear here…</string>
-    <string name="onb_welcome_body">MyWhisper adds a small microphone button next to wherever you type. Talk, and your words appear as text.</string>
+    <string name="onb_welcome_body">MyWhisper adds a small floating button next to wherever you type. Talk, and your words appear as text.</string>
     <string name="onb_welcome_point_1">Works in any app: messages, notes, email, search.</string>
     <string name="onb_welcome_point_2">Fixes punctuation and filler words for you, if you want.</string>
     <string name="onb_welcome_point_3">You choose where your voice is turned into text.</string>
     <string name="onb_try_title">Try the button</string>
-    <string name="onb_try_body">Tap the box below. The floating button appears next to the keyboard, exactly like in any other app. Tap it to start and tap again to finish, hold it while you talk, or drag it where you like.</string>
+    <string name="onb_try_body">Tap the box below. The floating button appears next to the keyboard, just like in any other app.</string>
     <string name="onb_try_note">Practice mode: whatever you say, it types an example sentence. Set up a transcription provider in Providers and it will type what you actually say.</string>
     <string name="onb_setup_title">Set up the button</string>
     <string name="onb_setup_body">Three permissions let the button appear over other apps and type for you. MyWhisper only listens while you hold or tap the button.</string>
@@ -631,4 +630,11 @@
     <string name="diag_share">Share</string>
     <string name="stt_advanced_sub">Silence trimming and noise gate</string>
     <string name="stt_vad_help">Cut silence at the start and end of each recording</string>
+    <string name="err_mic_revoked">MyWhisper can’t use the microphone anymore. Open MyWhisper to allow it again.</string>
+    <string name="onb_try_point_1">Tap it to start, tap again to finish.</string>
+    <string name="onb_try_point_2">Or hold it while you talk, then let go.</string>
+    <string name="onb_try_point_3">Drag it to move it out of the way. While recording, drop it on ✕ to cancel.</string>
+    <string name="onb_try_locked">Tap the box to bring up the button and continue.</string>
+    <string name="settings_guide">Setup guide</string>
+    <string name="settings_guide_sub">Walk through setup and practice with the button again</string>
 </resources>

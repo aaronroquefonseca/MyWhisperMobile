@@ -57,6 +57,12 @@ class OverlayService : Service(), Dictation.Listener {
         var practiceMode = false
         private var practiceIndex = 0
 
+        /** The button has appeared at least once during practice (unlocks finishing onboarding). */
+        val practiceButtonShown = kotlinx.coroutines.flow.MutableStateFlow(false)
+
+        /** Bumped after a dictation is saved, so an open Activity tab refreshes. */
+        val historyChanged = kotlinx.coroutines.flow.MutableStateFlow(0)
+
         fun start(ctx: Context) {
             // Behavior controls may refresh while disabled. Do not create a
             // service unless the persisted setting currently enables it.
@@ -112,6 +118,7 @@ class OverlayService : Service(), Dictation.Listener {
     // One-shot move-hint coachmark (first bubble show ever).
     private var hintView: View? = null
     private var hintParams: WindowManager.LayoutParams? = null
+    private var hintAnim: android.animation.Animator? = null
     private val hintHide = Runnable { hideMoveHint() }
 
     private var parked = false
@@ -645,6 +652,12 @@ class OverlayService : Service(), Dictation.Listener {
             mode = { readMode() },
             releaseDelayMs = { readLong("stt", "release_delay_ms", 0L) },
             startCapture = { onPcm, onError, onLevel ->
+                if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    // e.g. an "Only this time" grant expired: say so instead of silently doing nothing.
+                    recordIssue(DictationIssue.SPEECH, "microphone permission missing")
+                    showToast(getString(R.string.err_mic_revoked), Toast.LENGTH_LONG)
+                    return@Dictation null
+                }
                 try {
                     // Promote synchronously from the user's visible bubble gesture,
                     // before AudioRecord starts. Idle boot readiness needs no mic type.
@@ -1038,6 +1051,15 @@ class OverlayService : Service(), Dictation.Listener {
             removeBubble()
         }
         if (show) {
+            if (practiceMode && !practiceButtonShown.value) {
+                // Post so the arrow anchors to the bubble once it is laid out.
+                mainHandler.post {
+                    if (holder != null && practiceMode && !practiceButtonShown.value) {
+                        practiceButtonShown.value = true
+                        maybeShowMoveHint(force = true)
+                    }
+                }
+            }
             if (holder == null) showBubble() else {
                 if (parked) {
                     parked = false
@@ -1942,15 +1964,18 @@ class OverlayService : Service(), Dictation.Listener {
      * tap can never replay it), tap or outside-tap dismisses, a timeout
      * dismisses, and hiding the bubble dismisses.
      */
-    @SuppressLint("ClickableViewAccessibility")
-    private fun maybeShowMoveHint() {
+    /**
+     * First-show arrow pointing at the button for a few seconds (once ever,
+     * or [force]d by onboarding practice). Pass-through: never blocks touches.
+     */
+    private fun maybeShowMoveHint(force: Boolean = false) {
         if (hintView != null) return
         val prefs = try {
             getSharedPreferences(PREFS, MODE_PRIVATE)
         } catch (_: Exception) {
             return
         }
-        if (!FloatState.shouldShowMoveHint(prefs.getBoolean(KEY_MOVE_HINT, false))) return
+        if (!force && !FloatState.shouldShowMoveHint(prefs.getBoolean(KEY_MOVE_HINT, false))) return
         // Once-ever: persist first, show second. Never replays.
         try {
             prefs.edit { putBoolean(KEY_MOVE_HINT, true) }
@@ -1958,53 +1983,46 @@ class OverlayService : Service(), Dictation.Listener {
         }
         try {
             val lp = params ?: return
-            val padH = dp(HINT_PAD_H_DP)
-            val padV = dp(HINT_PAD_V_DP)
-            val tv = android.widget.TextView(this).apply {
-                text = getString(R.string.float_move_hint)
-                setTextColor(0xFFFFFFFF.toInt())
-                textSize = 14f
+            val size = dp(HINT_ARROW_DP)
+            val bob = dp(HINT_BOB_DP)
+            val gap = dp(4)
+            val boxH = size + bob
+            val above = arrowHintAbove(lp.y, boxH, gap)
+            val arrow = android.widget.ImageView(this).apply {
+                setImageResource(R.drawable.ic_hint_arrow)
                 background = GradientDrawable().apply {
-                    shape = GradientDrawable.RECTANGLE
-                    cornerRadius = dp(18).toFloat()
+                    shape = GradientDrawable.OVAL
                     setColor(0xE61D1B20.toInt())
                 }
-                setPadding(padH, padV, padH, padV)
-                isClickable = true
-                isFocusable = false
-                setOnClickListener { hideMoveHint() }
-                setOnTouchListener { _, ev ->
-                    if (ev.actionMasked == MotionEvent.ACTION_OUTSIDE) {
-                        hideMoveHint()
-                        true
-                    } else {
-                        false
-                    }
-                }
+                val pad = dp(9)
+                setPadding(pad, pad, pad, pad)
+                if (!above) rotation = 180f
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             }
-            // Screen bounds for anchoring (fold/rotate-safe query).
-            val (scrW, scrH) = screenSize()
-            tv.measure(
-                View.MeasureSpec.makeMeasureSpec(scrW - dp(HINT_MARGIN_DP) * 2, View.MeasureSpec.AT_MOST),
-                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
-            )
-            val w = tv.measuredWidth.coerceAtLeast(1)
-            val h = tv.measuredHeight.coerceAtLeast(1)
-            val margin = dp(HINT_MARGIN_DP)
+            val box = FrameLayout(this).apply {
+                addView(arrow, FrameLayout.LayoutParams(size, size, if (above) Gravity.TOP else Gravity.BOTTOM))
+            }
+            val (scrW, _) = screenSize()
             val hp = WindowManager.LayoutParams(
-                w, h,
+                size, boxH,
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
                 PixelFormat.TRANSLUCENT,
             ).also {
                 it.gravity = Gravity.TOP or Gravity.START
-                it.x = moveHintX(lp.x + lp.width / 2, w, 0, scrW)
-                it.y = moveHintY(lp.y, lp.height, h, margin, scrH)
+                it.x = moveHintX(lp.x + lp.width / 2, size, 0, scrW)
+                it.y = if (above) lp.y - boxH - gap else lp.y + lp.height + gap
             }
             hintParams = hp
-            hintView = tv
-            wm?.addView(tv, hp)
+            hintView = box
+            wm?.addView(box, hp)
+            // Bob toward the button so the eye finds it.
+            hintAnim = android.animation.ObjectAnimator.ofFloat(arrow, "translationY", 0f, if (above) bob.toFloat() else -bob.toFloat()).apply {
+                duration = 450L
+                repeatMode = android.animation.ValueAnimator.REVERSE
+                repeatCount = android.animation.ValueAnimator.INFINITE
+                start()
+            }
             mainHandler.removeCallbacks(hintHide)
             mainHandler.postDelayed(hintHide, HINT_TIMEOUT_MS)
         } catch (_: Exception) {
@@ -2022,6 +2040,8 @@ class OverlayService : Service(), Dictation.Listener {
             hintView?.let { wm?.removeView(it) }
         } catch (_: Exception) {
         }
+        hintAnim?.cancel()
+        hintAnim = null
         hintView = null
         hintParams = null
     }
@@ -2091,6 +2111,8 @@ class OverlayService : Service(), Dictation.Listener {
     override fun onResult(text: String) {
         android.util.Log.i("MwFloat", "onResult len=${text.length}")
         if (!practiceMode) {
+            // The core saved history before returning the text.
+            historyChanged.value++
             when (CoreBridge.lastCleanup) {
                 DictationIssue.Cleanup.OK -> recordIssue(null, null)
                 DictationIssue.Cleanup.FAILED -> {
@@ -2273,16 +2295,11 @@ internal const val VIZ_H_DP = 36
 internal const val VIZ_MARGIN_DP = 16
 
 /** Move-hint coachmark auto-dismiss (ms): tap / outside / timeout / bubble-hide dismiss. */
-internal const val HINT_TIMEOUT_MS = 6000L
+internal const val HINT_TIMEOUT_MS = 4000L
 
-/** Move-hint coachmark screen-edge margin (dp). */
-internal const val HINT_MARGIN_DP = 16
-
-/** Move-hint coachmark horizontal text padding (dp). */
-internal const val HINT_PAD_H_DP = 14
-
-/** Move-hint coachmark vertical text padding (dp). */
-internal const val HINT_PAD_V_DP = 10
+/** Arrow coachmark diameter and bob travel (dp). */
+internal const val HINT_ARROW_DP = 40
+internal const val HINT_BOB_DP = 8
 
 /**
  * Coachmark X (px, view origin): centered on the bubble center, clamped
@@ -2295,20 +2312,8 @@ internal fun moveHintX(bubbleCxPx: Int, hintWPx: Int, minXPx: Int, maxXPx: Int):
     return (bubbleCxPx - hintWPx / 2).coerceIn(lo, hi)
 }
 
-/**
- * Coachmark Y (px, view origin): below the bubble when the pill fits
- * on-screen, else above it (never negative).
- */
-internal fun moveHintY(
-    bubbleYPx: Int,
-    bubbleHPx: Int,
-    hintHPx: Int,
-    marginPx: Int,
-    screenHPx: Int,
-): Int {
-    val below = bubbleYPx + bubbleHPx + marginPx
-    return if (below + hintHPx <= screenHPx) below else (bubbleYPx - hintHPx - marginPx).coerceAtLeast(0)
-}
+/** Arrow goes above the button (pointing down) when it fits on-screen, else below (pointing up). */
+internal fun arrowHintAbove(bubbleYPx: Int, boxHPx: Int, gapPx: Int): Boolean = bubbleYPx - boxHPx - gapPx >= 0
 
 /** Visualizer bar-strip bar count (mirrors BarsView: 11 bars). */
 internal const val VIZ_BAR_COUNT = 11

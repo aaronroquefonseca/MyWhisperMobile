@@ -41,6 +41,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.animateContentSize
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
@@ -93,6 +94,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -982,6 +984,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        returnHandler.removeCallbacksAndMessages(null)
         refreshPermStates()
         reload()
         resumeTick.intValue++
@@ -999,6 +1002,7 @@ class MainActivity : ComponentActivity() {
         } catch (_: Exception) {
         }
         multicastLock = null
+        returnHandler.removeCallbacksAndMessages(null)
         // Drop late job results: the generation bump makes stale
         // workers no-ops instead of touching torn-down state.
         settingsGen.incrementAndGet()
@@ -1037,6 +1041,32 @@ class MainActivity : ComponentActivity() {
         } else {
             startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
         }
+    }
+
+    private val returnHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    /**
+     * Opens a system settings page and brings MyWhisper back as soon as
+     * [granted] turns true, so setup continues without hunting for the app.
+     * Polls every 500 ms for up to 3 minutes; returning by hand cancels it.
+     * Starting from the background is allowed here: by then the overlay
+     * permission is granted.
+     */
+    private fun openSettingsAndReturn(intent: Intent, granted: () -> Boolean) {
+        returnHandler.removeCallbacksAndMessages(null)
+        startActivity(intent)
+        val deadline = System.currentTimeMillis() + 180_000L
+        val check = object : Runnable {
+            override fun run() {
+                if (try { granted() } catch (_: Exception) { false }) {
+                    startActivity(Intent(this@MainActivity, MainActivity::class.java).addFlags(
+                        Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP))
+                } else if (System.currentTimeMillis() < deadline) {
+                    returnHandler.postDelayed(this, 500L)
+                }
+            }
+        }
+        returnHandler.postDelayed(check, 500L)
     }
 
     private fun openAppSettings() {
@@ -1535,7 +1565,7 @@ class MainActivity : ComponentActivity() {
                     TopAppBar(
                         title = { Text(titles[tab] ?: getString(R.string.setup_float)) },
                         navigationIcon = {
-                            if (backStack.isNotEmpty() && tab != 16) {
+                            if (backStack.isNotEmpty()) {
                                 IconButton(onClick = { goBack() }) {
                                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = getString(R.string.new_back))
                                 }
@@ -1604,7 +1634,7 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     } else {
-                        pageState.SaveableStateProvider(tab) {
+                        pageState.SaveableStateProvider(if (tab == 2) 1 else tab) {
                         when (tab) {
                             0 -> ActivityHome(s, onNavigate = ::navigate, onOpenProviders = { tab = it })
                             9 -> BubbleScreen(s, onBehavior = { navigate(10) })
@@ -1664,21 +1694,24 @@ class MainActivity : ComponentActivity() {
             expanded = !expanded
             prefs.edit { putBoolean(prefKey, expanded) }
         }
-        Card(modifier = Modifier.fillMaxWidth().padding(8.dp)) {
-            Column(modifier = Modifier.padding(12.dp)) {
+        // Same card as [Section] so collapsible and fixed sections line up.
+        val chevron by animateFloatAsState(if (expanded) 180f else 0f, label = "sectionChevron")
+        Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
+            Column(modifier = Modifier.padding(16.dp).animateContentSize()) {
                 Row(
-                    modifier = Modifier.fillMaxWidth().clickable { toggle() },
+                    modifier = Modifier.fillMaxWidth().clickable(role = Role.Button) { toggle() }.semantics {
+                        stateDescription = getString(if (expanded) R.string.bubble_advanced_open else R.string.bubble_advanced_closed)
+                    },
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(title, style = MaterialTheme.typography.titleMedium)
-                        Text(summary, style = MaterialTheme.typography.bodySmall)
+                        Text(summary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    IconButton(onClick = { toggle() }) {
-                        // Text chevron (icons-core has no expand glyphs):
-                        // TalkBack reads the expanded/collapsed state.
-                        Icon(Icons.Default.ArrowDropDown, contentDescription = title, modifier = Modifier.graphicsLayer { rotationZ = if (expanded) 180f else 0f })
-                    }
+                    Icon(Icons.Filled.KeyboardArrowDown, contentDescription = null,
+                        modifier = Modifier.padding(start = 8.dp).graphicsLayer { rotationZ = chevron },
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 if (expanded) {
                     Spacer(Modifier.height(8.dp))
@@ -2129,18 +2162,31 @@ class MainActivity : ComponentActivity() {
     /** Providers: speech recognition and text cleanup as two tabs. */
     @Composable
     private fun ProvidersScreen(s: JSONObject, tab: Int, onTab: (Int) -> Unit) {
+        val pager = androidx.compose.foundation.pager.rememberPagerState(initialPage = if (tab == 2) 1 else 0) { 2 }
+        val scope = androidx.compose.runtime.rememberCoroutineScope()
+        // Swipes report the settled page; tab taps and deep links scroll the pager.
+        LaunchedEffect(pager.settledPage) { onTab(pager.settledPage + 1) }
+        LaunchedEffect(tab) { if (pager.currentPage != tab - 1) pager.animateScrollToPage(tab - 1) }
         Column(Modifier.fillMaxSize()) {
-            TabRow(selectedTabIndex = if (tab == 2) 1 else 0, containerColor = MaterialTheme.colorScheme.background) {
-                Tab(selected = tab != 2, onClick = { onTab(1) }, text = { Text(stringResource(R.string.providers_speech)) })
-                Tab(selected = tab == 2, onClick = { onTab(2) }, text = { Text(stringResource(R.string.tab_cleanup)) })
+            TabRow(selectedTabIndex = pager.currentPage, containerColor = MaterialTheme.colorScheme.background) {
+                Tab(selected = pager.currentPage == 0, onClick = { scope.launch { pager.animateScrollToPage(0) } },
+                    text = { Text(stringResource(R.string.providers_speech)) })
+                Tab(selected = pager.currentPage == 1, onClick = { scope.launch { pager.animateScrollToPage(1) } },
+                    text = { Text(stringResource(R.string.tab_cleanup)) })
             }
-            Box(Modifier.weight(1f)) { if (tab == 2) CleanupScreen(s) else SttScreen(s) }
+            androidx.compose.foundation.pager.HorizontalPager(pager, Modifier.weight(1f), verticalAlignment = Alignment.Top) { page ->
+                if (page == 1) CleanupScreen(s) else SttScreen(s)
+            }
         }
     }
 
     @Composable
     private fun SettingsHome(onNavigate: (Int) -> Unit) {
         TaskPage {
+            Spacer(Modifier.height(12.dp))
+            Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainerLow) {
+                DestinationRow(getString(R.string.settings_guide), getString(R.string.settings_guide_sub), { onNavigate(16) })
+            }
             SettingsGroup(getString(R.string.setup_float)) {
                 DestinationRow(getString(R.string.task_button_controls), getString(R.string.task_button_description), { onNavigate(9) })
                 DestinationRow(getString(R.string.setup_mic_button), getString(R.string.new_behavior_description), { onNavigate(10) })
@@ -2245,18 +2291,17 @@ class MainActivity : ComponentActivity() {
                 }
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.weight(1f)) {
-                    if (pager.currentPage > 0) TextButton(onClick = { go(pager.currentPage - 1) }) { Text(getString(R.string.new_back)) }
-                }
-                StepDots(4, pager.currentPage)
-                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
-                    when {
-                        pager.currentPage == 3 -> Button(onClick = onFinish) { Text(getString(R.string.onb_finish)) }
-                        pager.currentPage == 1 && !permissionsDone -> Button(onClick = {}, enabled = false) { Text(getString(R.string.onb_next)) }
-                        else -> Button(onClick = { go(pager.currentPage + 1) }) {
-                            Text(getString(if (pager.currentPage == 0) R.string.task_get_started else R.string.onb_next))
-                        }
+            val buttonShown by OverlayService.practiceButtonShown.collectAsState()
+            StepDots(4, pager.currentPage, Modifier.align(Alignment.CenterHorizontally).padding(top = 12.dp))
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (pager.currentPage > 0) TextButton(onClick = { go(pager.currentPage - 1) }) { Text(getString(R.string.new_back)) }
+                Spacer(Modifier.weight(1f))
+                when {
+                    // Finishing unlocks once the real button has appeared on the practice page.
+                    pager.currentPage == 3 -> Button(onClick = onFinish, enabled = buttonShown) { Text(getString(R.string.onb_finish), maxLines = 1) }
+                    pager.currentPage == 1 && !permissionsDone -> Button(onClick = {}, enabled = false) { Text(getString(R.string.onb_next)) }
+                    else -> Button(onClick = { go(pager.currentPage + 1) }) {
+                        Text(getString(if (pager.currentPage == 0) R.string.task_get_started else R.string.onb_next))
                     }
                 }
             }
@@ -2319,12 +2364,18 @@ class MainActivity : ComponentActivity() {
                     !setup.overlay -> {
                         Text(getString(R.string.task_overlay_reason))
                         Spacer(Modifier.height(8.dp))
-                        Button(onClick = { startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))) }) { Text(getString(R.string.setup_float_overlay)) }
+                        Button(onClick = {
+                            openSettingsAndReturn(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))) {
+                                Settings.canDrawOverlays(this@MainActivity)
+                            }
+                        }) { Text(getString(R.string.setup_float_overlay)) }
                     }
                     !setup.dictationService -> {
                         Text(getString(R.string.control_service_help))
                         Spacer(Modifier.height(8.dp))
-                        Button(onClick = { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }) { Text(getString(R.string.setup_float_a11y)) }
+                        Button(onClick = {
+                            openSettingsAndReturn(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) { MyWhisperAccessibility.isOn(this@MainActivity) }
+                        }) { Text(getString(R.string.setup_float_a11y)) }
                     }
                     else -> Text(getString(R.string.onb_setup_complete), color = MaterialTheme.colorScheme.primary)
                 }
@@ -2356,6 +2407,13 @@ class MainActivity : ComponentActivity() {
         }
         OnboardingHeading(getString(R.string.onb_try_title))
         Text(getString(R.string.onb_try_body), style = MaterialTheme.typography.bodyMedium)
+        Spacer(Modifier.height(8.dp))
+        listOf(R.string.onb_try_point_1, R.string.onb_try_point_2, R.string.onb_try_point_3).forEach {
+            Row(Modifier.padding(vertical = 3.dp)) {
+                Text("•", Modifier.width(20.dp), color = MaterialTheme.colorScheme.primary)
+                Text(getString(it), style = MaterialTheme.typography.bodyMedium)
+            }
+        }
         Spacer(Modifier.height(16.dp))
         if (!floatOn) {
             Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainerHigh) {
@@ -2378,6 +2436,11 @@ class MainActivity : ComponentActivity() {
         Spacer(Modifier.height(12.dp))
         Text(getString(R.string.onb_try_note), style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant)
+        val shown by OverlayService.practiceButtonShown.collectAsState()
+        if (!shown) {
+            Text(getString(R.string.onb_try_locked), Modifier.padding(top = 8.dp), style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary)
+        }
     }
 
     @Composable
@@ -3583,26 +3646,28 @@ class MainActivity : ComponentActivity() {
                 }
             }
             // Language lives at the top; the rarely touched capture tuning stays folded away.
-            var advanced by rememberSaveable { mutableStateOf(false) }
-            Box(Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
-                CollapsibleCard(stringResource(R.string.bubble_advanced), stringResource(R.string.stt_advanced_sub),
-                    advanced, { advanced = !advanced }) {
-                    val vad = stt.optBoolean("vad_enabled", false)
-                    ToggleSetting(stringResource(R.string.stt_vad), stringResource(R.string.stt_vad_help), vad) {
+            CollapsibleModelsSection(stringResource(R.string.bubble_advanced), stringResource(R.string.stt_advanced_sub), "stt_advanced_expanded") {
+                val vad = stt.optBoolean("vad_enabled", false)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(stringResource(R.string.stt_vad))
+                        Text(stringResource(R.string.stt_vad_help), style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    FeedbackSwitch(modifier = Modifier.semantics { contentDescription = getString(R.string.stt_vad) }, checked = vad, onCheckedChange = {
                         stt.put("vad_enabled", it); save(); version++
-                    }
-                    Column(Modifier.padding(horizontal = 16.dp)) {
-                        var gate by remember { mutableStateOf(stt.optDouble("vad_threshold", 0.1).toFloat()) }
-                        Text(stringResource(R.string.stt_vad_gate, gate), style = MaterialTheme.typography.bodyMedium)
-                        Slider(
-                            value = gate, onValueChange = { gate = it },
-                            onValueChangeFinished = {
-                                stt.put("vad_threshold", gate.toDouble()); save()
-                            },
-                            valueRange = 0f..0.5f,
-                        )
-                    }
+                    })
                 }
+                Spacer(Modifier.height(12.dp))
+                var gate by remember { mutableStateOf(stt.optDouble("vad_threshold", 0.1).toFloat()) }
+                Text(stringResource(R.string.stt_vad_gate, gate), style = MaterialTheme.typography.bodyMedium)
+                Slider(
+                    value = gate, onValueChange = { gate = it },
+                    onValueChangeFinished = {
+                        stt.put("vad_threshold", gate.toDouble()); save()
+                    },
+                    valueRange = 0f..0.5f,
+                )
             }
         }
         if (localInfo) {
@@ -5142,7 +5207,9 @@ class MainActivity : ComponentActivity() {
         }
         // Words / Snippets segments (desktop Dictionary tabs): one list
         // visible at a time so huge dictionaries stay usable.
-        var dictTab by rememberSaveable { mutableIntStateOf(0) }
+        val dictPager = androidx.compose.foundation.pager.rememberPagerState { 2 }
+        val dictScope = androidx.compose.runtime.rememberCoroutineScope()
+        val dictTab = dictPager.currentPage
         var next by rememberSaveable { mutableStateOf("") }
         var wordQuery by rememberSaveable { mutableStateOf("") }
         var snippetQuery by rememberSaveable { mutableStateOf("") }
@@ -5166,120 +5233,122 @@ class MainActivity : ComponentActivity() {
         val fieldShape = MaterialTheme.shapes.extraLarge
         Column(modifier = Modifier.fillMaxSize()) {
             TabRow(selectedTabIndex = dictTab, containerColor = MaterialTheme.colorScheme.background) {
-                Tab(selected = dictTab == 0, onClick = { dictTab = 0 },
+                Tab(selected = dictTab == 0, onClick = { dictScope.launch { dictPager.animateScrollToPage(0) } },
                     text = { Text(stringResource(R.string.dict_tab_words) + " · ${words.size}") })
-                Tab(selected = dictTab == 1, onClick = { dictTab = 1 },
+                Tab(selected = dictTab == 1, onClick = { dictScope.launch { dictPager.animateScrollToPage(1) } },
                     text = { Text(stringResource(R.string.dict_tab_snippets) + " · ${snippets.size}") })
             }
             // Store-backed (desktop app_dictionary parity): edits hit the
             // sync tables directly, so transcription and sync see them
             // without a restart.
-            LazyColumn(
-                Modifier.weight(1f).fillMaxWidth(),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 24.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                item(key = "sync") {
-                    Surface(shape = MaterialTheme.shapes.extraLarge, color = MaterialTheme.colorScheme.surfaceContainerLow) {
-                        DestinationRow(stringResource(R.string.ux_devices_sync), stringResource(R.string.dict_sync_hint), onSync)
+            androidx.compose.foundation.pager.HorizontalPager(dictPager, Modifier.weight(1f).fillMaxWidth(), verticalAlignment = Alignment.Top) { page ->
+                LazyColumn(
+                    Modifier.fillMaxSize(),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 24.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    item(key = "sync") {
+                        Surface(shape = MaterialTheme.shapes.extraLarge, color = MaterialTheme.colorScheme.surfaceContainerLow) {
+                            DestinationRow(stringResource(R.string.ux_devices_sync), stringResource(R.string.dict_sync_hint), onSync)
+                        }
                     }
-                }
-                if (dictTab == 0) {
-                    item(key = "wordsIntro") {
-                        Text(stringResource(R.string.dict_words_sub), Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
-                            style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    item(key = "addWord") {
-                        OutlinedTextField(
-                            value = next, onValueChange = { next = it; dup = false },
-                            placeholder = { Text(stringResource(R.string.dict_new_word)) },
-                            singleLine = true,
-                            shape = fieldShape,
-                            isError = dup,
-                            supportingText = if (dup) { { Text(stringResource(R.string.dict_dup)) } } else null,
-                            keyboardOptions = KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Done),
-                            keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { addWord() }),
-                            trailingIcon = {
-                                IconButton(onClick = { addWord() }, enabled = next.isNotBlank()) {
-                                    Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.action_add))
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    }
-                    if (words.size > 8) item(key = "searchWords") {
-                        OutlinedTextField(
-                            value = wordQuery, onValueChange = { wordQuery = it },
-                            placeholder = { Text(stringResource(R.string.dict_search_words)) },
-                            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
-                            shape = fieldShape, singleLine = true, modifier = Modifier.fillMaxWidth(),
-                        )
-                    }
-                    val shown = words.filter { wordQuery.isBlank() || it.contains(wordQuery, ignoreCase = true) }
-                    if (shown.isEmpty()) item(key = "wordsEmpty") {
-                        Text(stringResource(if (words.isEmpty()) R.string.dict_no_words else R.string.dict_no_match),
-                            Modifier.fillMaxWidth().padding(vertical = 24.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                            style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    items(shown, key = { "w-$it" }) { w ->
-                        Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainerLow) {
-                            Row(Modifier.fillMaxWidth().padding(start = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Text(w, Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
-                                IconButton(onClick = { pendingDeleteWord = w }) {
-                                    Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.action_delete),
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (page == 0) {
+                        item(key = "wordsIntro") {
+                            Text(stringResource(R.string.dict_words_sub), Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
+                                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        item(key = "addWord") {
+                            OutlinedTextField(
+                                value = next, onValueChange = { next = it; dup = false },
+                                placeholder = { Text(stringResource(R.string.dict_new_word)) },
+                                singleLine = true,
+                                shape = fieldShape,
+                                isError = dup,
+                                supportingText = if (dup) { { Text(stringResource(R.string.dict_dup)) } } else null,
+                                keyboardOptions = KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Done),
+                                keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { addWord() }),
+                                trailingIcon = {
+                                    IconButton(onClick = { addWord() }, enabled = next.isNotBlank()) {
+                                        Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.action_add))
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                        if (words.size > 8) item(key = "searchWords") {
+                            OutlinedTextField(
+                                value = wordQuery, onValueChange = { wordQuery = it },
+                                placeholder = { Text(stringResource(R.string.dict_search_words)) },
+                                leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                                shape = fieldShape, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                        val shown = words.filter { wordQuery.isBlank() || it.contains(wordQuery, ignoreCase = true) }
+                        if (shown.isEmpty()) item(key = "wordsEmpty") {
+                            Text(stringResource(if (words.isEmpty()) R.string.dict_no_words else R.string.dict_no_match),
+                                Modifier.fillMaxWidth().padding(vertical = 24.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        items(shown, key = { "w-$it" }) { w ->
+                            Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainerLow) {
+                                Row(Modifier.fillMaxWidth().padding(start = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Text(w, Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+                                    IconButton(onClick = { pendingDeleteWord = w }) {
+                                        Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.action_delete),
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
                                 }
                             }
                         }
-                    }
-                } else {
-                    item(key = "snippetsIntro") {
-                        Text(stringResource(R.string.dict_snippets_sub), Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
-                            style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    item(key = "addSnippet") {
-                        androidx.compose.material3.FilledTonalButton(
-                            onClick = { snipOld = null; snipDialog = "" to "" },
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Icon(Icons.Filled.Add, contentDescription = null)
-                            Spacer(Modifier.width(6.dp))
-                            Text(stringResource(R.string.dict_add_snippet))
+                    } else {
+                        item(key = "snippetsIntro") {
+                            Text(stringResource(R.string.dict_snippets_sub), Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
+                                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                    }
-                    if (snippets.size > 5) item(key = "searchSnippets") {
-                        OutlinedTextField(
-                            value = snippetQuery, onValueChange = { snippetQuery = it },
-                            placeholder = { Text(stringResource(R.string.dict_search_snippets)) },
-                            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
-                            shape = fieldShape, singleLine = true, modifier = Modifier.fillMaxWidth(),
-                        )
-                    }
-                    val shown = snippets.filter { (trig, repl) ->
-                        snippetQuery.isBlank() || trig.contains(snippetQuery, ignoreCase = true) ||
-                            repl.contains(snippetQuery, ignoreCase = true)
-                    }
-                    if (shown.isEmpty()) item(key = "snippetsEmpty") {
-                        Text(stringResource(if (snippets.isEmpty()) R.string.dict_no_snippets else R.string.dict_no_match),
-                            Modifier.fillMaxWidth().padding(vertical = 24.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                            style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    items(shown, key = { (trig, repl) -> "s-$trig\u0000$repl" }) { (trig, repl) ->
-                        Surface(
-                            shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainerLow,
-                            onClick = { snipOld = trig; snipDialog = trig to repl },
-                        ) {
-                            Row(Modifier.fillMaxWidth().padding(start = 16.dp, top = 10.dp, bottom = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically) {
-                                Column(Modifier.weight(1f)) {
-                                    Text(stringResource(R.string.dict_snippet_say, trig), style = MaterialTheme.typography.titleSmall)
-                                    Spacer(Modifier.height(2.dp))
-                                    Text(repl, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 3, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-                                }
-                                IconButton(onClick = { pendingDeleteSnippet = trig }) {
-                                    Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.action_delete),
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        item(key = "addSnippet") {
+                            androidx.compose.material3.FilledTonalButton(
+                                onClick = { snipOld = null; snipDialog = "" to "" },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Icon(Icons.Filled.Add, contentDescription = null)
+                                Spacer(Modifier.width(6.dp))
+                                Text(stringResource(R.string.dict_add_snippet))
+                            }
+                        }
+                        if (snippets.size > 5) item(key = "searchSnippets") {
+                            OutlinedTextField(
+                                value = snippetQuery, onValueChange = { snippetQuery = it },
+                                placeholder = { Text(stringResource(R.string.dict_search_snippets)) },
+                                leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                                shape = fieldShape, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                        val shown = snippets.filter { (trig, repl) ->
+                            snippetQuery.isBlank() || trig.contains(snippetQuery, ignoreCase = true) ||
+                                repl.contains(snippetQuery, ignoreCase = true)
+                        }
+                        if (shown.isEmpty()) item(key = "snippetsEmpty") {
+                            Text(stringResource(if (snippets.isEmpty()) R.string.dict_no_snippets else R.string.dict_no_match),
+                                Modifier.fillMaxWidth().padding(vertical = 24.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        items(shown, key = { (trig, repl) -> "s-$trig\u0000$repl" }) { (trig, repl) ->
+                            Surface(
+                                shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainerLow,
+                                onClick = { snipOld = trig; snipDialog = trig to repl },
+                            ) {
+                                Row(Modifier.fillMaxWidth().padding(start = 16.dp, top = 10.dp, bottom = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text(stringResource(R.string.dict_snippet_say, trig), style = MaterialTheme.typography.titleSmall)
+                                        Spacer(Modifier.height(2.dp))
+                                        Text(repl, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 3, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                                    }
+                                    IconButton(onClick = { pendingDeleteSnippet = trig }) {
+                                        Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.action_delete),
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
                                 }
                             }
                         }
@@ -5554,7 +5623,9 @@ class MainActivity : ComponentActivity() {
         var privOpen by rememberSaveable { mutableStateOf(false) }
         var expanded by rememberSaveable { mutableStateOf<String?>(null) }
         var histQuery by rememberSaveable { mutableStateOf("") }
-        val tick = resumeTick.intValue
+        // Resume / focus regain, or a dictation saved while the app is open.
+        val saved by OverlayService.historyChanged.collectAsState()
+        val tick = resumeTick.intValue + saved
         LaunchedEffect(tick, statsVersion) {
             val gen = CoreBridge.SettingsJobs.nextJobGen(activityGen.get()).also { activityGen.set(it) }
             workers.execute {

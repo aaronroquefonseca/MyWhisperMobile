@@ -97,7 +97,6 @@
     <string name="float_need_overlay">Permite mostrar sobre otras apps primero</string>
     <string name="float_overlay_recovery">El permiso de superposición fue revocado — reactiva «Mostrar sobre otras apps» para recuperar el botón flotante</string>
     <string name="float_drag_handle">Asa de arrastre — mover el botón flotante, tirar hacia abajo para cancelar</string>
-    <string name="float_move_hint">Arrastra el asa para mover • tírala hacia abajo para cancelar • suelta el micrófono sobre ✕ para cancelar</string>
     <string name="float_stop">Cancelar — descartar el dictado</string>
     <string name="float_processing">Transcribiendo…</string>
     <string name="float_no_field">Ningún campo editable activo — abre uno y dicta de nuevo</string>
@@ -588,12 +587,12 @@
     <string name="issue_cleanup_toast">La limpieza no funcionó; el texto se escribió tal cual se oyó</string>
     <string name="tutorial_app_name">Notas · práctica</string>
     <string name="tutorial_placeholder">Tus palabras aparecerán aquí…</string>
-    <string name="onb_welcome_body">MyWhisper añade un pequeño botón de micrófono junto a donde escribes. Habla y tus palabras aparecen como texto.</string>
+    <string name="onb_welcome_body">MyWhisper añade un pequeño botón flotante junto a donde escribes. Habla y tus palabras aparecen como texto.</string>
     <string name="onb_welcome_point_1">Funciona en cualquier app: mensajes, notas, correo, búsquedas.</string>
     <string name="onb_welcome_point_2">Corrige la puntuación y las muletillas por ti, si quieres.</string>
     <string name="onb_welcome_point_3">Tú eliges dónde se convierte tu voz en texto.</string>
     <string name="onb_try_title">Prueba el botón</string>
-    <string name="onb_try_body">Toca el cuadro de abajo. El botón flotante aparece junto al teclado, igual que en cualquier otra app. Tócalo para empezar y otra vez para terminar, mantenlo pulsado mientras hablas, o arrástralo donde quieras.</string>
+    <string name="onb_try_body">Toca el cuadro de abajo. El botón flotante aparece junto al teclado, igual que en cualquier otra app.</string>
     <string name="onb_try_note">Modo práctica: digas lo que digas, escribe una frase de ejemplo. Configura un proveedor de transcripción en Proveedores y escribirá lo que de verdad digas.</string>
     <string name="onb_setup_title">Prepara el botón</string>
     <string name="onb_setup_body">Tres permisos permiten que el botón aparezca sobre otras apps y escriba por ti. MyWhisper solo escucha mientras tocas o mantienes el botón.</string>
@@ -632,4 +631,11 @@
     <string name="diag_share">Compartir</string>
     <string name="stt_advanced_sub">Recorte de silencios y puerta de ruido</string>
     <string name="stt_vad_help">Recorta el silencio al principio y al final de cada grabación</string>
+    <string name="err_mic_revoked">MyWhisper ya no puede usar el micrófono. Abre MyWhisper para permitirlo de nuevo.</string>
+    <string name="onb_try_point_1">Tócalo para empezar y otra vez para terminar.</string>
+    <string name="onb_try_point_2">O mantenlo pulsado mientras hablas y suéltalo.</string>
+    <string name="onb_try_point_3">Arrástralo para apartarlo. Mientras graba, suéltalo sobre ✕ para cancelar.</string>
+    <string name="onb_try_locked">Toca el cuadro para que aparezca el botón y continuar.</string>
+    <string name="settings_guide">Guía de configuración</string>
+    <string name="settings_guide_sub">Vuelve a recorrer la configuración y practica con el botón</string>
 </resources>

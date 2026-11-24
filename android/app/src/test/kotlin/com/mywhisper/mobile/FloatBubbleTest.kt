@@ -309,13 +309,10 @@ class FloatBubbleTest {
     }
 
     @Test
-    fun moveHint_belowBubbleWhenFits_elseAbove() {
-        // Fits below: bubble bottom + margin.
-        assertEquals(476, moveHintY(400, 60, 48, 16, 1000))
-        // No room below: above the bubble.
-        assertEquals(836, moveHintY(900, 60, 48, 16, 1000))
-        // No room either side: clamped to the top edge, never negative.
-        assertEquals(0, moveHintY(10, 200, 300, 16, 400))
+    fun arrowHint_aboveWhenFits_elseBelow() {
+        assertTrue(arrowHintAbove(bubbleYPx = 400, boxHPx = 48, gapPx = 4))
+        // Too close to the top edge: the arrow goes below, pointing up.
+        assertFalse(arrowHintAbove(bubbleYPx = 40, boxHPx = 48, gapPx = 4))
     }
 
     @Test
@@ -332,8 +329,7 @@ class FloatBubbleTest {
 
     @Test
     fun moveHint_timeoutPinned() {
-        assertEquals(6000L, HINT_TIMEOUT_MS)
-        assertEquals(16, HINT_MARGIN_DP)
+        assertEquals(4000L, HINT_TIMEOUT_MS)
     }
 
     // -- Bubble chrome geometry (review round 2) ---------------------
