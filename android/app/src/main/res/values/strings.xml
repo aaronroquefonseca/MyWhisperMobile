@@ -651,6 +651,8 @@
     <string name="settings_guide_sub">Walk through setup and practice with the button again</string>
     <string name="providers_language_help">Auto-detect understands whichever language you speak, so you can switch languages from one dictation to the next. Pick a single language only if it guesses wrong.</string>
     <string name="home_back_to_top">Back to top</string>
+    <!-- Locale the speech-language names are shown in; resolves with the same fallback as the UI strings. -->
+    <string name="lang_names_locale">en</string>
     <string name="lang_auto">Auto-detect (any language)</string>
     <string name="stt_needs_free_ram">Needs ~%1$s free RAM</string>
     <string name="cleanup_prompt_load_failed">Couldn\u2019t load the built-in prompt.</string>

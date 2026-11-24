@@ -926,7 +926,7 @@ class MainActivity : ComponentActivity() {
     /** Speech language codes (stored code, shown label in the app's language). */
     private val langs: List<Pair<String, String>>
         get() {
-            val appLocale = resources.configuration.locales[0]
+            val appLocale = java.util.Locale.forLanguageTag(getString(R.string.lang_names_locale))
             return listOf("auto" to getString(R.string.lang_auto)) + listOf(
                 "en", "es", "de", "fr", "it", "pt", "nl", "pl", "ru", "uk", "tr", "ar", "hi", "zh",
                 "ja", "ko", "ca", "gl", "eu", "sv", "da", "fi", "no", "cs", "ro", "hu", "el",

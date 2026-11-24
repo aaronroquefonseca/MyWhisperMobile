@@ -336,7 +336,7 @@
     <string name="sync_nearby_sub">Descubiertos en la LAN. Acepta para confiar y sincronizar (vale con escritorios y otros teléfonos).</string>
     <string name="sync_nobody">Nadie por aquí.</string>
     <string name="sync_add_title">Añadir dispositivo manualmente</string>
-    <string name="sync_add_sub">Copia el ID de MyWhisper en tu otro dispositivo. Envía una solicitud y acéptala allí. Ambos deben ser accesibles.</string>
+    <string name="sync_add_sub">Copia el ID del dispositivo desde MyWhisper en tu otro dispositivo. Envía una solicitud y acéptala allí. Ambos deben ser accesibles.</string>
     <string name="sync_add_button">Añadir por ID</string>
     <string name="sync_add_dialog">Añadir dispositivo</string>
     <string name="sync_add_id">ID del otro dispositivo (64 hex)</string>
@@ -656,6 +656,7 @@
     <string name="settings_guide_sub">Vuelve a recorrer la configuración y practica con el botón</string>
     <string name="providers_language_help">La detección automática entiende el idioma que hables, así que puedes cambiar de idioma de un dictado a otro. Elige un solo idioma solo si se equivoca.</string>
     <string name="home_back_to_top">Volver arriba</string>
+    <string name="lang_names_locale">es</string>
     <string name="lang_auto">Detección automática (cualquier idioma)</string>
     <string name="stt_needs_free_ram">Necesita ~%1$s de RAM libre</string>
     <string name="cleanup_prompt_load_failed">No se pudo cargar el prompt integrado.</string>
