@@ -230,14 +230,19 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeFinishU
     mut env: JNIEnv,
     _cls: JClass,
 ) -> jstring {
-    let out = with_engine(
-        |e| match e.finish_utterance() {
-            Ok(o) => finish_json(o),
-            Err(err) => err_json(err),
-        },
-        || err_json("engine not open"),
-    );
+    let out = finish_out(|e| e.begin_finish());
     jstr(&mut env, &out)
+}
+
+/// Runs a finish without holding the engine lock across the network
+/// or cleanup (see `engine::finish_unlocked`).
+#[cfg(target_os = "android")]
+fn finish_out(begin: impl FnOnce(&mut Engine) -> engine::FinishJob) -> String {
+    match ENGINE.get().map(|m| engine::finish_unlocked(m, begin)) {
+        Some(Ok(o)) => finish_json(o),
+        Some(Err(err)) => err_json(err),
+        None => err_json("engine not open"),
+    }
 }
 
 #[cfg(target_os = "android")]
@@ -266,20 +271,14 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeFinishL
     let raw = get_string(&mut env, &raw).unwrap_or_default();
     let text = get_string(&mut env, &text).unwrap_or_default();
     let engine_name = get_string(&mut env, &engine_name).unwrap_or_default();
-    let out = with_engine(
-        |e| match e.finish_with_text(&raw, &text, &engine_name, duration_secs as i64) {
-            Ok(o) => finish_json(o),
-            Err(err) => err_json(err),
-        },
-        || err_json("engine not open"),
-    );
+    let out =
+        finish_out(|e| e.begin_finish_with_text(&raw, &text, &engine_name, duration_secs as i64));
     jstr(&mut env, &out)
 }
 
 /// Register the Kotlin on-device LLM runner (`null` clears it). The
 /// runner's `cleanup(String, String): String` is called on the
-/// finish thread while the engine lock is held, so it must never call
-/// back into `CoreBridge`. A thrown exception becomes the entry's
+/// finish thread (outside the engine lock). A thrown exception becomes the entry's
 /// error and the cleanup chain falls through.
 /// # Safety
 /// Called from the JVM with valid JNI handles (`env` attached, object args valid local refs).
@@ -359,13 +358,13 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeCancelU
     mut env: JNIEnv,
     _cls: JClass,
 ) -> jstring {
-    let out = with_engine(
-        |e| {
-            let secs = e.cancel_utterance();
-            ok_json(serde_json::json!({"durationSecs": secs}))
-        },
-        || err_json("engine not open"),
-    );
+    // Never waits on an in-flight finish: it no longer holds the lock
+    // across the network, and the invalidation itself is lock-free.
+    let out = match ENGINE.get().map(engine::cancel_unlocked) {
+        Some(Ok(secs)) => ok_json(serde_json::json!({"durationSecs": secs})),
+        Some(Err(err)) => err_json(err),
+        None => err_json("engine not open"),
+    };
     jstr(&mut env, &out)
 }
 

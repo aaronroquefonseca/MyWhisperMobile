@@ -84,7 +84,12 @@ class Dictation(
      */
     private val releaseLocal: () -> Unit = {},
     private val log: (String) -> Unit = { msg -> android.util.Log.i("MwDict", msg) },
-    private val workers: ExecutorService = Executors.newSingleThreadExecutor(),
+    /**
+     * Finish workers. Not single-threaded: a cancelled finish may stay
+     * blocked on its provider until the request times out, and the
+     * next dictation must not queue behind it.
+     */
+    private val workers: ExecutorService = Executors.newCachedThreadPool(),
 ) {
     enum class State { IDLE, RECORDING, WORKING }
 
@@ -114,6 +119,10 @@ class Dictation(
      * second copy on snapshot). Grown by doubling, hard-capped at
      * [MAX_LOCAL_PCM_SAMPLES]. Guarded by [pcmLock]; the buffer itself
      * is retained across utterances to avoid realloc churn.
+     *
+     * [pcmLock] also guards handing [capture] over together with the
+     * [session] token, so a stale finish can never take (and stop) a
+     * newer recording's mic or snapshot its PCM.
      */
     private val pcmLock = Any()
     private var pcmBuf = ShortArray(16_000 * 10)
@@ -148,9 +157,9 @@ class Dictation(
      * witness before every fallback entry, so a post-cancel result can
      * neither commit here nor upload there.
      *
-     * Bounded admission: [workers] is a single thread, and at most one
-     * finish is ever queued — [pressDown] drops while WORKING,
-     * [pressUp]/[finish] only leave RECORDING, and the tail caps at 2 s.
+     * Bounded admission: at most one live finish at a time — [pressDown]
+     * drops while WORKING, [pressUp]/[finish] only leave RECORDING, and
+     * the tail caps at 2 s. Cancelled finishes may still be draining.
      */
     private val session = AtomicInteger(0)
 
@@ -224,16 +233,16 @@ class Dictation(
                 onLevel?.invoke(it)
             },
         ) ?: return
-        // bump before publish so workers that see the capture see the token.
-        session.incrementAndGet()
-        capture = cap
-        toggled = false
-        downAt = System.currentTimeMillis()
-        maxPeak = 0f
         synchronized(pcmLock) {
+            // New token and capture publish together: a stale worker sees both or neither.
+            session.incrementAndGet()
+            capture = cap
             pcmSize = 0
             pcmOverflowed = false
         }
+        toggled = false
+        downAt = System.currentTimeMillis()
+        maxPeak = 0f
         set(State.RECORDING)
     }
 
@@ -305,11 +314,11 @@ class Dictation(
     }
 
     private fun hardStop() {
+        val cap = synchronized(pcmLock) { capture.also { capture = null } }
         try {
-            capture?.stop()
+            cap?.stop()
         } catch (_: Exception) {
         }
-        capture = null
         toggled = false
         secondDown = false
         set(State.IDLE)
@@ -345,16 +354,18 @@ class Dictation(
                 log("finish drop stale-tail gen=$gen session=${session.get()}")
                 return@execute
             }
-            val cap = capture
-            if (cap == null || gen != session.get()) {
+            val cap = synchronized(pcmLock) {
+                if (gen == session.get()) capture.also { capture = null } else null
+            }
+            if (cap == null) {
                 log("finish drop stale-capture gen=$gen session=${session.get()}")
                 return@execute
             }
+            // Outside pcmLock: stop() joins the capture thread, which takes it.
             try {
                 cap.stop()
             } catch (_: Exception) {
             }
-            capture = null
             val text: String
             try {
                 // On-device decode via LocalStt on the utterance PCM,
@@ -372,8 +383,8 @@ class Dictation(
                 // so the local hook is skipped outright (server owns the
                 // full audio) — truncation never commits silently.
                 val (pcm, overflow) = synchronized(pcmLock) {
-                    pcmBuf.copyOf(pcmSize) to pcmOverflowed
-                }
+                    if (gen != session.get()) null else pcmBuf.copyOf(pcmSize) to pcmOverflowed
+                } ?: return@execute
                 val secs = maxOf(1, pcm.size / 16_000)
                 fun decodeLocal(): LocalHit? {
                     if (overflow) {

@@ -9,6 +9,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Cancel-wins tests for [Dictation]: a cancel issued while the finish
@@ -243,6 +244,85 @@ class DictationCancelTest {
             assertEquals(Dictation.State.IDLE, h.dictation.current)
         } finally {
             h.shutdown()
+        }
+    }
+
+    /**
+     * Delayed provider, production executor: the first finish blocks in
+     * the provider. Cancel must return at once, the stale finish must
+     * neither paste nor save, and the next dictation must complete
+     * while the stale request is still in flight.
+     *
+     * The fake core models the native witness: [cancelTranscription]
+     * bumps a generation and a finish saves History only if the
+     * generation it started under is still current.
+     */
+    @Test
+    fun cancelDuringDelayedProvider_isPrompt_savesNothing_nextDictationWorks() {
+        val generation = AtomicInteger(0)
+        val calls = AtomicInteger(0)
+        val providerEntered = CountDownLatch(1)
+        val providerRelease = CountDownLatch(1)
+        val staleDropped = CountDownLatch(1)
+        val history: MutableList<String> = Collections.synchronizedList(mutableListOf())
+        val pastes: MutableList<String> = Collections.synchronizedList(mutableListOf())
+        val errors: MutableList<String> = Collections.synchronizedList(mutableListOf())
+        val nextPasted = CountDownLatch(1)
+        val dictation = Dictation(
+            mode = { "Push" },
+            startCapture = { _, _, _ -> FakeCapture() },
+            finishTranscription = {
+                val witness = generation.get()
+                val text = if (calls.incrementAndGet() == 1) "stale" else "next"
+                if (text == "stale") {
+                    providerEntered.countDown()
+                    assertTrue("provider release timeout", providerRelease.await(10, TimeUnit.SECONDS))
+                }
+                if (generation.get() != witness) throw IllegalStateException("superseded")
+                history.add(text)
+                text to "slow-provider"
+            },
+            cancelTranscription = { generation.incrementAndGet() },
+            log = { if (it.startsWith("finish drop stale-error")) staleDropped.countDown() },
+        )
+        dictation.listener = object : Dictation.Listener {
+            override fun onState(s: Dictation.State, toggled: Boolean) {}
+            override fun onResult(text: String) {
+                pastes.add(text)
+                nextPasted.countDown()
+            }
+            override fun onError(msg: String) {
+                errors.add(msg)
+            }
+        }
+        try {
+            dictation.pressDown()
+            dictation.pressUp()
+            assertTrue(providerEntered.await(10, TimeUnit.SECONDS))
+            assertEquals(Dictation.State.WORKING, dictation.current)
+
+            val began = System.nanoTime()
+            dictation.cancel()
+            val cancelMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - began)
+            assertTrue("cancel took ${cancelMs}ms", cancelMs < 200)
+            assertEquals(Dictation.State.IDLE, dictation.current)
+
+            // Next dictation while the cancelled request is still blocked.
+            dictation.pressDown()
+            dictation.pressUp()
+            assertTrue("next dictation queued behind the stale one", nextPasted.await(5, TimeUnit.SECONDS))
+            assertEquals(listOf("next"), pastes)
+
+            providerRelease.countDown()
+            assertTrue("stale finish never settled", staleDropped.await(10, TimeUnit.SECONDS))
+
+            assertEquals("cancelled utterance must not paste", listOf("next"), pastes)
+            assertEquals("cancelled utterance must not reach History", listOf("next"), history)
+            assertTrue("stale finish must stay silent (saw $errors)", errors.isEmpty())
+            assertEquals(Dictation.State.IDLE, dictation.current)
+        } finally {
+            providerRelease.countDown()
+            dictation.shutdown()
         }
     }
 }
