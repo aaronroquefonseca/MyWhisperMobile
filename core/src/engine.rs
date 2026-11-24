@@ -755,14 +755,16 @@ impl Engine {
                 if crate::server_stt::server_generation() != held.generation {
                     return Err("superseded (provider switched mid-utterance)".to_string());
                 }
-                // Held order, current config: a server edited, disabled or
-                // removed during the decode never gets audio under its old setup.
+                // Held order and set, current config: a server edited,
+                // disabled or removed during the decode never gets audio under
+                // its old setup; one enabled meanwhile waits for the next
+                // utterance.
                 let mut stt = held.stt;
                 let live = &self.settings.stt.entries;
                 for e in stt
                     .entries
                     .iter_mut()
-                    .filter(|e| e.kind != SttEntryKind::Local)
+                    .filter(|e| e.enabled && e.kind != SttEntryKind::Local)
                 {
                     match live.iter().find(|l| l.id == e.id && l.kind == e.kind) {
                         Some(current) => *e = current.clone(),
@@ -1552,6 +1554,39 @@ mod tests {
         let out = eng.finish_utterance_part(ChainPart::AfterLocal).unwrap();
         assert_eq!(out.text, "hello world");
         stub.join().unwrap();
+    }
+
+    #[test]
+    fn server_enabled_during_local_decode_waits_for_next_utterance() {
+        let _guard = status_test_lock();
+        reset_status_state();
+        let mut eng = open_engine();
+        // Above → Local → Below (off) → Last; closed ports, so any upload
+        // shows up by name in the error.
+        let mut plan: AppSettings =
+            serde_json::from_str(&split_chain_settings("http://127.0.0.1:9")).unwrap();
+        plan.stt.entries[2].enabled = false;
+        plan.stt
+            .entries
+            .push(self_hosted_entry("Last", "http://127.0.0.1:9"));
+        let plan = serde_json::to_string(&plan).unwrap();
+        eng.put_settings(&plan).unwrap();
+        eng.start_utterance(16000);
+        eng.push_pcm(&vec![1000i16; 8000]);
+        assert!(eng.finish_utterance_part(ChainPart::BeforeLocal).is_err());
+        let mut enabled: AppSettings = serde_json::from_str(&plan).unwrap();
+        enabled.stt.entries[2].enabled = true;
+        eng.put_settings(&serde_json::to_string(&enabled).unwrap())
+            .unwrap();
+        let err = eng
+            .finish_utterance_part(ChainPart::AfterLocal)
+            .err()
+            .unwrap();
+        assert!(
+            !err.contains("Below"),
+            "server off at the first pass must not upload, got: {err}"
+        );
+        assert!(err.contains("Last"), "got: {err}");
     }
 
     #[test]
