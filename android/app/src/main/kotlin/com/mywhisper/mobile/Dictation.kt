@@ -494,8 +494,9 @@ class Dictation(
                         try {
                             return@chain finishTranscription(false).first
                         } catch (e: Exception) {
-                            // Under 0.3 s the server already said "too short".
-                            if (pcm.size < 4_800 || gen != session.get()) throw e
+                            // Under 0.3 s the server already said "too short"
+                            // (an overflowed copy is empty but the audio is not).
+                            if ((!overflow && pcm.size < 4_800) || gen != session.get()) throw e
                             aboveError = e
                         }
                     }
