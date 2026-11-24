@@ -72,7 +72,7 @@ class LocalSttModelsTest {
         // flagship") is the only cost copy allowed.
         val banned = listOf("opt-in", "opt in", "slow", "fastest", "slower", "fast pick")
         for (m in LocalSttModels.MODELS) {
-            val copy = "${m.name}\n${m.runtimeNote}\n${m.phoneTier}".lowercase()
+            val copy = "${m.name}\n${m.phoneTier}".lowercase()
             for (b in banned) {
                 assertFalse("$b in ${m.id}", copy.contains(b))
             }
@@ -260,7 +260,7 @@ class LocalSttModelsTest {
             provider = LocalSttModels.Provider.WHISPER,
             langMode = LocalSttModels.LangMode.AUTO,
             languages = listOf("en"),
-            dictionary = false, runtimeNote = "x", phoneTier = "x",
+            dictionary = false, phoneTier = "x",
             dirRel = "models/x",
             files = listOf(
                 LocalSttModels.ModelFile("a.onnx", "u", "c".repeat(64), 3),

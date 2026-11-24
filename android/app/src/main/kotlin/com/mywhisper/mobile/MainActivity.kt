@@ -923,19 +923,18 @@ class MainActivity : ComponentActivity() {
 }"""
     }
 
-    /** Speech language codes (stored code, shown label). */
-    private val langs = listOf(
-        "auto" to "Auto-detect (any language)", "en" to "English", "es" to "Spanish",
-        "de" to "German", "fr" to "French", "it" to "Italian",
-        "pt" to "Portuguese", "nl" to "Dutch", "pl" to "Polish",
-        "ru" to "Russian", "uk" to "Ukrainian", "tr" to "Turkish",
-        "ar" to "Arabic", "hi" to "Hindi", "zh" to "Chinese",
-        "ja" to "Japanese", "ko" to "Korean", "ca" to "Catalan",
-        "gl" to "Galician", "eu" to "Basque", "sv" to "Swedish",
-        "da" to "Danish", "fi" to "Finnish", "no" to "Norwegian",
-        "cs" to "Czech", "ro" to "Romanian", "hu" to "Hungarian",
-        "el" to "Greek",
-    )
+    /** Speech language codes (stored code, shown label in the app's language). */
+    private val langs: List<Pair<String, String>>
+        get() {
+            val appLocale = java.util.Locale.forLanguageTag(getString(R.string.lang_names_locale))
+            return listOf("auto" to getString(R.string.lang_auto)) + listOf(
+                "en", "es", "de", "fr", "it", "pt", "nl", "pl", "ru", "uk", "tr", "ar", "hi", "zh",
+                "ja", "ko", "ca", "gl", "eu", "sv", "da", "fi", "no", "cs", "ro", "hu", "el",
+            ).map { code ->
+                code to java.util.Locale.forLanguageTag(code).getDisplayLanguage(appLocale)
+                    .replaceFirstChar { it.titlecase(appLocale) }
+            }
+        }
 
     private val micPerm = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -1321,7 +1320,7 @@ class MainActivity : ComponentActivity() {
             600L -> getString(R.string.keep_10min)
             1800L -> getString(R.string.keep_30min)
             LocalKeepWarm.INDEFINITE -> getString(R.string.keep_indefinite)
-            else -> getString(R.string.keep_custom, secs)
+            else -> resources.getQuantityString(R.plurals.keep_custom, secs.toInt(), secs)
         }
 
     private fun thinkLabel(budget: Int): String =
@@ -3484,11 +3483,16 @@ class MainActivity : ComponentActivity() {
                                     )
                                 }
                             }
-                            Text(
-                                m.runtimeNote,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                            if (m.freeRamMb > 0) {
+                                Text(
+                                    stringResource(
+                                        R.string.stt_needs_free_ram,
+                                        android.text.format.Formatter.formatShortFileSize(this@MainActivity, m.freeRamMb * 1_000_000L),
+                                    ),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                             // Measured speed: last-decode ×realtime on
                             // THIS phone (per-model float in mw_state),
                             // else the neutral pre-first-run copy. No
@@ -4391,15 +4395,14 @@ class MainActivity : ComponentActivity() {
                 var expanded by remember { mutableStateOf(false) }
                 var editor by remember { mutableStateOf(false) }
                 Text(
-                    if (isDefault) "Using the built-in default prompt."
-                    else "Using your customized prompt.",
+                    stringResource(if (isDefault) R.string.cleanup_default_state else R.string.cleanup_custom_state),
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 if (promptFailed) {
                     // Explicit recovery UI for the async prompt job.
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            "Couldn't load the built-in prompt.",
+                            stringResource(R.string.cleanup_prompt_load_failed),
                             color = MaterialTheme.colorScheme.error,
                             style = MaterialTheme.typography.bodySmall,
                             modifier = Modifier.weight(1f),
@@ -4457,7 +4460,7 @@ class MainActivity : ComponentActivity() {
                                     .verticalScroll(rememberScrollState()),
                             ) {
                                 Text(
-                                    "Saved as your custom prompt. Reset returns to the built-in default.",
+                                    stringResource(R.string.cleanup_dialog_note),
                                     style = MaterialTheme.typography.bodySmall,
                                 )
                                 Spacer(Modifier.height(4.dp))
@@ -5817,7 +5820,7 @@ class MainActivity : ComponentActivity() {
         fun purgeHist(n: Int) {
             var purged = 0
             histJob({ purged = CoreBridge.purgeHistory(n).getOrThrow(); kickSync() },
-                onOk = { statsVersion++; bgToast(getString(R.string.hist_purged, purged)) },
+                onOk = { statsVersion++; bgToast(resources.getQuantityString(R.plurals.hist_purged, purged, purged)) },
                 onFail = { bgToast(getString(R.string.hist_purge_failed, it)) })
         }
         fun clearHist() = histJob({ CoreBridge.dataOf(CoreBridge.nativeClearHistory()); kickSync() },
@@ -5988,7 +5991,7 @@ class MainActivity : ComponentActivity() {
                     // Total from stats: the list only holds the pages loaded so far.
                     val total = stats?.optLong("dictations", -1L)?.takeIf { it >= 0 && histQuery.isBlank() }?.toInt()
                         ?: items.size.takeIf { histLoaded }
-                    if (total != null) Text(stringResource(R.string.hist_count, total), style = MaterialTheme.typography.labelMedium,
+                    if (total != null) Text(resources.getQuantityString(R.plurals.hist_count, total, total), style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
@@ -6067,7 +6070,7 @@ class MainActivity : ComponentActivity() {
                     HistoryEntryCard(
                         text = h.text,
                         original = h.rawText,
-                        meta = historyTimeLabel(h.recordedAt, zone) + " · " + getString(R.string.hist_words, h.words),
+                        meta = historyTimeLabel(h.recordedAt, zone) + " · " + resources.getQuantityString(R.plurals.hist_words, h.words, h.words),
                         expanded = expanded == h.uuid,
                         busy = histBusy.value,
                         onCopy = { copyText(h.text, getString(R.string.home_copied)) },
@@ -6204,13 +6207,13 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun agoText(epochSecs: Long): String {
-        if (epochSecs <= 0) return "never"
+        if (epochSecs <= 0) return getString(R.string.sync_ago_never)
         val dt = System.currentTimeMillis() / 1000 - epochSecs
         return when {
-            dt < 60 -> "just now"
-            dt < 3600 -> "${dt / 60} min ago"
-            dt < 86400 -> "${dt / 3600} h ago"
-            else -> "${dt / 86400} d ago"
+            dt < 60 -> getString(R.string.sync_ago_now)
+            dt < 3600 -> getString(R.string.sync_ago_min, dt / 60)
+            dt < 86400 -> getString(R.string.sync_ago_h, dt / 3600)
+            else -> getString(R.string.sync_ago_d, dt / 86400)
         }
     }
 
@@ -6324,7 +6327,7 @@ class MainActivity : ComponentActivity() {
                         val shown = displayName.ifEmpty { status?.optString("nodeId", "")?.take(12) + "…" }
 getString(R.string.sync_running, shown)
                     } else {
-                        pendingCopy ?: "Sync stopped."
+                        pendingCopy ?: stringResource(R.string.sync_stopped)
                     },
                     style = MaterialTheme.typography.bodyMedium,
                 )
@@ -6352,7 +6355,7 @@ getString(R.string.sync_running, shown)
                     Column(modifier = Modifier.weight(1f)) {
                         Text(stringResource(R.string.sync_advertise))
                         Text(
-                            "Off = invisible, still sees others.",
+                            stringResource(R.string.sync_advertise_sub),
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
@@ -6380,7 +6383,7 @@ getString(R.string.sync_running, shown)
                     Column(modifier = Modifier.weight(1f)) {
                         Text(stringResource(R.string.sync_boot))
                         Text(
-                            "Relaunch sync after reboot when enabled.",
+                            stringResource(R.string.sync_boot_sub),
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
@@ -6432,7 +6435,7 @@ getString(R.string.sync_running, shown)
                     OutlinedButton(
                         enabled = running && busy.isEmpty(),
                         onClick = {
-                            busy = "syncing…"
+                            busy = getString(R.string.sync_syncing)
                             workers.execute {
                                 try {
                                     val lines = CoreBridge.syncAllNow().getOrThrow()
@@ -6444,7 +6447,7 @@ getString(R.string.sync_running, shown)
                                 runOnUiThread { refresh() }
                             }
                         },
-                    ) { Text(if (busy.isEmpty()) "Sync now" else busy) }
+                    ) { Text(busy.ifEmpty { stringResource(R.string.action_sync_now) }) }
                 }
                 val reports = status?.optJSONArray("reports")
                 if (reports != null && reports.length() > 0) {
@@ -6469,15 +6472,15 @@ getString(R.string.sync_running, shown)
                     PeerRow(
                         p,
                         note = notes[id],
-                        lastSync = "last sync ${agoText(p.optLong("lastSync", 0))}",
+                        lastSync = getString(R.string.sync_lastsync, agoText(p.optLong("lastSync", 0))),
                         onSync = {
-                            busy = "syncing…"
+                            busy = getString(R.string.sync_syncing)
                             workers.execute {
                                 try {
                                     val msg = CoreBridge.syncNow(id).getOrThrow()
                                     runOnUiThread { note(id, msg) }
                                 } catch (e: Exception) {
-                                    runOnUiThread { note(id, "sync failed: ${e.message}") }
+                                    runOnUiThread { note(id, getString(R.string.sync_failed, e.message)) }
                                 }
                                 busy = ""
                                 runOnUiThread { refresh() }
@@ -6517,10 +6520,9 @@ getString(R.string.sync_running, shown)
                     )
                 }
             }
-            Section("Waiting for response (${waiting.size})") {
+            Section(stringResource(R.string.sync_waiting_title, waiting.size)) {
                 if (waiting.isNotEmpty()) Text(
-                    "You sent a pairing request. Accept it on the other device; " +
-                        "no action needed here except cancel.",
+                    stringResource(R.string.sync_waiting_sub),
                     style = MaterialTheme.typography.bodySmall,
                 )
                 if (waiting.isEmpty()) Text(stringResource(R.string.sync_requests_none), style = MaterialTheme.typography.bodySmall)
@@ -6547,8 +6549,7 @@ getString(R.string.sync_running, shown)
             }
             Section(stringResource(R.string.sync_nearby, nearby.size)) {
                 Text(
-                    "Discovered on the LAN. Accept to trust and sync " +
-                        "(works with desktops and other phones).",
+                    stringResource(R.string.sync_nearby_sub),
                     style = MaterialTheme.typography.bodySmall,
                 )
                 if (nearby.isEmpty()) Text(stringResource(R.string.sync_nobody), style = MaterialTheme.typography.bodySmall)
@@ -6585,11 +6586,9 @@ getString(R.string.sync_running, shown)
                 Spacer(Modifier.height(4.dp))
                 OutlinedButton(onClick = { refresh() }) { Text(stringResource(R.string.action_refresh)) }
             }
-            Section("Add device manually") {
+            Section(stringResource(R.string.sync_add_title)) {
                 Text(
-                    "Copy the Device ID from MyWhisper on your other device. " +
-                        "Send a pairing request, then accept it there. " +
-                        "Both devices must be reachable.",
+                    stringResource(R.string.sync_add_sub),
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Spacer(Modifier.height(4.dp))
@@ -6642,7 +6641,7 @@ getString(R.string.sync_running, shown)
                                     }
                                 }
                             } catch (e: Exception) {
-                                runOnUiThread { notes = notes + ("__add" to "failed: ${e.message}") }
+                                runOnUiThread { notes = notes + ("__add" to getString(R.string.sync_add_failed, e.message)) }
                             }
                             runOnUiThread { refresh(); addOpen = false }
                         }
@@ -6737,7 +6736,7 @@ getString(R.string.sync_running, shown)
                             List(a.length()) { a.optString(it) }
                         } ?: emptyList()
                         Text(
-                            (addrs + disc).distinct().take(2).joinToString(" · ").ifEmpty { "no address yet" },
+                            (addrs + disc).distinct().take(2).joinToString(" · ").ifEmpty { getString(R.string.sync_noaddr) },
                             style = MaterialTheme.typography.bodySmall,
                         )
                         if (lastSync != null) {
