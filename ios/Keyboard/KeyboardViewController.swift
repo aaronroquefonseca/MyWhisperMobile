@@ -1,7 +1,7 @@
 import UIKit
 
 /// MyWhisper keyboard with local predictions, autocorrect, and emoji.
-final class KeyboardViewController: UIInputViewController {
+class KeyboardViewController: UIInputViewController {
 
     /// In-keyboard settings (extension-local defaults: no App Group exists
     /// under free provisioning, so the main app cannot reach these yet).
@@ -13,6 +13,9 @@ final class KeyboardViewController: UIInputViewController {
         var enableCapsLock = true
         var characterPreview = true
         var keyClicks = true
+        // Optional so older saved settings retain their existing values.
+        var swipeTyping: Bool?
+        var swipeLanguage: String?
 
         static let defaultsKey = "mw.keyboard.settings.v1"
 
@@ -49,7 +52,21 @@ final class KeyboardViewController: UIInputViewController {
     private var visible = false
     private var lastShiftTap: TimeInterval?
     private var cursorDragX: CGFloat = 0
-    private var shiftAtLastAutomaticUpdate: Shift?
+    private var lastSwipe: SwipeCommit?
+    private var swipeLexicon: (locale: String, words: KeyboardSwipeLexicon)?
+    private var swipeLexiconLoad: Task<Void, Never>?
+    private var loadingSwipeLocale: String?
+    private var pendingSwipe: Task<Void, Never>?
+    private lazy var swipeGesture = KeyboardSwipeGesture(target: self, action: #selector(handleSwipe(_:)))
+    private let swipeTrail = CAShapeLayer()
+
+    private struct SwipeCommit {
+        let document: UUID
+        let prefix: String
+        let word: String
+        let alternatives: [String]
+        let contextAfter: String
+    }
     private let accents: [String: String] = [
         "a": "áàâäãåæā", "c": "çćč", "e": "éèêëēėę", "i": "íìîïī",
         "n": "ñń", "o": "óòôöõøœō", "s": "ßśš", "u": "úùûüū", "y": "ýÿ", "z": "źżž",
@@ -77,6 +94,7 @@ final class KeyboardViewController: UIInputViewController {
     private weak var pressedKey: UIButton?
     private var pressTint: UIView?
     private var deleteTimer: Timer?
+    private var deleteRepeated = false
     private var lastSpaceAt: TimeInterval?
 
     private var isDark = false
@@ -105,6 +123,12 @@ final class KeyboardViewController: UIInputViewController {
         super.viewDidLoad()
         rowsView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(rowsView)
+        swipeGesture.delegate = self
+        rowsView.addGestureRecognizer(swipeGesture)
+        swipeTrail.lineCap = .round
+        swipeTrail.lineJoin = .round
+        swipeTrail.lineWidth = 5
+        swipeTrail.fillColor = UIColor.clear.cgColor
         NSLayoutConstraint.activate([
             rowsView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             rowsView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
@@ -122,11 +146,15 @@ final class KeyboardViewController: UIInputViewController {
         layoutIfNeeded()
         updateAutomaticShift()
         scheduleSuggestions()
+        preloadSwipeWords()
     }
 
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
         visible = false
+        pendingSwipe?.cancel()
+        lastSwipe = nil
+        swipeTrail.removeFromSuperlayer()
         predictionTask?.cancel()
         clearSuggestions()
         stopDelete()
@@ -164,6 +192,9 @@ final class KeyboardViewController: UIInputViewController {
 
     override func didReceiveMemoryWarning() {
         super.didReceiveMemoryWarning()
+        swipeLexiconLoad?.cancel()
+        loadingSwipeLocale = nil
+        swipeLexicon = nil
         predictionTask?.cancel()
         clearSuggestions()
     }
@@ -239,6 +270,11 @@ final class KeyboardViewController: UIInputViewController {
         clearSuggestions()
         guard visible, page == .letters, !emojiMode, !showingSettings, !isNumberField, !isAddressField,
               settings.predictive || settings.autoCorrection else { return }
+        if let swipe = validSwipe {
+            if settings.predictive { showSuggestions([swipe.word] + swipe.alternatives) }
+            return
+        }
+        lastSwipe = nil
         predictionTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 80_000_000)
             guard !Task.isCancelled, let self, self.visible else { return }
@@ -266,6 +302,10 @@ final class KeyboardViewController: UIInputViewController {
         let choices = ([correction].compactMap { $0 } + completions).filter {
             $0.caseInsensitiveCompare(word) != .orderedSame && seen.insert($0.lowercased()).inserted
         }
+        showSuggestions(choices)
+    }
+
+    private func showSuggestions(_ choices: [String]) {
         for (button, choice) in zip(predictionButtons, choices) {
             button.setTitle(choice, for: .normal)
             button.isEnabled = true
@@ -274,8 +314,13 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     @objc private func predictionTapped(_ button: UIButton) {
-        guard let replacement = button.title(for: .normal), let suggestion,
-              suggestion.document == textDocumentProxy.documentIdentifier, suggestion.word == currentWord else { return }
+        guard let replacement = button.title(for: .normal) else { return }
+        if let swipe = validSwipe {
+            guard replacement != swipe.word, swipe.alternatives.contains(replacement) else { return }
+            replaceSwipe(swipe, with: replacement)
+            return
+        }
+        guard let suggestion, suggestion.document == textDocumentProxy.documentIdentifier, suggestion.word == currentWord else { return }
         replaceWord(suggestion.word, with: replacement)
         lastSpaceAt = nil
         playClick()
@@ -299,6 +344,9 @@ final class KeyboardViewController: UIInputViewController {
         stopDelete()
         hidePopup()
         clearAccents()
+        swipeGesture.isEnabled = false
+        swipeGesture.isEnabled = settings.swipeTyping != false
+        swipeTrail.removeFromSuperlayer()
         rowsView.clear()
         predictionButtons.removeAll(keepingCapacity: true)
         letterKeys.removeAll(keepingCapacity: true)
@@ -416,12 +464,25 @@ final class KeyboardViewController: UIInputViewController {
             ("Enable Caps Lock", 5, settings.enableCapsLock),
             ("Character Preview", 6, settings.characterPreview),
             ("Key Clicks", 7, settings.keyClicks),
+            ("Swipe to Type", 8, settings.swipeTyping != false),
         ]
         var rowY: CGFloat = 0
         for (label, tag, value) in rows {
             rowY = addToggleRow(title: label, tag: tag, value: value, y: rowY, width: width, pad: pad, in: options)
         }
-        options.contentSize = CGSize(width: width, height: rowY + 8)
+        let languageLabel = UILabel(frame: CGRect(x: pad + 16, y: rowY, width: width - 2 * pad - 32, height: 36))
+        languageLabel.text = "Swipe language"
+        languageLabel.textColor = labelColor
+        languageLabel.font = .systemFont(ofSize: 17)
+        options.addSubview(languageLabel)
+
+        let languages = UISegmentedControl(items: ["Auto", "English", "Español"])
+        languages.frame = CGRect(x: pad + 16, y: rowY + 36, width: width - 2 * pad - 32, height: 34)
+        languages.accessibilityLabel = "Swipe language"
+        languages.selectedSegmentIndex = settings.swipeLanguage == "es" ? 2 : (settings.swipeLanguage == "en" ? 1 : 0)
+        languages.addTarget(self, action: #selector(swipeLanguageChanged(_:)), for: .valueChanged)
+        options.addSubview(languages)
+        options.contentSize = CGSize(width: width, height: rowY + 82)
     }
 
     private func addToggleRow(
@@ -454,9 +515,20 @@ final class KeyboardViewController: UIInputViewController {
             settings.enableCapsLock = sender.isOn
             if !sender.isOn && shift == .locked { shift = .off }
         case 6: settings.characterPreview = sender.isOn
-        default: settings.keyClicks = sender.isOn
+        case 7: settings.keyClicks = sender.isOn
+        case 8: settings.swipeTyping = sender.isOn
+        default: return
         }
         settings.save()
+        if sender.tag == 8 { preloadSwipeWords() }
+    }
+
+    @objc private func swipeLanguageChanged(_ sender: UISegmentedControl) {
+        let languages: [String?] = [nil, "en", "es"]
+        guard languages.indices.contains(sender.selectedSegmentIndex) else { return }
+        settings.swipeLanguage = languages[sender.selectedSegmentIndex]
+        settings.save()
+        preloadSwipeWords()
     }
 
     @objc private func backFromSettings() {
@@ -519,6 +591,10 @@ final class KeyboardViewController: UIInputViewController {
         let cursor = UILongPressGestureRecognizer(target: self, action: #selector(dragCursor(_:)))
         cursor.minimumPressDuration = 0.30
         space.addGestureRecognizer(cursor)
+        let drag = UIPanGestureRecognizer(target: self, action: #selector(dragSpacebar(_:)))
+        drag.maximumNumberOfTouches = 1
+        drag.delegate = self
+        space.addGestureRecognizer(drag)
         keys.append((space, 4.6))
         if isAddressField {
             keys.append((characterKey(".", cased: false), 1))
@@ -634,8 +710,12 @@ final class KeyboardViewController: UIInputViewController {
             self?.playClick()
             self?.performDelete()
         }
-        button.addTarget(self, action: #selector(stopDelete),
-                         for: [.touchUpInside, .touchUpOutside, .touchCancel, .touchDragExit])
+        button.addTarget(self, action: #selector(deleteTapped), for: .touchUpInside)
+        button.addTarget(self, action: #selector(stopDelete), for: [.touchUpOutside, .touchCancel, .touchDragExit])
+        let drag = UIPanGestureRecognizer(target: self, action: #selector(dragDelete(_:)))
+        drag.maximumNumberOfTouches = 1
+        drag.delegate = self
+        button.addGestureRecognizer(drag)
         return button
     }
 
@@ -692,6 +772,10 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     private func insert(_ text: String) {
+        pendingSwipe?.cancel()
+        let startsWord = text.first.map { $0.isLetter || $0.isNumber } == true
+        let separator = startsWord && validSwipe != nil ? " " : ""
+        lastSwipe = nil
         pendingUndo = nil
         lastSpaceAt = nil
         lastShiftTap = nil
@@ -700,7 +784,7 @@ final class KeyboardViewController: UIInputViewController {
             shift = .off
             updateShiftKeys()
         }
-        textDocumentProxy.insertText(text)
+        textDocumentProxy.insertText(separator + text)
         updateAutomaticShift()
         scheduleSuggestions()
     }
@@ -758,10 +842,11 @@ final class KeyboardViewController: UIInputViewController {
 
     @objc private func deleteDown() {
         stopDelete()
-        playClick()
-        performDelete()
+        deleteRepeated = false
         let delay = Timer(timeInterval: 0.42, repeats: false) { [weak self] _ in
             guard let self else { return }
+            self.deleteRepeated = true
+            self.playClick()
             self.performDelete()
             let repeating = Timer(timeInterval: 0.07, repeats: true) { [weak self] _ in self?.performDelete() }
             self.deleteTimer = repeating
@@ -771,8 +856,53 @@ final class KeyboardViewController: UIInputViewController {
         RunLoop.main.add(delay, forMode: .common)
     }
 
-    private func performDelete() {
+    @objc private func deleteTapped() {
+        stopDelete()
+        if !deleteRepeated {
+            playClick()
+            performDelete()
+        }
+    }
+
+    @objc private func dragDelete(_ gesture: UIPanGestureRecognizer) {
+        if gesture.state == .began {
+            stopDelete()
+            hidePopup()
+        } else if gesture.state == .ended, !deleteRepeated, gesture.translation(in: rowsView).x <= -22 {
+            playClick()
+            deleteWord()
+        }
+    }
+
+    func deleteWord() {
         let proxy = textDocumentProxy
+        if proxy.selectedText?.isEmpty == false {
+            performDelete()
+            return
+        }
+        guard let before = proxy.documentContextBeforeInput, !before.isEmpty else { return }
+        pendingSwipe?.cancel()
+        lastSwipe = nil
+        pendingUndo = nil
+        lastSpaceAt = nil
+        lastShiftTap = nil
+        let count = KeyboardTextEditing.trailingWordDeletionCount(in: before)
+        for _ in 0..<count { proxy.deleteBackward() }
+        updateAutomaticShift()
+        scheduleSuggestions()
+    }
+
+    private func performDelete() {
+        pendingSwipe?.cancel()
+        let proxy = textDocumentProxy
+        if let swipe = validSwipe {
+            lastSwipe = nil
+            for _ in swipe.word { proxy.deleteBackward() }
+            updateAutomaticShift()
+            scheduleSuggestions()
+            return
+        }
+        lastSwipe = nil
         let undo = pendingUndo
         pendingUndo = nil
         lastSpaceAt = nil
@@ -794,6 +924,8 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     @objc private func spaceTapped() {
+        pendingSwipe?.cancel()
+        lastSwipe = nil
         playClick()
         let now = ProcessInfo.processInfo.systemUptime
         let proxy = textDocumentProxy
@@ -825,21 +957,36 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     @objc private func dragCursor(_ gesture: UILongPressGestureRecognizer) {
+        moveCursor(for: gesture, initialOffset: 0)
+    }
+
+    @objc private func dragSpacebar(_ gesture: UIPanGestureRecognizer) {
+        moveCursor(for: gesture, initialOffset: gesture.translation(in: rowsView).x)
+    }
+
+    private func moveCursor(for gesture: UIGestureRecognizer, initialOffset: CGFloat) {
         let x = gesture.location(in: rowsView).x
         switch gesture.state {
         case .began:
             hidePopup()
-            cursorDragX = x
+            cursorDragX = x - initialOffset
+            pendingSwipe?.cancel()
+            lastSwipe = nil
             lastSpaceAt = nil
             pendingUndo = nil
-        case .changed:
-            let steps = Int((x - cursorDragX) / 12)
-            guard steps != 0 else { return }
-            cursorDragX += CGFloat(steps) * 12
-            textDocumentProxy.adjustTextPosition(byCharacterOffset: steps)
+            adjustCursor(towards: x)
+        case .changed, .ended:
+            adjustCursor(towards: x)
         default:
             break
         }
+    }
+
+    private func adjustCursor(towards x: CGFloat) {
+        let steps = Int((x - cursorDragX) / 12)
+        guard steps != 0 else { return }
+        cursorDragX += CGFloat(steps) * 12
+        textDocumentProxy.adjustTextPosition(byCharacterOffset: steps)
     }
 
     @objc private func selectAccent(_ gesture: UILongPressGestureRecognizer) {
@@ -949,6 +1096,156 @@ final class KeyboardViewController: UIInputViewController {
         UIDevice.current.playInputClick()
     }
 
+    // MARK: - Swipe typing
+
+    private var swipeLocale: String {
+        let preferred = Locale.preferredLanguages.map(Locale.init(identifier:))
+        if settings.swipeLanguage == "es" { return "es" }
+        let english = preferred.first { $0.languageCode == "en" }
+        let englishLocale = english?.regionCode == "GB" ? "en_GB" : "en_US"
+        if settings.swipeLanguage == "en" { return englishLocale }
+        return preferred.first(where: { ["en", "es"].contains($0.languageCode ?? "") })?.languageCode == "es"
+            ? "es" : englishLocale
+    }
+
+    private func preloadSwipeWords() {
+        guard settings.swipeTyping != false else {
+            swipeLexiconLoad?.cancel()
+            loadingSwipeLocale = nil
+            swipeLexicon = nil
+            return
+        }
+        let locale = swipeLocale
+        guard loadingSwipeLocale != locale else { return }
+        swipeLexiconLoad?.cancel()
+        guard swipeLexicon?.locale != locale else {
+            loadingSwipeLocale = nil
+            return
+        }
+        loadingSwipeLocale = locale
+        let url = Bundle(for: KeyboardViewController.self).url(forResource: "swipe-" + locale, withExtension: "txt")
+        swipeLexiconLoad = Task { @MainActor [weak self] in
+            let words = await Task.detached(priority: .utility) {
+                guard let url, let data = try? String(contentsOf: url, encoding: .utf8) else { return nil as KeyboardSwipeLexicon? }
+                return KeyboardSwipeLexicon(data)
+            }.value
+            guard !Task.isCancelled, let self else { return }
+            self.loadingSwipeLocale = nil
+            if let words { self.swipeLexicon = (locale, words) }
+        }
+    }
+
+    private var validSwipe: SwipeCommit? {
+        let proxy = textDocumentProxy
+        guard let swipe = lastSwipe, proxy.documentIdentifier == swipe.document,
+              proxy.selectedText?.isEmpty != false,
+              proxy.documentContextBeforeInput?.hasSuffix(swipe.prefix + swipe.word) == true,
+              String((proxy.documentContextAfterInput ?? "").prefix(24)) == swipe.contextAfter else { return nil }
+        return swipe
+    }
+
+    @objc private func handleSwipe(_ gesture: KeyboardSwipeGesture) {
+        switch gesture.state {
+        case .began, .changed:
+            if gesture.state == .began {
+                hidePopup()
+                pendingSwipe?.cancel()
+                predictionTask?.cancel()
+                swipeTrail.strokeColor = accentColor.withAlphaComponent(0.85).cgColor
+                rowsView.layer.addSublayer(swipeTrail)
+            }
+            let trail = UIBezierPath()
+            if let first = gesture.points.first { trail.move(to: first) }
+            for point in gesture.points.dropFirst() { trail.addLine(to: point) }
+            swipeTrail.path = trail.cgPath
+        case .ended:
+            swipeTrail.removeFromSuperlayer()
+            completeSwipe(trace: gesture.points, pauses: gesture.pauses)
+        case .cancelled, .failed:
+            swipeTrail.removeFromSuperlayer()
+        default:
+            break
+        }
+    }
+
+    private func completeSwipe(trace: [CGPoint], pauses: [CGPoint]) {
+        let centers: [UInt8: CGPoint] = Dictionary(uniqueKeysWithValues: letterKeys.compactMap { key in
+            guard let letter = key.letter.lowercased().utf8.first else { return nil }
+            return (letter, CGPoint(x: key.button.frame.midX, y: key.button.frame.midY))
+        })
+        guard let q = centers[113], let w = centers[119] else { return }
+        let pitch = w.x - q.x
+        let locale = swipeLocale
+        let proxy = textDocumentProxy
+        let document = proxy.documentIdentifier
+        let before = String((proxy.documentContextBeforeInput ?? "").suffix(48))
+        let after = String((proxy.documentContextAfterInput ?? "").prefix(24))
+        let selection = String((proxy.selectedText ?? "").prefix(24))
+        guard !selection.isEmpty || before.last?.isLetter != true || after.first?.isLetter != true else { return }
+
+        pendingSwipe?.cancel()
+        if let lexicon = swipeLexicon, lexicon.locale == locale {
+            insertSwipeCandidates(KeyboardSwipeDecoder.candidates(
+                trace: trace, pauses: pauses, centers: centers, pitch: pitch, lexicon: lexicon.words
+            ))
+            return
+        }
+
+        preloadSwipeWords()
+        let load = swipeLexiconLoad
+        pendingSwipe = Task { @MainActor [weak self] in
+            await load?.value
+            guard !Task.isCancelled, let self, let lexicon = self.swipeLexicon, lexicon.locale == locale else { return }
+            guard self.visible,
+                  self.textDocumentProxy.documentIdentifier == document,
+                  String((self.textDocumentProxy.documentContextBeforeInput ?? "").suffix(48)) == before,
+                  String((self.textDocumentProxy.documentContextAfterInput ?? "").prefix(24)) == after,
+                  String((self.textDocumentProxy.selectedText ?? "").prefix(24)) == selection else { return }
+            self.insertSwipeCandidates(KeyboardSwipeDecoder.candidates(
+                trace: trace, pauses: pauses, centers: centers, pitch: pitch, lexicon: lexicon.words
+            ))
+        }
+    }
+
+    func insertSwipeCandidates(_ words: [String]) {
+        let cased = words.map { word in
+            switch shift {
+            case .off: return word
+            case .on: return word.prefix(1).uppercased() + word.dropFirst()
+            case .locked: return word.uppercased()
+            }
+        }
+        guard let word = cased.first else { return }
+        let proxy = textDocumentProxy
+        let before = proxy.documentContextBeforeInput ?? ""
+        let needsSpace = before.last.map { $0.isLetter || $0.isNumber || ",;:!?.".contains($0) } == true
+        let separator = needsSpace && proxy.selectedText?.isEmpty != false ? " " : ""
+        let prefix = String(before.suffix(24)) + separator
+        let document = proxy.documentIdentifier
+        let after = String((proxy.documentContextAfterInput ?? "").prefix(24))
+        pendingUndo = nil
+        lastSpaceAt = nil
+        lastShiftTap = nil
+        lastSwipe = nil
+        playClick()
+        proxy.insertText(separator + word)
+        lastSwipe = SwipeCommit(document: document, prefix: prefix, word: word,
+                                alternatives: Array(cased.dropFirst()), contextAfter: after)
+        updateAutomaticShift()
+        scheduleSuggestions()
+    }
+
+    private func replaceSwipe(_ swipe: SwipeCommit, with replacement: String) {
+        let proxy = textDocumentProxy
+        for _ in swipe.word { proxy.deleteBackward() }
+        proxy.insertText(replacement)
+        let alternatives = [swipe.word] + swipe.alternatives.filter { $0 != replacement }
+        lastSwipe = SwipeCommit(document: swipe.document, prefix: swipe.prefix, word: replacement,
+                                alternatives: alternatives, contextAfter: swipe.contextAfter)
+        playClick()
+        scheduleSuggestions()
+    }
+
     // MARK: - Emoji picker
 
     @objc private func openEmojiPicker() {
@@ -969,5 +1266,23 @@ final class KeyboardViewController: UIInputViewController {
         }
         rowsView.addSubview(picker)
         addBottomRow(y: bottomY, h: rowHeight, width: width, pad: pad)
+    }
+}
+
+extension KeyboardViewController: UIGestureRecognizerDelegate {
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        guard gestureRecognizer === swipeGesture else { return true }
+        guard settings.swipeTyping != false,
+              page == .letters, !emojiMode, !showingSettings, !isNumberField, !isAddressField,
+              let key = rowsView.nearestKey(at: touch.location(in: rowsView)) else { return false }
+        return letterKeys.contains { $0.button === key }
+    }
+
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return true }
+        let movement = pan.translation(in: rowsView)
+        guard abs(movement.x) > abs(movement.y) else { return false }
+        if pan.view?.accessibilityLabel == "Delete" { return !deleteRepeated && movement.x < 0 }
+        return true
     }
 }

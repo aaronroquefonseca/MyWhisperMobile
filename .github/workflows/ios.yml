@@ -74,6 +74,9 @@ jobs:
           mkdir Payload
           cp -R MyWhisper.xcarchive/Products/Applications/MyWhisper.app Payload/
           test -s Payload/MyWhisper.app/PlugIns/MyWhisperKeyboard.appex/emoji.json
+          for lexicon in swipe-en_US.txt swipe-en_GB.txt swipe-es.txt SwipeWords-NOTICE.txt; do
+            test -s "Payload/MyWhisper.app/PlugIns/MyWhisperKeyboard.appex/$lexicon"
+          done
           zip -qry MyWhisper-unsigned-icon.ipa Payload
           ls -l MyWhisper-unsigned-icon.ipa
           unzip -l MyWhisper-unsigned-icon.ipa

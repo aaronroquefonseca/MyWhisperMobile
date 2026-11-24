@@ -7,6 +7,17 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		DD6015F1000000000000001E /* KeyboardTextEditing.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD6015F1000000000000001D; };
+		DD6015F1000000000000001F /* KeyboardTextEditing.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD6015F1000000000000001D; };
+		DD6015F1000000000000000B /* KeyboardSwipeDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD6015F10000000000000001; };
+		DD6015F10000000000000015 /* KeyboardSwipeDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD6015F10000000000000001; };
+		DD6015F1000000000000000C /* KeyboardSwipeGesture.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD6015F10000000000000002; };
+		DD6015F10000000000000016 /* KeyboardSwipeGesture.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD6015F10000000000000002; };
+		DD6015F1000000000000000D /* swipe-en_US.txt in Resources */ = {isa = PBXBuildFile; fileRef = DD6015F10000000000000003; };
+		DD6015F1000000000000000E /* swipe-en_GB.txt in Resources */ = {isa = PBXBuildFile; fileRef = DD6015F10000000000000004; };
+		DD6015F1000000000000000F /* swipe-es.txt in Resources */ = {isa = PBXBuildFile; fileRef = DD6015F10000000000000005; };
+		DD6015F10000000000000010 /* SwipeWords-NOTICE.txt in Resources */ = {isa = PBXBuildFile; fileRef = DD6015F10000000000000006; };
+		DD6015F10000000000000011 /* KeyboardSwipeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD6015F10000000000000007; };
 		DB257A200000000000000010 /* KeyboardEmojiPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB257A200000000000000012; };
 		DB257A200000000000000011 /* KeyboardEmojiPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB257A200000000000000012; };
 		DB257A200000000000000008 /* KeyboardKeyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB257A200000000000000005; };
@@ -79,6 +90,14 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		DD6015F1000000000000001D /* KeyboardTextEditing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardTextEditing.swift; sourceTree = "<group>"; };
+		DD6015F10000000000000001 /* KeyboardSwipeDecoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardSwipeDecoder.swift; sourceTree = "<group>"; };
+		DD6015F10000000000000002 /* KeyboardSwipeGesture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardSwipeGesture.swift; sourceTree = "<group>"; };
+		DD6015F10000000000000003 /* swipe-en_US.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = SwipeWords/swipe-en_US.txt; sourceTree = "<group>"; };
+		DD6015F10000000000000004 /* swipe-en_GB.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = SwipeWords/swipe-en_GB.txt; sourceTree = "<group>"; };
+		DD6015F10000000000000005 /* swipe-es.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = SwipeWords/swipe-es.txt; sourceTree = "<group>"; };
+		DD6015F10000000000000006 /* SwipeWords-NOTICE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = SwipeWords/SwipeWords-NOTICE.txt; sourceTree = "<group>"; };
+		DD6015F10000000000000007 /* KeyboardSwipeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardSwipeTests.swift; sourceTree = "<group>"; };
 		DB257A200000000000000012 /* KeyboardEmojiPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardEmojiPicker.swift; sourceTree = "<group>"; };
 		DB257A200000000000000005 /* KeyboardKeyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardKeyView.swift; sourceTree = "<group>"; };
 		DB257A200000000000000006 /* KeyboardKeyGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardKeyGeometry.swift; sourceTree = "<group>"; };
@@ -208,6 +227,7 @@
 			isa = PBXGroup;
 			children = (
 				DB257A200000000000000007 /* KeyboardKeyGeometryTests.swift */,
+				DD6015F10000000000000007 /* KeyboardSwipeTests.swift */,
 				EC75167B1E2B32413C59E564 /* CoreBridgeTests.swift */,
 				1F563518FFFD727440F23503 /* SettingsJobsTests.swift */,
 				CE1EAA900000000000000001 /* CleanupTests.swift */,
@@ -233,6 +253,13 @@
 				DB257A200000000000000006 /* KeyboardKeyGeometry.swift */,
 				EE1100000000000000000003 /* Info.plist */,
 				EE11000000000000000016 /* emoji.json */,
+				DD6015F1000000000000001D /* KeyboardTextEditing.swift */,
+				DD6015F10000000000000001 /* KeyboardSwipeDecoder.swift */,
+				DD6015F10000000000000002 /* KeyboardSwipeGesture.swift */,
+				DD6015F10000000000000003 /* swipe-en_US.txt */,
+				DD6015F10000000000000004 /* swipe-en_GB.txt */,
+				DD6015F10000000000000005 /* swipe-es.txt */,
+				DD6015F10000000000000006 /* SwipeWords-NOTICE.txt */,
 			);
 			path = Keyboard;
 			sourceTree = "<group>";
@@ -373,6 +400,10 @@
 			buildActionMask = 2147483647;
 			files = (
 				EE11000000000000000017 /* emoji.json in Resources */,
+				DD6015F1000000000000000D /* swipe-en_US.txt in Resources */,
+				DD6015F1000000000000000E /* swipe-en_GB.txt in Resources */,
+				DD6015F1000000000000000F /* swipe-es.txt in Resources */,
+				DD6015F10000000000000010 /* SwipeWords-NOTICE.txt in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -420,6 +451,9 @@
 				EE1100000000000000000008 /* KeyboardViewController.swift in Sources */,
 				DB257A200000000000000001 /* KeyboardKeyView.swift in Sources */,
 				DB257A200000000000000002 /* KeyboardKeyGeometry.swift in Sources */,
+				DD6015F1000000000000001E /* KeyboardTextEditing.swift in Sources */,
+				DD6015F1000000000000000B /* KeyboardSwipeDecoder.swift in Sources */,
+				DD6015F1000000000000000C /* KeyboardSwipeGesture.swift in Sources */,
 				DB257A200000000000000010 /* KeyboardEmojiPicker.swift in Sources */,
 				EE1100000000000000000078 /* affentry.cxx in Sources */,
 				EE1100000000000000000079 /* affixmgr.cxx in Sources */,
@@ -437,6 +471,10 @@
 			buildActionMask = 2147483647;
 			files = (
 				DB257A200000000000000003 /* KeyboardKeyGeometry.swift in Sources */,
+				DD6015F1000000000000001F /* KeyboardTextEditing.swift in Sources */,
+				DD6015F10000000000000015 /* KeyboardSwipeDecoder.swift in Sources */,
+				DD6015F10000000000000016 /* KeyboardSwipeGesture.swift in Sources */,
+				DD6015F10000000000000011 /* KeyboardSwipeTests.swift in Sources */,
 				DB257A200000000000000004 /* KeyboardKeyGeometryTests.swift in Sources */,
 				DB257A200000000000000008 /* KeyboardKeyView.swift in Sources */,
 				DB257A200000000000000009 /* KeyboardViewController.swift in Sources */,
