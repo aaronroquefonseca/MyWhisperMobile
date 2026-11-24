@@ -344,9 +344,10 @@ class DictationCancelTest {
         val stopEntered = CountDownLatch(1)
         val stopRelease = CountDownLatch(1)
         val stopped = AtomicBoolean(false)
+        val stops = AtomicInteger(0)
         val slowCapture = object : Dictation.Capture {
             override fun stop() {
-                if (stopped.get()) return
+                stops.incrementAndGet()
                 stopEntered.countDown()
                 assertTrue(stopRelease.await(10, TimeUnit.SECONDS))
                 stopped.set(true)
@@ -372,6 +373,7 @@ class DictationCancelTest {
             stopRelease.countDown()
             assertTrue(cancelled.await(10, TimeUnit.SECONDS))
             assertTrue("old mic fully stopped before cancel returned", stopped.get())
+            assertEquals("old mic torn down exactly once", 1, stops.get())
             dictation.pressDown()
             assertEquals(Dictation.State.RECORDING, dictation.current)
         } finally {

@@ -681,7 +681,7 @@ class OverlayService : Service(), Dictation.Listener {
             // throw → server chain. Pack-gated: null without the pack.
             localTranscribe = { pcm -> if (practiceMode) null else LocalStt.transcribeIfEnabled(this, pcm) },
             localFirst = { !practiceMode && LocalStt.isLocalFirst() },
-            finishTranscription = { utterance -> if (practiceMode) practiceResult() else CoreBridge.finishUtterance(utterance) },
+            finishTranscription = { utterance -> if (practiceMode) practiceResult(utterance) else CoreBridge.finishUtterance(utterance) },
             // Shutdown releases the native recognizer (no resident ORT
             // session across service restarts in one process).
             releaseLocal = {
@@ -2123,8 +2123,9 @@ class OverlayService : Service(), Dictation.Listener {
     }
 
     /** Practice dictation: drop the audio, pretend to work, return the next example. */
-    private fun practiceResult(): Pair<String, String> {
-        try { CoreBridge.cancelUtterance() } catch (_: Exception) { }
+    private fun practiceResult(utterance: Long): Pair<String, String> {
+        // Scoped to this recording: a late practice worker never cancels a real dictation.
+        try { CoreBridge.discardUtterance(utterance) } catch (_: Exception) { }
         Thread.sleep(TUTORIAL_WORKING_MS)
         val samples = resources.getStringArray(R.array.tutorial_samples)
         return samples[practiceIndex++ % samples.size] to "practice"

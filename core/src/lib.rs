@@ -356,6 +356,27 @@ fn call_local_runner(
     get_string(env, &JString::from(out))
 }
 
+/// Drops `utterance`'s audio only if it still owns the recorder.
+/// # Safety
+/// Called from the JVM with valid JNI handles (`env` attached, object args valid local refs).
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeDiscardUtterance(
+    mut env: JNIEnv,
+    _cls: JClass,
+    utterance: jlong,
+) -> jstring {
+    let out = match ENGINE
+        .get()
+        .map(|m| engine::discard_unlocked(m, utterance as u64))
+    {
+        Some(Ok(())) => ok_json(serde_json::Value::Null),
+        Some(Err(err)) => err_json(err),
+        None => err_json("engine not open"),
+    };
+    jstr(&mut env, &out)
+}
+
 /// # Safety
 /// Called from the JVM with valid JNI handles (`env` attached, object args valid local refs).
 #[cfg(target_os = "android")]

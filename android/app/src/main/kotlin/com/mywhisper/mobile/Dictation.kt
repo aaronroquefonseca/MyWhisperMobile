@@ -191,6 +191,22 @@ class Dictation(
         listener?.onState(state, true)
     }
 
+    /** Stops [cap] once; a second caller waits for the first stop to finish. */
+    private class StopOnce(private val cap: Capture) : Capture {
+        override val utterance get() = cap.utterance
+        private var stopped = false
+
+        @Synchronized
+        override fun stop() {
+            if (stopped) return
+            stopped = true
+            try {
+                cap.stop()
+            } catch (_: Exception) {
+            }
+        }
+    }
+
     fun pressDown() {
         when (state) {
             State.WORKING -> return
@@ -207,11 +223,19 @@ class Dictation(
             }
             State.IDLE -> Unit
         }
+        // New session before the mic opens: PCM from an older capture
+        // that outlived its stop is dropped, here and in the core.
+        val gen = synchronized(pcmLock) {
+            pcmSize = 0
+            pcmOverflowed = false
+            session.incrementAndGet()
+        }
         val cap = startCapture(
-            { buf, n ->
+            pcm@{ buf, n ->
                 // Copy: the buffer is reused by the read loop.
                 val copy = buf.copyOf(n)
                 synchronized(pcmLock) {
+                    if (gen != session.get()) return@pcm
                     val take = minOf(n, MAX_LOCAL_PCM_SAMPLES - pcmSize).coerceAtLeast(0)
                     if (pcmSize + take > pcmBuf.size) {
                         pcmBuf = pcmBuf.copyOf(
@@ -227,10 +251,10 @@ class Dictation(
                         pcmOverflowed = true
                         log("local PCM capped at 60s, overflow falls back to server")
                     }
-                }
-                try {
-                    pushPcm(copy, n)
-                } catch (_: Exception) {
+                    try {
+                        pushPcm(copy, n)
+                    } catch (_: Exception) {
+                    }
                 }
             },
             { listener?.onError(it); hardStop() },
@@ -238,14 +262,8 @@ class Dictation(
                 if (it > maxPeak) maxPeak = it
                 onLevel?.invoke(it)
             },
-        ) ?: return
-        synchronized(pcmLock) {
-            // New session and capture publish together: a stale worker sees both or neither.
-            session.incrementAndGet()
-            capture = cap
-            pcmSize = 0
-            pcmOverflowed = false
-        }
+        )?.let(::StopOnce) ?: return
+        synchronized(pcmLock) { capture = cap }
         toggled = false
         downAt = System.currentTimeMillis()
         maxPeak = 0f
@@ -290,14 +308,17 @@ class Dictation(
         // Invalidate the finish worker FIRST so a blocked
         // finishTranscription that returns later drops, never commits.
         val was = state
-        synchronized(pcmLock) { session.incrementAndGet() }
-        log("cancel $was->IDLE session=${session.get()}")
-        // Then the core (lock-free), before the UI shows IDLE: a provider
-        // returning now can neither fall back nor save to History.
-        try {
-            cancelTranscription()
-        } catch (_: Exception) {
+        synchronized(pcmLock) {
+            // The core first (its revoke is lock-free), then the session,
+            // in one step: no window where Kotlin dropped the utterance but
+            // a returning provider can still fall back or save to History.
+            try {
+                cancelTranscription()
+            } catch (_: Exception) {
+            }
+            session.incrementAndGet()
         }
+        log("cancel $was->IDLE session=${session.get()}")
         hardStop()
     }
 
@@ -320,16 +341,11 @@ class Dictation(
     private fun takeCapture(): Capture? = synchronized(pcmLock) { capture.also { capture = null } }
 
     /**
-     * Stops are exclusive per capture: a cancel racing the finish
-     * worker's stop waits for it, so the old mic (and its foreground
-     * service downgrade) is fully done before a new recording starts.
+     * Captures are [StopOnce]: a cancel racing the finish worker's stop
+     * waits for it, and a late second stop is a no-op, so the old mic
+     * (and its foreground service downgrade) never outlives the cancel.
      */
-    private fun stopCapture(cap: Capture) = synchronized(cap) {
-        try {
-            cap.stop()
-        } catch (_: Exception) {
-        }
-    }
+    private fun stopCapture(cap: Capture) = cap.stop()
 
     private fun hardStop() {
         takeCapture()?.let(::stopCapture)

@@ -1146,6 +1146,19 @@ pub fn cancel_unlocked(engine: &Mutex<Engine>) -> Result<i64, String> {
     Ok(lock_engine(engine)?.cancel_utterance())
 }
 
+/// Cancels `utterance` only if it still owns the recorder, so a stale
+/// caller can never cancel a newer recording. Checked under the lock,
+/// where every start takes its token.
+pub fn discard_unlocked(engine: &Mutex<Engine>, utterance: u64) -> Result<(), String> {
+    let mut e = lock_engine(engine)?;
+    if current_utterance() == utterance {
+        UTTERANCE_TOKEN.fetch_add(1, Ordering::SeqCst);
+        crate::server_stt::revoke_in_flight();
+        e.cancel_utterance();
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1996,9 +2009,15 @@ mod tests {
         assert!(finish_unlocked(&eng, |e| e.begin_finish(cancelled)).is_err());
         assert_never_contacted(&provider, "the STT provider");
 
-        // A newer recording started: the stale finish must leave it alone.
-        let _next = record(&eng);
+        // A newer recording started: stale finishes and discards must leave it alone.
+        let next = record(&eng);
         assert!(finish_unlocked(&eng, |e| e.begin_finish(cancelled)).is_err());
+        discard_unlocked(&eng, cancelled).unwrap();
+        assert_eq!(
+            current_utterance(),
+            next,
+            "stale discard revoked the newer recording"
+        );
         let left = eng.lock().unwrap().recorder.finish().0.len();
         assert_eq!(left, 8000, "stale finish consumed the newer recording");
         assert_eq!(history_texts(&eng), Vec::<String>::new());
