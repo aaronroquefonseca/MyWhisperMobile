@@ -6050,7 +6050,10 @@ class MainActivity : ComponentActivity() {
                 Text(histError.value, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             }
             if (items.isEmpty()) item(key = "histEmpty") {
-                if (!histLoaded) LoadingBox() else Text(
+                // Skeleton rows shaped like history entries, pulsing like the stat cards.
+                if (!histLoaded) Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    repeat(3) { LoadingBar(Modifier.fillMaxWidth().height(64.dp)) }
+                } else Text(
                     stringResource(if (histQuery.isBlank()) R.string.home_history_empty else R.string.dict_no_match),
                     Modifier.fillMaxWidth().padding(vertical = 24.dp),
                     style = MaterialTheme.typography.bodyMedium,
