@@ -23,7 +23,7 @@ class LauncherIconManagerTest {
         assertEquals(LauncherIconStyle.DEFAULT, manager.selected())
         assertEquals(PackageManager.COMPONENT_ENABLED_STATE_DEFAULT,
             context.packageManager.getComponentEnabledSetting(ComponentName(context, MainActivity::class.java)))
-        assertEquals(listOf("${context.packageName}.LauncherDefault"), launcherActivities())
+        assertEquals(listOf("$ALIAS_NAMESPACE.LauncherDefault"), launcherActivities())
     }
 
     @Test
@@ -32,7 +32,7 @@ class LauncherIconManagerTest {
         for (style in LauncherIconStyle.entries.reversed()) {
             manager.select(style)
             assertEquals(style, LauncherIconManager(context).selected())
-            assertEquals(listOf("${context.packageName}.${style.alias}"), launcherActivities())
+            assertEquals(listOf("$ALIAS_NAMESPACE.${style.alias}"), launcherActivities())
             assertEquals(PackageManager.COMPONENT_ENABLED_STATE_DEFAULT,
                 context.packageManager.getComponentEnabledSetting(ComponentName(context, MainActivity::class.java)))
         }
@@ -53,7 +53,7 @@ class LauncherIconManagerTest {
     fun paletteAliasesAlwaysPointAtExistingAdaptiveArtwork() {
         for (style in LauncherIconStyle.entries) {
             val info = context.packageManager.getActivityInfo(
-                ComponentName(context.packageName, "${context.packageName}.${style.alias}"),
+                ComponentName(context.packageName, "$ALIAS_NAMESPACE.${style.alias}"),
                 PackageManager.MATCH_DISABLED_COMPONENTS,
             )
             assertEquals(LauncherActivity::class.java.name, info.targetActivity)

@@ -86,3 +86,54 @@ internal fun whisperColorScheme(dark: Boolean, black: Boolean = false): androidx
         outlineVariant = Color(0xFF424B53),
     ) else colors
 }
+
+/**
+ * Theme switches (light/dark, black background) fade every color together
+ * instead of snapping. Compose scales this with the system animation setting.
+ */
+@Composable
+internal fun animatedColorScheme(target: androidx.compose.material3.ColorScheme): androidx.compose.material3.ColorScheme {
+    val spec = androidx.compose.animation.core.tween<Color>(THEME_FADE_MS)
+    @Composable
+    fun fade(c: Color): Color = androidx.compose.animation.animateColorAsState(c, spec, label = "theme").value
+    return target.copy(
+        primary = fade(target.primary),
+        onPrimary = fade(target.onPrimary),
+        primaryContainer = fade(target.primaryContainer),
+        onPrimaryContainer = fade(target.onPrimaryContainer),
+        inversePrimary = fade(target.inversePrimary),
+        secondary = fade(target.secondary),
+        onSecondary = fade(target.onSecondary),
+        secondaryContainer = fade(target.secondaryContainer),
+        onSecondaryContainer = fade(target.onSecondaryContainer),
+        tertiary = fade(target.tertiary),
+        onTertiary = fade(target.onTertiary),
+        tertiaryContainer = fade(target.tertiaryContainer),
+        onTertiaryContainer = fade(target.onTertiaryContainer),
+        background = fade(target.background),
+        onBackground = fade(target.onBackground),
+        surface = fade(target.surface),
+        onSurface = fade(target.onSurface),
+        surfaceVariant = fade(target.surfaceVariant),
+        onSurfaceVariant = fade(target.onSurfaceVariant),
+        surfaceTint = fade(target.surfaceTint),
+        inverseSurface = fade(target.inverseSurface),
+        inverseOnSurface = fade(target.inverseOnSurface),
+        error = fade(target.error),
+        onError = fade(target.onError),
+        errorContainer = fade(target.errorContainer),
+        onErrorContainer = fade(target.onErrorContainer),
+        outline = fade(target.outline),
+        outlineVariant = fade(target.outlineVariant),
+        scrim = fade(target.scrim),
+        surfaceBright = fade(target.surfaceBright),
+        surfaceDim = fade(target.surfaceDim),
+        surfaceContainer = fade(target.surfaceContainer),
+        surfaceContainerHigh = fade(target.surfaceContainerHigh),
+        surfaceContainerHighest = fade(target.surfaceContainerHighest),
+        surfaceContainerLow = fade(target.surfaceContainerLow),
+        surfaceContainerLowest = fade(target.surfaceContainerLowest),
+    )
+}
+
+internal const val THEME_FADE_MS = 450

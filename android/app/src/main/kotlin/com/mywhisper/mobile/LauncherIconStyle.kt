@@ -27,10 +27,15 @@ enum class LauncherIconStyle(
 /** Android persists alias states across restarts and stable/nightly/lite/full upgrades.
  * Use that state directly rather than a second preference that could disagree with the launcher.
  */
+/** Manifest namespace that `.Launcher*` activity-alias names resolve against. */
+internal const val ALIAS_NAMESPACE = "com.mywhisper.mobile"
+
 class LauncherIconManager(private val context: Context) {
     private val pm get() = context.packageManager
+    // Aliases keep the manifest namespace even when the build adds an
+    // applicationId suffix (side-by-side ".test" installs).
     private fun component(style: LauncherIconStyle) =
-        ComponentName(context.packageName, "${context.packageName}.${style.alias}")
+        ComponentName(context.packageName, "$ALIAS_NAMESPACE.${style.alias}")
 
     fun selected(): LauncherIconStyle = LauncherIconStyle.entries.firstOrNull {
         pm.getComponentEnabledSetting(component(it)) == PackageManager.COMPONENT_ENABLED_STATE_ENABLED
