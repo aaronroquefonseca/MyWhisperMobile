@@ -5447,6 +5447,30 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** Heatmap shades by level: empty, then three steps of primary. */
+    @Composable
+    private fun heatShades(): List<Color> {
+        val full = MaterialTheme.colorScheme.primary
+        return listOf(MaterialTheme.colorScheme.surfaceVariant, full.copy(alpha = 0.35f), full.copy(alpha = 0.65f), full)
+    }
+
+    /** Less → More key; sits in the card header so it costs no extra height. */
+    @Composable
+    private fun HeatmapLegend() {
+        val shades = heatShades()
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(stringResource(R.string.act_less), style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.width(4.dp))
+            shades.forEach { shade ->
+                Box(Modifier.size(10.dp).background(shade, androidx.compose.foundation.shape.RoundedCornerShape(2.dp)))
+                Spacer(Modifier.width(3.dp))
+            }
+            Text(stringResource(R.string.act_more), style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+
     /** GitHub-style level from a real word count (desktop thresholds). */
     private fun heatLevel(words: Int): Int = when {
         words <= 0 -> 0
@@ -5474,14 +5498,7 @@ class MainActivity : ComponentActivity() {
                 Cell(epoch, heatLevel(byDay[epoch]?.words ?: 0))
             }
         }
-        val empty = MaterialTheme.colorScheme.surfaceVariant
-        val full = MaterialTheme.colorScheme.primary
-        val shades = listOf(
-            empty,
-            full.copy(alpha = 0.35f),
-            full.copy(alpha = 0.65f),
-            full,
-        )
+        val shades = heatShades()
         val measurer = rememberTextMeasurer()
         val labelStyle = MaterialTheme.typography.bodySmall.copy(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -5562,24 +5579,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(stringResource(R.string.act_less), style = MaterialTheme.typography.bodySmall)
-            Spacer(Modifier.width(4.dp))
-            for (l in 0..3) {
-                Box(
-                    modifier = Modifier
-                        .width(12.dp)
-                        .height(12.dp)
-                        .background(shades[l], androidx.compose.foundation.shape.RoundedCornerShape(3.dp)),
-                )
-                Spacer(Modifier.width(3.dp))
-            }
-            Text(stringResource(R.string.act_more), style = MaterialTheme.typography.bodySmall)
         }
     }
 
@@ -5772,7 +5771,10 @@ class MainActivity : ComponentActivity() {
             item(key = "heatmap") {
                 Surface(shape = MaterialTheme.shapes.extraLarge, color = MaterialTheme.colorScheme.surfaceContainerLow) {
                     Column(Modifier.fillMaxWidth().padding(16.dp)) {
-                        Text(stringResource(R.string.act_chart), style = MaterialTheme.typography.titleSmall)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(stringResource(R.string.act_chart), Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+                            if (days.isNotEmpty()) HeatmapLegend()
+                        }
                         Spacer(Modifier.height(8.dp))
                         if (statsErr.isNotEmpty()) {
                             Text(statsErr, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
