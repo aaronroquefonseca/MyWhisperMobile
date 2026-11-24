@@ -23,12 +23,19 @@ final class DictionaryViewModel: ObservableObject {
         }
     }
 
-    func addWord(_ word: String) {
+    func addWord(_ word: String) -> Bool {
         do {
+            let word = try DictionaryStore.validateWord(word)
+            guard !words.contains(where: { $0.caseInsensitiveCompare(word) == .orderedSame }) else {
+                error = "This word is already in your dictionary."
+                return false
+            }
             try DictionaryStore.addWord(word)
             load()
+            return true
         } catch {
             self.error = error.localizedDescription
+            return false
         }
     }
 
@@ -66,7 +73,10 @@ final class DictionaryViewModel: ObservableObject {
 struct DictionaryView: View {
     @StateObject private var model: DictionaryViewModel
 
-    @State private var showingWordForm = false
+    @State private var showingSnippets = false
+    @State private var newWord = ""
+    @State private var wordQuery = ""
+    @State private var snippetQuery = ""
     @State private var editingSnippet: DictionaryStore.Snippet?
     @State private var showingSnippetForm = false
     @State private var pendingWordDelete: String?
@@ -77,70 +87,16 @@ struct DictionaryView: View {
     }
 
     var body: some View {
-        List {
-            if let error = model.error {
-                Section {
-                    Text(error).foregroundStyle(.red).font(.caption)
-                }
-            }
-            Section("Words") {
-                if model.words.isEmpty {
-                    Text("No custom words yet. Words steer transcription toward your spellings.")
-                        .foregroundStyle(.secondary)
-                }
-                ForEach(model.words, id: \.self) { word in
-                    HStack {
-                        Text(word)
-                        Spacer()
-                        Button("Delete", role: .destructive) { pendingWordDelete = word }
-                            .font(.caption)
-                            .buttonStyle(.borderless)
-                    }
-                    .accessibilityLabel("Word \(word)")
-                }
-                Button("Add word") { showingWordForm = true }
-            }
-            Section("Snippets") {
-                if model.snippets.isEmpty {
-                    Text("No snippets yet. A trigger expands to its replacement, longest match wins.")
-                        .foregroundStyle(.secondary)
-                }
-                ForEach(model.snippets, id: \.trigger) { snippet in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(snippet.trigger).font(.body)
-                        Text("→ \(snippet.replacement)").font(.caption).foregroundStyle(.secondary)
-                        HStack(spacing: 12) {
-                            Button("Edit") {
-                                editingSnippet = snippet
-                                showingSnippetForm = true
-                            }
-                            Button("Delete", role: .destructive) { pendingSnippetDelete = snippet.trigger }
-                        }
-                        .font(.caption)
-                        .buttonStyle(.borderless)
-                    }
-                    .accessibilityElement(children: .combine)
-                    .accessibilityLabel("Snippet \(snippet.trigger) expands to \(snippet.replacement)")
-                }
-                Button("Add snippet") {
-                    editingSnippet = nil
-                    showingSnippetForm = true
-                }
-            }
-            Section {
-                NavigationLink {
-                    DevicesView()
-                } label: {
-                    Label(OnboardingStrings.current(languageCode: languageCode).devices,
-                          systemImage: "antenna.radiowaves.left.and.right")
-                }
-            }
+        WhisperPager(
+            showSecond: $showingSnippets,
+            firstTitle: "\(strings.words) · \(model.words.count)",
+            secondTitle: "\(strings.snippets) · \(model.snippets.count)"
+        ) {
+            dictionaryList { wordSections }
+        } second: {
+            dictionaryList { snippetSections }
         }
-        .navigationTitle(TabStrings.current(languageCode: languageCode).dictionary)
         .onAppear { model.load() }
-        .sheet(isPresented: $showingWordForm) {
-            WordForm(onSave: { model.addWord($0) })
-        }
         .sheet(isPresented: $showingSnippetForm) {
             SnippetForm(existing: editingSnippet, onSave: { trigger, replacement, old in
                 model.saveSnippet(trigger: trigger, replacement: replacement, replacing: old)
@@ -166,6 +122,144 @@ struct DictionaryView: View {
         }
     }
 
+    private func dictionaryList<Rows: View>(@ViewBuilder rows: () -> Rows) -> some View {
+        List {
+            Section {
+                NavigationLink {
+                    DevicesView()
+                } label: {
+                    WhisperDestinationLabel(
+                        title: keyboardStrings.devices,
+                        summary: keyboardStrings.syncSummary,
+                        symbol: "antenna.radiowaves.left.and.right"
+                    )
+                }
+            }
+            .whisperRowSurface()
+            if let error = model.error {
+                Section {
+                    Text(error).font(.subheadline).foregroundStyle(.secondary)
+                }
+                .whisperRowSurface()
+            }
+            rows()
+        }
+        .whisperListStyle()
+    }
+
+    @ViewBuilder
+    private var wordSections: some View {
+        Section {
+            HStack {
+                TextField("Add a word", text: $newWord)
+                    .autocorrectionDisabled()
+                    .submitLabel(.done)
+                    .onSubmit(addWord)
+                Button(action: addWord) {
+                    Label("Add word", systemImage: "plus.circle.fill")
+                        .labelStyle(.iconOnly)
+                        .font(.title3)
+                        .frame(minWidth: 44, minHeight: 44)
+                }
+                .buttonStyle(.borderless)
+                .disabled(newWord.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        } header: {
+            Text("Teach transcription your spellings.").textCase(nil)
+        }
+        .whisperRowSurface()
+
+        if model.words.count > 8 || !wordQuery.isEmpty {
+            Section {
+                WhisperSearchField(text: $wordQuery, prompt: "Search words")
+            }
+            .whisperRowSurface()
+        }
+        Section {
+            let words = model.words.filter { wordQuery.isEmpty || $0.localizedCaseInsensitiveContains(wordQuery) }
+            if words.isEmpty {
+                Text(wordQuery.isEmpty ? "No custom words yet." : "No matches.").foregroundStyle(.secondary)
+            }
+            ForEach(words, id: \.self) { word in
+                HStack {
+                    Text(word)
+                    Spacer()
+                    Button(role: .destructive) { pendingWordDelete = word } label: {
+                        Label("Delete \(word)", systemImage: "trash")
+                            .labelStyle(.iconOnly)
+                            .frame(minWidth: 44, minHeight: 44)
+                    }
+                    .foregroundStyle(.secondary)
+                    .buttonStyle(.borderless)
+                }
+            }
+        }
+        .whisperRowSurface()
+    }
+
+    @ViewBuilder
+    private var snippetSections: some View {
+        Section {
+            Button {
+                editingSnippet = nil
+                showingSnippetForm = true
+            } label: {
+                WhisperAddLabel(title: "Add snippet")
+            }
+            .buttonStyle(.plain)
+            .listRowInsets(EdgeInsets())
+            .listRowBackground(Color.clear)
+        } header: {
+            Text("Expand a short trigger into text you use often.").textCase(nil)
+        }
+
+        if model.snippets.count > 8 || !snippetQuery.isEmpty {
+            Section {
+                WhisperSearchField(text: $snippetQuery, prompt: "Search snippets")
+            }
+            .whisperRowSurface()
+        }
+        Section {
+            let snippets = model.snippets.filter { snippet in
+                snippetQuery.isEmpty || snippet.trigger.localizedCaseInsensitiveContains(snippetQuery)
+                    || snippet.replacement.localizedCaseInsensitiveContains(snippetQuery)
+            }
+            if snippets.isEmpty {
+                Text(snippetQuery.isEmpty ? "No snippets yet." : "No matches.").foregroundStyle(.secondary)
+            }
+            ForEach(snippets, id: \.trigger) { snippet in
+                HStack {
+                    Button {
+                        editingSnippet = snippet
+                        showingSnippetForm = true
+                    } label: {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(snippet.trigger).foregroundStyle(.primary)
+                            Text(snippet.replacement).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                    }
+                    Button(role: .destructive) { pendingSnippetDelete = snippet.trigger } label: {
+                        Label("Delete \(snippet.trigger)", systemImage: "trash")
+                            .labelStyle(.iconOnly)
+                            .frame(minWidth: 44, minHeight: 44)
+                    }
+                    .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.borderless)
+            }
+        }
+        .whisperRowSurface()
+    }
+
+    private func addWord() {
+        guard !newWord.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        if model.addWord(newWord) { newWord = "" }
+    }
+
+    private var strings: TabStrings { .current(languageCode: languageCode) }
+    private var keyboardStrings: OnboardingStrings { .current(languageCode: languageCode) }
     private var languageCode: String? { Locale.current.language.languageCode?.identifier }
 
     private var wordDeleteBinding: Binding<Bool> {

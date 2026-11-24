@@ -60,15 +60,18 @@ struct DevicesView: View {
                     Text(advertiseError).font(.footnote)
                 }
             }
-            trustedSection
-            requestsSection
-            nearbySection
-            addSection
+            .whisperRowSurface()
+            trustedSection.whisperRowSurface()
+            requestsSection.whisperRowSurface()
+            nearbySection.whisperRowSurface()
+            addSection.whisperRowSurface()
             if let banner = banner {
-                Section { Text(banner).font(.footnote) }
+                Section { Text(banner).font(.footnote) }.whisperRowSurface()
             }
         }
-        .navigationTitle("Devices")
+        .whisperListStyle()
+        .navigationTitle(OnboardingStrings.current(languageCode: Locale.current.language.languageCode?.identifier).devices)
+        .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             store.discovery.startBrowsing()
             pullState()

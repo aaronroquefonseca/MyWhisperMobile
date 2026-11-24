@@ -132,6 +132,7 @@ struct UsageStats: Equatable {
     let wordsSpoken: UInt64
     let dictations: UInt64
     let wordsPerMinute: Double
+    let streakDays: Int
 }
 
 /// One per-day aggregate for the activity list: local-midnight `dayStart`
@@ -162,7 +163,7 @@ enum StatsStore {
             return items
         }
         let lower = needle.lowercased()
-        return items.filter { $0.text.lowercased().contains(lower) }
+        return items.filter { $0.text.lowercased().contains(lower) || $0.rawText?.lowercased().contains(lower) == true }
     }
 
     // MARK: - Retention predicate (core `purge_old_history` parity)
@@ -192,7 +193,7 @@ enum StatsStore {
     /// Totals over non-discarded rows (core `usage_stats` WHERE clause:
     /// `deleted = 0 AND discarded = 0`). Bridge rows are already
     /// non-deleted; the discarded filter is applied here.
-    static func usageStats(_ items: [HistoryItem]) -> UsageStats {
+    static func usageStats(_ items: [HistoryItem], now: Date = .now, calendar: Calendar = .current) -> UsageStats {
         let kept = items.filter { $0.discarded == false }
         let words = kept.reduce(0) { $0 + max($1.wordCount, 0) }
         let measuredWords = kept
@@ -210,8 +211,24 @@ enum StatsStore {
         return UsageStats(
             wordsSpoken: UInt64(max(words, 0)),
             dictations: UInt64(kept.count),
-            wordsPerMinute: wpm
+            wordsPerMinute: wpm,
+            streakDays: streakDays(kept, now: now, calendar: calendar)
         )
+    }
+
+    private static func streakDays(_ items: [HistoryItem], now: Date, calendar: Calendar) -> Int {
+        let activeDays = Set(items.compactMap { item -> Date? in
+            guard item.recordedAt > 0 else { return nil }
+            return calendar.startOfDay(for: Date(timeIntervalSince1970: TimeInterval(item.recordedAt)))
+        })
+        let today = calendar.startOfDay(for: now)
+        var day: Date? = activeDays.contains(today) ? today : calendar.date(byAdding: .day, value: -1, to: today)
+        var streak = 0
+        while let current = day, activeDays.contains(current) {
+            streak += 1
+            day = calendar.date(byAdding: .day, value: -1, to: current)
+        }
+        return streak
     }
 
     // MARK: - Daily aggregates (pure, no bridge)

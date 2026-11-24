@@ -230,7 +230,7 @@ struct LlmEntryForm: View {
     }
 }
 
-// MARK: - Word + snippet forms
+// MARK: - Snippet form
 
 /// User-facing text for `DictionaryError` (forms show it inline).
 func dictionaryErrorText(_ error: DictionaryError) -> String {
@@ -238,45 +238,6 @@ func dictionaryErrorText(_ error: DictionaryError) -> String {
     case .emptyWord: return "Enter a word."
     case .emptyTrigger: return "Enter a trigger."
     case .emptyReplacement: return "Enter a replacement."
-    }
-}
-
-/// Add-word sheet; validation via `DictionaryStore.validateWord`.
-struct WordForm: View {
-    var onSave: (String) -> Void
-    @Environment(\.dismiss) private var dismiss
-    @State private var word = ""
-    @State private var error: String?
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                TextField("Word", text: $word)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                if let error = error {
-                    Text(error).foregroundStyle(.red).font(.caption)
-                }
-            }
-            .navigationTitle("Add word")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        do {
-                            let valid = try DictionaryStore.validateWord(word)
-                            onSave(valid)
-                            dismiss()
-                        } catch let validation as DictionaryError {
-                            error = dictionaryErrorText(validation)
-                        } catch {
-                            self.error = error.localizedDescription
-                        }
-                    }
-                }
-            }
-        }
     }
 }
 

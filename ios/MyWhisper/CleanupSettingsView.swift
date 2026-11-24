@@ -180,7 +180,6 @@ final class CleanupSettingsStore: ObservableObject {
 /// Cleanup editor screen.
 struct CleanupSettingsView: View {
     @ObservedObject var store: CleanupSettingsStore
-    var navigationTitle: String
 
     @State private var sheet: CleanupSheetKind?
     @State private var pendingDelete: Cleanup.Entry?
@@ -189,9 +188,8 @@ struct CleanupSettingsView: View {
     @State private var promptDraft = ""
     @State private var promptEditing = false
 
-    init(store: CleanupSettingsStore = CleanupSettingsStore(), navigationTitle: String = "Cleanup") {
+    init(store: CleanupSettingsStore = CleanupSettingsStore()) {
         self.store = store
-        self.navigationTitle = navigationTitle
     }
 
     var body: some View {
@@ -200,8 +198,9 @@ struct CleanupSettingsView: View {
                 Section {
                     Text(error).foregroundStyle(.red).font(.caption)
                 }
+                .whisperRowSurface()
             }
-            Section("Cleanup") {
+            Section {
                 Toggle("Enable cleanup", isOn: Binding(get: { store.draft.enabled }, set: { store.setEnabled($0) }))
                 if store.draft.enabled {
                     let runnable = Cleanup.runnableChain(store.draft.entries)
@@ -211,7 +210,8 @@ struct CleanupSettingsView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            Section("Custom prompt") {
+            .whisperRowSurface()
+            Section {
                 if promptEditing {
                     TextEditor(text: $promptDraft)
                         .frame(minHeight: 120)
@@ -244,9 +244,20 @@ struct CleanupSettingsView: View {
                     .buttonStyle(.borderless)
                 }
             }
-            Section("LLM chain") {
+            .whisperRowSurface()
+            Section {
+                Menu {
+                    Button("Ollama") { sheet = .add(.ollama) }
+                    Button("Cloud provider") { sheet = .add(.cloud) }
+                } label: {
+                    WhisperAddLabel(title: "Add provider")
+                }
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
+            }
+            Section {
                 if store.draft.entries.isEmpty {
-                    Text("No LLM entries yet — add Ollama or a cloud entry below.")
+                    Text("Add a provider to clean up transcripts.")
                         .foregroundStyle(.secondary)
                 }
                 ForEach(store.draft.entries, id: \.id) { entry in
@@ -262,18 +273,14 @@ struct CleanupSettingsView: View {
                         onWhy: { whyText = $0 }
                     )
                 }
-            }
-            Section {
-                Button("Add Ollama entry") { sheet = .add(.ollama) }
-                Button("Add cloud entry") { sheet = .add(.cloud) }
-                if CleanupChain.canAddLocal(store.draft.entries) {
-                    Button("Add Local entry") { store.upsert(Cleanup.localFallbackEntry()) }
-                }
+            } header: {
+                WhisperSectionHeading("Cleanup providers")
             } footer: {
-                Text("Enabled entries run top-down until one answers. Local rows are skipped (no on-device engine).")
+                Text("Enabled providers run in order until one answers.")
             }
+            .whisperRowSurface()
         }
-        .navigationTitle(navigationTitle)
+        .whisperListStyle()
         .onAppear { if store.draft.entries.isEmpty { store.load() } }
         .sheet(item: $sheet) { kind in
             switch kind {
@@ -345,29 +352,24 @@ private struct CleanupRow: View {
     var onWhy: (String) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Toggle(entry.name, isOn: Binding(get: { entry.enabled }, set: onToggle))
-                Button("Up", action: onMoveUp).disabled(!canMoveUp)
-                Button("Down", action: onMoveDown).disabled(!canMoveDown)
+        WhisperProviderRow(
+            name: entry.name,
+            summary: "\(CleanupChain.capitalizedKind(entry.kind)) · \(entry.model)",
+            enabled: Binding(get: { entry.enabled }, set: onToggle),
+            canMoveUp: canMoveUp,
+            canMoveDown: canMoveDown,
+            onMoveUp: onMoveUp,
+            onMoveDown: onMoveDown,
+            onEdit: onEdit,
+            onDelete: onDelete
+        ) {
+            if CleanupChain.isSkippedLocal(entry) {
+                Button("Why skipped?") { onWhy(localSkippedCleanupCopy) }
             }
-            .buttonStyle(.borderless)
-            Text("\(CleanupChain.capitalizedKind(entry.kind)) · \(entry.model)").font(.caption).foregroundStyle(.secondary)
-            HStack(spacing: 12) {
-                if CleanupChain.isSkippedLocal(entry) {
-                    Button("Why skipped?") { onWhy(localSkippedCleanupCopy) }
-                }
-                if CleanupChain.isGeminiLike(entry) {
-                    Button("Why errors?") { onWhy(geminiCleanupCopy) }
-                }
-                Button("Edit", action: onEdit)
-                Button("Delete", role: .destructive, action: onDelete)
+            if CleanupChain.isGeminiLike(entry) {
+                Button("Why errors?") { onWhy(geminiCleanupCopy) }
             }
-            .font(.caption)
-            .buttonStyle(.borderless)
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(entry.name), \(entry.enabled ? "enabled" : "disabled")")
     }
 }
 

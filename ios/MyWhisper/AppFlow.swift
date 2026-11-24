@@ -47,6 +47,8 @@ struct TabStrings: Equatable {
     let settings: String
     let speech: String
     let cleanup: String
+    let words: String
+    let snippets: String
 
     static let english = TabStrings(
         activity: "Activity",
@@ -54,7 +56,9 @@ struct TabStrings: Equatable {
         dictionary: "Dictionary",
         settings: "Settings",
         speech: "Speech recognition",
-        cleanup: "Text cleanup"
+        cleanup: "Text cleanup",
+        words: "Words",
+        snippets: "Snippets"
     )
     static let spanish = TabStrings(
         activity: "Actividad",
@@ -62,7 +66,9 @@ struct TabStrings: Equatable {
         dictionary: "Diccionario",
         settings: "Ajustes",
         speech: "Reconocimiento de voz",
-        cleanup: "Limpieza de texto"
+        cleanup: "Limpieza de texto",
+        words: "Palabras",
+        snippets: "Fragmentos"
     )
 
     static func current(languageCode: String?) -> TabStrings {

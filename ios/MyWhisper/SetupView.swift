@@ -106,6 +106,7 @@ struct SetupView: View {
                 checklistRow(done: checklist.serverConfigured, label: strings.doneServer)
                 checklistRow(done: checklist.testPassed, label: strings.doneTest)
             }
+            .whisperRowSurface()
             Section(strings.stepMic) {
                 Text(micGranted ? strings.setupMicYes : strings.setupMicNo)
                 Button(strings.setupMicGrant) {
@@ -118,6 +119,7 @@ struct SetupView: View {
                 }
                 .disabled(micGranted)
             }
+            .whisperRowSurface()
             Section(strings.stepServer) {
                 if checklist.serverConfigured {
                     Text(strings.doneServer)
@@ -126,6 +128,7 @@ struct SetupView: View {
                            action: onOpenProviders)
                 }
             }
+            .whisperRowSurface()
             Section(strings.stepTest) {
                 Text(strings.testHint)
                     .font(.subheadline)
@@ -140,6 +143,7 @@ struct SetupView: View {
                         .foregroundStyle(.red)
                 }
             }
+            .whisperRowSurface()
             Section {
                 let order = MicRoute.priority(from: settings)
                 ForEach(Array(order.enumerated()), id: \.element) { index, kind in
@@ -160,11 +164,13 @@ struct SetupView: View {
                 // Always show reorder handles, like Android's drag handles.
                 .environment(\.editMode, .constant(.active))
             } header: {
-                Text(strings.micPriority)
+                WhisperSectionHeading(strings.micPriority)
             } footer: {
                 Text(strings.micPrioritySub)
             }
+            .whisperRowSurface()
         }
+        .whisperListStyle()
         .navigationTitle(OnboardingStrings.current(languageCode: Locale.current.language.languageCode?.identifier).dictationSetup)
         .navigationBarTitleDisplayMode(.inline)
         .alert(strings.stepMic, isPresented: $showRationale) {

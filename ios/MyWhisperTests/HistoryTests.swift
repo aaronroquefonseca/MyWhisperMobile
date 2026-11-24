@@ -154,6 +154,29 @@ final class HistoryTests: XCTestCase {
         XCTAssertTrue(StatsStore.filterItems(rows, query: "zzz").isEmpty)
     }
 
+    func testSearchMatchesOriginalTranscription() {
+        let row = HistoryItem(uuid: "a", text: "Alice", rawText: "all is", dateLabel: "", wordCount: 1,
+                              durationSecs: 5, recordedAt: 200, discarded: false)
+        XCTAssertEqual(StatsStore.filterItems([row], query: "ALL IS"), [row])
+    }
+
+    func testStreakCountsLocalDaysThroughYesterdayAndIgnoresDiscarded() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 3_600)!
+        let rows = [
+            item(uuid: "today-discarded", recordedAt: 345_600, discarded: true),
+            item(uuid: "yesterday", recordedAt: 342_000 - 1),
+            item(uuid: "yesterday-duplicate", recordedAt: 300_000),
+            item(uuid: "day-before", recordedAt: 255_600 - 1),
+            item(uuid: "gap", recordedAt: 82_800 - 1)
+        ]
+
+        let today = Date(timeIntervalSince1970: 345_600)
+        let tomorrow = Date(timeIntervalSince1970: 432_000)
+        XCTAssertEqual(StatsStore.usageStats(rows, now: today, calendar: calendar).streakDays, 2)
+        XCTAssertEqual(StatsStore.usageStats(rows, now: tomorrow, calendar: calendar).streakDays, 0)
+    }
+
     // MARK: - Usage stats (core `usage_stats` semantics)
 
     func testUsageStatsEmpty() {

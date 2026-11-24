@@ -244,16 +244,14 @@ final class SttSettingsStore: ObservableObject {
 /// Speech-chain editor screen.
 struct SttSettingsView: View {
     @ObservedObject var store: SttSettingsStore
-    var navigationTitle: String
 
     @State private var sheet: SttSheetKind?
     @State private var pendingDelete: SttChainEntry?
     @State private var guardBlocked = false
     @State private var whyText: String?
 
-    init(store: SttSettingsStore = SttSettingsStore(), navigationTitle: String = "Speech") {
+    init(store: SttSettingsStore = SttSettingsStore()) {
         self.store = store
-        self.navigationTitle = navigationTitle
     }
 
     var body: some View {
@@ -262,10 +260,21 @@ struct SttSettingsView: View {
                 Section {
                     Text(error).foregroundStyle(.red).font(.caption)
                 }
+                .whisperRowSurface()
             }
-            Section("Failover chain") {
+            Section {
+                Menu {
+                    Button("Self-hosted server") { sheet = .add(.selfHosted) }
+                    Button("Cloud provider") { sheet = .add(.cloud) }
+                } label: {
+                    WhisperAddLabel(title: "Add provider")
+                }
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
+            }
+            Section {
                 if store.entries.isEmpty {
-                    Text("No speech entries yet — add a server or cloud entry below.")
+                    Text("Add a provider to start transcribing.")
                         .foregroundStyle(.secondary)
                 }
                 ForEach(store.entries) { entry in
@@ -281,18 +290,14 @@ struct SttSettingsView: View {
                         onWhy: { whyText = $0 }
                     )
                 }
-            }
-            Section {
-                Button("Add self-hosted server") { sheet = .add(.selfHosted) }
-                Button("Add cloud entry") { sheet = .add(.cloud) }
-                if SttChain.canAddLocal(store.entries) {
-                    Button("Add Local entry") { store.upsert(SttChain.localEntry()) }
-                }
+            } header: {
+                WhisperSectionHeading("Speech providers")
             } footer: {
-                Text("Entries run top-down until one answers. Reorder with the arrows; drag is deferred.")
+                Text("Enabled providers run in order until one answers.")
             }
+            .whisperRowSurface()
         }
-        .navigationTitle(navigationTitle)
+        .whisperListStyle()
         .onAppear { if store.entries.isEmpty { store.load() } }
         .sheet(item: $sheet) { kind in
             switch kind {
@@ -364,29 +369,24 @@ private struct SttRow: View {
     var onWhy: (String) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Toggle(entry.name, isOn: Binding(get: { entry.enabled }, set: onToggle))
-                Button("Up", action: onMoveUp).disabled(!canMoveUp)
-                Button("Down", action: onMoveDown).disabled(!canMoveDown)
+        WhisperProviderRow(
+            name: entry.name,
+            summary: entry.summary,
+            enabled: Binding(get: { entry.enabled }, set: onToggle),
+            canMoveUp: canMoveUp,
+            canMoveDown: canMoveDown,
+            onMoveUp: onMoveUp,
+            onMoveDown: onMoveDown,
+            onEdit: onEdit,
+            onDelete: onDelete
+        ) {
+            if entry.isLocal {
+                Button("Why skipped?") { onWhy(localSkippedCopy) }
             }
-            .buttonStyle(.borderless)
-            Text(entry.summary).font(.caption).foregroundStyle(.secondary)
-            HStack(spacing: 12) {
-                if entry.isLocal {
-                    Button("Why skipped?") { onWhy(localSkippedCopy) }
-                }
-                if entry.isGemini {
-                    Button("Why unsupported?") { onWhy(geminiUnsupportedCopy) }
-                }
-                Button("Edit", action: onEdit)
-                Button("Delete", role: .destructive, action: onDelete)
+            if entry.isGemini {
+                Button("Why unsupported?") { onWhy(geminiUnsupportedCopy) }
             }
-            .font(.caption)
-            .buttonStyle(.borderless)
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(entry.name), \(entry.enabled ? "enabled" : "disabled")")
     }
 }
 

@@ -8,7 +8,6 @@ struct ContentView: View {
     @StateObject private var cleanupStore = CleanupSettingsStore()
     @State private var selectedTab = AppTab.activity
     @State private var voiceCleanup = false
-    @State private var showGuide = false
     @State private var showOnboarding = {
         #if DEBUG
         if CommandLine.arguments.contains("-mwSkipOnboarding") { return false }
@@ -37,30 +36,22 @@ struct ContentView: View {
         TabView(selection: $selectedTab) {
             ForEach(AppTab.allCases, id: \.self) { tab in
                 NavigationStack {
-                    switch tab {
-                    case .activity:
-                        ActivityView(flow: flow, keyboardStrings: keyboardStrings, onOpenProviders: openSpeechProviders)
-                    case .providers:
-                        providers
-                    case .dictionary:
-                        DictionaryView()
-                    case .settings:
-                        settingsHub
-                    }
+                    tabRoot(tab)
+                        .navigationTitle(tab.title(using: tabStrings))
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbarBackground(WhisperColors.background(colorScheme), for: .navigationBar)
+                        .toolbarBackground(.visible, for: .navigationBar)
+                        .whisperTabBarBackground(colorScheme)
                 }
                 .tabItem { Label(tab.title(using: tabStrings), systemImage: tab.systemImage) }
                 .tag(tab)
             }
         }
-        .whisperTabBarMinimize()
         .tint(WhisperColors.primary(colorScheme))
         .onChange(of: selectedTab) { _, tab in
             if tab == .activity || tab == .settings { flow.reloadSettings() }
         }
         .onAppear(perform: selectDebugTab)
-        .sheet(isPresented: $showGuide) {
-            OnboardingView(strings: keyboardStrings) { showGuide = false }
-        }
         .sheet(isPresented: $flow.showRecorder) {
             NavigationStack {
                 recordView
@@ -82,44 +73,47 @@ struct ContentView: View {
         }
     }
 
-    private var providers: some View {
-        VStack(spacing: 0) {
-            Picker(tabStrings.providers, selection: $voiceCleanup) {
-                Text(tabStrings.speech).tag(false)
-                Text(tabStrings.cleanup).tag(true)
+    @ViewBuilder
+    private func tabRoot(_ tab: AppTab) -> some View {
+        switch tab {
+        case .activity:
+            ActivityView(flow: flow, keyboardStrings: keyboardStrings, onOpenProviders: openSpeechProviders)
+        case .providers:
+            WhisperPager(showSecond: $voiceCleanup, firstTitle: tabStrings.speech, secondTitle: tabStrings.cleanup) {
+                SttSettingsView(store: speechStore)
+            } second: {
+                CleanupSettingsView(store: cleanupStore)
             }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-
-            // Keep both editors mounted when switching segments.
-            ZStack {
-                SttSettingsView(store: speechStore, navigationTitle: tabStrings.providers)
-                    .opacity(voiceCleanup ? 0 : 1)
-                    .allowsHitTesting(!voiceCleanup)
-                    .accessibilityHidden(voiceCleanup)
-                CleanupSettingsView(store: cleanupStore, navigationTitle: tabStrings.providers)
-                    .opacity(voiceCleanup ? 1 : 0)
-                    .allowsHitTesting(voiceCleanup)
-                    .accessibilityHidden(!voiceCleanup)
-            }
+        case .dictionary:
+            DictionaryView()
+        case .settings:
+            settingsHub
         }
-        .background(WhisperColors.background(colorScheme))
-        .navigationTitle(tabStrings.providers)
     }
 
     private var settingsHub: some View {
         List {
             Section {
-                Button { showGuide = true } label: {
-                    Label(keyboardStrings.setupGuide, systemImage: "list.bullet.clipboard")
+                NavigationLink {
+                    SetupGuidePage(strings: keyboardStrings)
+                } label: {
+                    WhisperDestinationLabel(
+                        title: keyboardStrings.setupGuide,
+                        summary: keyboardStrings.guideSummary,
+                        symbol: "list.bullet.clipboard"
+                    )
                 }
             }
-            Section(keyboardStrings.input) {
+            .whisperRowSurface()
+            Section {
                 NavigationLink {
                     KeyboardSetupView(strings: keyboardStrings)
                 } label: {
-                    Label(keyboardStrings.keyboardTitle, systemImage: "keyboard")
+                    WhisperDestinationLabel(
+                        title: keyboardStrings.keyboardTitle,
+                        summary: keyboardStrings.keyboardSummary,
+                        symbol: "keyboard"
+                    )
                 }
                 NavigationLink {
                     SetupView(
@@ -135,26 +129,63 @@ struct ContentView: View {
                         onMicPriorityChange: flow.applyMicPriority
                     )
                 } label: {
-                    Label(keyboardStrings.dictationSetup, systemImage: "mic")
+                    WhisperDestinationLabel(
+                        title: keyboardStrings.dictationSetup,
+                        summary: keyboardStrings.dictationSummary,
+                        symbol: "mic"
+                    )
                 }
+            } header: {
+                WhisperSectionHeading(keyboardStrings.input)
             }
+            .whisperRowSurface()
             Section {
                 NavigationLink {
                     DevicesView()
                 } label: {
-                    Label(keyboardStrings.devices, systemImage: "antenna.radiowaves.left.and.right")
+                    WhisperDestinationLabel(
+                        title: keyboardStrings.devices,
+                        summary: keyboardStrings.syncSummary,
+                        symbol: "antenna.radiowaves.left.and.right"
+                    )
                 }
+            } header: {
+                WhisperSectionHeading(keyboardStrings.library)
             }
-            Section(setupStrings.setupTheme) {
+            .whisperRowSurface()
+            Section {
+                NavigationLink {
+                    appearanceSettings
+                } label: {
+                    WhisperDestinationLabel(
+                        title: keyboardStrings.appearance,
+                        summary: keyboardStrings.appearanceSummary,
+                        symbol: "circle.lefthalf.filled"
+                    )
+                }
+            } header: {
+                WhisperSectionHeading(keyboardStrings.appGroup)
+            }
+            .whisperRowSurface()
+        }
+        .whisperListStyle()
+    }
+
+    private var appearanceSettings: some View {
+        List {
+            Section {
                 Picker(setupStrings.setupTheme, selection: Binding(get: { flow.theme }, set: flow.applyTheme)) {
                     ForEach(AppTheme.allCases, id: \.self) { option in
                         Text(option.rawValue).tag(option)
                     }
                 }
-                .pickerStyle(.segmented)
+                .pickerStyle(.inline)
             }
+            .whisperRowSurface()
         }
-        .navigationTitle(tabStrings.settings)
+        .whisperListStyle()
+        .navigationTitle(keyboardStrings.appearance)
+        .navigationBarTitleDisplayMode(.inline)
     }
 
     private var recordView: some View {
@@ -245,5 +276,15 @@ struct ContentView: View {
             if let tab = AppTab(rawValue: args[index + 1]) { selectedTab = tab }
         }
         #endif
+    }
+}
+
+private struct SetupGuidePage: View {
+    @Environment(\.dismiss) private var dismiss
+    let strings: OnboardingStrings
+
+    var body: some View {
+        OnboardingView(strings: strings) { dismiss() }
+            .toolbar(.hidden, for: .navigationBar)
     }
 }

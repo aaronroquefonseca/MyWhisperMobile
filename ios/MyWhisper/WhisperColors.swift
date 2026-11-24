@@ -1,19 +1,6 @@
 import SwiftUI
 
-/// Brand color tokens ported from Android `WhisperTheme` (teal/ink), so the
-/// iPhone app reads as the same app, not system-blue SwiftUI.
-///
-/// Android mapping (`WhisperTheme.kt`):
-/// - Light primary `#176657`, dark primary `#80D9BD`.
-/// - Light background `#F6F7F8` / surface white; dark background/surface
-///   `#121416` (the neutral override — wallpaper dynamic color has no iOS
-///   equivalent, so both modes use the fixed spec).
-/// - Error `#B3261E` (`mw_error`) on both modes.
-///
-/// System coherence stays: system fonts/Dynamic Type, SF Symbols,
-/// `.secondary` copy, standard lists/cards. When the toolchain moves to
-/// the iOS 26 SDK, surfaces should adopt Liquid Glass in one place
-/// (see `whisperSurface`) — Xcode 15.4 cannot compile glass APIs.
+/// Android’s fixed teal accent and neutral light and dark surfaces.
 enum WhisperColors {
     static let brandNavy = Color(red: 20 / 255, green: 34 / 255, blue: 52 / 255)
     static let brandInk = Color(red: 7 / 255, green: 14 / 255, blue: 24 / 255)
@@ -30,8 +17,12 @@ enum WhisperColors {
     }
 
     static func surface(_ scheme: ColorScheme) -> Color {
-        scheme == .dark ? Color(red: 0x12 / 255, green: 0x14 / 255, blue: 0x16 / 255)
-            : .white
+        scheme == .dark ? Color(red: 27 / 255, green: 30 / 255, blue: 33 / 255) : .white
+    }
+
+    static func primaryContainer(_ scheme: ColorScheme) -> Color {
+        scheme == .dark ? Color(red: 34 / 255, green: 58 / 255, blue: 51 / 255)
+            : Color(red: 234 / 255, green: 244 / 255, blue: 239 / 255)
     }
 
     static func onSurface(_ scheme: ColorScheme) -> Color {
@@ -56,20 +47,24 @@ extension View {
         whisperGlass(cornerRadius: cornerRadius)
     }
 
-    /// iOS 26 minimize-on-scroll tab bar; no-op on older SDKs (and on
-    /// toolchains that can't see the API at all).
     @ViewBuilder
-    func whisperTabBarMinimize() -> some View {
+    func whisperTabBarBackground(_ scheme: ColorScheme) -> some View {
         #if compiler(>=6.2)
         if #available(iOS 26, *) {
-            self.tabBarMinimizeBehavior(.automatic)
-        } else {
             self
+        } else {
+            fallbackTabBarBackground(scheme)
         }
         #else
-        self
+        fallbackTabBarBackground(scheme)
         #endif
     }
+
+    private func fallbackTabBarBackground(_ scheme: ColorScheme) -> some View {
+        toolbarBackground(WhisperColors.surface(scheme), for: .tabBar)
+            .toolbarBackground(.visible, for: .tabBar)
+    }
+
     /// Frosted glass in the given rounded shape: `.glassEffect` where the
     /// SDK has it, ultra-thin material + hairline where it doesn't.
     @ViewBuilder

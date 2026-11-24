@@ -3,9 +3,10 @@ import SwiftUI
 struct ActivityView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.dynamicTypeSize) private var typeSize
     @StateObject private var model = HistoryViewModel()
     @State private var confirmingClear = false
-    @State private var original: HistoryItem?
+    @State private var expandedOriginalID: String?
     @State private var lastCopied: String?
     @ObservedObject var flow: AppFlow
     let keyboardStrings: OnboardingStrings
@@ -13,56 +14,23 @@ struct ActivityView: View {
 
     var body: some View {
         List {
-            if model.searchText.isEmpty {
-                inputSection
-                usageSection
-            }
+            inputSection
+            usageSection
+            historyHeader
             if let message = model.errorMessage {
                 Section {
                     Text(message).font(.footnote).foregroundStyle(.secondary)
                     Button("Retry", action: model.refresh)
                 } header: {
-                    Text("History unavailable")
+                    WhisperSectionHeading("History unavailable")
                 }
+                .whisperRowSurface()
             }
             historySections
         }
-        .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
-        .background(WhisperColors.background(colorScheme))
-        .navigationTitle(TabStrings.current(languageCode: Locale.current.language.languageCode?.identifier).activity)
-        .searchable(text: $model.searchText, prompt: "Search transcripts")
-        .toolbar {
-            if !model.items.isEmpty {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        Button("Clear history", systemImage: "trash", role: .destructive) { confirmingClear = true }
-                    } label: {
-                        Label("History actions", systemImage: "ellipsis.circle")
-                    }
-                    .disabled(model.isBusy)
-                }
-            }
-        }
+        .whisperListStyle()
         .confirmationDialog("Delete all saved dictations?", isPresented: $confirmingClear, titleVisibility: .visible) {
             Button("Delete everything", role: .destructive, action: model.clearAll)
-        }
-        .sheet(item: $original) { item in
-            NavigationStack {
-                ScrollView {
-                    Text(item.rawText ?? item.text)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding()
-                }
-                .navigationTitle("Original transcription")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button(keyboardStrings.done) { original = nil }
-                    }
-                }
-            }
         }
         .onAppear(perform: model.refresh)
         .onChange(of: scenePhase) { _, phase in
@@ -79,21 +47,11 @@ struct ActivityView: View {
             NavigationLink {
                 KeyboardSetupView(strings: keyboardStrings)
             } label: {
-                HStack(spacing: 12) {
-                    Image(systemName: "keyboard")
-                        .font(.title3.weight(.medium))
-                        .foregroundStyle(WhisperColors.brandCyan)
-                        .frame(width: 44, height: 44)
-                        .background(WhisperColors.brandNavy, in: RoundedRectangle(cornerRadius: 12))
-                        .accessibilityHidden(true)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(keyboardStrings.keyboardTitle).font(.headline)
-                        Text(keyboardStrings.keyboardSummary)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .padding(.vertical, 6)
+                WhisperDestinationLabel(
+                    title: keyboardStrings.keyboardTitle,
+                    summary: keyboardStrings.keyboardSummary,
+                    symbol: "keyboard"
+                )
             }
             if let error = flow.coreError {
                 VStack(alignment: .leading, spacing: 6) {
@@ -115,67 +73,95 @@ struct ActivityView: View {
                 }
             }
         }
+        .whisperRowSurface()
     }
 
     private var usageSection: some View {
         Section {
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 0) {
-                    usageMetric("Dictations", model.stats?.dictations.formatted() ?? "0")
-                    Divider()
-                    usageMetric("Words spoken", model.stats?.wordsSpoken.formatted() ?? "0")
-                    Divider()
-                    usageMetric("Words per minute", (model.stats?.wordsPerMinute ?? 0).formatted(.number.precision(.fractionLength(0))))
-                }
-                VStack(alignment: .leading) {
-                    LabeledContent("Dictations", value: model.stats?.dictations.formatted() ?? "0")
-                    LabeledContent("Words spoken", value: model.stats?.wordsSpoken.formatted() ?? "0")
-                    LabeledContent("Words per minute", value: (model.stats?.wordsPerMinute ?? 0).formatted(.number.precision(.fractionLength(0))))
-                }
+            let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: typeSize.isAccessibilitySize ? 1 : 2)
+            LazyVGrid(columns: columns, spacing: 8) {
+                usageMetric("Words spoken", model.stats?.wordsSpoken.formatted() ?? "0")
+                usageMetric("Words per minute", model.stats.flatMap {
+                    $0.wordsPerMinute > 0 ? $0.wordsPerMinute.formatted(.number.precision(.fractionLength(0))) : nil
+                } ?? "—")
+                usageMetric("Dictations", model.stats?.dictations.formatted() ?? "0")
+                let streak = model.stats?.streakDays ?? 0
+                usageMetric("Current streak", streak == 1 ? "1 day" : "\(streak) days")
             }
-            .padding(.vertical, 4)
+            .listRowInsets(EdgeInsets())
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
 
-            if !model.activity.isEmpty {
-                SpeakingActivityView(activity: model.activity)
-                    .padding(.vertical, 4)
-            }
+            SpeakingActivityView(activity: model.activity)
+                .padding(.vertical, 4)
+                .whisperRowSurface()
+                .listRowSeparator(.hidden)
         } header: {
-            Text("Usage")
+            WhisperSectionHeading("Usage")
         } footer: {
             Text("Based on your most recent saved dictations.")
         }
     }
 
     private func usageMetric(_ title: String, _ value: String) -> some View {
-        VStack(spacing: 4) {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.subheadline).foregroundStyle(.secondary)
             Text(value)
                 .font(.title2.weight(.semibold).monospacedDigit())
                 .foregroundStyle(WhisperColors.primary(colorScheme))
-            Text(title).font(.caption).foregroundStyle(.secondary)
         }
-        .fixedSize(horizontal: true, vertical: false)
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
+        .padding(12)
+        .background(WhisperColors.surface(colorScheme), in: RoundedRectangle(cornerRadius: 16))
         .accessibilityElement(children: .combine)
+    }
+
+    private var historyHeader: some View {
+        Section {
+            if !model.items.isEmpty || !model.searchText.isEmpty {
+                WhisperSearchField(text: $model.searchText, prompt: "Search transcripts")
+            } else if model.isBusy {
+                ProgressView()
+            } else if model.errorMessage == nil {
+                Text("No saved dictations yet.").foregroundStyle(.secondary)
+            }
+        } header: {
+            HStack {
+                WhisperSectionHeading("History")
+                Spacer()
+                if !model.items.isEmpty {
+                    Menu {
+                        Button("Clear history", systemImage: "trash", role: .destructive) { confirmingClear = true }
+                    } label: {
+                        Label("History actions", systemImage: "ellipsis.circle")
+                            .labelStyle(.iconOnly)
+                            .frame(minWidth: 44, minHeight: 44)
+                            .foregroundStyle(WhisperColors.primary(colorScheme))
+                    }
+                    .disabled(model.isBusy)
+                }
+            }
+        }
+        .whisperRowSurface()
     }
 
     @ViewBuilder
     private var historySections: some View {
-        if model.visibleItems.isEmpty && model.errorMessage == nil {
-            Section("History") {
-                if model.isBusy {
-                    ProgressView()
-                } else {
-                    Text(model.searchText.isEmpty ? "No saved dictations yet." : "No matches.")
-                        .foregroundStyle(.secondary)
-                }
+        if model.visibleItems.isEmpty && model.errorMessage == nil && !model.searchText.isEmpty {
+            Section {
+                Text("No matches.").foregroundStyle(.secondary)
             }
+            .whisperRowSurface()
         }
         ForEach(model.days) { day in
-            Section(day.title) {
+            Section {
                 ForEach(day.items) { item in
                     historyRow(item)
                 }
+            } header: {
+                WhisperSectionHeading(day.title)
             }
+            .whisperRowSurface()
         }
         if model.searchText.isEmpty && !model.retentionFooter.isEmpty {
             Section {
@@ -188,37 +174,45 @@ struct ActivityView: View {
     }
 
     private func historyRow(_ item: HistoryItem) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            Button {
-                if Delivery.copyToClipboard(item.text) { lastCopied = item.id }
-            } label: {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(item.discarded ? "Discarded recording" : item.text)
-                        .foregroundStyle(.primary)
-                        .lineLimit(3)
-                    Text(lastCopied == item.id ? "Copied" : subtitle(for: item))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-            }
-            .disabled(item.text.isEmpty)
-            .accessibilityHint("Copies the transcript")
-            if item.rawText?.isEmpty == false {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 8) {
                 Button {
-                    original = item
+                    if Delivery.copyToClipboard(item.text) { lastCopied = item.id }
                 } label: {
-                    Label("Original transcription", systemImage: "doc.text.magnifyingglass")
-                        .labelStyle(.iconOnly)
-                        .frame(width: 44, height: 44)
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(item.discarded ? "Discarded recording" : item.text)
+                            .foregroundStyle(.primary)
+                            .lineLimit(3)
+                        Text(lastCopied == item.id ? "Copied" : subtitle(for: item))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
                 }
+                .disabled(item.text.isEmpty)
+                .accessibilityHint("Copies the transcript")
+                if item.rawText?.isEmpty == false {
+                    let expanded = expandedOriginalID == item.id
+                    Button {
+                        toggleOriginal(item)
+                    } label: {
+                        Label(expanded ? "Hide original" : "Show original", systemImage: expanded ? "chevron.up" : "chevron.down")
+                            .labelStyle(.iconOnly)
+                            .frame(width: 44, height: 44)
+                    }
+                }
+            }
+            if expandedOriginalID == item.id, let raw = item.rawText {
+                Divider()
+                Text("Original").font(.subheadline.weight(.semibold))
+                Text(raw).font(.subheadline).foregroundStyle(.secondary).textSelection(.enabled)
             }
         }
         .buttonStyle(.borderless)
         .contextMenu {
             if item.rawText?.isEmpty == false {
-                Button("Original transcription", systemImage: "doc.text.magnifyingglass") { original = item }
+                Button("Original transcription", systemImage: "doc.text.magnifyingglass") { toggleOriginal(item) }
             }
             if !item.text.isEmpty {
                 Button("Copy", systemImage: "doc.on.doc") {
@@ -230,6 +224,10 @@ struct ActivityView: View {
             Button("Delete", systemImage: "trash", role: .destructive) { model.deleteItem(item) }
                 .disabled(model.isBusy)
         }
+    }
+
+    private func toggleOriginal(_ item: HistoryItem) {
+        expandedOriginalID = expandedOriginalID == item.id ? nil : item.id
     }
 
     private func subtitle(for item: HistoryItem) -> String {
@@ -245,21 +243,31 @@ private struct SpeakingActivityView: View {
     let activity: [DailyBucket]
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Text("Speaking activity").font(.subheadline.weight(.semibold))
+            if activity.isEmpty {
+                Text("Your activity appears after you save a dictation.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            } else {
+                heatmap
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var heatmap: some View {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: .now)
         let counts = Dictionary(uniqueKeysWithValues: activity.map { ($0.dayStart, $0.utterances) })
         let recentDays = (0..<84).reversed().compactMap { calendar.date(byAdding: .day, value: -$0, to: today) }
         let values = recentDays.map { counts[Int64($0.timeIntervalSince1970), default: 0] }
 
-        VStack(alignment: .leading, spacing: 9) {
-            Text("Speaking activity").font(.subheadline.weight(.semibold))
-            LazyHGrid(rows: Array(repeating: GridItem(.fixed(10), spacing: 3), count: 7), spacing: 3) {
-                ForEach(values.indices, id: \.self) { index in
-                    let count = values[index]
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(color(for: count))
-                        .frame(width: 10, height: 10)
-                }
+        return LazyHGrid(rows: Array(repeating: GridItem(.fixed(10), spacing: 3), count: 7), spacing: 3) {
+            ForEach(values.indices, id: \.self) { index in
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(color(for: values[index]))
+                    .frame(width: 10, height: 10)
             }
         }
         .accessibilityElement(children: .ignore)

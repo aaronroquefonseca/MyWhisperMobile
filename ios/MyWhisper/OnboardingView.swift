@@ -22,6 +22,13 @@ struct OnboardingStrings {
     let dictate: String
     let dictationHint: String
     let devices: String
+    let guideSummary: String
+    let dictationSummary: String
+    let syncSummary: String
+    let library: String
+    let appGroup: String
+    let appearance: String
+    let appearanceSummary: String
 
     static let english = OnboardingStrings(
         skip: "Skip", back: "Back", next: "Continue", done: "Done",
@@ -41,7 +48,14 @@ struct OnboardingStrings {
         dictationSetup: "Dictation setup",
         dictate: "Dictate in the app",
         dictationHint: "Choose a speech provider in Providers, then record from Activity. Copy the transcript to use it in another app.",
-        devices: "Devices & sync"
+        devices: "Devices & sync",
+        guideSummary: "Walk through setup and practice again",
+        dictationSummary: "Microphone access, input priority, and a dictation test",
+        syncSummary: "Keep your words and snippets on all your devices",
+        library: "Library & sync",
+        appGroup: "App",
+        appearance: "Appearance",
+        appearanceSummary: "System, light, or dark theme"
     )
 
     static let spanish = OnboardingStrings(
@@ -62,7 +76,14 @@ struct OnboardingStrings {
         dictationSetup: "Configurar el dictado",
         dictate: "Dictar en la app",
         dictationHint: "Elige un proveedor de voz en Proveedores y graba desde Actividad. Copia la transcripción para usarla en otra app.",
-        devices: "Dispositivos y sincronización"
+        devices: "Dispositivos y sincronización",
+        guideSummary: "Repite la configuración y la práctica",
+        dictationSummary: "Acceso al micrófono, prioridad de entrada y prueba de dictado",
+        syncSummary: "Mantén tus palabras y fragmentos en todos tus dispositivos",
+        library: "Biblioteca y sincronización",
+        appGroup: "Aplicación",
+        appearance: "Aspecto",
+        appearanceSummary: "Tema del sistema, claro u oscuro"
     )
 
     static func current(languageCode: String?) -> OnboardingStrings {
@@ -225,24 +246,31 @@ struct KeyboardSetupView: View {
 
     var body: some View {
         List {
-            Section(strings.installTitle) {
+            Section {
                 VStack(alignment: .leading, spacing: 8) {
                     KeyboardInstallInstructions(strings: strings)
                 }
+            } header: {
+                WhisperSectionHeading(strings.installTitle)
             }
+            .whisperRowSurface()
             Section {
                 TextField(strings.practicePlaceholder, text: $practiceText)
             } header: {
-                Text(strings.practiceTitle)
+                WhisperSectionHeading(strings.practiceTitle)
             } footer: {
                 Text(strings.practiceHint)
             }
-            Section("Keyboard settings") {
+            .whisperRowSurface()
+            Section {
                 Text(strings.keyboardSettings)
+            } header: {
+                WhisperSectionHeading("Keyboard settings")
             }
+            .whisperRowSurface()
         }
+        .whisperListStyle()
         .navigationTitle(strings.keyboardTitle)
         .navigationBarTitleDisplayMode(.inline)
-        .scrollDismissesKeyboard(.interactively)
     }
 }
