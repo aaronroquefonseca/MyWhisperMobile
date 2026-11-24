@@ -73,6 +73,7 @@ jobs:
           rm -rf Payload MyWhisper-unsigned-icon.ipa
           mkdir Payload
           cp -R MyWhisper.xcarchive/Products/Applications/MyWhisper.app Payload/
+          test -s Payload/MyWhisper.app/PlugIns/MyWhisperKeyboard.appex/emoji.json
           zip -qry MyWhisper-unsigned-icon.ipa Payload
           ls -l MyWhisper-unsigned-icon.ipa
           unzip -l MyWhisper-unsigned-icon.ipa
