@@ -651,6 +651,19 @@ impl ChainPart {
     }
 }
 
+/// Enabled entries one [`ChainPart`] walks, in Settings order.
+pub fn part_entries(stt: &SttSettings, part: ChainPart) -> impl Iterator<Item = &SttChainEntry> {
+    let local_at = stt
+        .entries
+        .iter()
+        .position(|e| e.enabled && e.kind == SttEntryKind::Local);
+    stt.entries
+        .iter()
+        .enumerate()
+        .filter(move |(i, e)| e.enabled && part.includes(*i, local_at))
+        .map(|(_, e)| e)
+}
+
 /// Top-down chain with failover (mirrors desktop `plans_for`).
 /// Returns the first success; errors when every enabled entry failed
 /// (or no usable entry exists).
@@ -689,12 +702,7 @@ pub fn transcribe_chain_witnessed(
     let wav = wav_bytes_16k(samples_16k_i16);
     let mut errors: Vec<String> = Vec::new();
     let mut usable = 0;
-    let local_at = stt
-        .entries
-        .iter()
-        .position(|e| e.enabled && e.kind == SttEntryKind::Local);
-    let entries = stt.entries.iter().enumerate();
-    for (_, entry) in entries.filter(|(i, e)| e.enabled && part.includes(*i, local_at)) {
+    for entry in part_entries(stt, part) {
         if entry.kind == SttEntryKind::Local {
             errors.push(format!(
                 "{}: on-device inference not supported yet",

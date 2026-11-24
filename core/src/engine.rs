@@ -17,10 +17,11 @@
 
 use crate::audio::{self, MIN_SAMPLES_16K, Recorder};
 use crate::server_stt::{
-    ChainPart, TickOutcome, Transcript, capped_text, record_stop, server_status as chain_status,
-    stt_fingerprint, stt_primary_id, stt_watcher_tick, transcribe_chain_witnessed,
+    ChainPart, TickOutcome, Transcript, capped_text, part_entries, record_stop,
+    server_status as chain_status, stt_fingerprint, stt_primary_id, stt_watcher_tick,
+    transcribe_chain_witnessed,
 };
-use crate::settings::{AppSettings, HistoryEntry, LlmEntry};
+use crate::settings::{AppSettings, HistoryEntry, LlmEntry, SttEntryKind, SttSettings};
 use crate::store::Store;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -568,6 +569,9 @@ pub struct Engine {
 struct HeldUtterance {
     pcm16: Vec<i16>,
     duration_secs: i64,
+    /// Chain of the first pass: both passes walk one Settings order even
+    /// if it is edited during the on-device decode.
+    stt: SttSettings,
     /// Admission witness of the first pass: a cancel or provider switch
     /// between the passes aborts the second one.
     generation: u64,
@@ -745,16 +749,17 @@ impl Engine {
         // Fresh settings every utterance (mirrors desktop deliver):
         // picks up UI edits and sync merges without a restart.
         self.settings = self.store.load_settings();
-        let (pcm16, duration_secs, generation_at_entry) = match self.held.take() {
+        let (pcm16, duration_secs, generation_at_entry, stt) = match self.held.take() {
             Some(held) if part == ChainPart::AfterLocal => {
                 if crate::server_stt::server_generation() != held.generation {
                     return Err("superseded (provider switched mid-utterance)".to_string());
                 }
-                (held.pcm16, held.duration_secs, held.generation)
+                (held.pcm16, held.duration_secs, held.generation, held.stt)
             }
             _ => {
                 let (pcm16, secs) = self.prepare_utterance()?;
-                (pcm16, secs, crate::server_stt::server_generation())
+                let stt = self.settings.stt.clone();
+                (pcm16, secs, crate::server_stt::server_generation(), stt)
             }
         };
         let words = self.store.load_words().unwrap_or_default();
@@ -767,20 +772,18 @@ impl Engine {
         // Witness before the blocking chain: a provider switch or Stop
         // applied mid-transcribe bumps the generation; stale results
         // then settle instead of delivering for a dead chain.
-        let chain = transcribe_chain_witnessed(
-            &self.settings.stt,
-            part,
-            &pcm16,
-            &words,
-            generation_at_entry,
-        );
+        let chain = transcribe_chain_witnessed(&stt, part, &pcm16, &words, generation_at_entry);
         let Transcript { text: raw, engine } = match chain {
             Ok(t) => t,
             Err(e) => {
-                if part == ChainPart::BeforeLocal {
+                // Keep the audio only when a server below Local can still use it.
+                let below = part_entries(&stt, ChainPart::AfterLocal)
+                    .any(|e| e.kind != SttEntryKind::Local);
+                if part == ChainPart::BeforeLocal && below {
                     self.held = Some(HeldUtterance {
                         pcm16,
                         duration_secs,
+                        stt,
                         generation: generation_at_entry,
                     });
                 }
@@ -1438,6 +1441,51 @@ mod tests {
         let out = eng.finish_utterance_part(ChainPart::AfterLocal).unwrap();
         assert_eq!(out.text, "hello world");
         stub.join().unwrap();
+    }
+
+    #[test]
+    fn reorder_during_local_decode_keeps_first_pass_plan() {
+        let _guard = status_test_lock();
+        reset_status_state();
+        let (port, stub) = stub_transcription_server();
+        let mut eng = open_engine();
+        let plan = split_chain_settings(&format!("http://127.0.0.1:{port}"));
+        eng.put_settings(&plan).unwrap();
+        assert_eq!(eng.poll_stt(), TickOutcome::Unchanged);
+        eng.start_utterance(16000);
+        eng.push_pcm(&vec![1000i16; 8000]);
+        assert!(eng.finish_utterance_part(ChainPart::BeforeLocal).is_err());
+        // Above → Below → Local saved mid-decode: same primary, so no generation bump.
+        let mut reordered: AppSettings = serde_json::from_str(&plan).unwrap();
+        reordered.stt.entries.swap(1, 2);
+        eng.put_settings(&serde_json::to_string(&reordered).unwrap())
+            .unwrap();
+        let out = eng.finish_utterance_part(ChainPart::AfterLocal).unwrap();
+        assert_eq!(out.text, "hello world");
+        stub.join().unwrap();
+    }
+
+    #[test]
+    fn no_server_below_local_holds_no_audio() {
+        let _guard = status_test_lock();
+        reset_status_state();
+        let mut eng = open_engine();
+        let mut settings: AppSettings =
+            serde_json::from_str(&split_chain_settings("http://127.0.0.1:9")).unwrap();
+        settings.stt.entries.pop();
+        eng.put_settings(&serde_json::to_string(&settings).unwrap())
+            .unwrap();
+        eng.start_utterance(16000);
+        eng.push_pcm(&vec![1000i16; 8000]);
+        assert!(eng.finish_utterance_part(ChainPart::BeforeLocal).is_err());
+        let err = eng
+            .finish_utterance_part(ChainPart::AfterLocal)
+            .err()
+            .unwrap();
+        assert!(
+            err.contains("too short"),
+            "nothing below Local keeps audio, got: {err}"
+        );
     }
 
     #[test]

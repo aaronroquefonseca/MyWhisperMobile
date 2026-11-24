@@ -486,6 +486,8 @@ class Dictation(
                         hit.text
                     }
                 val (above, below) = try { remotesAroundLocal() } catch (_: Throwable) { true to false }
+                // Cancelled during the settings read: no attempt may start.
+                if (gen != session.get()) return@execute
                 text = run chain@{
                     var aboveError: Exception? = null
                     if (above) {
