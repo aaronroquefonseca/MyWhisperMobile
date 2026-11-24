@@ -157,7 +157,10 @@
     <string name="keep_10min">10 minutes</string>
     <string name="keep_30min">30 minutes</string>
     <string name="keep_indefinite">Indefinitely</string>
-    <string name="keep_custom">%1$d seconds</string>
+    <plurals name="keep_custom">
+        <item quantity="one">%1$d second</item>
+        <item quantity="other">%1$d seconds</item>
+    </plurals>
     <string name="think_label">Thinking:</string>
     <string name="think_off">Off</string>
     <string name="think_budget">%1$d tokens</string>
@@ -276,14 +279,23 @@
     <string name="hist_days">Auto-delete transcripts after N days (0 = keep)</string>
     <string name="hist_delete_older">Delete older now</string>
     <string name="hist_set_days">set N days first</string>
-    <string name="hist_purged">deleted %1$d old entries</string>
+    <plurals name="hist_purged">
+        <item quantity="one">deleted %1$d old entry</item>
+        <item quantity="other">deleted %1$d old entries</item>
+    </plurals>
     <string name="hist_purge_failed">purge failed: %1$s</string>
-    <string name="hist_count">%1$d entries</string>
+    <plurals name="hist_count">
+        <item quantity="one">%1$d entry</item>
+        <item quantity="other">%1$d entries</item>
+    </plurals>
     <string name="hist_cleared">history cleared</string>
     <string name="hist_clear_failed">clear failed: %1$s</string>
     <string name="hist_delete_failed">delete failed: %1$s</string>
     <string name="hist_search">Search transcripts</string>
-    <string name="hist_words">%1$d words</string>
+    <plurals name="hist_words">
+        <item quantity="one">%1$d word</item>
+        <item quantity="other">%1$d words</item>
+    </plurals>
 
     <!-- Devices (sync) -->
     <string name="sync_this">This device</string>
@@ -639,4 +651,10 @@
     <string name="settings_guide_sub">Walk through setup and practice with the button again</string>
     <string name="providers_language_help">Auto-detect understands whichever language you speak, so you can switch languages from one dictation to the next. Pick a single language only if it guesses wrong.</string>
     <string name="home_back_to_top">Back to top</string>
+    <string name="lang_auto">Auto-detect (any language)</string>
+    <string name="stt_needs_free_ram">Needs ~%1$s free RAM</string>
+    <string name="cleanup_prompt_load_failed">Couldn\u2019t load the built-in prompt.</string>
+    <string name="sync_syncing">syncing…</string>
+    <string name="sync_waiting_title">Waiting for response (%1$d)</string>
+    <string name="sync_waiting_sub">You sent a pairing request. Accept it on the other device; no action needed here except cancel.</string>
 </resources>

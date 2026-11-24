@@ -65,7 +65,7 @@ class SampleSpeechTest {
             provider = LocalSttModels.Provider.WHISPER,
             langMode = LocalSttModels.LangMode.MANUAL,
             languages = listOf("en"),
-            dictionary = false, runtimeNote = "x", phoneTier = "x",
+            dictionary = false, phoneTier = "x",
             dirRel = "x", files = emptyList(),
         )
         assertEquals(SampleSpeech.EN_ASSET, SampleSpeech.assetFor(enEntry))

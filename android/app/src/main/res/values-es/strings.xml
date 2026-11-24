@@ -158,7 +158,11 @@
     <string name="keep_10min">10 minutos</string>
     <string name="keep_30min">30 minutos</string>
     <string name="keep_indefinite">Indefinidamente</string>
-    <string name="keep_custom">%1$d segundos</string>
+    <plurals name="keep_custom">
+        <item quantity="one">%1$d segundo</item>
+        <item quantity="many">%1$d segundos</item>
+        <item quantity="other">%1$d segundos</item>
+    </plurals>
     <string name="think_label">Razonamiento:</string>
     <string name="think_off">No</string>
     <string name="think_budget">%1$d tokens</string>
@@ -277,14 +281,26 @@
     <string name="hist_days">Borrar transcripciones tras N días (0 = guardar)</string>
     <string name="hist_delete_older">Borrar antiguas ahora</string>
     <string name="hist_set_days">indica N días primero</string>
-    <string name="hist_purged">%1$d entradas antiguas borradas</string>
+    <plurals name="hist_purged">
+        <item quantity="one">%1$d entrada antigua borrada</item>
+        <item quantity="many">%1$d entradas antiguas borradas</item>
+        <item quantity="other">%1$d entradas antiguas borradas</item>
+    </plurals>
     <string name="hist_purge_failed">falló el borrado: %1$s</string>
-    <string name="hist_count">%1$d entradas</string>
+    <plurals name="hist_count">
+        <item quantity="one">%1$d entrada</item>
+        <item quantity="many">%1$d entradas</item>
+        <item quantity="other">%1$d entradas</item>
+    </plurals>
     <string name="hist_cleared">historial borrado</string>
     <string name="hist_clear_failed">falló el borrado: %1$s</string>
     <string name="hist_delete_failed">falló al eliminar: %1$s</string>
     <string name="hist_search">Buscar transcripciones</string>
-    <string name="hist_words">%1$d palabras</string>
+    <plurals name="hist_words">
+        <item quantity="one">%1$d palabra</item>
+        <item quantity="many">%1$d palabras</item>
+        <item quantity="other">%1$d palabras</item>
+    </plurals>
 
     <!-- Devices (sync) -->
     <string name="sync_this">Este dispositivo</string>
@@ -640,4 +656,10 @@
     <string name="settings_guide_sub">Vuelve a recorrer la configuración y practica con el botón</string>
     <string name="providers_language_help">La detección automática entiende el idioma que hables, así que puedes cambiar de idioma de un dictado a otro. Elige un solo idioma solo si se equivoca.</string>
     <string name="home_back_to_top">Volver arriba</string>
+    <string name="lang_auto">Detección automática (cualquier idioma)</string>
+    <string name="stt_needs_free_ram">Necesita ~%1$s de RAM libre</string>
+    <string name="cleanup_prompt_load_failed">No se pudo cargar el prompt integrado.</string>
+    <string name="sync_syncing">sincronizando…</string>
+    <string name="sync_waiting_title">Esperando respuesta (%1$d)</string>
+    <string name="sync_waiting_sub">Enviaste una solicitud de emparejamiento. Acéptala en el otro dispositivo; aquí solo puedes cancelarla.</string>
 </resources>
