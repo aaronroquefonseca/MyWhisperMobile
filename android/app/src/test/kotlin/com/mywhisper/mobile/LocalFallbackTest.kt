@@ -254,22 +254,20 @@ class LocalFallbackTest {
         }
     }
 
-    @Test
-    fun localOnly_longSilenceThenSpeech_windowCutStaysInThePause() {
-        // 55s of silence, then 7s of speech: a cut on the speech onset
-        // would leave a few ms of speech in window one, which decodes
-        // blank and used to abort the whole utterance.
+    /**
+     * Local-only recording of [lead] then 7s of speech (level 3000); the
+     * fake decodes under 1s of speech as blank (production: null), so a
+     * window cut that strands a speech burst aborts the utterance.
+     */
+    private fun assertLeadThenSpeechDecodesLocally(lead: ShortArray) {
         val h = Harness(
-            local = { pcm ->
-                // Under 1s of speech decodes blank (production: null).
-                if (pcm.count { it == 3000.toShort() } < 16_000) null else "after" to "local parakeet"
-            },
+            local = { pcm -> if (pcm.count { it == 3000.toShort() } < 16_000) null else "after" to "local parakeet" },
             serverError = "no STT provider",
         )
         try {
             h.dictation.pressDown()
             val feed = h.pcmSinks.single()
-            repeat(55) { feed(ShortArray(16_000), 16_000) }
+            feed(lead, lead.size)
             repeat(7) { feed(ShortArray(16_000) { 3000 }, 16_000) }
             h.dictation.pressUp()
             h.executor.submit {}.get(10, TimeUnit.SECONDS)
@@ -278,6 +276,23 @@ class LocalFallbackTest {
         } finally {
             h.executor.shutdownNow()
         }
+    }
+
+    @Test
+    fun localOnly_longSilenceThenSpeech_windowCutStaysInThePause() {
+        // A cut on the speech onset left a few ms of speech in window one.
+        assertLeadThenSpeechDecodesLocally(ShortArray(16_000 * 55))
+    }
+
+    @Test
+    fun localOnly_noiseThenSpeechBurst_windowCutStaysInThePause() {
+        // 55s of background noise under the VAD threshold, a 20ms speech
+        // burst, then a 20ms gap quieter than the noise: the quietest
+        // frame alone would cut right after the burst.
+        val noise = ShortArray(16_000 * 55) { if (it % 2 == 0) 300 else -300 }
+        val burst = ShortArray(320) { 3000 }
+        val gap = ShortArray(320) { if (it % 2 == 0) 100 else -100 }
+        assertLeadThenSpeechDecodesLocally(noise + burst + gap)
     }
 
     @Test

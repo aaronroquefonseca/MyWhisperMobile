@@ -9,28 +9,43 @@ internal const val LOCAL_WINDOW_SAMPLES = 16_000 * 60
 
 /**
  * Splits [pcm] into ordered, contiguous decode windows of at most
- * [maxLen] samples that together cover every sample. Each cut lands
- * after the quietest VAD frame in the window's second half (latest on
- * ties), so it falls inside a pause rather than on a word or speech
- * onset whenever the window has one.
+ * [maxLen] samples that together cover every sample. Each cut lands in
+ * the middle of the longest VAD-silent run (the [LocalStt.chunkPcm]
+ * rule) in the window's second half, so a window never ends on a stray
+ * burst of speech; with no silent frame there, after the quietest one.
  */
 internal fun localDecodeWindows(pcm: ShortArray, maxLen: Int = LOCAL_WINDOW_SAMPLES): List<IntRange> {
     val frame = LocalStt.VAD_FRAME_SAMPLES
+    // RMS threshold as a per-frame sum of squares.
+    val speechEnergy = (LocalStt.VAD_RMS_THRESHOLD * 32768.0).let { it * it * frame }
     val out = mutableListOf<IntRange>()
     var start = 0
     while (pcm.size - start > maxLen) {
-        var cut = start + maxLen
-        var best = Long.MAX_VALUE
-        var f = start + maxLen - frame
-        while (f >= start + maxLen / 2) {
-            var energy = 0L
-            for (i in f until f + frame) energy += pcm[i].toLong() * pcm[i]
-            if (energy < best) {
-                best = energy
-                cut = f + frame
+        var quietCut = start + maxLen
+        var quietEnergy = Double.MAX_VALUE
+        var runStart = -1
+        var bestRun = 0
+        var runCut = 0
+        var f = start + maxLen / 2
+        while (f + frame <= start + maxLen) {
+            var energy = 0.0
+            for (i in f until f + frame) energy += pcm[i].toDouble() * pcm[i]
+            if (energy <= quietEnergy) {
+                quietEnergy = energy
+                quietCut = f + frame
             }
-            f -= frame
+            if (energy < speechEnergy) {
+                if (runStart < 0) runStart = f
+                if (f + frame - runStart > bestRun) {
+                    bestRun = f + frame - runStart
+                    runCut = runStart + bestRun / 2
+                }
+            } else {
+                runStart = -1
+            }
+            f += frame
         }
+        val cut = if (bestRun > 0) runCut else quietCut
         out.add(start until cut)
         start = cut
     }
