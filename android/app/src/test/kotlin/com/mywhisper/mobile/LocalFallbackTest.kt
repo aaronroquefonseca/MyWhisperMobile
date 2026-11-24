@@ -38,7 +38,7 @@ class LocalFallbackTest {
         val releases = AtomicInteger(0)
         val results: MutableList<String> = Collections.synchronizedList(mutableListOf())
         val logs: MutableList<String> = Collections.synchronizedList(mutableListOf())
-        val pcmSinks: MutableList<(ShortArray, Int) -> Unit> =
+        val pcmSinks: MutableList<(ShortArray, Int, Long) -> Unit> =
             Collections.synchronizedList(mutableListOf())
         val dictation = Dictation(
             mode = { "Push" },
@@ -139,7 +139,7 @@ class LocalFallbackTest {
             serverError = "llm post: connection refused",
         )
         h.dictation.pressDown()
-        h.pcmSinks.single()(ShortArray(16_000) { 1000 }, 16_000)
+        h.pcmSinks.single()(ShortArray(16_000) { 1000 }, 16_000, 0L)
         h.dictation.pressUp()
         h.executor.submit {}.get(10, TimeUnit.SECONDS)
         h.executor.shutdownNow()
@@ -153,7 +153,7 @@ class LocalFallbackTest {
     fun localBelowServer_bothFailSurfacesServerError() {
         val h = Harness(local = { null }, localFirst = false, serverError = "server down")
         h.dictation.pressDown()
-        h.pcmSinks.single()(ShortArray(16_000) { 1000 }, 16_000)
+        h.pcmSinks.single()(ShortArray(16_000) { 1000 }, 16_000, 0L)
         h.dictation.pressUp()
         h.executor.submit {}.get(10, TimeUnit.SECONDS)
         h.executor.shutdownNow()
@@ -223,7 +223,7 @@ class LocalFallbackTest {
         try {
             h.dictation.pressDown()
             val feed = h.pcmSinks.single()
-            repeat(61) { feed(ShortArray(16_000) { 1000 }, 16_000) }
+            repeat(61) { feed(ShortArray(16_000) { 1000 }, 16_000, 0L) }
             h.dictation.pressUp() // Push -> WORKING
             h.executor.submit {}.get(10, TimeUnit.SECONDS)
             assertEquals("overflowed PCM must skip local decode", 0, h.localCalls.get())

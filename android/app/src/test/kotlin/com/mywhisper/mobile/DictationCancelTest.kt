@@ -397,7 +397,7 @@ class DictationCancelTest {
         val dictation = Dictation(
             mode = { "Push" },
             startCapture = { onPcm, _, _ ->
-                onPcm(ShortArray(8_000), 8_000) // enough audio for the fallback path
+                onPcm(ShortArray(8_000), 8_000, 0L) // enough audio for the fallback path
                 FakeCapture()
             },
             pushPcm = { _, _, _ -> },
@@ -445,6 +445,51 @@ class DictationCancelTest {
         } finally {
             providerRelease.countDown()
             bookkeepingRelease.countDown()
+            dictation.shutdown()
+        }
+    }
+
+    /** Cancel while the worker reads the local-first setting: no on-device decode may start. */
+    @Test
+    fun cancelDuringLocalFirstRead_neverStartsLocalDecode() {
+        val inLocalFirst = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val decoded = AtomicBoolean(false)
+        val serverCalled = AtomicBoolean(false)
+        val executor = Executors.newSingleThreadExecutor()
+        val dictation = Dictation(
+            mode = { "Push" },
+            startCapture = { _, _, _ -> FakeCapture() },
+            pushPcm = { _, _, _ -> },
+            localFirst = {
+                inLocalFirst.countDown()
+                assertTrue(release.await(10, TimeUnit.SECONDS))
+                true
+            },
+            localTranscribe = {
+                decoded.set(true)
+                null
+            },
+            finishTranscription = {
+                serverCalled.set(true)
+                "x" to "y"
+            },
+            cancelTranscription = {},
+            log = {},
+            workers = executor,
+        )
+        try {
+            dictation.pressDown()
+            dictation.pressUp()
+            assertTrue(inLocalFirst.await(10, TimeUnit.SECONDS))
+            dictation.cancel()
+            release.countDown()
+            executor.submit {}.get(10, TimeUnit.SECONDS)
+
+            assertFalse("local decode started after cancel", decoded.get())
+            assertFalse("server request started after cancel", serverCalled.get())
+        } finally {
+            release.countDown()
             dictation.shutdown()
         }
     }

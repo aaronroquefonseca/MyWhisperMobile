@@ -24,7 +24,7 @@ class Dictation(
     private val mode: () -> String = { "Smart" },
     private val releaseDelayMs: () -> Long = { 0L },
     private val startCapture: (
-        onPcm: (ShortArray, Int) -> Unit,
+        onPcm: (ShortArray, Int, Long) -> Unit,
         onError: (String) -> Unit,
         onLevel: (Float) -> Unit,
     ) -> Capture? = { onPcm, onError, onLevel ->
@@ -232,10 +232,10 @@ class Dictation(
             session.incrementAndGet()
         }
         val cap = startCapture(
-            pcm@{ buf, n ->
+            pcm@{ buf, n, utterance ->
                 // Copy: the buffer is reused by the read loop.
                 val copy = buf.copyOf(n)
-                val utterance = synchronized(pcmLock) {
+                synchronized(pcmLock) {
                     if (gen != session.get()) return@pcm
                     val take = minOf(n, MAX_LOCAL_PCM_SAMPLES - pcmSize).coerceAtLeast(0)
                     if (pcmSize + take > pcmBuf.size) {
@@ -252,7 +252,6 @@ class Dictation(
                         pcmOverflowed = true
                         log("local PCM capped at 60s, overflow falls back to server")
                     }
-                    capture?.utterance ?: 0L
                 }
                 // Outside pcmLock (the core may wait on its own lock); the
                 // token keeps a chunk that lost a race out of a newer recording.
@@ -433,6 +432,8 @@ class Dictation(
                 }
                 val secs = maxOf(1, pcm.size / 16_000)
                 fun decodeLocal(): LocalHit? {
+                    // Cancel may have landed during localFirst() or the server call.
+                    if (stale()) return null
                     if (overflow) {
                         log("local PCM overflowed 60s cap, server only")
                         return null
