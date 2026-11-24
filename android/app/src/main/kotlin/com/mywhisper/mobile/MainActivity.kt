@@ -1572,7 +1572,9 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                         },
-                        colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
+                        // Transparent: the bar's own colour animates, so on a theme switch it lagged
+                        // behind the rest; the Scaffold background behind it changes instantly.
+                        colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent, scrolledContainerColor = Color.Transparent),
                     )
                 },
                 snackbarHost = { SnackbarHost(snackbarHost) },
