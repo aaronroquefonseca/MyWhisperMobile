@@ -5734,6 +5734,8 @@ class MainActivity : ComponentActivity() {
         var histLoaded by remember { mutableStateOf(false) }
         var hasMore by remember { mutableStateOf(false) }
         var loadingMore by remember { mutableStateOf(false) }
+        // Advances whenever a page load or reload ends, success or not (the fast scroller waits on it).
+        var pagingDone by remember { mutableIntStateOf(0) }
         var confirmClear by remember { mutableStateOf(false) }
         var privOpen by rememberSaveable { mutableStateOf(false) }
         var expanded by rememberSaveable { mutableStateOf<String?>(null) }
@@ -5746,7 +5748,7 @@ class MainActivity : ComponentActivity() {
             workers.execute {
                 try {
                     val st = CoreBridge.usageStats().getOrThrow()
-                    val arr = CoreBridge.dailyActivity(371).getOrThrow()
+                    val arr = CoreBridge.dailyActivity(HISTORY_ALL_DAYS).getOrThrow()
                     val d = List(arr.length()) { i ->
                         val o = arr.getJSONObject(i)
                         Day(o.getLong("dayStart"), o.getInt("words"), o.getInt("utterances"))
@@ -5780,6 +5782,7 @@ class MainActivity : ComponentActivity() {
                     val committed = loadHistPage(want, null, query)
                     runOnUiThread {
                         if (!jobApplies(histGen.get(), gen)) return@runOnUiThread
+                        pagingDone++
                         items = committed
                         histLoaded = true
                         hasMore = committed.size == want
@@ -5790,6 +5793,7 @@ class MainActivity : ComponentActivity() {
                 } catch (e: Exception) {
                     runOnUiThread {
                         if (!jobApplies(histGen.get(), gen)) return@runOnUiThread
+                        pagingDone++
                         histError.value = e.message ?: "failed"
                         histLoaded = true
                         histBusy.value = false
@@ -5799,23 +5803,26 @@ class MainActivity : ComponentActivity() {
             }
         }
         fun refreshHist() = histJob({})
-        fun loadMore() {
-            val last = items.lastOrNull() ?: return
-            if (!hasMore || loadingMore || histBusy.value) return
+        /** False when refused: nothing loaded, no more rows, or paging busy. */
+        fun loadMore(count: Int = HISTORY_PAGE): Boolean {
+            val last = items.lastOrNull() ?: return false
+            if (!hasMore || loadingMore || histBusy.value) return false
             loadingMore = true
             val gen = histGen.get()
             val query = histQuery.trim()
             workers.execute {
-                val page = try { loadHistPage(HISTORY_PAGE, last, query) } catch (_: Exception) { null }
+                val page = try { loadHistPage(count, last, query) } catch (_: Exception) { null }
                 runOnUiThread {
                     loadingMore = false
+                    pagingDone++
                     // A refresh or new search since then owns the list.
                     if (page == null || histGen.get() != gen) return@runOnUiThread
                     val known = items.mapTo(HashSet()) { it.uuid }
                     items = items + page.filter { it.uuid !in known }
-                    hasMore = page.size == HISTORY_PAGE
+                    hasMore = page.size == count
                 }
             }
+            return true
         }
         fun purgeHist(n: Int) {
             var purged = 0
@@ -6090,6 +6097,22 @@ class MainActivity : ComponentActivity() {
         // history section starts after the overview items (single list only), then
         // historyHeader, privacy, search and the optional error / empty rows.
         val rowLabels = remember(grouped) { grouped.flatMap { (label, group) -> List(group.size + 1) { label } } }
+        // Plus the unloaded rest from per-day counts, so the thumb holds still as pages
+        // load. Search results have no per-day counts: those map loaded rows only.
+        val scrollerRows = remember(rowLabels, days, hasMore, histQuery.isBlank(), today) {
+            if (!hasMore || histQuery.isNotBlank()) rowLabels
+            else historyScrollerRows(
+                rowLabels,
+                items.lastOrNull()?.let { java.time.Instant.ofEpochSecond(it.recordedAt).atZone(zone).toLocalDate() },
+                grouped.values.lastOrNull()?.size ?: 0,
+                days.map { java.time.LocalDate.ofEpochDay(it.dayStart / 86400) to it.utterances },
+            ) { historyDayLabel(it, today, todayWord, yesterdayWord) }
+        }
+        // Whole pages through the entry at [row] (day headers are not entries).
+        val loadThrough: (Int) -> Int? = { row ->
+            // Live counter, not the composed one: a page may have ended since this frame.
+            if (loadMore((historyReloadCount(historyEntriesThrough(scrollerRows, row)) - items.size).coerceAtLeast(HISTORY_PAGE))) pagingDone else null
+        }
         val historyLead = 3 + (if (histError.value.isNotEmpty()) 1 else 0) + (if (items.isEmpty()) 1 else 0)
         val overviewCount = 4 + (if (issueKind != null) 1 else 0)
         val scrollerPadding = Modifier.padding(top = 8.dp, bottom = 72.dp)
@@ -6133,8 +6156,11 @@ class MainActivity : ComponentActivity() {
                     Box(Modifier.weight(0.58f).fillMaxHeight()) {
                         LazyColumn(Modifier.fillMaxSize(), state = historyState, contentPadding = listPadding,
                             verticalArrangement = Arrangement.spacedBy(8.dp)) { history(true) }
-                        HistoryFastScroller(historyState, historyLead, rowLabels, showTop,
-                            Modifier.align(Alignment.TopEnd).then(scrollerPadding))
+                        // Keyed by query: a new search resets a pending drop and the drag handler with it.
+                        androidx.compose.runtime.key(histQuery.trim()) {
+                            HistoryFastScroller(historyState, historyLead, scrollerRows, rowLabels.size, hasMore, loadThrough, pagingDone, showTop,
+                                Modifier.align(Alignment.TopEnd).then(scrollerPadding))
+                        }
                         BackToTopButton(showTop, { scope.launch { historyState.scrollToTopTimed() } },
                             Modifier.align(Alignment.BottomEnd).padding(16.dp))
                     }
@@ -6147,8 +6173,10 @@ class MainActivity : ComponentActivity() {
                     overview()
                     history(false)
                 }
-                HistoryFastScroller(singleState, overviewCount + historyLead, rowLabels, showTop,
-                    Modifier.align(Alignment.TopEnd).then(scrollerPadding))
+                androidx.compose.runtime.key(histQuery.trim()) {
+                    HistoryFastScroller(singleState, overviewCount + historyLead, scrollerRows, rowLabels.size, hasMore, loadThrough, pagingDone, showTop,
+                        Modifier.align(Alignment.TopEnd).then(scrollerPadding))
+                }
                 BackToTopButton(showTop, { scope.launch { singleState.scrollToTopTimed() } },
                     Modifier.align(Alignment.BottomEnd).padding(16.dp))
             }

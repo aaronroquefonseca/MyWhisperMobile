@@ -26,8 +26,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.core.view.HapticFeedbackConstantsCompat
 import androidx.core.view.ViewCompat
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.launch
+import java.time.LocalDate
 
 /** Row (0-based, within history) for a thumb at [fraction] of the track. Pure for unit tests. */
 internal fun scrollerRowAt(fraction: Float, rows: Int): Int =
@@ -38,19 +37,58 @@ internal fun scrollerFractionOf(row: Int, rows: Int): Float =
     if (rows <= 1) 0f else (row.toFloat() / (rows - 1)).coerceIn(0f, 1f)
 
 /**
+ * Fast-scroller rows over all history: the [loaded] rows as listed (each day
+ * header plus its entries, newest day first), then the unloaded rest from
+ * per-day entry counts. [lastDay] is the day of the last loaded entry and
+ * [lastDayLoaded] how many of its entries are loaded. Loaded rows keep their
+ * list index, so only the unloaded tail is an estimate. Pure for unit tests.
+ */
+internal fun historyScrollerRows(
+    loaded: List<String>,
+    lastDay: LocalDate?,
+    lastDayLoaded: Int,
+    dayCounts: List<Pair<LocalDate, Int>>,
+    label: (LocalDate) -> String,
+): List<String> {
+    if (lastDay == null || loaded.isEmpty()) return loaded
+    val rows = ArrayList(loaded)
+    for ((day, n) in dayCounts.filter { it.first <= lastDay && it.second > 0 }.sortedByDescending { it.first }) {
+        if (day == lastDay) repeat(n - lastDayLoaded) { rows += loaded.last() }
+        else label(day).let { l -> repeat(n + 1) { rows += l } }
+    }
+    return rows
+}
+
+/** Entries (not day headers) among [rows] 0..[row]: each run of one label is a header plus its entries. Pure for unit tests. */
+internal fun historyEntriesThrough(rows: List<String>, row: Int): Int {
+    val last = row.coerceAtMost(rows.size - 1)
+    val headers = (0..last).count { it == 0 || rows[it] != rows[it - 1] }
+    return last + 1 - headers
+}
+
+/**
  * Fast scroller for history: a thin track with day marks and a thumb on
  * the end edge. Grabbing the thumb (or the track) widens it, shows the
  * day under the finger in a bubble and ticks a haptic at each new day.
  *
  * [rowLabels] holds the day label of every history row in list order,
- * starting at list index [firstIndex]. It covers loaded pages only, so the
- * thumb shifts as more pages arrive.
+ * starting at list index [firstIndex], unloaded rows included (see
+ * [historyScrollerRows]), so the thumb holds still as pages arrive. The first
+ * [loadedRows] are in the list; dropping the thumb past them calls
+ * [onLoadThrough] on release (while [canLoad]) and scrolls once the row is
+ * loaded. [pagingDone] must advance whenever a page load or reload ends, even
+ * on failure. Callers wrap this in `key(query)` so a new search resets it.
  */
 @Composable
 internal fun HistoryFastScroller(
     state: LazyListState,
     firstIndex: Int,
     rowLabels: List<String>,
+    loadedRows: Int,
+    canLoad: Boolean,
+    /** Live [pagingDone] when the load starts, null when refused. */
+    onLoadThrough: (row: Int) -> Int?,
+    pagingDone: Int,
     visible: Boolean,
     modifier: Modifier = Modifier,
 ) {
@@ -58,16 +96,19 @@ internal fun HistoryFastScroller(
     if (rows < 2) return
     val view = LocalView.current
     val density = LocalDensity.current
-    val scope = rememberCoroutineScope()
     var trackPx by remember { mutableIntStateOf(1) }
     var dragging by remember { mutableStateOf(false) }
     var dragFraction by remember { mutableFloatStateOf(0f) }
     var lastLabel by remember { mutableStateOf<String?>(null) }
-    var scrollJob by remember { mutableStateOf<Job?>(null) }
+    // Row the thumb was dragged to that the list has not scrolled to yet.
+    var pending by remember { mutableStateOf<Int?>(null) }
+    // [pagingDone] when the load for [pending] started; once it moves on, that load has ended.
+    var askedAt by remember { mutableStateOf<Int?>(null) }
     val scrolledFraction by remember(state, firstIndex, rows) {
         derivedStateOf { scrollerFractionOf(state.firstVisibleItemIndex - firstIndex, rows) }
     }
-    val fraction = if (dragging) dragFraction else scrolledFraction
+    // Hold the thumb where it was dropped until the list catches up.
+    val fraction = if (dragging || pending != null) dragFraction else scrolledFraction
     val thumbWidth by animateDpAsState(if (dragging) 10.dp else 5.dp, label = "thumbWidth")
     val thumbHeight = 44.dp
     val thumbHeightPx = with(density) { thumbHeight.toPx() }
@@ -81,11 +122,26 @@ internal fun HistoryFastScroller(
             if (lastLabel != null) ViewCompat.performHapticFeedback(view, HapticFeedbackConstantsCompat.SEGMENT_FREQUENT_TICK)
             lastLabel = label
         }
-        scrollJob?.cancel()
-        scrollJob = scope.launch { state.scrollToItem(firstIndex + row) }
+        pending = row
+    }
+    val load by rememberUpdatedState(onLoadThrough)
+    LaunchedEffect(pending, dragging, loadedRows, canLoad, pagingDone) {
+        val row = pending ?: return@LaunchedEffect
+        when {
+            // Loaded rows scroll live, even mid-drag.
+            row < loadedRows -> {}
+            // Unloaded rows load once, on release.
+            dragging || askedAt == pagingDone -> return@LaunchedEffect
+            // Refused while paging is busy: that job's end advances pagingDone and retries.
+            askedAt == null && canLoad -> { askedAt = load(row); return@LaunchedEffect }
+            // Nothing more to load, or our load ended short of the row: settle on the last loaded row.
+        }
+        state.scrollToItem(firstIndex + row.coerceAtMost(loadedRows - 1))
+        pending = null
+        askedAt = null
     }
 
-    AnimatedVisibility(visible || dragging, modifier, enter = fadeIn(), exit = fadeOut()) {
+    AnimatedVisibility(visible || dragging || pending != null, modifier, enter = fadeIn(), exit = fadeOut()) {
         Box(
             Modifier.fillMaxHeight().width(28.dp)
                 .onSizeChanged { trackPx = it.height.coerceAtLeast(1) }
@@ -94,11 +150,12 @@ internal fun HistoryFastScroller(
                         onDragStart = { offset ->
                             dragging = true
                             lastLabel = null
+                            askedAt = null
                             ViewCompat.performHapticFeedback(view, HapticFeedbackConstantsCompat.GESTURE_START)
                             moveTo(offset.y)
                         },
                         onDragEnd = { dragging = false; ViewCompat.performHapticFeedback(view, HapticFeedbackConstantsCompat.GESTURE_END) },
-                        onDragCancel = { dragging = false },
+                        onDragCancel = { dragging = false; pending = null },
                     ) { change, _ ->
                         change.consume()
                         moveTo(change.position.y)

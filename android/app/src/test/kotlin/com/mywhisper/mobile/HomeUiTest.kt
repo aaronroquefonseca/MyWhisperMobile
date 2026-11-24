@@ -73,4 +73,24 @@ class HomeUiTest {
         assertEquals(0f, scrollerFractionOf(-3, 101), 0.0001f)
         assertEquals(scrollerRowAt(scrollerFractionOf(37, 101), 101), 37)
     }
+
+    @Test
+    fun fastScrollerRowsCoverUnloadedDays() {
+        val d1 = LocalDate.of(2026, 11, 24)
+        val d2 = d1.minusDays(1)
+        val d3 = d1.minusDays(3)
+        // Loaded: all 2 entries of d1, 1 of d2's 3 entries (header + entries per day).
+        val loaded = listOf("a", "a", "a", "b", "b")
+        val counts = listOf(d3 to 2, d1 to 2, d2 to 3, d1.minusDays(2) to 0)
+        val rows = historyScrollerRows(loaded, d2, 1, counts) { if (it == d3) "c" else "?" }
+        assertEquals(listOf("a", "a", "a", "b", "b", "b", "b", "c", "c", "c"), rows)
+        // Nothing loaded or no counts: loaded rows only.
+        assertEquals(emptyList<String>(), historyScrollerRows(emptyList(), null, 0, counts) { "x" })
+        assertEquals(loaded, historyScrollerRows(loaded, d2, 1, emptyList()) { "x" })
+        // Headers are not entries: row 8 ("c" entry 1) is the 6th entry.
+        assertEquals(0, historyEntriesThrough(rows, 0))
+        assertEquals(2, historyEntriesThrough(rows, 2))
+        assertEquals(6, historyEntriesThrough(rows, 8))
+        assertEquals(7, historyEntriesThrough(rows, 99))
+    }
 }

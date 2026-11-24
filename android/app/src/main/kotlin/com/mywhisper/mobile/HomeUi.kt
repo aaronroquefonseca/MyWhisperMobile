@@ -64,6 +64,9 @@ internal val ACTIVITY_TOP_KEYS = setOf("float", "issue", "activityHeader", "stat
 /** History rows per page: the first load and each load-more. */
 internal const val HISTORY_PAGE = 100
 
+/** Daily-activity window wide enough for all history: the fast scroller needs every day's count; the heatmap draws its own trailing weeks. */
+internal const val HISTORY_ALL_DAYS = 36_500
+
 /** Rows to reload on refresh: everything already loaded, rounded up to whole pages, at least one. Pure for unit tests. */
 internal fun historyReloadCount(loaded: Int): Int = ((loaded + HISTORY_PAGE - 1) / HISTORY_PAGE).coerceAtLeast(1) * HISTORY_PAGE
 
@@ -179,8 +182,9 @@ internal fun historyDayLabel(
     zone: ZoneId,
     todayWord: String,
     yesterdayWord: String,
-): String {
-    val day = Instant.ofEpochSecond(recordedAtSecs).atZone(zone).toLocalDate()
+): String = historyDayLabel(Instant.ofEpochSecond(recordedAtSecs).atZone(zone).toLocalDate(), today, todayWord, yesterdayWord)
+
+internal fun historyDayLabel(day: LocalDate, today: LocalDate, todayWord: String, yesterdayWord: String): String {
     return when (day) {
         today -> todayWord
         today.minusDays(1) -> yesterdayWord
