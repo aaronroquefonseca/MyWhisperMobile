@@ -296,6 +296,17 @@ class LocalFallbackTest {
     }
 
     @Test
+    fun localOnly_oddLengthPause_windowCutStaysOnAFrameEdge() {
+        // A 1251-frame pause put the midpoint inside a 20ms frame, so a
+        // 10ms rise in the noise became a lone "speech" frame tail.
+        val noise = ShortArray(16_000 * 55 + 320) { i ->
+            val amp = if (i in 680_000 until 680_160) 800 else 300
+            (if (i % 2 == 0) amp else -amp).toShort()
+        }
+        assertLeadThenSpeechDecodesLocally(noise)
+    }
+
+    @Test
     fun over60s_windowMiss_neverCommitsPartialText() {
         // The window holding the post-60s speech fails: committing the
         // first window alone would silently drop the tail.

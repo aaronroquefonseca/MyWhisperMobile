@@ -26,7 +26,8 @@ internal fun localDecodeWindows(pcm: ShortArray, maxLen: Int = LOCAL_WINDOW_SAMP
         var runStart = -1
         var bestRun = 0
         var runCut = 0
-        var f = start + maxLen / 2
+        // Whole VAD frames only, so a window edge never splits a frame chunkPcm scores.
+        var f = start + maxLen / 2 / frame * frame
         while (f + frame <= start + maxLen) {
             var energy = 0.0
             for (i in f until f + frame) energy += pcm[i].toDouble() * pcm[i]
@@ -38,7 +39,7 @@ internal fun localDecodeWindows(pcm: ShortArray, maxLen: Int = LOCAL_WINDOW_SAMP
                 if (runStart < 0) runStart = f
                 if (f + frame - runStart > bestRun) {
                     bestRun = f + frame - runStart
-                    runCut = runStart + bestRun / 2
+                    runCut = runStart + bestRun / frame / 2 * frame
                 }
             } else {
                 runStart = -1
