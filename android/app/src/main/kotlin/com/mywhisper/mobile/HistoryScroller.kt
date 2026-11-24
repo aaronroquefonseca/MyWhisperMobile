@@ -75,8 +75,9 @@ internal fun historyEntriesThrough(rows: List<String>, row: Int): Int {
  * starting at list index [firstIndex], unloaded rows included (see
  * [historyScrollerRows]), so the thumb holds still as pages arrive. The first
  * [loadedRows] are in the list; dropping the thumb past them calls
- * [onLoadThrough] once paging is idle ([loading] false, [canLoad] true) and
- * scrolls once the row is loaded. A new [listKey] (another search) drops it.
+ * [onLoadThrough] on release (while [canLoad]) and scrolls once the row is
+ * loaded. [pagingDone] must advance whenever a page load or reload ends, even
+ * on failure. Callers wrap this in `key(query)` so a new search resets it.
  */
 @Composable
 internal fun HistoryFastScroller(
@@ -85,9 +86,8 @@ internal fun HistoryFastScroller(
     rowLabels: List<String>,
     loadedRows: Int,
     canLoad: Boolean,
-    onLoadThrough: (row: Int) -> Unit,
-    loading: Boolean,
-    listKey: Any,
+    onLoadThrough: (row: Int) -> Boolean,
+    pagingDone: Int,
     visible: Boolean,
     modifier: Modifier = Modifier,
 ) {
@@ -100,9 +100,9 @@ internal fun HistoryFastScroller(
     var dragFraction by remember { mutableFloatStateOf(0f) }
     var lastLabel by remember { mutableStateOf<String?>(null) }
     // Row the thumb was dragged to that the list has not scrolled to yet.
-    var pending by remember(listKey) { mutableStateOf<Int?>(null) }
-    // [loadedRows] when the last load for [pending] was asked; unchanged after it ends = it failed or was superseded.
-    var askedAt by remember(listKey) { mutableStateOf<Int?>(null) }
+    var pending by remember { mutableStateOf<Int?>(null) }
+    // [pagingDone] when the load for [pending] started; once it moves on, that load has ended.
+    var askedAt by remember { mutableStateOf<Int?>(null) }
     val scrolledFraction by remember(state, firstIndex, rows) {
         derivedStateOf { scrollerFractionOf(state.firstVisibleItemIndex - firstIndex, rows) }
     }
@@ -124,15 +124,16 @@ internal fun HistoryFastScroller(
         pending = row
     }
     val load by rememberUpdatedState(onLoadThrough)
-    LaunchedEffect(pending, dragging, loadedRows, canLoad, loading) {
+    LaunchedEffect(pending, dragging, loadedRows, canLoad, pagingDone) {
         val row = pending ?: return@LaunchedEffect
         when {
             // Loaded rows scroll live, even mid-drag.
             row < loadedRows -> {}
-            // Load once: on release, when paging is idle.
-            dragging || loading -> return@LaunchedEffect
-            canLoad && askedAt != loadedRows -> { askedAt = loadedRows; load(row); return@LaunchedEffect }
-            // Nothing more to load, or the last load added nothing: settle on the last loaded row.
+            // Unloaded rows load once, on release.
+            dragging || askedAt == pagingDone -> return@LaunchedEffect
+            // Refused while paging is busy: that job's end advances pagingDone and retries.
+            askedAt == null && canLoad -> { if (load(row)) askedAt = pagingDone; return@LaunchedEffect }
+            // Nothing more to load, or our load ended short of the row: settle on the last loaded row.
         }
         state.scrollToItem(firstIndex + row.coerceAtMost(loadedRows - 1))
         pending = null
@@ -153,7 +154,7 @@ internal fun HistoryFastScroller(
                             moveTo(offset.y)
                         },
                         onDragEnd = { dragging = false; ViewCompat.performHapticFeedback(view, HapticFeedbackConstantsCompat.GESTURE_END) },
-                        onDragCancel = { dragging = false },
+                        onDragCancel = { dragging = false; pending = null },
                     ) { change, _ ->
                         change.consume()
                         moveTo(change.position.y)

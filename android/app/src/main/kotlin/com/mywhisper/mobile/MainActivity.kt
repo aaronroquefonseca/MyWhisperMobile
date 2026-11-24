@@ -5734,6 +5734,8 @@ class MainActivity : ComponentActivity() {
         var histLoaded by remember { mutableStateOf(false) }
         var hasMore by remember { mutableStateOf(false) }
         var loadingMore by remember { mutableStateOf(false) }
+        // Advances whenever a page load or reload ends, success or not (the fast scroller waits on it).
+        var pagingDone by remember { mutableIntStateOf(0) }
         var confirmClear by remember { mutableStateOf(false) }
         var privOpen by rememberSaveable { mutableStateOf(false) }
         var expanded by rememberSaveable { mutableStateOf<String?>(null) }
@@ -5780,6 +5782,7 @@ class MainActivity : ComponentActivity() {
                     val committed = loadHistPage(want, null, query)
                     runOnUiThread {
                         if (!jobApplies(histGen.get(), gen)) return@runOnUiThread
+                        pagingDone++
                         items = committed
                         histLoaded = true
                         hasMore = committed.size == want
@@ -5790,6 +5793,7 @@ class MainActivity : ComponentActivity() {
                 } catch (e: Exception) {
                     runOnUiThread {
                         if (!jobApplies(histGen.get(), gen)) return@runOnUiThread
+                        pagingDone++
                         histError.value = e.message ?: "failed"
                         histLoaded = true
                         histBusy.value = false
@@ -5799,9 +5803,10 @@ class MainActivity : ComponentActivity() {
             }
         }
         fun refreshHist() = histJob({})
-        fun loadMore(count: Int = HISTORY_PAGE) {
-            val last = items.lastOrNull() ?: return
-            if (!hasMore || loadingMore || histBusy.value) return
+        /** False when refused: nothing loaded, no more rows, or paging busy. */
+        fun loadMore(count: Int = HISTORY_PAGE): Boolean {
+            val last = items.lastOrNull() ?: return false
+            if (!hasMore || loadingMore || histBusy.value) return false
             loadingMore = true
             val gen = histGen.get()
             val query = histQuery.trim()
@@ -5809,6 +5814,7 @@ class MainActivity : ComponentActivity() {
                 val page = try { loadHistPage(count, last, query) } catch (_: Exception) { null }
                 runOnUiThread {
                     loadingMore = false
+                    pagingDone++
                     // A refresh or new search since then owns the list.
                     if (page == null || histGen.get() != gen) return@runOnUiThread
                     val known = items.mapTo(HashSet()) { it.uuid }
@@ -5816,6 +5822,7 @@ class MainActivity : ComponentActivity() {
                     hasMore = page.size == count
                 }
             }
+            return true
         }
         fun purgeHist(n: Int) {
             var purged = 0
@@ -6102,10 +6109,9 @@ class MainActivity : ComponentActivity() {
             ) { historyDayLabel(it, today, todayWord, yesterdayWord) }
         }
         // Whole pages through the entry at [row] (day headers are not entries).
-        val loadThrough: (Int) -> Unit = { row ->
+        val loadThrough: (Int) -> Boolean = { row ->
             loadMore((historyReloadCount(historyEntriesThrough(scrollerRows, row)) - items.size).coerceAtLeast(HISTORY_PAGE))
         }
-        val pagingBusy = loadingMore || histBusy.value
         val historyLead = 3 + (if (histError.value.isNotEmpty()) 1 else 0) + (if (items.isEmpty()) 1 else 0)
         val overviewCount = 4 + (if (issueKind != null) 1 else 0)
         val scrollerPadding = Modifier.padding(top = 8.dp, bottom = 72.dp)
@@ -6149,8 +6155,11 @@ class MainActivity : ComponentActivity() {
                     Box(Modifier.weight(0.58f).fillMaxHeight()) {
                         LazyColumn(Modifier.fillMaxSize(), state = historyState, contentPadding = listPadding,
                             verticalArrangement = Arrangement.spacedBy(8.dp)) { history(true) }
-                        HistoryFastScroller(historyState, historyLead, scrollerRows, rowLabels.size, hasMore, loadThrough, pagingBusy, histQuery.trim(), showTop,
-                            Modifier.align(Alignment.TopEnd).then(scrollerPadding))
+                        // Keyed by query: a new search resets a pending drop and the drag handler with it.
+                        androidx.compose.runtime.key(histQuery.trim()) {
+                            HistoryFastScroller(historyState, historyLead, scrollerRows, rowLabels.size, hasMore, loadThrough, pagingDone, showTop,
+                                Modifier.align(Alignment.TopEnd).then(scrollerPadding))
+                        }
                         BackToTopButton(showTop, { scope.launch { historyState.scrollToTopTimed() } },
                             Modifier.align(Alignment.BottomEnd).padding(16.dp))
                     }
@@ -6163,8 +6172,10 @@ class MainActivity : ComponentActivity() {
                     overview()
                     history(false)
                 }
-                HistoryFastScroller(singleState, overviewCount + historyLead, scrollerRows, rowLabels.size, hasMore, loadThrough, pagingBusy, histQuery.trim(), showTop,
-                    Modifier.align(Alignment.TopEnd).then(scrollerPadding))
+                androidx.compose.runtime.key(histQuery.trim()) {
+                    HistoryFastScroller(singleState, overviewCount + historyLead, scrollerRows, rowLabels.size, hasMore, loadThrough, pagingDone, showTop,
+                        Modifier.align(Alignment.TopEnd).then(scrollerPadding))
+                }
                 BackToTopButton(showTop, { scope.launch { singleState.scrollToTopTimed() } },
                     Modifier.align(Alignment.BottomEnd).padding(16.dp))
             }
