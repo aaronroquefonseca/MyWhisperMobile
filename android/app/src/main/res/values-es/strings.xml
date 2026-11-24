@@ -227,7 +227,7 @@
 
     <!-- Dictionary -->
     <string name="dict_words_title">Palabras (%1$d)</string>
-    <string name="dict_words_sub">La ortografía exacta orienta el reconocimiento.</string>
+    <string name="dict_words_sub">Nombres y términos que dices a menudo, escritos como quieres que aparezcan.</string>
     <string name="dict_new_word">Nueva palabra</string>
     <string name="dict_dup">Esa palabra ya está en la lista.</string>
     <string name="dict_search_words">Buscar palabras</string>
@@ -236,7 +236,7 @@
     <string name="confirm_delete_title">¿Eliminar esta entrada?</string>
     <string name="confirm_delete_body">Esto no se puede deshacer. La eliminación también se aplica a los dispositivos con los que se sincroniza.</string>
     <string name="dict_snippets_title">Fragmentos (%1$d)</string>
-    <string name="dict_snippets_sub">Di el activador y obtén el reemplazo.</string>
+    <string name="dict_snippets_sub">Di una frase corta y MyWhisper escribe el texto largo por ti.</string>
     <string name="dict_search_snippets">Buscar fragmentos</string>
     <string name="dict_no_snippets">Sin fragmentos.</string>
     <string name="dict_add_snippet">Añadir fragmento</string>
@@ -551,4 +551,83 @@
     <string name="bubble_advanced_sub">Visibilidad, superposición residente, pausa, forma, retardos de reducción y pulsación</string>
     <string name="bubble_advanced_open">Expandido</string>
     <string name="bubble_advanced_closed">Contraído</string>
+    <string name="nav_providers">Proveedores</string>
+    <string name="nav_settings">Ajustes</string>
+    <string name="providers_speech">Reconocimiento de voz</string>
+    <string name="providers_language_title">Idioma en el que hablas</string>
+    <string name="home_float_open">Abrir ajustes del botón flotante</string>
+    <string name="home_copy">Copiar</string>
+    <string name="home_collapse">Contraer</string>
+    <string name="home_show_original">Ver original</string>
+    <string name="home_original">Transcripción original</string>
+    <string name="home_original_same">La limpieza no cambió nada; esto es exactamente lo que se oyó.</string>
+    <string name="home_copy_original">Copiar original</string>
+    <string name="home_copied">Copiado</string>
+    <string name="home_copied_original">Original copiado</string>
+    <string name="home_history_hint">Toca para copiar · Mantén pulsado para ver el original</string>
+    <string name="home_privacy_on">Guardando tus dictados en este dispositivo</string>
+    <string name="home_privacy_off">Historial desactivado; no se guarda nada</string>
+    <string name="home_clear_all">Borrar todo el historial</string>
+    <string name="home_history_empty">Tus dictados aparecerán aquí.</string>
+    <string name="home_today">Hoy</string>
+    <string name="home_yesterday">Ayer</string>
+    <string name="home_clear_title">¿Borrar todo el historial?</string>
+    <string name="home_clear_body">Se borrarán todos los dictados guardados en este dispositivo. No se puede deshacer.</string>
+    <string name="issue_speech_title">Tu último dictado no funcionó</string>
+    <string name="issue_cleanup_title">La limpieza de texto no funciona</string>
+    <string name="issue_cleanup_body">Tus palabras se escribieron tal cual se oyeron porque ninguno de tus proveedores de limpieza respondió.</string>
+    <string name="issue_no_provider">Aún no hay ningún proveedor de voz configurado, así que no se pudo transcribir nada.</string>
+    <string name="issue_sign_in">Tu proveedor de voz rechazó la petición. Puede que falte la clave de API o que sea incorrecta.</string>
+    <string name="issue_unreachable">MyWhisper no pudo conectar con tu proveedor de voz. Revisa tu conexión a internet o la dirección del servidor.</string>
+    <string name="issue_missing_address">A uno de tus proveedores de voz le falta la dirección del servidor.</string>
+    <string name="issue_microphone">MyWhisper no pudo usar el micrófono.</string>
+    <string name="issue_other">Algo falló al convertir tu voz en texto.</string>
+    <string name="issue_fix_mic">Abrir permisos de la app</string>
+    <string name="issue_fix_cleanup">Revisar proveedores de limpieza</string>
+    <string name="issue_fix_speech">Revisar proveedores de voz</string>
+    <string name="issue_cleanup_toast">La limpieza no funcionó; el texto se escribió tal cual se oyó</string>
+    <string name="tutorial_app_name">Notas · práctica</string>
+    <string name="tutorial_placeholder">Tus palabras aparecerán aquí…</string>
+    <string name="tutorial_listening_tap">Escuchando… toca el botón para terminar</string>
+    <string name="tutorial_listening_hold">Escuchando… suelta para terminar</string>
+    <string name="tutorial_working">Escribiéndolo…</string>
+    <string name="tutorial_hint">Toca el botón, o mantenlo pulsado mientras hablas</string>
+    <string name="tutorial_clear">Borrar y volver a probar</string>
+    <string name="tutorial_button">Botón flotante de práctica</string>
+    <string name="onb_welcome_body">MyWhisper añade un pequeño botón de micrófono junto a donde escribes. Habla y tus palabras aparecen como texto.</string>
+    <string name="onb_welcome_point_1">Funciona en cualquier app: mensajes, notas, correo, búsquedas.</string>
+    <string name="onb_welcome_point_2">Corrige la puntuación y las muletillas por ti, si quieres.</string>
+    <string name="onb_welcome_point_3">Tú eliges dónde se convierte tu voz en texto.</string>
+    <string name="onb_try_title">Prueba el botón</string>
+    <string name="onb_try_body">Esto es una zona de práctica. Toca el botón para empezar a hablar y tócalo otra vez para terminar, o mantenlo pulsado mientras hablas y suéltalo.</string>
+    <string name="onb_try_note">Aquí no se graba nada, es solo una vista previa. Cuando configures un proveedor de voz, el botón real funciona igual en tus otras apps.</string>
+    <string name="onb_setup_title">Prepara el botón</string>
+    <string name="onb_setup_body">Unos pocos permisos permiten que el botón aparezca sobre otras apps y escriba por ti. MyWhisper solo escucha mientras tocas o mantienes el botón.</string>
+    <string name="onb_setup_complete">¡Listo! El botón ya se puede usar.</string>
+    <string name="onb_setup_later">Puedes saltarte esto y terminarlo más tarde desde la pestaña Actividad.</string>
+    <string name="onb_notif_title">Notificaciones (opcional)</string>
+    <string name="onb_notif_body">MyWhisper funciona sin ellas. Si las permites, además tendrás:</string>
+    <string name="onb_notif_point_1">Una forma rápida de recuperar el botón después de pausarlo.</string>
+    <string name="onb_notif_point_2">El progreso mientras se descargan los modelos del dispositivo.</string>
+    <string name="onb_notif_point_3">Un aviso cuando tus dispositivos se sincronizan.</string>
+    <string name="onb_notif_optional">Puedes cambiarlo cuando quieras en Ajustes.</string>
+    <string name="onb_notif_quiet_title">¿Prefieres menos notificaciones?</string>
+    <string name="onb_notif_quiet_body">Mientras el botón está activo, Android mantiene visible una pequeña notificación. Puedes ocultarla; el botón sigue funcionando.</string>
+    <string name="onb_notif_quiet_done">La notificación permanente está oculta</string>
+    <string name="onb_notif_quiet_action">Ocultar la notificación permanente</string>
+    <string name="onb_done_title">Todo listo</string>
+    <string name="onb_done_title_partial">Casi listo</string>
+    <string name="onb_done_partial_body">Termina de preparar el botón desde la pestaña Actividad cuando quieras.</string>
+    <string name="onb_done_tip_title">Personaliza el botón</string>
+    <string name="onb_done_tip_body">Toca Botón flotante arriba en Actividad para cambiar su tamaño, aspecto y gestos. El interruptor de al lado lo activa o desactiva.</string>
+    <string name="onb_skip">Saltar</string>
+    <string name="onb_next">Siguiente</string>
+    <string name="onb_finish">Empezar a dictar</string>
+    <string name="dict_sync_hint">Mantén tus palabras y fragmentos en todos tus dispositivos</string>
+    <string name="dict_snippet_say">Di «%1$s»</string>
+    <string-array name="tutorial_samples">
+        <item>Hola Sam, llego diez minutos tarde, guárdame un sitio por favor.</item>
+        <item>Recuerda comprar leche, huevos y café de camino a casa.</item>
+        <item>Gracias por la respuesta rápida, me viene perfecto.</item>
+    </string-array>
 </resources>

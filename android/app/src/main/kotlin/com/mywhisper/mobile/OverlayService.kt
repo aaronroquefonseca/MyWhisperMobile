@@ -2080,7 +2080,28 @@ class OverlayService : Service(), Dictation.Listener {
 
     override fun onResult(text: String) {
         android.util.Log.i("MwFloat", "onResult len=${text.length}")
+        val cleanupFailed = CoreBridge.lastCleanupFailed
+        recordIssue(if (cleanupFailed) DictationIssue.CLEANUP else null, null)
+        if (cleanupFailed) {
+            mainHandler.post {
+                try {
+                    Toast.makeText(this, R.string.issue_cleanup_toast, Toast.LENGTH_SHORT).show()
+                } catch (_: Exception) {
+                }
+            }
+        }
         deliver(text)
+    }
+
+    /** Last dictation problem for the Activity tab; null clears it after a clean run. */
+    private fun recordIssue(kind: String?, detail: String?) {
+        try {
+            getSharedPreferences("mw_state", MODE_PRIVATE).edit().apply {
+                if (kind == null) remove(DictationIssue.PREF_KIND).remove(DictationIssue.PREF_DETAIL)
+                else putString(DictationIssue.PREF_KIND, kind).putString(DictationIssue.PREF_DETAIL, detail)
+            }.apply()
+        } catch (_: Exception) {
+        }
     }
 
     private val bgWorkers = java.util.concurrent.Executors.newSingleThreadExecutor()
@@ -2094,6 +2115,7 @@ class OverlayService : Service(), Dictation.Listener {
         // text row, so only failures that matter get a toast.
         // Listener fires off the main thread — post the toast.
         if (shouldSurfaceError(msg)) {
+            recordIssue(DictationIssue.SPEECH, msg)
             mainHandler.post {
                 try {
                     Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
