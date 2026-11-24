@@ -5746,7 +5746,7 @@ class MainActivity : ComponentActivity() {
             workers.execute {
                 try {
                     val st = CoreBridge.usageStats().getOrThrow()
-                    val arr = CoreBridge.dailyActivity(371).getOrThrow()
+                    val arr = CoreBridge.dailyActivity(HISTORY_ALL_DAYS).getOrThrow()
                     val d = List(arr.length()) { i ->
                         val o = arr.getJSONObject(i)
                         Day(o.getLong("dayStart"), o.getInt("words"), o.getInt("utterances"))
@@ -5799,21 +5799,21 @@ class MainActivity : ComponentActivity() {
             }
         }
         fun refreshHist() = histJob({})
-        fun loadMore() {
+        fun loadMore(count: Int = HISTORY_PAGE) {
             val last = items.lastOrNull() ?: return
             if (!hasMore || loadingMore || histBusy.value) return
             loadingMore = true
             val gen = histGen.get()
             val query = histQuery.trim()
             workers.execute {
-                val page = try { loadHistPage(HISTORY_PAGE, last, query) } catch (_: Exception) { null }
+                val page = try { loadHistPage(count, last, query) } catch (_: Exception) { null }
                 runOnUiThread {
                     loadingMore = false
                     // A refresh or new search since then owns the list.
                     if (page == null || histGen.get() != gen) return@runOnUiThread
                     val known = items.mapTo(HashSet()) { it.uuid }
                     items = items + page.filter { it.uuid !in known }
-                    hasMore = page.size == HISTORY_PAGE
+                    hasMore = page.size == count
                 }
             }
         }
@@ -6090,6 +6090,19 @@ class MainActivity : ComponentActivity() {
         // history section starts after the overview items (single list only), then
         // historyHeader, privacy, search and the optional error / empty rows.
         val rowLabels = remember(grouped) { grouped.flatMap { (label, group) -> List(group.size + 1) { label } } }
+        // Plus the unloaded rest from per-day counts, so the thumb holds still as pages
+        // load. Search results have no per-day counts: those map loaded rows only.
+        val scrollerRows = remember(rowLabels, days, hasMore, histQuery.isBlank(), today) {
+            if (!hasMore || histQuery.isNotBlank()) rowLabels
+            else historyScrollerRows(
+                rowLabels,
+                items.lastOrNull()?.let { java.time.Instant.ofEpochSecond(it.recordedAt).atZone(zone).toLocalDate() },
+                grouped.values.lastOrNull()?.size ?: 0,
+                days.map { java.time.LocalDate.ofEpochDay(it.dayStart / 86400) to it.utterances },
+            ) { historyDayLabel(it, today, todayWord, yesterdayWord) }
+        }
+        // Rows needed to show [row]: header rows count too, so this over-fetches by at most a page plus a row per day.
+        val loadThrough: (Int) -> Unit = { row -> loadMore((historyReloadCount(row + 1) - items.size).coerceAtLeast(HISTORY_PAGE)) }
         val historyLead = 3 + (if (histError.value.isNotEmpty()) 1 else 0) + (if (items.isEmpty()) 1 else 0)
         val overviewCount = 4 + (if (issueKind != null) 1 else 0)
         val scrollerPadding = Modifier.padding(top = 8.dp, bottom = 72.dp)
@@ -6133,7 +6146,7 @@ class MainActivity : ComponentActivity() {
                     Box(Modifier.weight(0.58f).fillMaxHeight()) {
                         LazyColumn(Modifier.fillMaxSize(), state = historyState, contentPadding = listPadding,
                             verticalArrangement = Arrangement.spacedBy(8.dp)) { history(true) }
-                        HistoryFastScroller(historyState, historyLead, rowLabels, showTop,
+                        HistoryFastScroller(historyState, historyLead, scrollerRows, rowLabels.size, hasMore, loadThrough, showTop,
                             Modifier.align(Alignment.TopEnd).then(scrollerPadding))
                         BackToTopButton(showTop, { scope.launch { historyState.scrollToTopTimed() } },
                             Modifier.align(Alignment.BottomEnd).padding(16.dp))
@@ -6147,7 +6160,7 @@ class MainActivity : ComponentActivity() {
                     overview()
                     history(false)
                 }
-                HistoryFastScroller(singleState, overviewCount + historyLead, rowLabels, showTop,
+                HistoryFastScroller(singleState, overviewCount + historyLead, scrollerRows, rowLabels.size, hasMore, loadThrough, showTop,
                     Modifier.align(Alignment.TopEnd).then(scrollerPadding))
                 BackToTopButton(showTop, { scope.launch { singleState.scrollToTopTimed() } },
                     Modifier.align(Alignment.BottomEnd).padding(16.dp))
