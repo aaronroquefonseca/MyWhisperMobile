@@ -5802,7 +5802,6 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-        fun refreshHist() = histJob({})
         /** False when refused: nothing loaded, no more rows, or paging busy. */
         fun loadMore(count: Int = HISTORY_PAGE): Boolean {
             val last = items.lastOrNull() ?: return false
@@ -5824,28 +5823,30 @@ class MainActivity : ComponentActivity() {
             }
             return true
         }
-        /** [quiet]: automatic retention; no toast, the reload and stats show the result. */
-        fun purgeHist(n: Int, quiet: Boolean = false) {
+        fun purgeHist(n: Int) {
             var purged = 0
-            histJob({ purged = CoreBridge.purgeHistory(n).getOrThrow(); if (purged > 0) kickSync() },
-                onOk = {
-                    if (purged > 0) statsVersion++
-                    if (!quiet) bgToast(resources.getQuantityString(R.plurals.hist_purged, purged, purged))
-                },
-                onFail = { if (!quiet) bgToast(getString(R.string.hist_purge_failed, it)) })
+            histJob({ purged = CoreBridge.purgeHistory(n).getOrThrow(); kickSync() },
+                onOk = { statsVersion++; bgToast(resources.getQuantityString(R.plurals.hist_purged, purged, purged)) },
+                onFail = { bgToast(getString(R.string.hist_purge_failed, it)) })
         }
+        // The engine purges only on open and after a dictation, so History applies the
+        // committed auto-delete setting itself (0 = keep). Read on the worker: after any queued save.
+        fun applyRetention() = histJob({
+            val days = CoreBridge.getSettings().getOrNull()?.optJSONObject("privacy")
+                ?.optInt("transcript_auto_delete_days", 0) ?: 0
+            if (days > 0 && CoreBridge.purgeHistory(days).getOrThrow() > 0) {
+                kickSync()
+                // Not onOk: a newer history job (search) would drop it, leaving stats stale.
+                runOnUiThread { statsVersion++ }
+            }
+        })
         fun clearHist() = histJob({ CoreBridge.dataOf(CoreBridge.nativeClearHistory()); kickSync() },
             onOk = { statsVersion++; toast(getString(R.string.hist_cleared)) },
             onFail = { toast(getString(R.string.hist_clear_failed, it)) })
         fun deleteHist(uuid: String) = histJob({ CoreBridge.dataOf(CoreBridge.nativeDeleteHistory(uuid)); kickSync() },
             onOk = { statsVersion++; if (expanded == uuid) expanded = null },
             onFail = { toast(getString(R.string.hist_delete_failed, it)) })
-        // The engine purges only on open and after a dictation; apply retention here too
-        // so an engine left open across the cutoff still drops expired rows.
-        LaunchedEffect(tick) {
-            val days = s.optJSONObject("privacy")?.optInt("transcript_auto_delete_days", 0) ?: 0
-            if (days > 0) purgeHist(days, quiet = true) else refreshHist()
-        }
+        LaunchedEffect(tick) { applyRetention() }
         // Search runs in the database (all history, not just loaded pages), debounced.
         var searched by remember { mutableStateOf(histQuery) }
         LaunchedEffect(histQuery) {
@@ -6033,10 +6034,8 @@ class MainActivity : ComponentActivity() {
                         )
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             TextButton(onClick = {
-                                val n = daysStr.toIntOrNull() ?: 0
-                                priv.put("transcript_auto_delete_days", n)
-                                save()
-                                if (n > 0) purgeHist(n, quiet = true)
+                                priv.put("transcript_auto_delete_days", daysStr.toIntOrNull() ?: 0)
+                                save { applyRetention() }
                             }) { Text(stringResource(R.string.action_save)) }
                             TextButton(onClick = {
                                 val n = daysStr.toIntOrNull() ?: 0
