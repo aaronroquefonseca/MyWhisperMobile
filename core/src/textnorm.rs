@@ -173,14 +173,34 @@ pub fn dict_key(s: &str) -> String {
 
 /// History-search key: Unicode canonical caseless form,
 /// NFC(default case fold(NFD(s))), with the `dict_key` Turkish dotted-`i`
-/// fold. NFC (not NFD) keeps accents distinct for substring search:
-/// `árbol`, `ÁRBOL`, and `a` + U+0301 + `rbol` share a key, `arbol` does
-/// not, and `STRASSE`/`straße` or `ΟΔΟΣ`/`οδοσ` match.
+/// fold applied before NFC so `İ` + U+0301 composes to `í`. NFC (not NFD)
+/// keeps accents distinct for substring search: `árbol`, `ÁRBOL`, and
+/// `a` + U+0301 + `rbol` share a key, `arbol` does not, and
+/// `STRASSE`/`straße` or `ΟΔΟΣ`/`οδοσ` match.
 pub fn search_key(s: &str) -> String {
-    caseless::default_case_fold_str(&s.nfd().collect::<String>())
-        .nfc()
+    use caseless::Caseless;
+    s.nfd()
+        .default_case_fold()
         .collect::<String>()
         .replace("i\u{307}", "i")
+        .nfc()
+        .collect()
+}
+
+/// Whether `text` contains `needle_key` (already a `search_key`) at a
+/// match that does not end inside a character: a following combining
+/// mark (`قلب` in `قلبْ`) would let a query drop an accent with no
+/// precomposed form.
+pub fn search_contains(text: &str, needle_key: &str) -> bool {
+    let key = search_key(text);
+    key.char_indices().any(|(i, _)| {
+        key[i..].strip_prefix(needle_key).is_some_and(|rest| {
+            !rest
+                .chars()
+                .next()
+                .is_some_and(unicode_normalization::char::is_combining_mark)
+        })
+    })
 }
 
 fn is_word_char(c: char) -> bool {

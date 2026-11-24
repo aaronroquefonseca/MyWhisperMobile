@@ -172,14 +172,19 @@ pub(crate) fn open_test_db(path: &std::path::Path) -> rusqlite::Result<Store> {
     Store::open(path)
 }
 
-/// `search_fold(text)`: the history-search key (`textnorm::search_key`).
-fn register_search_fold(conn: &Connection) -> rusqlite::Result<()> {
+/// `search_match(text, needle_key)`: History search (`textnorm::search_contains`).
+fn register_search_match(conn: &Connection) -> rusqlite::Result<()> {
     use rusqlite::functions::FunctionFlags;
     conn.create_scalar_function(
-        "search_fold",
-        1,
+        "search_match",
+        2,
         FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
-        |ctx| Ok(crate::textnorm::search_key(&ctx.get::<String>(0)?)),
+        |ctx| {
+            Ok(crate::textnorm::search_contains(
+                &ctx.get::<String>(0)?,
+                &ctx.get::<String>(1)?,
+            ))
+        },
     )
 }
 
@@ -578,7 +583,7 @@ impl Store {
         // when the file was replaced under us (desktop #18
         // file-identity check).
         let file_identity = file_identity_of(path);
-        register_search_fold(&conn)?;
+        register_search_match(&conn)?;
         Ok(Self {
             conn,
             file_identity,
@@ -944,7 +949,7 @@ impl Store {
     /// `(recorded_at, uuid)` of the last row already shown, so rows added
     /// meanwhile never shift or duplicate later pages (an OFFSET would).
     /// `query` filters text or original text as a literal substring
-    /// after `search_fold` on both sides (Unicode case- and
+    /// after `textnorm::search_key` on both sides (Unicode case- and
     /// normalization-insensitive, accent-sensitive; `%`, `_`, `\` are
     /// plain characters); empty means no filter.
     pub fn load_history_page(
@@ -961,8 +966,7 @@ impl Store {
                     duration_secs, recorded_at, discarded
              FROM history WHERE deleted = 0 AND (discarded = 0 OR ?1)
                AND (?3 = '' OR recorded_at < ?2 OR (recorded_at = ?2 AND uuid < ?3))
-               AND (?4 = '' OR instr(search_fold(text), ?4) > 0
-                    OR instr(search_fold(raw_text), ?4) > 0)
+               AND (?4 = '' OR search_match(text, ?4) OR search_match(raw_text, ?4))
              ORDER BY recorded_at DESC, uuid DESC LIMIT ?5",
         )?;
         let params = rusqlite::params![
@@ -1684,7 +1688,7 @@ impl Store {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch(PRAGMAS)?;
         migrate_schema(&conn)?;
-        register_search_fold(&conn)?;
+        register_search_match(&conn)?;
         Ok(Self {
             conn,
             file_identity: None,
@@ -2572,12 +2576,14 @@ mod tests {
         let mut rows = vec![row(10, "old", "cleaned", "A\u{301}RBOL viejo")];
         rows.extend((0..40).map(|i| row(20 + i, &format!("fill{i:02}"), "filler", "filler")));
         rows.extend([
-            row(60, "acc", "Árbol grande", ""),
+            row(60, "acc", "Árbol grande", "texto original"),
             row(61, "plain", "arbol sin tilde", ""),
             row(62, "pct", "50% off_sale C:\\tmp", ""),
             row(63, "under", "50 percent offXsale C:tmp", ""),
             row(64, "sharp", "Große Straße", ""),
             row(65, "sigma", "ΟΔΟΣ", ""),
+            row(66, "harakat", "قلبْ", ""),
+            row(67, "idot", "I\u{307}\u{301}", ""),
         ]);
         open_test_db(&path).unwrap().apply_history(&rows).unwrap();
 
@@ -2597,6 +2603,11 @@ mod tests {
         // Full case folding, not just lowercase.
         assert_eq!(ids("strasse"), ["sharp"]);
         assert_eq!(ids("οδοσ"), ["sigma"]);
+        // A match never ends inside a character (dropped final mark).
+        assert!(ids("قلب").is_empty());
+        assert_eq!(ids("قلبْ"), ["harakat"]);
+        // Dotted-I fold composes with a following accent.
+        assert_eq!(ids("í"), ["idot"]);
         assert_eq!(ids("%"), ["pct"]);
         assert_eq!(ids("50%"), ["pct"]);
         assert_eq!(ids("off_sale"), ["pct"]);
