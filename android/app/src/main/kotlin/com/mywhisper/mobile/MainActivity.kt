@@ -197,6 +197,8 @@ class MainActivity : ComponentActivity() {
      * (onCreate) and warm tap (onNewIntent, singleTop) alike.
      */
     private val deepLinkTab = mutableStateOf<Int?>(null)
+    /** Activity nav item tapped while Activity is open: scroll back to the top. */
+    private val activityScrollTop = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     /** Bumped on resume and focus regain; Activity reloads stats and history on change. */
     private val resumeTick = mutableIntStateOf(0)
 
@@ -1572,7 +1574,10 @@ class MainActivity : ComponentActivity() {
                 getString(R.string.tab_dict), getString(R.string.nav_settings))
             val navTargets = listOf(0, 1, 3, 17)
             val navIcons = listOf(R.drawable.ic_nav_activity, R.drawable.ic_voice, R.drawable.ic_library, R.drawable.ic_nav_settings)
-            fun openRoot(index: Int) { tab = if (navTargets[index] == 1) providersTab else navTargets[index] }
+            fun openRoot(index: Int) {
+                if (navTargets[index] == 0 && tab == 0) activityScrollTop.tryEmit(Unit)
+                tab = if (navTargets[index] == 1) providersTab else navTargets[index]
+            }
             // The rail runs the full height beside the Scaffold (header included);
             // the Scaffold skips the start insets the rail already covers.
             Row(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
@@ -5668,6 +5673,8 @@ class MainActivity : ComponentActivity() {
         var statsErr by remember { mutableStateOf("") }
         var statsVersion by remember { mutableIntStateOf(0) }
         var items by remember { mutableStateOf(emptyList<Hist>()) }
+        var hasMore by remember { mutableStateOf(false) }
+        var loadingMore by remember { mutableStateOf(false) }
         var confirmClear by remember { mutableStateOf(false) }
         var privOpen by rememberSaveable { mutableStateOf(false) }
         var expanded by rememberSaveable { mutableStateOf<String?>(null) }
@@ -5702,16 +5709,20 @@ class MainActivity : ComponentActivity() {
         // Generation-aware history jobs (desktop reset parity): each op
         // runs off-thread, then reflects the committed store state; stale
         // generations drop, failures keep an explicit retryable error.
-        fun histJob(work: () -> Unit, onOk: () -> Unit = {}, onFail: (String) -> Unit = {}) {
+        fun histJob(work: () -> Unit, reset: Boolean = false, onOk: () -> Unit = {}, onFail: (String) -> Unit = {}) {
             val gen = CoreBridge.SettingsJobs.nextJobGen(histGen.get()).also { histGen.set(it) }
             histBusy.value = true
+            // Reload what is already loaded (scroll position survives); a new search starts over.
+            val want = if (reset) HISTORY_PAGE else historyReloadCount(items.size)
+            val query = histQuery.trim()
             workers.execute {
                 try {
                     work()
-                    val committed = loadHistThrowing()
+                    val committed = loadHistPage(want, null, query)
                     runOnUiThread {
                         if (!jobApplies(histGen.get(), gen)) return@runOnUiThread
                         items = committed
+                        hasMore = committed.size == want
                         histError.value = ""
                         histBusy.value = false
                         onOk()
@@ -5727,6 +5738,24 @@ class MainActivity : ComponentActivity() {
             }
         }
         fun refreshHist() = histJob({})
+        fun loadMore() {
+            val last = items.lastOrNull() ?: return
+            if (!hasMore || loadingMore || histBusy.value) return
+            loadingMore = true
+            val gen = histGen.get()
+            val query = histQuery.trim()
+            workers.execute {
+                val page = try { loadHistPage(HISTORY_PAGE, last, query) } catch (_: Exception) { null }
+                runOnUiThread {
+                    loadingMore = false
+                    // A refresh or new search since then owns the list.
+                    if (page == null || histGen.get() != gen) return@runOnUiThread
+                    val known = items.mapTo(HashSet()) { it.uuid }
+                    items = items + page.filter { it.uuid !in known }
+                    hasMore = page.size == HISTORY_PAGE
+                }
+            }
+        }
         fun purgeHist(n: Int) {
             var purged = 0
             histJob({ purged = CoreBridge.purgeHistory(n).getOrThrow(); kickSync() },
@@ -5740,6 +5769,14 @@ class MainActivity : ComponentActivity() {
             onOk = { statsVersion++; if (expanded == uuid) expanded = null },
             onFail = { toast(getString(R.string.hist_delete_failed, it)) })
         LaunchedEffect(tick) { refreshHist() }
+        // Search runs in the database (all history, not just loaded pages), debounced.
+        var searched by remember { mutableStateOf(histQuery) }
+        LaunchedEffect(histQuery) {
+            if (histQuery == searched) return@LaunchedEffect
+            delay(250)
+            searched = histQuery
+            histJob({}, reset = true)
+        }
 
         val statePrefs = getSharedPreferences("mw_state", MODE_PRIVATE)
         var issueKind by remember { mutableStateOf(statePrefs.getString(DictationIssue.PREF_KIND, null)) }
@@ -5762,11 +5799,8 @@ class MainActivity : ComponentActivity() {
         val today = java.time.LocalDate.now(zone)
         val todayWord = getString(R.string.home_today)
         val yesterdayWord = getString(R.string.home_yesterday)
-        val shown = remember(items, histQuery) {
-            items.filter { h -> histQuery.isBlank() || h.text.contains(histQuery, ignoreCase = true) || h.rawText.contains(histQuery, ignoreCase = true) }
-        }
-        val grouped = remember(shown, today) {
-            shown.groupBy { historyDayLabel(it.recordedAt, today, zone, todayWord, yesterdayWord) }
+        val grouped = remember(items, today) {
+            items.groupBy { historyDayLabel(it.recordedAt, today, zone, todayWord, yesterdayWord) }
         }
         val priv = s.optJSONObject("privacy") ?: JSONObject().also { s.put("privacy", it) }
         // Toggles write into [priv] before the committed reload lands; this re-reads them now.
@@ -5888,7 +5922,9 @@ class MainActivity : ComponentActivity() {
                         Text(stringResource(R.string.home_history_hint), style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    Text(stringResource(R.string.hist_count, items.size), style = MaterialTheme.typography.labelMedium,
+                    // Total from stats: the list only holds the pages loaded so far.
+                    val total = stats?.optLong("dictations", -1L)?.takeIf { it >= 0 && histQuery.isBlank() }?.toInt() ?: items.size
+                    Text(stringResource(R.string.hist_count, total), style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
@@ -5949,9 +5985,9 @@ class MainActivity : ComponentActivity() {
                 // The next resume / focus regain retries the load.
                 Text(histError.value, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             }
-            if (shown.isEmpty()) item(key = "histEmpty") {
+            if (items.isEmpty()) item(key = "histEmpty") {
                 Text(
-                    stringResource(if (items.isEmpty()) R.string.home_history_empty else R.string.dict_no_match),
+                    stringResource(if (histQuery.isBlank()) R.string.home_history_empty else R.string.dict_no_match),
                     Modifier.fillMaxWidth().padding(vertical = 24.dp),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -5974,22 +6010,66 @@ class MainActivity : ComponentActivity() {
                     )
                 }
             }
+            if (loadingMore) item(key = "loadingMore") {
+                Box(Modifier.fillMaxWidth().padding(vertical = 12.dp), contentAlignment = Alignment.Center) {
+                    androidx.compose.material3.CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+                }
+            }
         }
         val listPadding = androidx.compose.foundation.layout.PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 24.dp)
+        val singleState = androidx.compose.foundation.lazy.rememberLazyListState()
+        val overviewState = androidx.compose.foundation.lazy.rememberLazyListState()
+        val historyState = androidx.compose.foundation.lazy.rememberLazyListState()
+        val scope = androidx.compose.runtime.rememberCoroutineScope()
+        // Wires one list that holds history: loads the next page near the end, and
+        // reports when the history header has scrolled off the top (back-to-top button).
+        @Composable
+        fun historyList(state: androidx.compose.foundation.lazy.LazyListState): Boolean {
+            LaunchedEffect(state) {
+                // Emits the item count while near the end, so each grown list asks again.
+                androidx.compose.runtime.snapshotFlow {
+                    val info = state.layoutInfo
+                    val nearEnd = (info.visibleItemsInfo.lastOrNull()?.index ?: 0) >= info.totalItemsCount - 15
+                    if (nearEnd) info.totalItemsCount else -1
+                }.collect { if (it >= 0) loadMore() }
+            }
+            val pastHeader by remember(state) {
+                androidx.compose.runtime.derivedStateOf {
+                    val visible = state.layoutInfo.visibleItemsInfo
+                    visible.isNotEmpty() && visible.none { it.key in ACTIVITY_TOP_KEYS }
+                }
+            }
+            return pastHeader
+        }
         androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize()) {
             if (maxWidth >= TWO_PANE_MIN_WIDTH) {
+                val showTop = historyList(historyState)
+                LaunchedEffect(Unit) {
+                    activityScrollTop.collect {
+                        launch { overviewState.scrollToTopTimed() }
+                        launch { historyState.scrollToTopTimed() }
+                    }
+                }
                 Row(Modifier.fillMaxSize()) {
-                    LazyColumn(Modifier.weight(0.42f).fillMaxHeight(), contentPadding = listPadding,
+                    LazyColumn(Modifier.weight(0.42f).fillMaxHeight(), state = overviewState, contentPadding = listPadding,
                         verticalArrangement = Arrangement.spacedBy(8.dp)) { overview() }
-                    LazyColumn(Modifier.weight(0.58f).fillMaxHeight(), contentPadding = listPadding,
-                        verticalArrangement = Arrangement.spacedBy(8.dp)) { history(true) }
+                    Box(Modifier.weight(0.58f).fillMaxHeight()) {
+                        LazyColumn(Modifier.fillMaxSize(), state = historyState, contentPadding = listPadding,
+                            verticalArrangement = Arrangement.spacedBy(8.dp)) { history(true) }
+                        BackToTopButton(showTop, { scope.launch { historyState.scrollToTopTimed() } },
+                            Modifier.align(Alignment.BottomEnd).padding(16.dp))
+                    }
                 }
             } else {
-                LazyColumn(Modifier.fillMaxSize(), contentPadding = listPadding,
+                val showTop = historyList(singleState)
+                LaunchedEffect(Unit) { activityScrollTop.collect { launch { singleState.scrollToTopTimed() } } }
+                LazyColumn(Modifier.fillMaxSize(), state = singleState, contentPadding = listPadding,
                     verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     overview()
                     history(false)
                 }
+                BackToTopButton(showTop, { scope.launch { singleState.scrollToTopTimed() } },
+                    Modifier.align(Alignment.BottomEnd).padding(16.dp))
             }
         }
         if (confirmClear) {
@@ -6007,9 +6087,9 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** Throwing history load so jobs can keep a retryable error state. */
-    private fun loadHistThrowing(): List<Hist> {
-        val raw = CoreBridge.nativeGetHistory(200)
+    /** One history page (throws, so jobs keep a retryable error); [before] = last row already shown. */
+    private fun loadHistPage(limit: Int, before: Hist?, query: String): List<Hist> {
+        val raw = CoreBridge.nativeGetHistoryPage(limit, before?.recordedAt ?: 0L, before?.uuid.orEmpty(), query)
         val arr = JSONArray(raw)
         return List(arr.length()) { i ->
             val o = arr.getJSONObject(i)

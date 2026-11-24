@@ -907,7 +907,27 @@ impl Engine {
     }
 
     pub fn history_json(&self, limit: usize) -> String {
-        let items: Vec<HistoryEntry> = self.store.load_history(limit, false).unwrap_or_default();
+        Self::history_rows_json(&self.store.load_history(limit, false).unwrap_or_default())
+    }
+
+    /// Keyset page for long histories: rows older than `before`
+    /// (`(recorded_at, uuid)` of the last shown row; `None` = newest),
+    /// optionally filtered by `query`. Same row shape as [`Self::history_json`].
+    pub fn history_page_json(
+        &self,
+        limit: usize,
+        before: Option<(i64, &str)>,
+        query: &str,
+    ) -> String {
+        Self::history_rows_json(
+            &self
+                .store
+                .load_history_page(limit, false, before, query.trim())
+                .unwrap_or_default(),
+        )
+    }
+
+    fn history_rows_json(items: &[HistoryEntry]) -> String {
         // Manual mapping: desktop HistoryEntry has no Serialize impl.
         let mapped: Vec<serde_json::Value> = items
             .iter()
