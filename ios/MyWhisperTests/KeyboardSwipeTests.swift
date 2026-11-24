@@ -74,6 +74,54 @@ final class KeyboardSwipeTests: XCTestCase {
         XCTAssertEqual(KeyboardTextEditing.trailingWordDeletionCount(in: ""), 0)
     }
 
+    func testVerticalMovementHandlesEmptyLinesAndGraphemes() {
+        let down = KeyboardTextEditing.verticalCursorMove(
+            before: "a👩🏽‍💻", after: "z\n\ne\u{301}bc", lines: 2, preferredColumn: nil
+        )
+        XCTAssertEqual(down?.offset, 5)
+        XCTAssertEqual(down?.column, 2)
+        let up = KeyboardTextEditing.verticalCursorMove(before: "abc\r\n", after: "", lines: -1, preferredColumn: nil)
+        XCTAssertEqual(up?.offset, -4)
+        XCTAssertNil(KeyboardTextEditing.verticalCursorMove(before: "ab", after: "cd", lines: 1, preferredColumn: nil))
+    }
+
+    func testCursorDragConsumesSmallHorizontalWobbleDuringVerticalMotion() {
+        var drag = KeyboardCursorDrag(origin: .zero)
+        for index in 1...4 {
+            let steps = drag.steps(towards: CGPoint(x: index * 5, y: index * 25))
+            XCTAssertEqual(steps.characters, 0)
+            XCTAssertEqual(steps.lines, 1)
+        }
+        let steps = drag.steps(towards: CGPoint(x: 44, y: 100))
+        XCTAssertEqual(steps.characters, 2)
+        XCTAssertEqual(steps.lines, 0)
+    }
+
+    @MainActor
+    func testCursorDragMovesThroughProxyAndRestoresColumnAfterShortLine() {
+        let controller = TestKeyboardController()
+        controller.document.text = "abcdef\nxy\nuvwxyz"
+        controller.document.caret = 4
+        controller.startCursorDrag(at: .zero)
+
+        controller.continueCursorDrag(to: CGPoint(x: 0, y: 25))
+        XCTAssertEqual(controller.document.caret, 9)
+        controller.continueCursorDrag(to: CGPoint(x: 0, y: 50))
+        XCTAssertEqual(controller.document.caret, 14)
+        controller.continueCursorDrag(to: .zero)
+        XCTAssertEqual(controller.document.caret, 4)
+        controller.continueCursorDrag(to: CGPoint(x: 24, y: 0))
+        XCTAssertEqual(controller.document.caret, 6)
+        controller.finishCursorDrag()
+
+        // Some hosts return nil for the context after the end of a field.
+        controller.document.caret = controller.document.text.count
+        controller.startCursorDrag(at: .zero)
+        controller.continueCursorDrag(to: CGPoint(x: 0, y: -25))
+        XCTAssertEqual(controller.document.caret, 9)
+        controller.finishCursorDrag()
+    }
+
     @MainActor
     func testSwipeInsertionAlternativesAndPunctuationUseKeyboardProxy() throws {
         let controller = TestKeyboardController()
@@ -120,15 +168,21 @@ private final class TestKeyboardController: KeyboardViewController {
 @MainActor
 private final class TestKeyboardDocument: NSObject, UITextDocumentProxy {
     var text = ""
+    var caret: Int?
+    private var insertionIndex: String.Index { text.index(text.startIndex, offsetBy: caret ?? text.count) }
     var hasText: Bool { !text.isEmpty }
-    var documentContextBeforeInput: String? { text }
-    var documentContextAfterInput: String? { "" }
+    var documentContextBeforeInput: String? { String(text[..<insertionIndex]) }
+    var documentContextAfterInput: String? {
+        insertionIndex == text.endIndex ? nil : String(text[insertionIndex...])
+    }
     var selectedText: String? { nil }
     var documentIdentifier = UUID()
     var documentInputMode: UITextInputMode? { nil }
     func insertText(_ string: String) { text += string }
     func deleteBackward() { if !text.isEmpty { text.removeLast() } }
-    func adjustTextPosition(byCharacterOffset offset: Int) {}
+    func adjustTextPosition(byCharacterOffset offset: Int) {
+        caret = min(max(0, (caret ?? text.count) + offset), text.count)
+    }
     func setMarkedText(_ markedText: String, selectedRange: NSRange) {}
     func unmarkText() {}
 }

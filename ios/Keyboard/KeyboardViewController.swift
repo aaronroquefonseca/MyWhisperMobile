@@ -51,7 +51,9 @@ class KeyboardViewController: UIInputViewController {
     private var suggestion: Suggestion?
     private var visible = false
     private var lastShiftTap: TimeInterval?
-    private var cursorDragX: CGFloat = 0
+    private var cursorDrag: KeyboardCursorDrag?
+    private var cursorDocument: UUID?
+    private weak var cursorGesture: UIGestureRecognizer?
     private var lastSwipe: SwipeCommit?
     private var swipeLexicon: (locale: String, words: KeyboardSwipeLexicon)?
     private var swipeLexiconLoad: Task<Void, Never>?
@@ -152,6 +154,9 @@ class KeyboardViewController: UIInputViewController {
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
         visible = false
+        cursorDrag = nil
+        cursorDocument = nil
+        cursorGesture = nil
         pendingSwipe?.cancel()
         lastSwipe = nil
         swipeTrail.removeFromSuperlayer()
@@ -177,7 +182,7 @@ class KeyboardViewController: UIInputViewController {
 
     override func textDidChange(_ textInput: UITextInput?) {
         super.textDidChange(textInput)
-        guard visible else { return }
+        guard visible, cursorDrag == nil else { return }
         layoutIfNeeded()
         updateAutomaticShift()
         scheduleSuggestions()
@@ -185,7 +190,7 @@ class KeyboardViewController: UIInputViewController {
 
     override func selectionDidChange(_ textInput: UITextInput?) {
         super.selectionDidChange(textInput)
-        guard visible else { return }
+        guard visible, cursorDrag == nil else { return }
         updateAutomaticShift()
         scheduleSuggestions()
     }
@@ -957,36 +962,78 @@ class KeyboardViewController: UIInputViewController {
     }
 
     @objc private func dragCursor(_ gesture: UILongPressGestureRecognizer) {
-        moveCursor(for: gesture, initialOffset: 0)
+        moveCursor(for: gesture, initialOffset: .zero)
     }
 
     @objc private func dragSpacebar(_ gesture: UIPanGestureRecognizer) {
-        moveCursor(for: gesture, initialOffset: gesture.translation(in: rowsView).x)
+        moveCursor(for: gesture, initialOffset: gesture.translation(in: rowsView))
     }
 
-    private func moveCursor(for gesture: UIGestureRecognizer, initialOffset: CGFloat) {
-        let x = gesture.location(in: rowsView).x
+    private func moveCursor(for gesture: UIGestureRecognizer, initialOffset: CGPoint) {
+        let point = gesture.location(in: rowsView)
         switch gesture.state {
         case .began:
             hidePopup()
-            cursorDragX = x - initialOffset
-            pendingSwipe?.cancel()
-            lastSwipe = nil
-            lastSpaceAt = nil
-            pendingUndo = nil
-            adjustCursor(towards: x)
-        case .changed, .ended:
-            adjustCursor(towards: x)
+            cursorGesture = gesture
+            startCursorDrag(at: CGPoint(x: point.x - initialOffset.x, y: point.y - initialOffset.y))
+            continueCursorDrag(to: point)
+        case .changed:
+            if cursorGesture === gesture { continueCursorDrag(to: point) }
+        case .ended, .cancelled, .failed:
+            guard cursorGesture === gesture else { return }
+            if gesture.state == .ended { continueCursorDrag(to: point) }
+            finishCursorDrag()
         default:
             break
         }
     }
 
-    private func adjustCursor(towards x: CGFloat) {
-        let steps = Int((x - cursorDragX) / 12)
-        guard steps != 0 else { return }
-        cursorDragX += CGFloat(steps) * 12
-        textDocumentProxy.adjustTextPosition(byCharacterOffset: steps)
+    func startCursorDrag(at point: CGPoint) {
+        cursorDocument = textDocumentProxy.documentIdentifier
+        cursorDrag = KeyboardCursorDrag(origin: point)
+        pendingSwipe?.cancel()
+        predictionTask?.cancel()
+        lastSwipe = nil
+        lastSpaceAt = nil
+        pendingUndo = nil
+        clearSuggestions()
+    }
+
+    func continueCursorDrag(to point: CGPoint) {
+        guard var drag = cursorDrag else { return }
+        let steps = drag.steps(towards: point)
+        guard steps.characters != 0 || steps.lines != 0 else { return }
+
+        let proxy = textDocumentProxy
+        guard proxy.documentIdentifier == cursorDocument else {
+            finishCursorDrag()
+            return
+        }
+        var offset = steps.characters
+        if steps.lines != 0, proxy.selectedText?.isEmpty != false,
+           let move = KeyboardTextEditing.verticalCursorMove(
+                before: proxy.documentContextBeforeInput ?? "",
+                after: proxy.documentContextAfterInput ?? "",
+                lines: steps.lines,
+                preferredColumn: drag.preferredColumn
+           ) {
+            offset += move.offset
+            drag.preferredColumn = move.column
+        }
+        if steps.characters != 0 { drag.preferredColumn = nil }
+        cursorDrag = drag
+        if offset != 0 { proxy.adjustTextPosition(byCharacterOffset: offset) }
+    }
+
+    func finishCursorDrag() {
+        cursorDrag = nil
+        cursorDocument = nil
+        cursorGesture = nil
+        if visible {
+            layoutIfNeeded()
+            updateAutomaticShift()
+            scheduleSuggestions()
+        }
     }
 
     @objc private func selectAccent(_ gesture: UILongPressGestureRecognizer) {
@@ -1280,9 +1327,10 @@ extension KeyboardViewController: UIGestureRecognizerDelegate {
 
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return true }
-        let movement = pan.translation(in: rowsView)
-        guard abs(movement.x) > abs(movement.y) else { return false }
-        if pan.view?.accessibilityLabel == "Delete" { return !deleteRepeated && movement.x < 0 }
+        if pan.view?.accessibilityLabel == "Delete" {
+            let movement = pan.translation(in: rowsView)
+            return !deleteRepeated && movement.x < -abs(movement.y)
+        }
         return true
     }
 }
