@@ -1496,7 +1496,7 @@ class MainActivity : ComponentActivity() {
             "Dark" -> true
             else -> androidx.compose.foundation.isSystemInDarkTheme()
         }
-        val colors = whisperColorScheme(dark, black = s?.optJSONObject("preferences")?.optBoolean("black_background", false) == true)
+        val colors = animatedColorScheme(whisperColorScheme(dark, black = s?.optJSONObject("preferences")?.optBoolean("black_background", false) == true))
         SideEffect {
             WindowCompat.getInsetsController(window, window.decorView).apply {
                 isAppearanceLightStatusBars = !dark
