@@ -26,6 +26,8 @@ object CoreBridge {
     @JvmStatic external fun nativeSetLocalLlmRunner(runner: LocalLlmCleanupRunner?): String
     @JvmStatic external fun nativeCancelUtterance(): String
     @JvmStatic external fun nativeGetHistory(limit: Int): String
+    /** Keyset page: rows older than (beforeTs, beforeUuid); empty uuid = newest. `query` filters text. */
+    @JvmStatic external fun nativeGetHistoryPage(limit: Int, beforeTs: Long, beforeUuid: String, query: String): String
     @JvmStatic external fun nativeClearHistory(): String
     @JvmStatic external fun nativeDeleteHistory(uuid: String): String
     @JvmStatic external fun nativeDefaultCleanupPrompt(): String

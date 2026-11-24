@@ -54,4 +54,12 @@ class HomeUiTest {
         assertEquals(40, heatmapWeeks(760f))
         assertEquals(53, heatmapWeeks(2000f))
     }
+
+    @Test
+    fun historyReloadKeepsLoadedPages() {
+        assertEquals(100, historyReloadCount(0))
+        assertEquals(100, historyReloadCount(37))
+        assertEquals(100, historyReloadCount(100))
+        assertEquals(300, historyReloadCount(201))
+    }
 }

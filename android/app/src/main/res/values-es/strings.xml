@@ -639,4 +639,5 @@
     <string name="settings_guide">Guía de configuración</string>
     <string name="settings_guide_sub">Vuelve a recorrer la configuración y practica con el botón</string>
     <string name="providers_language_help">La detección automática entiende el idioma que hables, así que puedes cambiar de idioma de un dictado a otro. Elige un solo idioma solo si se equivoca.</string>
+    <string name="home_back_to_top">Volver arriba</string>
 </resources>

@@ -389,6 +389,29 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeGetHist
 /// Called from the JVM with valid JNI handles (`env` attached, object args valid local refs).
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeGetHistoryPage(
+    mut env: JNIEnv,
+    _cls: JClass,
+    limit: jint,
+    before_ts: jni::sys::jlong,
+    before_uuid: JString,
+    query: JString,
+) -> jstring {
+    let before_uuid = get_string(&mut env, &before_uuid).unwrap_or_default();
+    let query = get_string(&mut env, &query).unwrap_or_default();
+    // Empty uuid = first page (newest rows).
+    let before = (!before_uuid.is_empty()).then_some((before_ts, before_uuid.as_str()));
+    let out = with_engine(
+        |e| e.history_page_json(limit.max(1) as usize, before, &query),
+        || "[]".to_string(),
+    );
+    jstr(&mut env, &out)
+}
+
+/// # Safety
+/// Called from the JVM with valid JNI handles (`env` attached, object args valid local refs).
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeClearHistory(
     mut env: JNIEnv,
     _cls: JClass,

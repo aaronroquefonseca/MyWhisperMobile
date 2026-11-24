@@ -925,13 +925,47 @@ impl Store {
         limit: usize,
         include_discarded: bool,
     ) -> rusqlite::Result<Vec<HistoryEntry>> {
+        self.load_history_page(limit, include_discarded, None, "")
+    }
+
+    /// One page of history, newest first. Keyset paging: `before` is the
+    /// `(recorded_at, uuid)` of the last row already shown, so rows added
+    /// meanwhile never shift or duplicate later pages (an OFFSET would).
+    /// `query` filters text or original text (case-insensitive for ASCII,
+    /// SQLite LIKE); empty means no filter.
+    pub fn load_history_page(
+        &self,
+        limit: usize,
+        include_discarded: bool,
+        before: Option<(i64, &str)>,
+        query: &str,
+    ) -> rusqlite::Result<Vec<HistoryEntry>> {
+        let pattern = if query.is_empty() {
+            String::new()
+        } else {
+            let escaped = query
+                .replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_");
+            format!("%{escaped}%")
+        };
+        let (before_ts, before_uuid) = before.unwrap_or((i64::MAX, ""));
         let mut stmt = self.conn.prepare(
             "SELECT uuid, text, raw_text, datetime(recorded_at, 'unixepoch'), words,
                     duration_secs, recorded_at, discarded
              FROM history WHERE deleted = 0 AND (discarded = 0 OR ?1)
-             ORDER BY recorded_at DESC LIMIT ?2",
+               AND (?3 = '' OR recorded_at < ?2 OR (recorded_at = ?2 AND uuid < ?3))
+               AND (?4 = '' OR text LIKE ?4 ESCAPE '\\' OR raw_text LIKE ?4 ESCAPE '\\')
+             ORDER BY recorded_at DESC, uuid DESC LIMIT ?5",
         )?;
-        stmt.query_map([include_discarded as i64, limit as i64], |row| {
+        let params = rusqlite::params![
+            include_discarded,
+            before_ts,
+            before_uuid,
+            pattern,
+            limit as i64
+        ];
+        stmt.query_map(params, |row| {
             Ok(HistoryEntry {
                 uuid: row.get(0)?,
                 text: row.get(1)?,
@@ -2447,6 +2481,63 @@ mod tests {
         assert_eq!(reloaded.stt.local_provider, LocalSttProvider::Nvidia);
         assert!(!reloaded.stt.entries.is_empty());
         assert_eq!(reloaded.stt.chain().len(), 1);
+    }
+
+    #[test]
+    fn history_pages_by_keyset_and_filters_by_query() {
+        let store = Store::open_memory().unwrap();
+        // Two rows share a timestamp: the uuid tie-break keeps pages exact.
+        let rows: Vec<HistoryRecord> = [
+            (100, "a", "buy milk"),
+            (200, "b", "50% off_sale"),
+            (200, "c", "call Sam"),
+            (300, "d", "Buy bread"),
+        ]
+        .iter()
+        .map(|(ts, id, text)| HistoryRecord {
+            uuid: id.to_string(),
+            text: text.to_string(),
+            raw_text: text.to_string(),
+            words: 2,
+            duration_secs: 1,
+            deleted: false,
+            discarded: false,
+            recorded_at: *ts,
+        })
+        .collect();
+        store.apply_history(&rows).unwrap();
+        let ids = |v: Vec<HistoryEntry>| v.into_iter().map(|h| h.uuid).collect::<Vec<_>>();
+        let first = store.load_history_page(2, false, None, "").unwrap();
+        assert_eq!(ids(first.clone()), ["d", "c"]);
+        let last = first.last().unwrap();
+        let second = store
+            .load_history_page(2, false, Some((last.recorded_at, &last.uuid)), "")
+            .unwrap();
+        assert_eq!(ids(second), ["b", "a"]);
+        // A row added at the top never shifts the next page.
+        let more = store
+            .load_history_page(10, false, Some((200, "c")), "")
+            .unwrap();
+        assert_eq!(ids(more), ["b", "a"]);
+        // Query: case-insensitive, and % / _ match literally.
+        assert_eq!(
+            ids(store.load_history_page(10, false, None, "BUY").unwrap()),
+            ["d", "a"]
+        );
+        assert_eq!(
+            ids(store.load_history_page(10, false, None, "%").unwrap()),
+            ["b"]
+        );
+        assert_eq!(
+            ids(store.load_history_page(10, false, None, "f_s").unwrap()),
+            ["b"]
+        );
+        assert!(
+            store
+                .load_history_page(10, false, None, "zzz")
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
