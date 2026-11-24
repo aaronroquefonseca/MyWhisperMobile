@@ -570,7 +570,7 @@ struct HeldUtterance {
     pcm16: Vec<i16>,
     duration_secs: i64,
     /// Chain of the first pass: both passes walk one Settings order even
-    /// if it is edited during the on-device decode.
+    /// if it is reordered during the on-device decode.
     stt: SttSettings,
     /// Admission witness of the first pass: a cancel or provider switch
     /// between the passes aborts the second one.
@@ -755,7 +755,17 @@ impl Engine {
                 if crate::server_stt::server_generation() != held.generation {
                     return Err("superseded (provider switched mid-utterance)".to_string());
                 }
-                (held.pcm16, held.duration_secs, held.generation, held.stt)
+                // A server disabled or removed during the decode gets no audio.
+                let mut stt = held.stt;
+                let live = &self.settings.stt.entries;
+                for e in stt
+                    .entries
+                    .iter_mut()
+                    .filter(|e| e.kind != SttEntryKind::Local)
+                {
+                    e.enabled &= live.iter().any(|l| l.id == e.id && l.enabled);
+                }
+                (held.pcm16, held.duration_secs, held.generation, stt)
             }
             _ => {
                 // No pass ran above Local (or it held nothing): walk every
@@ -1491,6 +1501,32 @@ mod tests {
         let out = eng.finish_utterance_part(ChainPart::AfterLocal).unwrap();
         assert_eq!(out.text, "hello world");
         stub.join().unwrap();
+    }
+
+    #[test]
+    fn server_disabled_during_local_decode_gets_no_audio() {
+        let _guard = status_test_lock();
+        reset_status_state();
+        let mut eng = open_engine();
+        // No stub: an upload to Below would fail with "Below: ...".
+        let plan = split_chain_settings("http://127.0.0.1:9");
+        eng.put_settings(&plan).unwrap();
+        eng.start_utterance(16000);
+        eng.push_pcm(&vec![1000i16; 8000]);
+        assert!(eng.finish_utterance_part(ChainPart::BeforeLocal).is_err());
+        let mut disabled: AppSettings = serde_json::from_str(&plan).unwrap();
+        disabled.stt.entries[2].enabled = false;
+        eng.put_settings(&serde_json::to_string(&disabled).unwrap())
+            .unwrap();
+        let err = eng
+            .finish_utterance_part(ChainPart::AfterLocal)
+            .err()
+            .unwrap();
+        assert!(
+            !err.contains("Below"),
+            "disabled server must not upload, got: {err}"
+        );
+        assert!(err.contains("no server STT configured"), "got: {err}");
     }
 
     #[test]
