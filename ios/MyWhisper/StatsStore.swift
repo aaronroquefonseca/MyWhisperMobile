@@ -13,6 +13,7 @@ struct HistoryItem: Equatable, Identifiable, Codable {
     var id: String { uuid }
     let uuid: String
     let text: String
+    let rawText: String?
     let dateLabel: String
     let wordCount: Int
     let durationSecs: Int64
@@ -22,6 +23,7 @@ struct HistoryItem: Equatable, Identifiable, Codable {
     init(
         uuid: String,
         text: String,
+        rawText: String? = nil,
         dateLabel: String,
         wordCount: Int,
         durationSecs: Int64,
@@ -30,6 +32,7 @@ struct HistoryItem: Equatable, Identifiable, Codable {
     ) {
         self.uuid = uuid
         self.text = text
+        self.rawText = rawText
         self.dateLabel = dateLabel
         self.wordCount = wordCount
         self.durationSecs = durationSecs
@@ -45,6 +48,7 @@ struct HistoryItem: Equatable, Identifiable, Codable {
         self.init(
             uuid: uuid,
             text: text,
+            rawText: dict["rawText"] as? String,
             dateLabel: dict["dateLabel"] as? String ?? "",
             wordCount: HistoryItem.intValue(dict["wordCount"]) ?? 0,
             durationSecs: HistoryItem.int64Value(dict["durationSecs"]) ?? 0,
@@ -132,8 +136,7 @@ struct UsageStats: Equatable {
 
 /// One per-day aggregate for the activity list: local-midnight `dayStart`
 /// (unix seconds, Android `Day.dayStart` parity), summed `words`, and the
-/// dictation `utterances` count. The full heatmap grid is deferred — this
-/// is the flat recent-first list the Activity section renders.
+/// dictation `utterances` count.
 struct DailyBucket: Equatable {
     let dayStart: Int64
     let words: Int
@@ -223,8 +226,7 @@ enum StatsStore {
 
     /// Per-day aggregates over the trailing `days` window, ascending by
     /// day (core `daily_aggregates` order). Discarded rows are excluded;
-    /// empty days are omitted (the heatmap grid that needs them is
-    /// deferred — callers render this flat list).
+    /// empty days are omitted.
     static func dailyAggregates(
         _ items: [HistoryItem],
         days: UInt32,

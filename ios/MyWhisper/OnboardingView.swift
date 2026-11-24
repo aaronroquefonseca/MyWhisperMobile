@@ -1,71 +1,68 @@
 import SwiftUI
 
-/// First-run onboarding: welcome → mic → keyboard install → providers.
-/// Forced-dark immersive glass style (brand navy gradient + frosted cards).
-/// Bilingual twins follow the app pattern (no `.lproj` infra yet).
-struct OnboardingStrings: Equatable {
+struct OnboardingStrings {
     let skip: String
     let back: String
     let next: String
-    let start: String
+    let done: String
     let welcomeTitle: String
     let welcomeBody: String
-    let micTitle: String
-    let micBody: String
-    let micGrant: String
-    let micDone: String
+    let setupGuide: String
+    let input: String
     let keyboardTitle: String
-    let keyboardBody: String
-    let keyboardSteps: [String]
-    let keyboardNote: String
-    let openSettings: String
-    let serverTitle: String
-    let serverBody: String
+    let keyboardSummary: String
+    let installTitle: String
+    let installPath: String
+    let installHint: String
+    let practiceTitle: String
+    let practiceHint: String
+    let practicePlaceholder: String
+    let keyboardSettings: String
+    let dictationSetup: String
+    let dictate: String
+    let dictationHint: String
+    let devices: String
 
     static let english = OnboardingStrings(
-        skip: "Skip",
-        back: "Back",
-        next: "Continue",
-        start: "Get started",
-        welcomeTitle: "Type with your voice, anywhere",
-        welcomeBody: "MyWhisper adds a keyboard with a mic key. Switch to it in any chat and type — voice dictation lights up in the next update.",
-        micTitle: "Microphone first",
-        micBody: "Dictation needs the mic. Audio goes only to the speech provider you choose — nothing else.",
-        micGrant: "Grant microphone access",
-        micDone: "Microphone ready ✓",
-        keyboardTitle: "Install the keyboard",
-        keyboardBody: "iOS won't switch keyboards for you — two minutes, once:",
-        keyboardSteps: [
-            "Open Settings → General → Keyboard → Keyboards → Add New Keyboard",
-            "Pick MyWhisper Keyboard",
-        ],
-        keyboardNote: "Typing works right away with no extra permissions. Voice dictation — and its Full Access prompt — arrive in the next update. Some password fields always use the system keyboard.",
-        openSettings: "Open Settings",
-        serverTitle: "Point it at speech",
-        serverBody: "After this, open the Speech tab and pick a provider. It powers dictation in the Record tab today; the keyboard’s mic key follows in the next update."
+        skip: "Skip", back: "Back", next: "Continue", done: "Done",
+        welcomeTitle: "Your words, in any app",
+        welcomeBody: "Add the MyWhisper keyboard to type with suggestions, autocorrect, and emoji wherever iOS supports custom keyboards.",
+        setupGuide: "Setup guide",
+        input: "Input",
+        keyboardTitle: "MyWhisper keyboard",
+        keyboardSummary: "Install, switch, and practice",
+        installTitle: "Add the keyboard",
+        installPath: "Settings → General → Keyboard → Keyboards → Add New Keyboard",
+        installHint: "Choose MyWhisper Keyboard. Typing works without Full Access.",
+        practiceTitle: "Try your keyboard",
+        practiceHint: "Tap the field and hold the globe key. Choose MyWhisper Keyboard, then type a few words.",
+        practicePlaceholder: "Type a practice message",
+        keyboardSettings: "Open the menu on the keyboard to change autocorrect, suggestions, and other typing preferences.",
+        dictationSetup: "Dictation setup",
+        dictate: "Dictate in the app",
+        dictationHint: "Choose a speech provider in Providers, then record from Activity. Copy the transcript to use it in another app.",
+        devices: "Devices & sync"
     )
 
     static let spanish = OnboardingStrings(
-        skip: "Omitir",
-        back: "Atrás",
-        next: "Continuar",
-        start: "Empezar",
-        welcomeTitle: "Escribe con tu voz, donde sea",
-        welcomeBody: "MyWhisper añade un teclado con tecla de micrófono. Cámbiate a él en cualquier chat y escribe: el dictado por voz llega en la próxima actualización.",
-        micTitle: "Primero el micrófono",
-        micBody: "El dictado necesita el micrófono. El audio solo va al proveedor de voz que elijas — a nada más.",
-        micGrant: "Permitir acceso al micrófono",
-        micDone: "Micrófono listo ✓",
-        keyboardTitle: "Instala el teclado",
-        keyboardBody: "iOS no cambia de teclado por ti — dos minutos, una vez:",
-        keyboardSteps: [
-            "Abre Ajustes → General → Teclado → Teclados → Añadir nuevo teclado",
-            "Elige MyWhisper Keyboard",
-        ],
-        keyboardNote: "Escribir funciona desde ya, sin permisos extra. El dictado por voz —y su aviso de acceso total— llega en la próxima actualización. Algunos campos de contraseña siempre usan el teclado del sistema.",
-        openSettings: "Abrir Ajustes",
-        serverTitle: "Conéctalo a la voz",
-        serverBody: "Después, abre la pestaña Voz y elige un proveedor. Da voz a la pestaña Grabar hoy; la tecla de micrófono del teclado llega en la próxima actualización."
+        skip: "Omitir", back: "Atrás", next: "Continuar", done: "Listo",
+        welcomeTitle: "Tus palabras, en cualquier app",
+        welcomeBody: "Añade el teclado MyWhisper para escribir con sugerencias, autocorrección y emojis donde iOS admita teclados personalizados.",
+        setupGuide: "Guía de configuración",
+        input: "Entrada",
+        keyboardTitle: "Teclado MyWhisper",
+        keyboardSummary: "Instala, cambia de teclado y practica",
+        installTitle: "Añade el teclado",
+        installPath: "Ajustes → General → Teclado → Teclados → Añadir nuevo teclado",
+        installHint: "Elige MyWhisper Keyboard. Puedes escribir sin acceso total.",
+        practiceTitle: "Prueba tu teclado",
+        practiceHint: "Toca el campo y mantén pulsada la tecla del globo. Elige MyWhisper Keyboard y escribe unas palabras.",
+        practicePlaceholder: "Escribe un mensaje de prueba",
+        keyboardSettings: "Abre el menú del teclado para cambiar la autocorrección, las sugerencias y otras preferencias de escritura.",
+        dictationSetup: "Configurar el dictado",
+        dictate: "Dictar en la app",
+        dictationHint: "Elige un proveedor de voz en Proveedores y graba desde Actividad. Copia la transcripción para usarla en otra app.",
+        devices: "Dispositivos y sincronización"
     )
 
     static func current(languageCode: String?) -> OnboardingStrings {
@@ -73,184 +70,179 @@ struct OnboardingStrings: Equatable {
     }
 }
 
-/// Brand mark redrawn in SwiftUI (app-icon geometry: navy squircle, cyan
-/// five-bar waveform with speech tail implied by the center bar).
-struct BrandMark: View {
+private struct BrandMark: View {
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 28, style: .continuous)
-                .fill(Color(red: 0x14 / 255, green: 0x22 / 255, blue: 0x34 / 255))
-            HStack(spacing: 7) {
-                ForEach([0.38, 0.62, 1.0, 0.62, 0.38], id: \.self) { f in
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(Color(red: 0x5C / 255, green: 0xD9 / 255, blue: 0xEC / 255))
-                        .frame(width: 13, height: 62 * f)
-                }
+        HStack(spacing: 7) {
+            ForEach(Array([0.38, 0.62, 1.0, 0.62, 0.38].enumerated()), id: \.offset) { _, fraction in
+                Capsule()
+                    .fill(WhisperColors.brandCyan)
+                    .frame(width: 13, height: 62 * fraction)
             }
         }
         .frame(width: 120, height: 120)
-        .shadow(color: .cyan.opacity(0.25), radius: 24)
+        .background(WhisperColors.brandNavy, in: RoundedRectangle(cornerRadius: 28))
+        .accessibilityHidden(true)
     }
 }
 
 struct OnboardingView: View {
-    var micGranted: Bool
-    var strings: OnboardingStrings
-    var onRequestMic: () -> Void = {}
-    var onOpenSettings: () -> Void = {}
-    var onDone: () -> Void = {}
-    var initialPage: Int = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @FocusState private var practicing: Bool
+    @State private var page: Int
+    @State private var practiceText = ""
+    let strings: OnboardingStrings
+    let onDone: () -> Void
 
-    @State private var page: Int = -1
+    init(strings: OnboardingStrings, initialPage: Int = 0, onDone: @escaping () -> Void) {
+        self.strings = strings
+        self.onDone = onDone
+        _page = State(initialValue: min(max(initialPage, 0), 3))
+    }
 
     var body: some View {
-        ZStack {
-            LinearGradient(
-                colors: [
-                    Color(red: 0x14 / 255, green: 0x22 / 255, blue: 0x34 / 255),
-                    Color(red: 0x07 / 255, green: 0x0E / 255, blue: 0x18 / 255),
-                ],
-                startPoint: .topLeading, endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
-            VStack(spacing: 0) {
-                HStack {
-                    Spacer()
-                    if page < 3 {
-                        Button(strings.skip, action: onDone)
-                            .foregroundStyle(.white.opacity(0.7))
-                    }
+        VStack(spacing: 0) {
+            HStack {
+                Spacer()
+                if page < 3 {
+                    Button(strings.skip, action: onDone)
                 }
-                .padding(.horizontal, 24)
-                .frame(height: 44)
-                TabView(selection: $page) {
-                    welcome.tag(0)
-                    mic.tag(1)
-                    keyboard.tag(2)
-                    server.tag(3)
-                }
-                .tabViewStyle(.page(indexDisplayMode: .never))
-                .onAppear { if page < 0 { page = min(max(initialPage, 0), 3) } }
-                HStack(spacing: 8) {
-                    ForEach(0..<4, id: \.self) { i in
-                        Circle()
-                            .fill(i == page ? Color(red: 0x5C / 255, green: 0xD9 / 255, blue: 0xEC / 255) : .white.opacity(0.25))
-                            .frame(width: 8, height: 8)
-                    }
-                }
-                .padding(.bottom, 20)
-                HStack(spacing: 12) {
-                    if page > 0 {
-                        Button(strings.back) { withAnimation { page -= 1 } }
-                            .buttonStyle(.bordered)
-                            .tint(.white)
-                    }
-                    Button(page == 3 ? strings.start : strings.next) {
-                        if page == 3 { onDone() } else { withAnimation { page += 1 } }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Color(red: 0x5C / 255, green: 0xD9 / 255, blue: 0xEC / 255))
-                    .foregroundStyle(.black)
-                }
-                .padding(.horizontal, 24)
-                .padding(.bottom, 32)
             }
+            .padding(.horizontal, 24)
+            .frame(height: 44)
+
+            TabView(selection: $page) {
+                step(strings.welcomeTitle) {
+                    BrandMark()
+                } details: {
+                    Text(strings.welcomeBody)
+                }
+                .tag(0)
+                step(strings.installTitle) {
+                    stepIcon("keyboard")
+                } details: {
+                    KeyboardInstallInstructions(strings: strings)
+                }
+                .tag(1)
+                step(strings.practiceTitle) {
+                    stepIcon("globe")
+                } details: {
+                    Text(strings.practiceHint)
+                    TextField(strings.practicePlaceholder, text: $practiceText)
+                        .textFieldStyle(.roundedBorder)
+                        .focused($practicing)
+                }
+                .tag(2)
+                step(strings.dictate) {
+                    stepIcon("waveform")
+                } details: {
+                    Text(strings.dictationHint)
+                }
+                .tag(3)
+            }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .onChange(of: page) { _, page in
+                if page != 2 { practicing = false }
+            }
+
+            HStack(spacing: 8) {
+                ForEach(0..<4, id: \.self) { index in
+                    Capsule()
+                        .fill(index == page ? WhisperColors.brandCyan : .white.opacity(0.25))
+                        .frame(width: index == page ? 18 : 6, height: 6)
+                }
+            }
+            .accessibilityHidden(true)
+            .padding(.vertical, 14)
+
+            HStack(spacing: 12) {
+                if page > 0 {
+                    Button(strings.back) { movePage(to: page - 1) }
+                        .buttonStyle(.bordered)
+                }
+                Button(page == 3 ? strings.done : strings.next) {
+                    if page == 3 { onDone() } else { movePage(to: page + 1) }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(WhisperColors.brandCyan)
+                .foregroundStyle(.black)
+            }
+            .buttonBorderShape(.capsule)
+            .padding(.horizontal, 24)
+            .padding(.bottom, 16)
         }
+        .tint(.white)
+        .background(WhisperColors.brandInk.ignoresSafeArea())
         .preferredColorScheme(.dark)
     }
 
-    private var welcome: some View {
-        VStack(spacing: 20) {
-            Spacer()
-            BrandMark()
-            Text(strings.welcomeTitle)
-                .font(.largeTitle).bold()
-                .foregroundStyle(.white)
-                .multilineTextAlignment(.center)
-            Text(strings.welcomeBody)
-                .font(.body)
-                .foregroundStyle(.white.opacity(0.75))
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 32)
-            Spacer()
-        }
-        .padding(.bottom, 24)
-    }
-
-    private var mic: some View {
-        card(title: strings.micTitle, systemImage: "mic.fill") {
-            Text(strings.micBody)
-                .font(.body)
-                .foregroundStyle(.white.opacity(0.8))
-            if micGranted {
-                Label(strings.micDone, systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-                    .font(.headline)
-            } else {
-                Button(strings.micGrant, action: onRequestMic)
-                    .buttonStyle(.borderedProminent)
-                    .tint(Color(red: 0x5C / 255, green: 0xD9 / 255, blue: 0xEC / 255))
-                    .foregroundStyle(.black)
-            }
-        }
-    }
-
-    private var keyboard: some View {
-        card(title: strings.keyboardTitle, systemImage: "keyboard.fill") {
-            Text(strings.keyboardBody)
-                .font(.body)
-                .foregroundStyle(.white.opacity(0.8))
-            VStack(alignment: .leading, spacing: 10) {
-                ForEach(Array(strings.keyboardSteps.enumerated()), id: \.offset) { i, step in
-                    HStack(alignment: .top, spacing: 10) {
-                        Text("\(i + 1)")
-                            .font(.headline)
-                            .foregroundStyle(Color(red: 0x5C / 255, green: 0xD9 / 255, blue: 0xEC / 255))
-                            .frame(width: 22)
-                        Text(step)
-                            .font(.subheadline)
-                            .foregroundStyle(.white)
-                    }
-                }
-            }
-            Button(strings.openSettings, action: onOpenSettings)
-                .buttonStyle(.bordered)
-                .tint(.white)
-            Text(strings.keyboardNote)
-                .font(.footnote)
-                .foregroundStyle(.white.opacity(0.6))
-        }
-    }
-
-    private var server: some View {
-        card(title: strings.serverTitle, systemImage: "waveform") {
-            Text(strings.serverBody)
-                .font(.body)
-                .foregroundStyle(.white.opacity(0.8))
-        }
-    }
-
-    private func card<Content: View>(title: String, systemImage: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(spacing: 0) {
-            Spacer()
+    private func step<Hero: View, Details: View>(
+        _ title: String, @ViewBuilder hero: () -> Hero, @ViewBuilder details: () -> Details
+    ) -> some View {
+        ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 34))
-                    .foregroundStyle(Color(red: 0x5C / 255, green: 0xD9 / 255, blue: 0xEC / 255))
+                hero()
                 Text(title)
-                    .font(.title2).bold()
-                    .foregroundStyle(.white)
-                content()
+                    .font(.largeTitle.bold())
+                    .accessibilityAddTraits(.isHeader)
+                details()
+                    .foregroundStyle(.secondary)
             }
+            .frame(maxWidth: 460, alignment: .leading)
             .padding(24)
-            .whisperGlass()
-            .padding(.horizontal, 20)
-            Spacer()
+            .frame(maxWidth: .infinity)
         }
-        .padding(.bottom, 12)
+        .defaultScrollAnchor(.center)
+        .scrollDismissesKeyboard(.interactively)
+    }
+
+    private func stepIcon(_ symbol: String) -> some View {
+        Image(systemName: symbol)
+            .font(.title.weight(.medium))
+            .foregroundStyle(WhisperColors.brandCyan)
+            .frame(width: 60, height: 60)
+            .background(WhisperColors.brandNavy, in: RoundedRectangle(cornerRadius: 18))
+            .accessibilityHidden(true)
+    }
+
+    private func movePage(to next: Int) {
+        practicing = false
+        withAnimation(reduceMotion ? nil : .default) { page = next }
     }
 }
 
-#Preview {
-    OnboardingView(micGranted: false, strings: .english)
+private struct KeyboardInstallInstructions: View {
+    let strings: OnboardingStrings
+
+    var body: some View {
+        Text(strings.installPath).font(.body.weight(.semibold))
+        Text(strings.installHint)
+    }
+}
+
+struct KeyboardSetupView: View {
+    let strings: OnboardingStrings
+    @State private var practiceText = ""
+
+    var body: some View {
+        List {
+            Section(strings.installTitle) {
+                VStack(alignment: .leading, spacing: 8) {
+                    KeyboardInstallInstructions(strings: strings)
+                }
+            }
+            Section {
+                TextField(strings.practicePlaceholder, text: $practiceText)
+            } header: {
+                Text(strings.practiceTitle)
+            } footer: {
+                Text(strings.practiceHint)
+            }
+            Section("Keyboard settings") {
+                Text(strings.keyboardSettings)
+            }
+        }
+        .navigationTitle(strings.keyboardTitle)
+        .navigationBarTitleDisplayMode(.inline)
+        .scrollDismissesKeyboard(.interactively)
+    }
 }

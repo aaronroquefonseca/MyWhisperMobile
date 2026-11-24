@@ -244,14 +244,16 @@ final class SttSettingsStore: ObservableObject {
 /// Speech-chain editor screen.
 struct SttSettingsView: View {
     @ObservedObject var store: SttSettingsStore
+    var navigationTitle: String
 
     @State private var sheet: SttSheetKind?
     @State private var pendingDelete: SttChainEntry?
     @State private var guardBlocked = false
     @State private var whyText: String?
 
-    init(store: SttSettingsStore = SttSettingsStore()) {
+    init(store: SttSettingsStore = SttSettingsStore(), navigationTitle: String = "Speech") {
         self.store = store
+        self.navigationTitle = navigationTitle
     }
 
     var body: some View {
@@ -290,7 +292,7 @@ struct SttSettingsView: View {
                 Text("Entries run top-down until one answers. Reorder with the arrows; drag is deferred.")
             }
         }
-        .navigationTitle("Speech")
+        .navigationTitle(navigationTitle)
         .onAppear { if store.entries.isEmpty { store.load() } }
         .sheet(item: $sheet) { kind in
             switch kind {

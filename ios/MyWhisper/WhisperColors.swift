@@ -15,6 +15,10 @@ import SwiftUI
 /// the iOS 26 SDK, surfaces should adopt Liquid Glass in one place
 /// (see `whisperSurface`) — Xcode 15.4 cannot compile glass APIs.
 enum WhisperColors {
+    static let brandNavy = Color(red: 20 / 255, green: 34 / 255, blue: 52 / 255)
+    static let brandInk = Color(red: 7 / 255, green: 14 / 255, blue: 24 / 255)
+    static let brandCyan = Color(red: 92 / 255, green: 217 / 255, blue: 236 / 255)
+
     static func primary(_ scheme: ColorScheme) -> Color {
         scheme == .dark ? Color(red: 0x80 / 255, green: 0xD9 / 255, blue: 0xBD / 255)
             : Color(red: 0x17 / 255, green: 0x66 / 255, blue: 0x57 / 255)

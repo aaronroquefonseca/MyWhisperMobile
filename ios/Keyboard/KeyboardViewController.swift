@@ -1,13 +1,7 @@
 import AudioToolbox
 import UIKit
 
-/// MyWhisper keyboard: Wispr Flow visual language (borderless
-/// translucent keys, utility strip with mode pill + round mic, brand space
-/// bar), Apple behavior (shift states incl. double-tap caps lock, delete
-/// repeat, double-space period, auto-caps incl. newlines, symbol pages,
-/// globe switch, in-keyboard settings). Completions come from the system
-/// lexicon via `UITextChecker` (Hunspell next) and appear as a strip row
-/// only while typing. Mic is a toast until Full Access + engine wiring.
+/// MyWhisper keyboard with local predictions, autocorrect, and emoji.
 final class KeyboardViewController: UIInputViewController {
 
     /// In-keyboard settings (extension-local defaults: no App Group exists
@@ -53,8 +47,6 @@ final class KeyboardViewController: UIInputViewController {
     private var popup: UILabel?
     private var deleteTimer: Timer?
     private var lastSpaceAt: Date?
-    private var toast: UILabel?
-    override var needsInputModeSwitchKey: Bool { false }
 
     private var isDark = false
     private var predictions: [String] = []
@@ -261,33 +253,38 @@ final class KeyboardViewController: UIInputViewController {
         (width - pad * 2 - gap * (CGFloat(keys) - 1 + inset * 2)) / (CGFloat(keys) + inset * 2)
     }
 
-    /// Utility strip (Wispr-style): menu, mode pill, round mic.
     private func addUtilityStrip(y: CGFloat, width: CGFloat, pad: CGFloat) {
-        let menuW: CGFloat = 54
-        let micD: CGFloat = 46
-        var x = pad
-        let menu = plainButton(systemName: "line.3.horizontal", size: 20)
-        menu.frame = CGRect(x: x, y: y, width: menuW, height: 46)
+        let buttonWidth: CGFloat = 48
+        let height: CGFloat = 46
+        let menu = plainButton(systemName: "slider.horizontal.3", size: 20)
+        menu.frame = CGRect(x: pad, y: y, width: buttonWidth, height: height)
+        menu.accessibilityLabel = NSLocalizedString("Keyboard settings", comment: "Keyboard settings button")
         menu.addTarget(self, action: #selector(menuTapped), for: .touchUpInside)
         rowsView.addSubview(menu)
-        x += menuW + 6
-        let pillW = width - pad * 2 - menuW - micD - 18
-        let pill = makeKey(bg: .clear, glass: true)
-        pill.frame = CGRect(x: x, y: y, width: pillW, height: 46)
-        pill.layer.cornerRadius = 23
-        pill.setTitle("Smart.", for: [])
-        pill.titleLabel?.font = .systemFont(ofSize: 17)
-        pill.setTitleColor(labelColor, for: [])
-        pill.addTarget(self, action: #selector(modeTapped), for: .touchUpInside)
-        rowsView.addSubview(pill)
-        x += pillW + 6
-        let mic = UIButton(type: .custom)
-        mic.frame = CGRect(x: x, y: y, width: micD, height: 46)
-        mic.backgroundColor = keyColor
-        mic.layer.cornerRadius = micD / 2
-        mic.setImage(UIImage(systemName: "mic.fill")?.withTintColor(cyan(), renderingMode: .alwaysOriginal), for: [])
-        mic.addTarget(self, action: #selector(micTapped), for: .touchUpInside)
-        rowsView.addSubview(mic)
+
+        let emoji = plainButton(systemName: "face.smiling", size: 21)
+        emoji.frame = CGRect(x: width - pad - buttonWidth, y: y, width: buttonWidth, height: height)
+        emoji.accessibilityLabel = NSLocalizedString("Emoji", comment: "Emoji picker button")
+        emoji.addTarget(self, action: #selector(openEmojiPicker), for: .touchUpInside)
+        rowsView.addSubview(emoji)
+
+        let accent = isDark
+            ? UIColor(red: 128 / 255, green: 217 / 255, blue: 189 / 255, alpha: 1)
+            : UIColor(red: 23 / 255, green: 102 / 255, blue: 87 / 255, alpha: 1)
+        let mark = UIImageView(image: UIImage(systemName: "waveform",
+                                             withConfiguration: UIImage.SymbolConfiguration(pointSize: 17)))
+        mark.tintColor = accent
+        let name = UILabel()
+        name.text = "MyWhisper"
+        name.textColor = labelColor
+        name.font = .systemFont(ofSize: 15, weight: .semibold)
+
+        let brand = UIStackView(arrangedSubviews: [mark, name])
+        brand.alignment = .center
+        brand.spacing = 7
+        let size = brand.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize)
+        brand.frame = CGRect(x: (width - size.width) / 2, y: y, width: size.width, height: height)
+        rowsView.addSubview(brand)
     }
 
     private func addPredictionRow(y: CGFloat, width: CGFloat, pad: CGFloat) {
@@ -326,12 +323,6 @@ final class KeyboardViewController: UIInputViewController {
         playClick()
         showingSettings.toggle()
         rebuild()
-    }
-
-    @objc private func modeTapped() {
-        hidePopup()
-        playClick()
-        showToast("Voice modes arrive with the mic update")
     }
 
     // MARK: - In-keyboard settings
@@ -405,10 +396,6 @@ final class KeyboardViewController: UIInputViewController {
         rebuild()
     }
 
-    private func cyan() -> UIColor {
-        UIColor(red: 0x5C / 255, green: 0xD9 / 255, blue: 0xEC / 255, alpha: 1)
-    }
-
     private func addLettersRow(keys: String, y: CGFloat, h: CGFloat, width: CGFloat, pad: CGFloat, inset: CGFloat = 0, left: UIButton? = nil, right: UIButton? = nil) {
         let chars = keys.map(String.init)
         let extras = (left == nil ? 0 : 1.5) + (right == nil ? 0 : 1.5)
@@ -452,18 +439,18 @@ final class KeyboardViewController: UIInputViewController {
         page.frame = CGRect(x: x, y: y, width: u * 1.5, height: h)
         rowsView.addSubview(page)
         x += u * 1.5 + 6
-        let globe = symbolKey("globe", size: 21)
-        globe.frame = CGRect(x: x, y: y, width: u, height: h)
-        globe.addTarget(self, action: #selector(nextKeyboard), for: .touchUpInside)
-        let globeHold = UILongPressGestureRecognizer(target: self, action: #selector(globeHeld(_:)))
-        globeHold.minimumPressDuration = 0.5
-        globe.addGestureRecognizer(globeHold)
-        rowsView.addSubview(globe)
-        x += u + 6
-        let spaceW = u * 4
+        if needsInputModeSwitchKey {
+            let globe = symbolKey("globe", size: 21)
+            globe.frame = CGRect(x: x, y: y, width: u, height: h)
+            globe.accessibilityLabel = NSLocalizedString("Switch keyboard", comment: "Globe key")
+            globe.addTarget(self, action: #selector(handleInputModeList(from:with:)), for: .allTouchEvents)
+            rowsView.addSubview(globe)
+            x += u + 6
+        }
+        let spaceW = u * 4 + (needsInputModeSwitchKey ? 0 : u + 6)
         let space = makeKey(bg: keyColor)
         space.frame = CGRect(x: x, y: y, width: spaceW, height: h)
-        space.setTitle("MyWhisper", for: [])
+        space.setTitle(NSLocalizedString("space", comment: "Space key"), for: [])
         space.titleLabel?.font = .systemFont(ofSize: 15)
         space.setTitleColor(labelColor.withAlphaComponent(0.85), for: [])
         space.addTarget(self, action: #selector(spaceTapped), for: .touchUpInside)
@@ -493,16 +480,11 @@ final class KeyboardViewController: UIInputViewController {
 
     // MARK: - Keys
 
-    /// Borderless translucent key. `glass` adds the frosted pill treatment.
-    private func makeKey(bg: UIColor, glass: Bool = false) -> UIButton {
-        let b = UIButton(type: .custom)
-        b.backgroundColor = bg
-        b.layer.cornerRadius = 5.5
-        if glass {
-            b.layer.borderColor = UIColor.white.withAlphaComponent(0.22).cgColor
-            b.layer.borderWidth = 1
-        }
-        return b
+    private func makeKey(bg: UIColor) -> UIButton {
+        let key = UIButton(type: .custom)
+        key.backgroundColor = bg
+        key.layer.cornerRadius = 5.5
+        return key
     }
 
     private func plainButton(systemName: String?, size: CGFloat) -> UIButton {
@@ -719,19 +701,7 @@ final class KeyboardViewController: UIInputViewController {
         textDocumentProxy.insertText("\n")
     }
 
-    @objc private func nextKeyboard() {
-        hidePopup()
-        playClick()
-        advanceToNextInputMode()
-    }
-
-    @objc private func micTapped() {
-        hidePopup()
-        playClick()
-        showToast("Voice dictation coming soon")
-    }
-
-    // MARK: - Popup, toast, click
+    // MARK: - Popup and key clicks
 
     private func showPopup(for b: UIButton) {
         hidePopup()
@@ -767,24 +737,6 @@ final class KeyboardViewController: UIInputViewController {
         popup?.removeFromSuperview()
         popup = nil
         rowsView.subviews.forEach { $0.viewWithTag(991)?.removeFromSuperview() }
-    }
-
-    private func showToast(_ s: String) {
-        toast?.removeFromSuperview()
-        let label = UILabel()
-        label.text = s
-        label.font = .systemFont(ofSize: 15)
-        label.textColor = .white
-        label.backgroundColor = UIColor.black.withAlphaComponent(0.75)
-        label.textAlignment = .center
-        label.layer.cornerRadius = 10
-        label.clipsToBounds = true
-        label.frame = CGRect(x: 40, y: 4, width: view.bounds.width - 80, height: 34)
-        view.addSubview(label)
-        toast = label
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self, weak label] in
-            if self?.toast == label { label?.removeFromSuperview() }
-        }
     }
 
     private func playClick() {
@@ -823,8 +775,7 @@ final class KeyboardViewController: UIInputViewController {
         return emojiCatalog.groups[category] ?? []
     }
 
-    @objc private func globeHeld(_ g: UILongPressGestureRecognizer) {
-        guard g.state == .began else { return }
+    @objc private func openEmojiPicker() {
         hidePopup()
         playClick()
         showingSettings = false

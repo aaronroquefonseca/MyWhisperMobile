@@ -62,22 +62,17 @@ func setupChecklist(micGranted: Bool, settings: [String: Any]?, testPassed: Bool
     SetupChecklist(micGranted: micGranted, serverConfigured: isServerConfigured(settings: settings), testPassed: testPassed)
 }
 
-/// Fresh-install checklist: mic permission (with rationale) → server
-/// configured → test dictation, plus the theme picker. There are deliberately
-/// NO input-method steps: iOS cannot replace the system keyboard the way
-/// Android IMEs do, so the UI says so instead of showing dead steps.
+/// Microphone, provider readiness, and the foreground dictation test.
 struct SetupView: View {
     var settings: [String: Any]?
     var micGranted: Bool
     var testPassed: Bool
-    var testRunning: Bool
     var testError: String?
-    var theme: AppTheme
     var strings: SetupStrings
     var onRequestMic: () -> Void = {}
     var onOpenSettings: () -> Void = {}
+    var onOpenProviders: () -> Void = {}
     var onRunTest: () -> Void = {}
-    var onThemeChange: (AppTheme) -> Void = { _ in }
     var onMicPriorityChange: ([String]) -> Void = { _ in }
 
     @State private var showRationale = false
@@ -111,11 +106,6 @@ struct SetupView: View {
                 checklistRow(done: checklist.serverConfigured, label: strings.doneServer)
                 checklistRow(done: checklist.testPassed, label: strings.doneTest)
             }
-            Section(strings.noImeTitle) {
-                Text(strings.noImeBody)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
             Section(strings.stepMic) {
                 Text(micGranted ? strings.setupMicYes : strings.setupMicNo)
                 Button(strings.setupMicGrant) {
@@ -132,9 +122,8 @@ struct SetupView: View {
                 if checklist.serverConfigured {
                     Text(strings.doneServer)
                 } else {
-                    Text(strings.serverMissing)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                    Button(TabStrings.current(languageCode: Locale.current.language.languageCode?.identifier).providers,
+                           action: onOpenProviders)
                 }
             }
             Section(strings.stepTest) {
@@ -142,10 +131,7 @@ struct SetupView: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                 Button(strings.testRun) { onRunTest() }
-                    .disabled(testRunning || !checklist.micGranted || !checklist.serverConfigured)
-                if testRunning {
-                    ProgressView()
-                }
+                    .disabled(!checklist.micGranted || !checklist.serverConfigured)
                 if testPassed {
                     Text(strings.testPassed)
                 } else if let error = testError {
@@ -153,17 +139,6 @@ struct SetupView: View {
                         .font(.subheadline)
                         .foregroundStyle(.red)
                 }
-            }
-            Section(strings.setupPrefs) {
-                Picker(strings.setupTheme, selection: Binding(
-                    get: { theme },
-                    set: { onThemeChange($0) }
-                )) {
-                    ForEach(AppTheme.allCases, id: \.self) { option in
-                        Text(option.rawValue).tag(option)
-                    }
-                }
-                .pickerStyle(.segmented)
             }
             Section {
                 let order = MicRoute.priority(from: settings)
@@ -189,13 +164,9 @@ struct SetupView: View {
             } footer: {
                 Text(strings.micPrioritySub)
             }
-            Section(strings.setupStatus) {
-                Text(strings.setupServerOnly)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
         }
-        .navigationTitle(strings.tabSetup)
+        .navigationTitle(OnboardingStrings.current(languageCode: Locale.current.language.languageCode?.identifier).dictationSetup)
+        .navigationBarTitleDisplayMode(.inline)
         .alert(strings.stepMic, isPresented: $showRationale) {
             Button(strings.setupMicGrant) {
                 showRationale = false
@@ -224,6 +195,10 @@ struct SetupView: View {
 /// Production mic-permission helper: reports the current record permission
 /// and requests it when undetermined. Calls back on the main queue.
 enum MicPermission {
+    static var isDenied: Bool {
+        AVAudioSession.sharedInstance().recordPermission == .denied
+    }
+
     static func current() -> Bool {
         AVAudioSession.sharedInstance().recordPermission == .granted
     }
@@ -250,9 +225,7 @@ enum MicPermission {
             settings: ["stt": ["entries": [["kind": "Cloud", "model": "whisper-1"]]]],
             micGranted: false,
             testPassed: false,
-            testRunning: false,
             testError: nil,
-            theme: .system,
             strings: .english
         )
     }

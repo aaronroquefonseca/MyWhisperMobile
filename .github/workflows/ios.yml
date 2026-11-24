@@ -102,7 +102,6 @@ jobs:
           print(pick['udid'])
           ")
           echo "Simulator: $UDID"
-          xcrun simctl boot "$UDID"
           # Boot first: screenshots during first boot only catch the Apple logo.
           # boot fails with 405 when already booted — not an error here.
           xcrun simctl boot "$UDID" || true
@@ -113,10 +112,10 @@ jobs:
             sleep 5
             xcrun simctl io "$UDID" screenshot "build/sim-$1.png"
           }
-          shot record -mwSkipOnboarding
-          shot speech -mwSkipOnboarding -mwTab speech
-          shot history -mwSkipOnboarding -mwTab history
-          shot setup -mwSkipOnboarding -mwTab setup
+          shot activity -mwSkipOnboarding
+          shot providers -mwSkipOnboarding -mwTab providers
+          shot dictionary -mwSkipOnboarding -mwTab dictionary
+          shot settings -mwSkipOnboarding -mwTab settings
           ls -l build/sim-*.png
 
       - name: Upload screenshots

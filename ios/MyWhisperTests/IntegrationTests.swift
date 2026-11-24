@@ -9,11 +9,9 @@ final class IntegrationTests: XCTestCase {
     // MARK: - Tab root covers every merged screen
 
     func testAllTabsPresentInFlowOrder() {
-        XCTAssertEqual(AppTab.allCases.count, 7)
-        XCTAssertEqual(AppTab.allCases.first, .record)
         XCTAssertEqual(
             AppTab.allCases,
-            [.record, .setup, .speech, .cleanup, .dictionary, .history, .devices]
+            [.activity, .providers, .dictionary, .settings]
         )
     }
 
@@ -124,8 +122,8 @@ final class IntegrationTests: XCTestCase {
             XCTAssertFalse(tab.title(using: .spanish).isEmpty)
             XCTAssertFalse(tab.systemImage.isEmpty)
         }
-        XCTAssertEqual(AppTab.record.title(using: .english), "Record")
-        XCTAssertEqual(AppTab.setup.title(using: .spanish), "Configuración")
+        XCTAssertEqual(AppTab.activity.title(using: .english), "Activity")
+        XCTAssertEqual(AppTab.settings.title(using: .spanish), "Ajustes")
         XCTAssertEqual(TabStrings.current(languageCode: nil), .english)
         XCTAssertEqual(TabStrings.current(languageCode: "es"), .spanish)
     }

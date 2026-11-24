@@ -88,13 +88,14 @@ final class HistoryTests: XCTestCase {
 
     func testHistoryItemParsesCoreShape() {
         let dict: [String: Any] = [
-            "uuid": "u-1", "text": "hi there", "rawText": "hi there",
+            "uuid": "u-1", "text": "hi there", "rawText": "hi their",
             "dateLabel": "Today", "wordCount": 2, "durationSecs": 30,
             "recordedAt": 1_700_000_000, "discarded": false
         ]
         let parsed = HistoryItem(dict: dict)
         XCTAssertEqual(parsed?.uuid, "u-1")
         XCTAssertEqual(parsed?.text, "hi there")
+        XCTAssertEqual(parsed?.rawText, "hi their")
         XCTAssertEqual(parsed?.wordCount, 2)
         XCTAssertEqual(parsed?.durationSecs, 30)
         XCTAssertEqual(parsed?.recordedAt, 1_700_000_000)
@@ -110,7 +111,23 @@ final class HistoryTests: XCTestCase {
         XCTAssertEqual(parsed?.wordCount, 1)
         XCTAssertEqual(parsed?.recordedAt, 1_700_000_000)
         XCTAssertEqual(parsed?.dateLabel, "")
+        XCTAssertNil(parsed?.rawText)
         XCTAssertEqual(parsed?.discarded, false)
+    }
+
+    func testHistoryGroupsMostRecentLocalDayFirstAndKeepsLegacyRows() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 3_600)!
+        let items = [
+            item(uuid: "recent", recordedAt: 86_400),
+            item(uuid: "same-day", recordedAt: 86_399),
+            item(uuid: "older", recordedAt: 82_799),
+            item(uuid: "legacy", recordedAt: 0)
+        ]
+
+        let groups = HistoryDay.group(items, calendar: calendar)
+        XCTAssertEqual(groups.map { $0.items.map(\.uuid) }, [["recent", "same-day"], ["older"], ["legacy"]])
+        XCTAssertNil(groups.last?.id)
     }
 
     func testHistoryItemRejectsMissingIdentity() {

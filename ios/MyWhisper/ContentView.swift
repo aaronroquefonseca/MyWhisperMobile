@@ -1,247 +1,249 @@
 import SwiftUI
 
-/// v1 root: tab navigation across every merged screen (T1–T9), owned by an
-/// `AppFlow` composition root. Record hosts the end-to-end dictation path
-/// (RecordView → Dictation/AudioCapture → core → ResultView +
-/// copy/share); history rows land via the core and HistoryView refreshes
-/// on tab-appear.
 struct ContentView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.colorScheme) private var colorScheme
     @StateObject private var flow = AppFlow()
+    @StateObject private var speechStore = SttSettingsStore()
+    @StateObject private var cleanupStore = CleanupSettingsStore()
+    @State private var selectedTab = AppTab.activity
+    @State private var voiceCleanup = false
+    @State private var showGuide = false
     @State private var showOnboarding = {
         #if DEBUG
         if CommandLine.arguments.contains("-mwSkipOnboarding") { return false }
         #endif
         return !UserDefaults.standard.bool(forKey: "mw.onboarded.v1")
     }()
-    @State private var voiceCleanup = false
-    @StateObject private var speechStore = SttSettingsStore()
-    @StateObject private var cleanupStore = CleanupSettingsStore()
 
     var body: some View {
-        if showOnboarding {
-            onboardingView
-        } else {
-            mainView
+        Group {
+            if showOnboarding {
+                OnboardingView(strings: keyboardStrings, initialPage: initialOnboardingPage) {
+                    UserDefaults.standard.set(true, forKey: "mw.onboarded.v1")
+                    showOnboarding = false
+                }
+            } else {
+                mainView
+            }
+        }
+        .preferredColorScheme(flow.theme.colorScheme)
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { flow.refreshMicPermission() }
         }
     }
 
-    private var onboardingView: some View {
-        OnboardingView(
-            micGranted: flow.micGranted,
-            strings: OnboardingStrings.current(languageCode: languageCode),
-            onRequestMic: { flow.requestMic() },
-            onOpenSettings: { flow.openSystemSettings() },
-            onDone: {
-                UserDefaults.standard.set(true, forKey: "mw.onboarded.v1")
-                showOnboarding = false
-            },
-            initialPage: {
-                #if DEBUG
-                let args = CommandLine.arguments
-                if let i = args.firstIndex(of: "-mwOnboardingPage"), i + 1 < args.count,
-                   let n = Int(args[i + 1]) { return n }
-                #endif
-                return 0
-            }()
-        )
-    }
-
     private var mainView: some View {
-        TabView(selection: $flow.selectedTab) {
-            ForEach([AppTab.record, .speech, .history, .setup], id: \.self) { tab in
+        TabView(selection: $selectedTab) {
+            ForEach(AppTab.allCases, id: \.self) { tab in
                 NavigationStack {
-                    if tab == .setup {
+                    switch tab {
+                    case .activity:
+                        ActivityView(flow: flow, keyboardStrings: keyboardStrings, onOpenProviders: openSpeechProviders)
+                    case .providers:
+                        providers
+                    case .dictionary:
+                        DictionaryView()
+                    case .settings:
                         settingsHub
-                    } else if tab == .speech {
-                        VStack(spacing: 0) {
-                            Picker(tabStrings.speech, selection: $voiceCleanup) {
-                                Text(tabStrings.speech).tag(false)
-                                Text(tabStrings.cleanup).tag(true)
-                            }
-                            .pickerStyle(.segmented)
-                            .padding()
-                            // Keep both editors mounted so changing segments preserves drafts.
-                            ZStack {
-                                SttSettingsView(store: speechStore)
-                                    .opacity(voiceCleanup ? 0 : 1)
-                                    .allowsHitTesting(!voiceCleanup)
-                                    .accessibilityHidden(voiceCleanup)
-                                CleanupSettingsView(store: cleanupStore)
-                                    .opacity(voiceCleanup ? 1 : 0)
-                                    .allowsHitTesting(voiceCleanup)
-                                    .accessibilityHidden(!voiceCleanup)
-                            }
-                        }
-                    } else {
-                        tabContent(for: tab)
                     }
                 }
-                .tabItem { Label(tab == .setup ? (languageCode == "es" ? "Más" : "More") : tab.title(using: tabStrings), systemImage: tab == .setup ? "ellipsis" : tab.systemImage) }
+                .tabItem { Label(tab.title(using: tabStrings), systemImage: tab.systemImage) }
                 .tag(tab)
             }
         }
         .whisperTabBarMinimize()
         .tint(WhisperColors.primary(colorScheme))
-        .preferredColorScheme(flow.theme.colorScheme)
-        .onAppear {
-            #if DEBUG
-            let args = CommandLine.arguments
-            if let i = args.firstIndex(of: "-mwTab"), i + 1 < args.count {
-                switch args[i + 1] {
-                case "speech": flow.selectedTab = .speech
-                case "history": flow.selectedTab = .history
-                case "setup": flow.selectedTab = .setup
-                default: break
+        .onChange(of: selectedTab) { _, tab in
+            if tab == .activity || tab == .settings { flow.reloadSettings() }
+        }
+        .onAppear(perform: selectDebugTab)
+        .sheet(isPresented: $showGuide) {
+            OnboardingView(strings: keyboardStrings) { showGuide = false }
+        }
+        .sheet(isPresented: $flow.showRecorder) {
+            NavigationStack {
+                recordView
+                    .navigationTitle(keyboardStrings.dictate)
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button(keyboardStrings.done) { flow.showRecorder = false }
+                                .disabled(flow.recordState != .idle)
+                        }
+                    }
+            }
+            .interactiveDismissDisabled(flow.recordState != .idle)
+            .sheet(isPresented: shareVisible) {
+                if let text = flow.shareText {
+                    ShareSheet(items: [text])
                 }
             }
-            #endif
         }
-        .sheet(isPresented: shareVisible) {
-            if let text = flow.shareText {
-                ShareSheet(items: [text])
+    }
+
+    private var providers: some View {
+        VStack(spacing: 0) {
+            Picker(tabStrings.providers, selection: $voiceCleanup) {
+                Text(tabStrings.speech).tag(false)
+                Text(tabStrings.cleanup).tag(true)
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+
+            // Keep both editors mounted when switching segments.
+            ZStack {
+                SttSettingsView(store: speechStore, navigationTitle: tabStrings.providers)
+                    .opacity(voiceCleanup ? 0 : 1)
+                    .allowsHitTesting(!voiceCleanup)
+                    .accessibilityHidden(voiceCleanup)
+                CleanupSettingsView(store: cleanupStore, navigationTitle: tabStrings.providers)
+                    .opacity(voiceCleanup ? 1 : 0)
+                    .allowsHitTesting(voiceCleanup)
+                    .accessibilityHidden(!voiceCleanup)
             }
         }
+        .background(WhisperColors.background(colorScheme))
+        .navigationTitle(tabStrings.providers)
     }
 
     private var settingsHub: some View {
         List {
             Section {
+                Button { showGuide = true } label: {
+                    Label(keyboardStrings.setupGuide, systemImage: "list.bullet.clipboard")
+                }
+            }
+            Section(keyboardStrings.input) {
                 NavigationLink {
-                    tabContent(for: .setup)
+                    KeyboardSetupView(strings: keyboardStrings)
                 } label: {
-                    Label(tabStrings.setup, systemImage: "slider.horizontal.3")
+                    Label(keyboardStrings.keyboardTitle, systemImage: "keyboard")
+                }
+                NavigationLink {
+                    SetupView(
+                        settings: flow.settings,
+                        micGranted: flow.micGranted,
+                        testPassed: flow.testPassed,
+                        testError: flow.testError,
+                        strings: setupStrings,
+                        onRequestMic: flow.requestMic,
+                        onOpenSettings: flow.openSystemSettings,
+                        onOpenProviders: openSpeechProviders,
+                        onRunTest: flow.runSetupTest,
+                        onMicPriorityChange: flow.applyMicPriority
+                    )
+                } label: {
+                    Label(keyboardStrings.dictationSetup, systemImage: "mic")
                 }
             }
             Section {
                 NavigationLink {
-                    DictionaryView()
-                } label: {
-                    Label(tabStrings.dictionary, systemImage: "book")
-                }
-                NavigationLink {
                     DevicesView()
                 } label: {
-                    Label(tabStrings.devices, systemImage: "antenna.radiowaves.left.and.right")
+                    Label(keyboardStrings.devices, systemImage: "antenna.radiowaves.left.and.right")
                 }
             }
+            Section(setupStrings.setupTheme) {
+                Picker(setupStrings.setupTheme, selection: Binding(get: { flow.theme }, set: flow.applyTheme)) {
+                    ForEach(AppTheme.allCases, id: \.self) { option in
+                        Text(option.rawValue).tag(option)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
         }
-        .navigationTitle(languageCode == "es" ? "Más" : "More")
+        .navigationTitle(tabStrings.settings)
     }
 
-    /// Exhaustive: adding an `AppTab` case without a screen is a compile
-    /// error, so the tab root can never silently drop a merged screen.
-    @ViewBuilder
-    private func tabContent(for tab: AppTab) -> some View {
-        switch tab {
-        case .record:
-            recordTab
-        case .setup:
-            SetupView(
-                settings: flow.settings,
-                micGranted: flow.micGranted,
-                testPassed: flow.testPassed,
-                // Reserved for a future headless test utterance (v1 routes
-                // to the Record tab instead); SetupView's branch stays off.
-                testRunning: false,
-                testError: flow.testError,
-                theme: flow.theme,
-                strings: SetupStrings.current(languageCode: languageCode),
-                onRequestMic: { flow.requestMic() },
-                onOpenSettings: { flow.openSystemSettings() },
-                onRunTest: { flow.runSetupTest() },
-                onThemeChange: { flow.applyTheme($0) },
-                onMicPriorityChange: { flow.applyMicPriority($0) }
-            )
-        case .speech:
-            SttSettingsView(store: speechStore)
-        case .cleanup:
-            CleanupSettingsView(store: cleanupStore)
-        case .dictionary:
-            DictionaryView()
-        case .history:
-            HistoryView()
-        case .devices:
-            DevicesView()
-        }
-    }
-
-    private var recordTab: some View {
+    private var recordView: some View {
         ScrollView {
             VStack(spacing: 16) {
                 if let error = flow.coreError {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Couldn't start the speech engine. Check the Speech tab, then retry.")
+                        Text("Couldn't start the speech engine.")
                             .font(.subheadline)
-                            .foregroundStyle(.secondary)
                         Text(error)
                             .font(.caption)
                             .foregroundStyle(WhisperColors.error)
                             .textSelection(.enabled)
-                        Button("Retry") { flow.openCore() }
+                        Button("Retry", action: flow.openCore)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding()
                     .whisperSurface()
                 }
-                VStack {
-                    RecordView(
-                        state: flow.recordState,
-                        toggled: flow.toggled,
-                        micMode: flow.micMode,
-                        levels: flow.levels,
-                        onPressDown: { flow.pressDown() },
-                        onPressUp: { flow.pressUp() },
-                        onCancel: { flow.cancelRecording() }
-                    )
-                    .frame(maxWidth: .infinity, alignment: .center)
-                }
+                RecordView(
+                    state: flow.recordState,
+                    toggled: flow.toggled,
+                    micMode: flow.micMode,
+                    levels: flow.levels,
+                    onPressDown: flow.pressDown,
+                    onPressUp: flow.pressUp,
+                    onCancel: flow.cancelRecording
+                )
+                .frame(maxWidth: .infinity)
                 .padding(.vertical, 12)
                 .background(
                     LinearGradient(
-                        colors: [
-                            Color(red: 0x14 / 255, green: 0x22 / 255, blue: 0x34 / 255),
-                            Color(red: 0x07 / 255, green: 0x0E / 255, blue: 0x18 / 255),
-                        ],
+                        colors: [WhisperColors.brandNavy, WhisperColors.brandInk],
                         startPoint: .topLeading, endPoint: .bottomTrailing
                     ),
-                    in: RoundedRectangle(cornerRadius: 24, style: .continuous)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .stroke(.white.opacity(0.14), lineWidth: 1)
+                    in: RoundedRectangle(cornerRadius: 24)
                 )
                 if let content = flow.result {
                     ResultView(
                         content: content,
-                        onCopy: { flow.copyResult() },
-                        onShare: { flow.shareResult() },
-                        onRetry: { flow.retryResult() },
+                        onCopy: flow.copyResult,
+                        onShare: flow.shareResult,
+                        onRetry: flow.retryResult,
                         strings: SttStrings.current(languageCode: languageCode)
                     )
-                    .padding()
                     .whisperSurface()
                 }
             }
             .padding()
         }
         .background(WhisperColors.background(colorScheme))
-        .navigationTitle("MyWhisper")
+    }
+
+    private func openSpeechProviders() {
+        voiceCleanup = false
+        selectedTab = .providers
     }
 
     private var shareVisible: Binding<Bool> {
-        Binding(
-            get: { flow.shareText != nil },
-            set: { if !$0 { flow.shareText = nil } }
-        )
+        Binding(get: { flow.shareText != nil }, set: { if !$0 { flow.shareText = nil } })
     }
 
-    /// Language code for the en/es string twins (nil = English).
-    private var languageCode: String? {
-        Locale.current.language.languageCode?.identifier
+    private var languageCode: String? { Locale.current.language.languageCode?.identifier }
+    private var tabStrings: TabStrings { .current(languageCode: languageCode) }
+    private var setupStrings: SetupStrings { .current(languageCode: languageCode) }
+    private var keyboardStrings: OnboardingStrings { .current(languageCode: languageCode) }
+
+    private var initialOnboardingPage: Int {
+        #if DEBUG
+        let args = CommandLine.arguments
+        if let index = args.firstIndex(of: "-mwOnboardingPage"), args.indices.contains(index + 1) {
+            return Int(args[index + 1]) ?? 0
+        }
+        #endif
+        return 0
     }
 
-    private var tabStrings: TabStrings {
-        TabStrings.current(languageCode: languageCode)
+    private func selectDebugTab() {
+        #if DEBUG
+        let args = CommandLine.arguments
+        guard let index = args.firstIndex(of: "-mwTab"), args.indices.contains(index + 1) else { return }
+        switch args[index + 1] {
+        case "record": flow.showRecorder = true
+        case "history": selectedTab = .activity
+        case "speech": selectedTab = .providers
+        case "setup": selectedTab = .settings
+        default:
+            if let tab = AppTab(rawValue: args[index + 1]) { selectedTab = tab }
+        }
+        #endif
     }
 }

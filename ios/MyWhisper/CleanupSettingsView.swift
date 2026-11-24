@@ -180,6 +180,7 @@ final class CleanupSettingsStore: ObservableObject {
 /// Cleanup editor screen.
 struct CleanupSettingsView: View {
     @ObservedObject var store: CleanupSettingsStore
+    var navigationTitle: String
 
     @State private var sheet: CleanupSheetKind?
     @State private var pendingDelete: Cleanup.Entry?
@@ -188,8 +189,9 @@ struct CleanupSettingsView: View {
     @State private var promptDraft = ""
     @State private var promptEditing = false
 
-    init(store: CleanupSettingsStore = CleanupSettingsStore()) {
+    init(store: CleanupSettingsStore = CleanupSettingsStore(), navigationTitle: String = "Cleanup") {
         self.store = store
+        self.navigationTitle = navigationTitle
     }
 
     var body: some View {
@@ -271,7 +273,7 @@ struct CleanupSettingsView: View {
                 Text("Enabled entries run top-down until one answers. Local rows are skipped (no on-device engine).")
             }
         }
-        .navigationTitle("Cleanup")
+        .navigationTitle(navigationTitle)
         .onAppear { if store.draft.entries.isEmpty { store.load() } }
         .sheet(item: $sheet) { kind in
             switch kind {

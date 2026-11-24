@@ -64,7 +64,7 @@ final class DictionaryViewModel: ObservableObject {
 }
 
 struct DictionaryView: View {
-    @ObservedObject var model: DictionaryViewModel
+    @StateObject private var model: DictionaryViewModel
 
     @State private var showingWordForm = false
     @State private var editingSnippet: DictionaryStore.Snippet?
@@ -73,7 +73,7 @@ struct DictionaryView: View {
     @State private var pendingSnippetDelete: String?
 
     init(model: DictionaryViewModel = DictionaryViewModel()) {
-        self.model = model
+        _model = StateObject(wrappedValue: model)
     }
 
     var body: some View {
@@ -127,8 +127,16 @@ struct DictionaryView: View {
                     showingSnippetForm = true
                 }
             }
+            Section {
+                NavigationLink {
+                    DevicesView()
+                } label: {
+                    Label(OnboardingStrings.current(languageCode: languageCode).devices,
+                          systemImage: "antenna.radiowaves.left.and.right")
+                }
+            }
         }
-        .navigationTitle("Dictionary")
+        .navigationTitle(TabStrings.current(languageCode: languageCode).dictionary)
         .onAppear { model.load() }
         .sheet(isPresented: $showingWordForm) {
             WordForm(onSave: { model.addWord($0) })
@@ -157,6 +165,8 @@ struct DictionaryView: View {
             Text("This trigger stops expanding.")
         }
     }
+
+    private var languageCode: String? { Locale.current.language.languageCode?.identifier }
 
     private var wordDeleteBinding: Binding<Bool> {
         Binding(get: { pendingWordDelete != nil }, set: { if !$0 { pendingWordDelete = nil } })

@@ -125,7 +125,6 @@ final class SetupTests: XCTestCase {
     func testSetupStringsSpanish() {
         let strings = SetupStrings.current(languageCode: "es")
         XCTAssertEqual(strings, .spanish)
-        XCTAssertEqual(strings.tabSetup, "Configuración")
         XCTAssertEqual(strings.setupMicGrant, "Conceder micrófono")
         XCTAssertEqual(strings.setupTheme, "Tema")
     }
@@ -140,22 +139,15 @@ final class SetupTests: XCTestCase {
         XCTAssertEqual(SetupStrings.spanish.setupMicDenied, "El permiso del micrófono es necesario para dictar")
         XCTAssertEqual(SetupStrings.english.setupTheme, "Theme")
         XCTAssertEqual(SetupStrings.spanish.setupTheme, "Tema")
-        XCTAssertEqual(SetupStrings.english.setupPrefs, "Preferences")
-        XCTAssertEqual(SetupStrings.spanish.setupPrefs, "Preferencias")
         // Checklist server row pins setup_speech_configured (PR #54 renamed
         // the hardcoded "Speech server configured" copy).
         XCTAssertEqual(SetupStrings.english.doneServer, "Speech configured")
         XCTAssertEqual(SetupStrings.spanish.doneServer, "Voz configurada")
     }
 
-    func testSetupStringsDocumentNoIme() {
-        // Both locales must explain the keyboard install (no dead IME steps).
-        for strings in [SetupStrings.english, SetupStrings.spanish] {
-            XCTAssertFalse(strings.noImeTitle.isEmpty)
-            XCTAssertFalse(strings.noImeBody.isEmpty)
-        }
-        XCTAssertTrue(SetupStrings.english.noImeBody.contains("Add New Keyboard"))
-        XCTAssertTrue(SetupStrings.spanish.noImeBody.contains("Añadir nuevo teclado"))
+    func testKeyboardInstallPathInBothLanguages() {
+        XCTAssertTrue(OnboardingStrings.english.installPath.contains("Keyboards → Add New Keyboard"))
+        XCTAssertTrue(OnboardingStrings.spanish.installPath.contains("Teclados → Añadir nuevo teclado"))
     }
 
     func testProgressTitleLocalizesCount() {

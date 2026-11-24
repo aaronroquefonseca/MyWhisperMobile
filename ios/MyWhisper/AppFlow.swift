@@ -1,40 +1,27 @@
 import SwiftUI
 import UIKit
 
-/// v1 tab identifiers, in user-flow order: record first, setup second
-/// (fresh-install checklist), then the merged T4–T9 screens.
-enum AppTab: String, Hashable, CaseIterable {
-    case record
-    case setup
-    case speech
-    case cleanup
+enum AppTab: String, CaseIterable {
+    case activity
+    case providers
     case dictionary
-    case history
-    case devices
+    case settings
 
-    /// Exhaustive: adding a tab without a title is a compile error.
     func title(using strings: TabStrings) -> String {
         switch self {
-        case .record: return strings.record
-        case .setup: return strings.setup
-        case .speech: return strings.speech
-        case .cleanup: return strings.cleanup
+        case .activity: return strings.activity
+        case .providers: return strings.providers
         case .dictionary: return strings.dictionary
-        case .history: return strings.history
-        case .devices: return strings.devices
+        case .settings: return strings.settings
         }
     }
 
-    /// Exhaustive: adding a tab without an icon is a compile error.
     var systemImage: String {
         switch self {
-        case .record: return "mic"
-        case .setup: return "checklist"
-        case .speech: return "waveform"
-        case .cleanup: return "wand.and.stars"
+        case .activity: return "waveform"
+        case .providers: return "server.rack"
         case .dictionary: return "book"
-        case .history: return "clock"
-        case .devices: return "antenna.radiowaves.left.and.right"
+        case .settings: return "gearshape"
         }
     }
 }
@@ -54,31 +41,28 @@ func applyingTheme(_ theme: AppTheme, to settings: [String: Any]) -> [String: An
 /// `SetupStrings`: no `.lproj` infrastructure exists yet, so twins live
 /// beside the English copy and resolve via an explicit language code).
 struct TabStrings: Equatable {
-    let record: String
-    let setup: String
+    let activity: String
+    let providers: String
+    let dictionary: String
+    let settings: String
     let speech: String
     let cleanup: String
-    let dictionary: String
-    let history: String
-    let devices: String
 
     static let english = TabStrings(
-        record: "Record",
-        setup: "Setup",
-        speech: "Speech",
-        cleanup: "Cleanup",
+        activity: "Activity",
+        providers: "Providers",
         dictionary: "Dictionary",
-        history: "History",
-        devices: "Devices"
+        settings: "Settings",
+        speech: "Speech recognition",
+        cleanup: "Text cleanup"
     )
     static let spanish = TabStrings(
-        record: "Grabar",
-        setup: "Configuración",
-        speech: "Voz",
-        cleanup: "Limpieza",
+        activity: "Actividad",
+        providers: "Proveedores",
         dictionary: "Diccionario",
-        history: "Historial",
-        devices: "Dispositivos"
+        settings: "Ajustes",
+        speech: "Reconocimiento de voz",
+        cleanup: "Limpieza de texto"
     )
 
     static func current(languageCode: String?) -> TabStrings {
@@ -110,7 +94,7 @@ struct TabStrings: Equatable {
 ///   recording indicator beyond the system orange dot. A future task adds
 ///   an ActivityKit extension showing record/working state.
 final class AppFlow: ObservableObject, Dictation.Listener {
-    @Published var selectedTab: AppTab = .record
+    @Published var showRecorder = false
 
     // Core + settings state (Setup screen inputs).
     @Published private(set) var coreVersion = "…"
@@ -205,9 +189,17 @@ final class AppFlow: ObservableObject, Dictation.Listener {
 
     // MARK: - Setup actions
 
+    func refreshMicPermission() {
+        micGranted = MicPermission.current()
+    }
+
     func requestMic() {
-        MicPermission.request { [weak self] granted in
-            self?.micGranted = granted
+        if MicPermission.isDenied {
+            openSystemSettings()
+        } else {
+            MicPermission.request { [weak self] granted in
+                self?.micGranted = granted
+            }
         }
     }
 
@@ -216,13 +208,10 @@ final class AppFlow: ObservableObject, Dictation.Listener {
         UIApplication.shared.open(url)
     }
 
-    /// Setup "run test": v1 has no headless test utterance (transcription
-    /// needs a real mic press), so this routes the user to the Record tab.
-    /// `testPassed` flips on the first successful `onResult`; `testError`
-    /// carries the last mapped failure. Documented limitation, not logic.
+    /// The setup test uses the same foreground recording flow as Activity.
     func runSetupTest() {
-        testError = nil
-        selectedTab = .record
+        retryResult()
+        showRecorder = true
     }
 
     /// Persist the theme to core `preferences.theme` (read-modify-write,
@@ -267,7 +256,6 @@ final class AppFlow: ObservableObject, Dictation.Listener {
         result = nil
         resultText = ""
         testError = nil
-        selectedTab = .record
     }
 
     // MARK: - Dictation.Listener (may arrive off-main; hop before publish)
@@ -288,8 +276,6 @@ final class AppFlow: ObservableObject, Dictation.Listener {
             self.result = .result(text: text, engine: "")
             self.testPassed = true
             self.testError = nil
-            // History row is already durable: finish_utterance appends it
-            // before returning, and HistoryView refreshes on tab-appear.
         }
     }
 
