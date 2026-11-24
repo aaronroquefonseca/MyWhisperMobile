@@ -221,6 +221,8 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativePushPcm
 }
 
 /// Block while the server chain transcribes (call off the UI thread).
+/// `after_local` picks the entries below the Local entry instead of
+/// those above it (`server_stt::ChainPart`).
 /// Returns `{ok, data: {text, raw, engine, durationSecs, words}}`.
 /// # Safety
 /// Called from the JVM with valid JNI handles (`env` attached, object args valid local refs).
@@ -229,9 +231,15 @@ pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativePushPcm
 pub unsafe extern "system" fn Java_com_mywhisper_mobile_CoreBridge_nativeFinishUtterance(
     mut env: JNIEnv,
     _cls: JClass,
+    after_local: jni::sys::jboolean,
 ) -> jstring {
+    let part = if after_local != 0 {
+        server_stt::ChainPart::AfterLocal
+    } else {
+        server_stt::ChainPart::BeforeLocal
+    };
     let out = with_engine(
-        |e| match e.finish_utterance() {
+        |e| match e.finish_utterance_part(part) {
             Ok(o) => finish_json(o),
             Err(err) => err_json(err),
         },

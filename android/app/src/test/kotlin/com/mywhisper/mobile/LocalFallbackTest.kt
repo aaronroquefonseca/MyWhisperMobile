@@ -25,9 +25,14 @@ class LocalFallbackTest {
         local: ((ShortArray) -> Pair<String, String>?)? = null,
         serverText: String = "server text",
         serverError: String? = null,
-        localFirst: Boolean = true,
+        /** (any server above Local, any below), as [LocalStt.remotesAroundLocal]. */
+        around: Pair<Boolean, Boolean> = false to true,
         coreCleanup: (String) -> String = { it },
+        /** Per-pass server override (arg: afterLocal); default uses [serverText]/[serverError]. */
+        server: ((Boolean) -> Pair<String, String>)? = null,
     ) {
+        /** Chain attempts in call order: "above", "local", "below". */
+        val attempts: MutableList<String> = Collections.synchronizedList(mutableListOf())
         /** (raw, text, engine) per core finish of a local hit. */
         val coreFinishes: MutableList<Triple<String, String, String>> =
             Collections.synchronizedList(mutableListOf())
@@ -49,13 +54,16 @@ class LocalFallbackTest {
                     override fun stop() = Unit
                 }
             },
-            finishTranscription = {
+            finishTranscription = { afterLocal ->
                 serverHit.set(true)
-                if (serverError != null) throw IllegalStateException(serverError)
-                serverText to "test-engine"
+                attempts.add(if (afterLocal) "below" else "above")
+                server?.invoke(afterLocal) ?: run {
+                    if (serverError != null) throw IllegalStateException(serverError)
+                    serverText to "test-engine"
+                }
             },
             cancelTranscription = {},
-            localFirst = { localFirst },
+            remotesAroundLocal = { around },
             finishLocal = { raw, text, engine, secs ->
                 finishSecs.set(secs)
                 coreFinishes.add(Triple(raw, text, engine))
@@ -63,6 +71,7 @@ class LocalFallbackTest {
             },
             localTranscribe = { pcm ->
                 localCalls.incrementAndGet()
+                attempts.add("local")
                 (local ?: { null })(pcm)
             },
             pushPcm = { _, _ -> },
@@ -126,7 +135,7 @@ class LocalFallbackTest {
     fun localBelowServer_serverRunsFirst() {
         // Chain order: a Local entry under a working server must not
         // preempt it (it used to win whenever its model was installed).
-        val h = Harness(local = { "local text" to "local" }, localFirst = false)
+        val h = Harness(local = { "local text" to "local" }, around = true to false)
         h.finish()
         assertEquals(listOf("server text"), h.results)
         assertEquals("local must not decode before the server", 0, h.localCalls.get())
@@ -137,14 +146,10 @@ class LocalFallbackTest {
     fun localBelowServer_serverFailureFallsBackToLocal() {
         val h = Harness(
             local = { "local text" to "local" },
-            localFirst = false,
+            around = true to false,
             serverError = "llm post: connection refused",
         )
-        h.dictation.pressDown()
-        h.pcmSinks.single()(ShortArray(16_000) { 1000 }, 16_000)
-        h.dictation.pressUp()
-        h.executor.submit {}.get(10, TimeUnit.SECONDS)
-        h.executor.shutdownNow()
+        h.finishWithSpeech()
         assertTrue(h.serverHit.get())
         assertEquals(listOf("local text"), h.results)
         assertEquals(1, h.coreFinishes.size)
@@ -153,14 +158,91 @@ class LocalFallbackTest {
 
     @Test
     fun localBelowServer_bothFailSurfacesServerError() {
-        val h = Harness(local = { null }, localFirst = false, serverError = "server down")
-        h.dictation.pressDown()
-        h.pcmSinks.single()(ShortArray(16_000) { 1000 }, 16_000)
-        h.dictation.pressUp()
-        h.executor.submit {}.get(10, TimeUnit.SECONDS)
-        h.executor.shutdownNow()
+        val h = Harness(local = { null }, around = true to false, serverError = "server down")
+        h.finishWithSpeech()
         assertTrue(h.results.isEmpty())
         assertEquals(listOf("server down"), h.errors)
+    }
+
+    /** Settings order Self-hosted → Local → Cloud with Self-hosted down. */
+    private fun selfHostedLocalCloud(local: (ShortArray) -> Pair<String, String>?) = Harness(
+        local = local,
+        around = true to true,
+        server = { afterLocal ->
+            if (!afterLocal) throw IllegalStateException("Self-hosted: connection refused")
+            "cloud text" to "openai whisper-1"
+        },
+    )
+
+    private fun Harness.finishWithSpeech() {
+        dictation.pressDown()
+        pcmSinks.single()(ShortArray(16_000) { 1000 }, 16_000)
+        dictation.pressUp()
+        executor.submit {}.get(10, TimeUnit.SECONDS)
+        executor.shutdownNow()
+    }
+
+    @Test
+    fun localBetweenServers_localHitKeepsCloudUncalled() {
+        val h = selfHostedLocalCloud { "local text" to "local" }
+        h.finishWithSpeech()
+        assertEquals(listOf("above", "local"), h.attempts)
+        assertEquals(listOf("local text"), h.results)
+        assertTrue(h.errors.isEmpty())
+    }
+
+    @Test
+    fun localBetweenServers_cloudRunsAfterLocalMiss() {
+        val h = selfHostedLocalCloud { null }
+        h.finishWithSpeech()
+        assertEquals(listOf("above", "local", "below"), h.attempts)
+        assertEquals(listOf("cloud text"), h.results)
+        assertTrue(h.coreFinishes.isEmpty())
+    }
+
+    @Test
+    fun localBetweenServers_allFailSurfacesEveryServerError() {
+        val h = Harness(
+            local = { null },
+            around = true to true,
+            server = { afterLocal -> throw IllegalStateException(if (afterLocal) "Cloud: 401" else "Self-hosted: down") },
+        )
+        h.finishWithSpeech()
+        assertEquals(listOf("above", "local", "below"), h.attempts)
+        assertEquals(listOf("Self-hosted: down; Cloud: 401"), h.errors)
+    }
+
+    @Test
+    fun cancelDuringServerAbove_skipsLocalAndServerBelow() {
+        val entered = CountDownLatch(1)
+        val proceed = CountDownLatch(1)
+        val h = Harness(
+            local = { "local text" to "local" },
+            around = true to true,
+            server = { afterLocal ->
+                if (!afterLocal) {
+                    entered.countDown()
+                    assertTrue(proceed.await(10, TimeUnit.SECONDS))
+                    throw IllegalStateException("Self-hosted: timeout")
+                }
+                "cloud text" to "cloud"
+            },
+        )
+        try {
+            h.dictation.pressDown()
+            h.pcmSinks.single()(ShortArray(16_000) { 1000 }, 16_000)
+            h.dictation.pressUp()
+            assertTrue(entered.await(10, TimeUnit.SECONDS))
+            h.dictation.cancel()
+            proceed.countDown()
+            h.executor.submit {}.get(10, TimeUnit.SECONDS)
+            assertEquals(listOf("above"), h.attempts)
+            assertTrue(h.results.isEmpty())
+            assertTrue(h.errors.isEmpty())
+        } finally {
+            proceed.countDown()
+            h.executor.shutdownNow()
+        }
     }
 
     @Test
