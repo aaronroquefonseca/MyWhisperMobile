@@ -171,6 +171,18 @@ pub fn dict_key(s: &str) -> String {
         .replace("i\u{307}", "i")
 }
 
+/// History-search key: Unicode canonical caseless form,
+/// NFC(default case fold(NFD(s))), with the `dict_key` Turkish dotted-`i`
+/// fold. NFC (not NFD) keeps accents distinct for substring search:
+/// `árbol`, `ÁRBOL`, and `a` + U+0301 + `rbol` share a key, `arbol` does
+/// not, and `STRASSE`/`straße` or `ΟΔΟΣ`/`οδοσ` match.
+pub fn search_key(s: &str) -> String {
+    caseless::default_case_fold_str(&s.nfd().collect::<String>())
+        .nfc()
+        .collect::<String>()
+        .replace("i\u{307}", "i")
+}
+
 fn is_word_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }

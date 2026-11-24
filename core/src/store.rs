@@ -172,16 +172,14 @@ pub(crate) fn open_test_db(path: &std::path::Path) -> rusqlite::Result<Store> {
     Store::open(path)
 }
 
-/// `search_fold(text)`: the history-search key, NFC + full Unicode
-/// lowercase (`textnorm::dict_key`), so `ÁRBOL`, `árbol`, and
-/// `a` + U+0301 + `rbol` all match while `arbol` stays distinct.
+/// `search_fold(text)`: the history-search key (`textnorm::search_key`).
 fn register_search_fold(conn: &Connection) -> rusqlite::Result<()> {
     use rusqlite::functions::FunctionFlags;
     conn.create_scalar_function(
         "search_fold",
         1,
         FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
-        |ctx| Ok(crate::textnorm::dict_key(&ctx.get::<String>(0)?)),
+        |ctx| Ok(crate::textnorm::search_key(&ctx.get::<String>(0)?)),
     )
 }
 
@@ -956,7 +954,7 @@ impl Store {
         before: Option<(i64, &str)>,
         query: &str,
     ) -> rusqlite::Result<Vec<HistoryEntry>> {
-        let needle = crate::textnorm::dict_key(query);
+        let needle = crate::textnorm::search_key(query.trim());
         let (before_ts, before_uuid) = before.unwrap_or((i64::MAX, ""));
         let mut stmt = self.conn.prepare(
             "SELECT uuid, text, raw_text, datetime(recorded_at, 'unixepoch'), words,
@@ -2578,6 +2576,8 @@ mod tests {
             row(61, "plain", "arbol sin tilde", ""),
             row(62, "pct", "50% off_sale C:\\tmp", ""),
             row(63, "under", "50 percent offXsale C:tmp", ""),
+            row(64, "sharp", "Große Straße", ""),
+            row(65, "sigma", "ΟΔΟΣ", ""),
         ]);
         open_test_db(&path).unwrap().apply_history(&rows).unwrap();
 
@@ -2594,6 +2594,9 @@ mod tests {
             assert_eq!(ids(q), ["acc", "old"], "query {q:?}");
         }
         assert_eq!(ids("arbol"), ["plain"]);
+        // Full case folding, not just lowercase.
+        assert_eq!(ids("strasse"), ["sharp"]);
+        assert_eq!(ids("οδοσ"), ["sigma"]);
         assert_eq!(ids("%"), ["pct"]);
         assert_eq!(ids("50%"), ["pct"]);
         assert_eq!(ids("off_sale"), ["pct"]);
