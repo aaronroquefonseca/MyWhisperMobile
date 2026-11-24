@@ -103,6 +103,7 @@ class OverlayService : Service(), Dictation.Listener {
      * leave an orphan ongoing notification STOP cannot remove.
      */
     @Volatile private var foregrounded = false
+    @Volatile private var boundEditor: android.view.accessibility.AccessibilityNodeInfo? = null
     private var wm: WindowManager? = null
     private var holder: ViewGroup? = null
     private var haloView: View? = null
@@ -657,6 +658,8 @@ class OverlayService : Service(), Dictation.Listener {
                     showToast(getString(R.string.err_mic_revoked), Toast.LENGTH_LONG)
                     return@Dictation null
                 }
+                // Bind the utterance to the field it was started in; delivery refuses any other.
+                boundEditor = MyWhisperAccessibility.focusedEditor()
                 try {
                     // Promote synchronously from the user's visible bubble gesture,
                     // before AudioRecord starts. Idle boot readiness needs no mic type.
@@ -2104,6 +2107,8 @@ class OverlayService : Service(), Dictation.Listener {
 
     override fun onResult(text: String) {
         android.util.Log.i("MwFloat", "onResult len=${text.length}")
+        // Snapshot before Dictation goes IDLE: a new recording may rebind while delivery is queued.
+        val bound = boundEditor
         if (!practiceMode) {
             // The core saved history before returning the text.
             historyChanged.value++
@@ -2119,7 +2124,7 @@ class OverlayService : Service(), Dictation.Listener {
                 }
             }
         }
-        deliver(text)
+        deliver(text, bound)
     }
 
     /** Practice dictation: drop the audio, pretend to work, return the next example. */
@@ -2194,7 +2199,7 @@ class OverlayService : Service(), Dictation.Listener {
     }
 
     /** Commit runs here (not in onResult) to keep the result text. */
-    fun deliver(text: String) {
+    fun deliver(text: String, bound: android.view.accessibility.AccessibilityNodeInfo?) {
         pendingDelivery.incrementAndGet()
         bgWorkers.execute {
             try {
@@ -2207,9 +2212,11 @@ class OverlayService : Service(), Dictation.Listener {
                     android.util.Log.i("MwFloat", "deliver drop-empty")
                     return@execute
                 }
-                val ok = MyWhisperAccessibility.commit(t)
-                android.util.Log.i("MwFloat", "deliver commit ok=$ok")
-                if (!ok) {
+                val result = MyWhisperAccessibility.commit(t, bound)
+                android.util.Log.i("MwFloat", "deliver commit result=$result")
+                if (result == MyWhisperAccessibility.Commit.MOVED) {
+                    showToast(getString(R.string.float_field_changed), Toast.LENGTH_LONG)
+                } else if (result == MyWhisperAccessibility.Commit.FAILED) {
                     // Toast must run on the main thread (this is a worker).
                     // a11y off is a configuration failure, not a missing
                     // field: say which one so the fix is obvious.
