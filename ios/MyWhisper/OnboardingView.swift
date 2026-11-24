@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct OnboardingStrings {
+    let isSpanish: Bool
     let skip: String
     let back: String
     let next: String
@@ -17,7 +18,6 @@ struct OnboardingStrings {
     let practiceTitle: String
     let practiceHint: String
     let practicePlaceholder: String
-    let keyboardSettings: String
     let dictationSetup: String
     let dictate: String
     let dictationHint: String
@@ -31,20 +31,19 @@ struct OnboardingStrings {
     let appearanceSummary: String
 
     static let english = OnboardingStrings(
-        skip: "Skip", back: "Back", next: "Continue", done: "Done",
+        isSpanish: false, skip: "Skip", back: "Back", next: "Continue", done: "Done",
         welcomeTitle: "Your words, in any app",
         welcomeBody: "Add the MyWhisper keyboard to type with suggestions, autocorrect, and emoji wherever iOS supports custom keyboards.",
         setupGuide: "Setup guide",
         input: "Input",
         keyboardTitle: "MyWhisper keyboard",
-        keyboardSummary: "Install, switch, and practice",
+        keyboardSummary: "Languages, typing preferences, and setup",
         installTitle: "Add the keyboard",
         installPath: "Settings → General → Keyboard → Keyboards → Add New Keyboard",
         installHint: "Choose MyWhisper Keyboard. Typing works without Full Access.",
         practiceTitle: "Try your keyboard",
         practiceHint: "Tap the field and hold the globe key. Choose MyWhisper Keyboard, then tap or slide across letters to type a word.",
         practicePlaceholder: "Type a practice message",
-        keyboardSettings: "Open the menu on the keyboard to change the swipe language, autocorrect, and other typing preferences.",
         dictationSetup: "Dictation setup",
         dictate: "Dictate in the app",
         dictationHint: "Choose a speech provider in Providers, then record from Activity. Copy the transcript to use it in another app.",
@@ -59,20 +58,19 @@ struct OnboardingStrings {
     )
 
     static let spanish = OnboardingStrings(
-        skip: "Omitir", back: "Atrás", next: "Continuar", done: "Listo",
+        isSpanish: true, skip: "Omitir", back: "Atrás", next: "Continuar", done: "Listo",
         welcomeTitle: "Tus palabras, en cualquier app",
         welcomeBody: "Añade el teclado MyWhisper para escribir con sugerencias, autocorrección y emojis donde iOS admita teclados personalizados.",
         setupGuide: "Guía de configuración",
         input: "Entrada",
         keyboardTitle: "Teclado MyWhisper",
-        keyboardSummary: "Instala, cambia de teclado y practica",
+        keyboardSummary: "Idiomas, preferencias de escritura e instalación",
         installTitle: "Añade el teclado",
         installPath: "Ajustes → General → Teclado → Teclados → Añadir nuevo teclado",
         installHint: "Elige MyWhisper Keyboard. Puedes escribir sin acceso total.",
         practiceTitle: "Prueba tu teclado",
         practiceHint: "Toca el campo y mantén pulsada la tecla del globo. Elige MyWhisper Keyboard y toca o desliza el dedo sobre las letras para escribir una palabra.",
         practicePlaceholder: "Escribe un mensaje de prueba",
-        keyboardSettings: "Abre el menú del teclado para cambiar el idioma de escritura por deslizamiento, la autocorrección y otras preferencias de escritura.",
         dictationSetup: "Configurar el dictado",
         dictate: "Dictar en la app",
         dictationHint: "Elige un proveedor de voz en Proveedores y graba desde Actividad. Copia la transcripción para usarla en otra app.",
@@ -243,9 +241,68 @@ private struct KeyboardInstallInstructions: View {
 struct KeyboardSetupView: View {
     let strings: OnboardingStrings
     @State private var practiceText = ""
+    @State private var preferences = KeyboardPreferences.load()
+    @State private var needsTransfer = KeyboardPreferences.sharedURL == nil
+    @State private var transferText = ""
+    @FocusState private var transferring: Bool
 
     var body: some View {
         List {
+            Section {
+                ForEach(KeyboardLanguage.allCases) { language in
+                    Toggle(language.title, isOn: Binding(
+                        get: { preferences.languages.contains(language) },
+                        set: { preferences.setLanguage(language, enabled: $0) }
+                    ))
+                    .disabled(preferences.languages == [language])
+                }
+                Picker(label("Default language", "Idioma predeterminado"), selection: $preferences.defaultLanguage) {
+                    ForEach(preferences.languages) { language in
+                        Text(language.title).tag(language)
+                    }
+                }
+                Toggle(label("Swipe spacebar to switch languages", "Deslizar en la barra espaciadora para cambiar de idioma"), isOn: $preferences.switchesLanguageBySwipe)
+                    .disabled(preferences.languages.count < 2)
+            } header: {
+                WhisperSectionHeading(label("Languages", "Idiomas"))
+            } footer: {
+                Text(label("Hold the spacebar to move the cursor. A quick sideways swipe changes the typing language.", "Mantén pulsada la barra espaciadora para mover el cursor. Desliza rápido hacia un lado para cambiar de idioma."))
+            }
+            .whisperRowSurface()
+
+            Section {
+                Toggle(label("Swipe to type", "Deslizar para escribir"), isOn: $preferences.usesSwipeTyping)
+                Toggle(label("Predictive suggestions", "Sugerencias predictivas"), isOn: $preferences.predictive)
+                Toggle(label("Auto-correction", "Autocorrección"), isOn: $preferences.autoCorrection)
+                Toggle(label("Auto-capitalization", "Mayúsculas automáticas"), isOn: $preferences.autoCapitalization)
+                Toggle(label("Double-space for a period", "Doble espacio para insertar un punto"), isOn: $preferences.periodShortcut)
+                Toggle(label("Enable Caps Lock", "Activar bloqueo de mayúsculas"), isOn: $preferences.enableCapsLock)
+                Toggle(label("Character preview", "Vista previa de teclas"), isOn: $preferences.characterPreview)
+                Toggle(label("Key clicks", "Sonido de teclas"), isOn: $preferences.keyClicks)
+            } header: {
+                WhisperSectionHeading(label("Typing", "Escritura"))
+            }
+            .whisperRowSurface()
+
+            if needsTransfer {
+                Section {
+                    Button(label("Apply preferences to keyboard", "Aplicar preferencias al teclado")) {
+                        transferText = preferences.transferText
+                        transferring = true
+                    }
+                    if !transferText.isEmpty || transferring {
+                        TextField(label("Keyboard preferences code", "Código de preferencias del teclado"), text: $transferText)
+                            .keyboardType(.asciiCapable)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                            .focused($transferring)
+                    }
+                } footer: {
+                    Text(label("If prompted, switch to MyWhisper Keyboard and tap Apply preferences above the keys.", "Si se solicita, cambia al teclado de MyWhisper y toca Aplicar preferencias encima de las teclas."))
+                }
+                .whisperRowSurface()
+            }
+
             Section {
                 VStack(alignment: .leading, spacing: 8) {
                     KeyboardInstallInstructions(strings: strings)
@@ -262,15 +319,20 @@ struct KeyboardSetupView: View {
                 Text(strings.practiceHint)
             }
             .whisperRowSurface()
-            Section {
-                Text(strings.keyboardSettings)
-            } header: {
-                WhisperSectionHeading("Keyboard settings")
-            }
-            .whisperRowSurface()
         }
         .whisperListStyle()
+        .onChange(of: preferences) { _, updated in
+            needsTransfer = !updated.saveFromApp()
+            if transferring { transferText = updated.transferText }
+        }
+        .onChange(of: transferText) { _, updated in
+            if updated.isEmpty { transferring = false }
+        }
         .navigationTitle(strings.keyboardTitle)
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func label(_ english: String, _ spanish: String) -> String {
+        strings.isSpanish ? spanish : english
     }
 }

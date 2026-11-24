@@ -30,6 +30,51 @@ final class KeyboardSwipeTests: XCTestCase {
         XCTAssertEqual(words.first, "también")
     }
 
+    func testSpanishSwipeUsesPhysicalEnyeKey() throws {
+        let enye = try XCTUnwrap(KeyboardSwipeLexicon.key(for: "ñ"))
+        var spanishCenters = centers
+        spanishCenters[enye] = CGPoint(x: 9 * pitch, y: 54)
+        let path = try "año".map { letter in
+            try XCTUnwrap(spanishCenters[try XCTUnwrap(KeyboardSwipeLexicon.key(for: letter))])
+        }
+        let lexicon = KeyboardSwipeLexicon("165\taño\n140\tano\n")
+        let words = KeyboardSwipeDecoder.candidates(trace: path, centers: spanishCenters, pitch: pitch, lexicon: lexicon)
+        XCTAssertEqual(words.first, "año")
+    }
+
+    func testPreferencesTransferPreservesLanguageOrderAndToggles() throws {
+        var settings = KeyboardPreferences()
+        for language in KeyboardLanguage.allCases { settings.setLanguage(language, enabled: true) }
+        settings.defaultLanguage = .spanish
+        settings.autoCorrection = false
+        settings.switchesLanguageBySwipe = false
+
+        let imported = try XCTUnwrap(KeyboardPreferences(transferText: settings.transferText))
+        XCTAssertEqual(imported.languages, [.englishUS, .englishUK, .spanish])
+        XCTAssertEqual(imported.defaultLanguage, .spanish)
+        XCTAssertFalse(imported.autoCorrection)
+        XCTAssertFalse(imported.switchesLanguageBySwipe)
+        XCTAssertEqual(imported.language(after: .spanish, movingRight: false), .englishUS)
+        XCTAssertEqual(imported.language(after: .englishUS, movingRight: true), .spanish)
+        XCTAssertNil(KeyboardPreferences(transferText: settings.transferText + "0"))
+        XCTAssertNil(KeyboardPreferences(transferText: "MyWhisper-K1-0"))
+
+        settings.setLanguage(.spanish, enabled: false)
+        settings.setLanguage(.englishUK, enabled: false)
+        settings.setLanguage(.englishUS, enabled: false)
+        XCTAssertEqual(settings.languages, [.englishUS])
+        XCTAssertEqual(settings.defaultLanguage, .englishUS)
+    }
+
+    func testSentenceBoundariesHandlePunctuationQuotesAndNewlines() {
+        for boundary in ["", "  ", "Done.", "Done. ", "Really?” ", "Done!\n  ", "¿Listo?"] {
+            XCTAssertTrue(KeyboardTextEditing.startsSentence(after: boundary), boundary)
+        }
+        for continuation in ["Hello", "Hello ", "3.14", "él dijo “hola", "note: "] {
+            XCTAssertFalse(KeyboardTextEditing.startsSentence(after: continuation), continuation)
+        }
+    }
+
     func testEndpointsCanLandBetweenKeysAndDuplicatesAreSafe() {
         let lexicon = KeyboardSwipeLexicon("165\tword\n150\tward\n140\twork\n")
         var path = trace("word")
@@ -123,6 +168,45 @@ final class KeyboardSwipeTests: XCTestCase {
     }
 
     @MainActor
+    func testFieldTraitsUpdateShortcutsAndCapitalization() throws {
+        let controller = TestKeyboardController()
+        controller.loadViewIfNeeded()
+        let input = try XCTUnwrap(controller.inputView)
+        input.frame = CGRect(x: 0, y: 0, width: 390, height: 260)
+        controller.viewWillAppear(false)
+        defer { controller.viewDidDisappear(false) }
+        let area = try XCTUnwrap(input.subviews.first { $0 is KeyboardKeyArea })
+
+        func key(_ title: String) -> UIButton? {
+            area.subviews.compactMap { $0 as? KeyboardKeyButton }.first { $0.title(for: .normal) == title }
+        }
+
+        XCTAssertNotNil(key("A"))
+        XCTAssertNil(key("@"))
+        controller.document.returnKeyType = .search
+        controller.textDidChange(nil)
+        XCTAssertNotNil(key("@"))
+        controller.document.text = "Hello"
+        controller.textDidChange(nil)
+        try XCTUnwrap(key(".")).sendActions(for: .touchUpInside)
+        XCTAssertEqual(controller.document.text, "Hello.")
+        XCTAssertNotNil(key("A"))
+
+        controller.document.keyboardType = .URL
+        controller.document.returnKeyType = .go
+        controller.textDidChange(nil)
+        XCTAssertNotNil(key("."))
+        XCTAssertNotNil(key("/"))
+        XCTAssertNotNil(key("a"))
+
+        controller.document.keyboardType = .emailAddress
+        controller.textDidChange(nil)
+        XCTAssertNotNil(key("@"))
+        XCTAssertNil(key("/"))
+        XCTAssertNotNil(area.subviews.first { $0.accessibilityLabel == "MyWhisper dictation" })
+    }
+
+    @MainActor
     func testSwipeInsertionAlternativesAndPunctuationUseKeyboardProxy() throws {
         let controller = TestKeyboardController()
         controller.loadViewIfNeeded()
@@ -177,6 +261,8 @@ private final class TestKeyboardDocument: NSObject, UITextDocumentProxy {
     }
     var selectedText: String? { nil }
     var documentIdentifier = UUID()
+    var keyboardType: UIKeyboardType = .default
+    var returnKeyType: UIReturnKeyType = .default
     var documentInputMode: UITextInputMode? { nil }
     func insertText(_ string: String) { text += string }
     func deleteBackward() { if !text.isEmpty { text.removeLast() } }

@@ -1,6 +1,13 @@
 import Foundation
 
 enum KeyboardTextEditing {
+    static func startsSentence(after text: String) -> Bool {
+        let meaningful = text.reversed().drop(while: { $0.isWhitespace && !$0.isNewline })
+        let punctuation = meaningful.drop(while: { "\"'’”»)]}".contains($0) })
+        guard let last = punctuation.first else { return meaningful.isEmpty }
+        return last.isNewline || ".!?…".contains(last)
+    }
+
     /// Resolve vertical steps using only the nearby text the host supplies.
     /// A newline advances the row; wrapped visual rows are unavailable.
     static func verticalCursorMove(

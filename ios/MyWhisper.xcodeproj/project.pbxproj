@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		EE11000000000000000000A1 /* KeyboardPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE11000000000000000000A0; };
+		EE11000000000000000000A2 /* KeyboardPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE11000000000000000000A0; };
+		EE11000000000000000000A3 /* KeyboardPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE11000000000000000000A0; };
 		DD6015F1000000000000001E /* KeyboardTextEditing.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD6015F1000000000000001D; };
 		DD6015F1000000000000001F /* KeyboardTextEditing.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD6015F1000000000000001D; };
 		DD6015F1000000000000000B /* KeyboardSwipeDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD6015F10000000000000001; };
@@ -90,6 +93,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		EE11000000000000000000A0 /* KeyboardPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardPreferences.swift; sourceTree = "<group>"; };
 		DD6015F1000000000000001D /* KeyboardTextEditing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardTextEditing.swift; sourceTree = "<group>"; };
 		DD6015F10000000000000001 /* KeyboardSwipeDecoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardSwipeDecoder.swift; sourceTree = "<group>"; };
 		DD6015F10000000000000002 /* KeyboardSwipeGesture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardSwipeGesture.swift; sourceTree = "<group>"; };
@@ -247,6 +251,7 @@
 		EE1100000000000000000004 /* Keyboard */ = {
 			isa = PBXGroup;
 			children = (
+				EE11000000000000000000A0 /* KeyboardPreferences.swift */,
 				EE1100000000000000000002 /* KeyboardViewController.swift */,
 				DB257A200000000000000005 /* KeyboardKeyView.swift */,
 				DB257A200000000000000012 /* KeyboardEmojiPicker.swift */,
@@ -438,6 +443,7 @@
 				CC11CC11CC11CC11CC11CC04 /* SyncDiscovery.swift in Sources */,
 				CC11CC11CC11CC11CC11CC05 /* DevicesView.swift in Sources */,
 				DD0100DD0100DD01000002 /* AppFlow.swift in Sources */,
+				EE11000000000000000000A1 /* KeyboardPreferences.swift in Sources */,
 				EE11000000000000000012 /* OnboardingView.swift in Sources */,
 				EE11000000000000000010 /* WhisperColors.swift in Sources */,
 				D37C123420DEAF01000000001 /* WhisperComponents.swift in Sources */,
@@ -448,6 +454,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				EE11000000000000000000A2 /* KeyboardPreferences.swift in Sources */,
 				EE1100000000000000000008 /* KeyboardViewController.swift in Sources */,
 				DB257A200000000000000001 /* KeyboardKeyView.swift in Sources */,
 				DB257A200000000000000002 /* KeyboardKeyGeometry.swift in Sources */,
@@ -477,6 +484,7 @@
 				DD6015F10000000000000011 /* KeyboardSwipeTests.swift in Sources */,
 				DB257A200000000000000004 /* KeyboardKeyGeometryTests.swift in Sources */,
 				DB257A200000000000000008 /* KeyboardKeyView.swift in Sources */,
+				EE11000000000000000000A3 /* KeyboardPreferences.swift in Sources */,
 				DB257A200000000000000009 /* KeyboardViewController.swift in Sources */,
 				DB257A200000000000000011 /* KeyboardEmojiPicker.swift in Sources */,
 				2D3275124A5A3FCA7E1F8CAD /* CoreBridgeTests.swift in Sources */,
@@ -538,6 +546,7 @@
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_STYLE = Automatic;
 				GENERATE_INFOPLIST_FILE = NO;
+				CODE_SIGN_ENTITLEMENTS = Keyboard/Keyboard.entitlements;
 				INFOPLIST_FILE = Keyboard/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -588,6 +597,7 @@
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_STYLE = Automatic;
 				GENERATE_INFOPLIST_FILE = NO;
+				CODE_SIGN_ENTITLEMENTS = Keyboard/Keyboard.entitlements;
 				INFOPLIST_FILE = Keyboard/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (

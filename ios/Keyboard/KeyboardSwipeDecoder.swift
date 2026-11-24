@@ -16,14 +16,27 @@ struct KeyboardSwipeLexicon: Sendable {
             let fields = line.split(separator: "\t", maxSplits: 1)
             guard fields.count == 2, let frequency = Double(fields[0]), frequency.isFinite else { continue }
             let word = String(fields[1])
-            let spelling = word.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: nil)
-            let keys = spelling.utf8.filter { (97...122).contains($0) }
+            let keys = word.compactMap(Self.key(for:))
             guard let start = keys.first, let end = keys.last, keys.count >= 2,
                   keys.dropFirst().contains(where: { $0 != start }) else { continue }
             let entry = Entry(word: word, keys: keys, frequency: frequency)
             buckets[Self.bucket(start, end), default: []].append(entry)
         }
         byEndpoints = buckets
+    }
+
+    static func key(for character: Character) -> UInt8? {
+        if let ascii = character.asciiValue {
+            switch ascii {
+            case 65...90: return ascii + 32
+            case 97...122: return ascii
+            default: return nil
+            }
+        }
+        let letter = String(character).lowercased()
+        if letter == "ñ" { return 241 }
+        let folded = letter.folding(options: .diacriticInsensitive, locale: nil)
+        return folded.utf8.first.flatMap { (97...122).contains($0) ? $0 : nil }
     }
 
     fileprivate static func bucket(_ first: UInt8, _ last: UInt8) -> Int {
