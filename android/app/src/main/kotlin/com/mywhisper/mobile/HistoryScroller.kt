@@ -26,7 +26,6 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.core.view.HapticFeedbackConstantsCompat
 import androidx.core.view.ViewCompat
-import kotlinx.coroutines.delay
 import java.time.LocalDate
 
 /** Row (0-based, within history) for a thumb at [fraction] of the track. Pure for unit tests. */
@@ -60,6 +59,13 @@ internal fun historyScrollerRows(
     return rows
 }
 
+/** Entries (not day headers) among [rows] 0..[row]: each run of one label is a header plus its entries. Pure for unit tests. */
+internal fun historyEntriesThrough(rows: List<String>, row: Int): Int {
+    val last = row.coerceAtMost(rows.size - 1)
+    val headers = (0..last).count { it == 0 || rows[it] != rows[it - 1] }
+    return last + 1 - headers
+}
+
 /**
  * Fast scroller for history: a thin track with day marks and a thumb on
  * the end edge. Grabbing the thumb (or the track) widens it, shows the
@@ -69,7 +75,8 @@ internal fun historyScrollerRows(
  * starting at list index [firstIndex], unloaded rows included (see
  * [historyScrollerRows]), so the thumb holds still as pages arrive. The first
  * [loadedRows] are in the list; dropping the thumb past them calls
- * [onLoadThrough] (while [canLoad]) and scrolls once the row is loaded.
+ * [onLoadThrough] once paging is idle ([loading] false, [canLoad] true) and
+ * scrolls once the row is loaded. A new [listKey] (another search) drops it.
  */
 @Composable
 internal fun HistoryFastScroller(
@@ -79,6 +86,8 @@ internal fun HistoryFastScroller(
     loadedRows: Int,
     canLoad: Boolean,
     onLoadThrough: (row: Int) -> Unit,
+    loading: Boolean,
+    listKey: Any,
     visible: Boolean,
     modifier: Modifier = Modifier,
 ) {
@@ -91,7 +100,9 @@ internal fun HistoryFastScroller(
     var dragFraction by remember { mutableFloatStateOf(0f) }
     var lastLabel by remember { mutableStateOf<String?>(null) }
     // Row the thumb was dragged to that the list has not scrolled to yet.
-    var pending by remember { mutableStateOf<Int?>(null) }
+    var pending by remember(listKey) { mutableStateOf<Int?>(null) }
+    // [loadedRows] when the last load for [pending] was asked; unchanged after it ends = it failed or was superseded.
+    var askedAt by remember(listKey) { mutableStateOf<Int?>(null) }
     val scrolledFraction by remember(state, firstIndex, rows) {
         derivedStateOf { scrollerFractionOf(state.firstVisibleItemIndex - firstIndex, rows) }
     }
@@ -113,15 +124,19 @@ internal fun HistoryFastScroller(
         pending = row
     }
     val load by rememberUpdatedState(onLoadThrough)
-    LaunchedEffect(pending, loadedRows, canLoad) {
+    LaunchedEffect(pending, dragging, loadedRows, canLoad, loading) {
         val row = pending ?: return@LaunchedEffect
-        if (row < loadedRows || !canLoad) {
-            state.scrollToItem(firstIndex + row.coerceAtMost(loadedRows - 1))
-            pending = null
-        } else {
-            delay(150) // Debounce: load once the finger settles, not per pixel.
-            load(row)
+        when {
+            // Loaded rows scroll live, even mid-drag.
+            row < loadedRows -> {}
+            // Load once: on release, when paging is idle.
+            dragging || loading -> return@LaunchedEffect
+            canLoad && askedAt != loadedRows -> { askedAt = loadedRows; load(row); return@LaunchedEffect }
+            // Nothing more to load, or the last load added nothing: settle on the last loaded row.
         }
+        state.scrollToItem(firstIndex + row.coerceAtMost(loadedRows - 1))
+        pending = null
+        askedAt = null
     }
 
     AnimatedVisibility(visible || dragging || pending != null, modifier, enter = fadeIn(), exit = fadeOut()) {
@@ -133,6 +148,7 @@ internal fun HistoryFastScroller(
                         onDragStart = { offset ->
                             dragging = true
                             lastLabel = null
+                            askedAt = null
                             ViewCompat.performHapticFeedback(view, HapticFeedbackConstantsCompat.GESTURE_START)
                             moveTo(offset.y)
                         },

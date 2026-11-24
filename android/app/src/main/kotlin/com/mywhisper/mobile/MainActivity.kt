@@ -6101,8 +6101,11 @@ class MainActivity : ComponentActivity() {
                 days.map { java.time.LocalDate.ofEpochDay(it.dayStart / 86400) to it.utterances },
             ) { historyDayLabel(it, today, todayWord, yesterdayWord) }
         }
-        // Rows needed to show [row]: header rows count too, so this over-fetches by at most a page plus a row per day.
-        val loadThrough: (Int) -> Unit = { row -> loadMore((historyReloadCount(row + 1) - items.size).coerceAtLeast(HISTORY_PAGE)) }
+        // Whole pages through the entry at [row] (day headers are not entries).
+        val loadThrough: (Int) -> Unit = { row ->
+            loadMore((historyReloadCount(historyEntriesThrough(scrollerRows, row)) - items.size).coerceAtLeast(HISTORY_PAGE))
+        }
+        val pagingBusy = loadingMore || histBusy.value
         val historyLead = 3 + (if (histError.value.isNotEmpty()) 1 else 0) + (if (items.isEmpty()) 1 else 0)
         val overviewCount = 4 + (if (issueKind != null) 1 else 0)
         val scrollerPadding = Modifier.padding(top = 8.dp, bottom = 72.dp)
@@ -6146,7 +6149,7 @@ class MainActivity : ComponentActivity() {
                     Box(Modifier.weight(0.58f).fillMaxHeight()) {
                         LazyColumn(Modifier.fillMaxSize(), state = historyState, contentPadding = listPadding,
                             verticalArrangement = Arrangement.spacedBy(8.dp)) { history(true) }
-                        HistoryFastScroller(historyState, historyLead, scrollerRows, rowLabels.size, hasMore, loadThrough, showTop,
+                        HistoryFastScroller(historyState, historyLead, scrollerRows, rowLabels.size, hasMore, loadThrough, pagingBusy, histQuery.trim(), showTop,
                             Modifier.align(Alignment.TopEnd).then(scrollerPadding))
                         BackToTopButton(showTop, { scope.launch { historyState.scrollToTopTimed() } },
                             Modifier.align(Alignment.BottomEnd).padding(16.dp))
@@ -6160,7 +6163,7 @@ class MainActivity : ComponentActivity() {
                     overview()
                     history(false)
                 }
-                HistoryFastScroller(singleState, overviewCount + historyLead, scrollerRows, rowLabels.size, hasMore, loadThrough, showTop,
+                HistoryFastScroller(singleState, overviewCount + historyLead, scrollerRows, rowLabels.size, hasMore, loadThrough, pagingBusy, histQuery.trim(), showTop,
                     Modifier.align(Alignment.TopEnd).then(scrollerPadding))
                 BackToTopButton(showTop, { scope.launch { singleState.scrollToTopTimed() } },
                     Modifier.align(Alignment.BottomEnd).padding(16.dp))

@@ -87,5 +87,10 @@ class HomeUiTest {
         // Nothing loaded or no counts: loaded rows only.
         assertEquals(emptyList<String>(), historyScrollerRows(emptyList(), null, 0, counts) { "x" })
         assertEquals(loaded, historyScrollerRows(loaded, d2, 1, emptyList()) { "x" })
+        // Headers are not entries: row 8 ("c" entry 1) is the 6th entry.
+        assertEquals(0, historyEntriesThrough(rows, 0))
+        assertEquals(2, historyEntriesThrough(rows, 2))
+        assertEquals(6, historyEntriesThrough(rows, 8))
+        assertEquals(7, historyEntriesThrough(rows, 99))
     }
 }
