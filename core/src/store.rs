@@ -2450,12 +2450,17 @@ mod tests {
                 [],
             )
             .unwrap();
+        let recent = a.add_history("raw2", "recent", 10, 5, "node").unwrap();
         b.apply_history(&a.export_history().unwrap()).unwrap();
-        assert_eq!(a.purge_old_history(30).unwrap(), 1);
+        // Expired goes, recent stays; the tombstone wins both sync directions.
+        assert_eq!(a.purge_old_history(1).unwrap(), 1);
         a.apply_history(&b.export_history().unwrap()).unwrap();
         b.apply_history(&a.export_history().unwrap()).unwrap();
-        assert!(a.load_history(10, true).unwrap().is_empty());
-        assert!(b.load_history(10, true).unwrap().is_empty());
+        for store in [&a, &b] {
+            let left = store.load_history(10, true).unwrap();
+            assert_eq!(left.len(), 1);
+            assert_eq!(left[0].uuid, recent);
+        }
     }
 
     #[test]

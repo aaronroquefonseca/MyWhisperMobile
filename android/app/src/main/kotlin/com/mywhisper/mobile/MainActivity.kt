@@ -5824,11 +5824,15 @@ class MainActivity : ComponentActivity() {
             }
             return true
         }
-        fun purgeHist(n: Int) {
+        /** [quiet]: automatic retention; no toast, the reload and stats show the result. */
+        fun purgeHist(n: Int, quiet: Boolean = false) {
             var purged = 0
-            histJob({ purged = CoreBridge.purgeHistory(n).getOrThrow(); kickSync() },
-                onOk = { statsVersion++; bgToast(resources.getQuantityString(R.plurals.hist_purged, purged, purged)) },
-                onFail = { bgToast(getString(R.string.hist_purge_failed, it)) })
+            histJob({ purged = CoreBridge.purgeHistory(n).getOrThrow(); if (purged > 0) kickSync() },
+                onOk = {
+                    if (purged > 0) statsVersion++
+                    if (!quiet) bgToast(resources.getQuantityString(R.plurals.hist_purged, purged, purged))
+                },
+                onFail = { if (!quiet) bgToast(getString(R.string.hist_purge_failed, it)) })
         }
         fun clearHist() = histJob({ CoreBridge.dataOf(CoreBridge.nativeClearHistory()); kickSync() },
             onOk = { statsVersion++; toast(getString(R.string.hist_cleared)) },
@@ -5836,7 +5840,12 @@ class MainActivity : ComponentActivity() {
         fun deleteHist(uuid: String) = histJob({ CoreBridge.dataOf(CoreBridge.nativeDeleteHistory(uuid)); kickSync() },
             onOk = { statsVersion++; if (expanded == uuid) expanded = null },
             onFail = { toast(getString(R.string.hist_delete_failed, it)) })
-        LaunchedEffect(tick) { refreshHist() }
+        // The engine purges only on open and after a dictation; apply retention here too
+        // so an engine left open across the cutoff still drops expired rows.
+        LaunchedEffect(tick) {
+            val days = s.optJSONObject("privacy")?.optInt("transcript_auto_delete_days", 0) ?: 0
+            if (days > 0) purgeHist(days, quiet = true) else refreshHist()
+        }
         // Search runs in the database (all history, not just loaded pages), debounced.
         var searched by remember { mutableStateOf(histQuery) }
         LaunchedEffect(histQuery) {
@@ -6024,8 +6033,10 @@ class MainActivity : ComponentActivity() {
                         )
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             TextButton(onClick = {
-                                priv.put("transcript_auto_delete_days", daysStr.toIntOrNull() ?: 0)
+                                val n = daysStr.toIntOrNull() ?: 0
+                                priv.put("transcript_auto_delete_days", n)
                                 save()
+                                if (n > 0) purgeHist(n, quiet = true)
                             }) { Text(stringResource(R.string.action_save)) }
                             TextButton(onClick = {
                                 val n = daysStr.toIntOrNull() ?: 0
