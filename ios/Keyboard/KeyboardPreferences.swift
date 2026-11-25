@@ -49,6 +49,11 @@ struct KeyboardPreferences: Codable, Equatable {
     private var enabledLanguages: [KeyboardLanguage]?
     private var primaryLanguage: KeyboardLanguage?
     var swipeToSwitch: Bool?
+    // Optional so older saved settings still decode. Not in `transferText`: new bits would break existing codes.
+    var haptics: Bool?
+    var numberRow: Bool?
+    var periodKey: Bool?
+    var sideButton: Bool?
 
     static let defaultsKey = "mw.keyboard.settings.v1"
     static let group = "group.com.mywhisper.mobile"
@@ -66,6 +71,27 @@ struct KeyboardPreferences: Codable, Equatable {
     var switchesLanguageBySwipe: Bool {
         get { swipeToSwitch != false }
         set { swipeToSwitch = newValue }
+    }
+
+    var usesHaptics: Bool {
+        get { haptics == true }
+        set { haptics = newValue }
+    }
+
+    var showsNumberRow: Bool {
+        get { numberRow == true }
+        set { numberRow = newValue }
+    }
+
+    var showsPeriodKey: Bool {
+        get { periodKey == true }
+        set { periodKey = newValue }
+    }
+
+    /// Settings/emoji button opposite the mic, so suggestions sit centered.
+    var showsSideButton: Bool {
+        get { sideButton != false }
+        set { sideButton = newValue }
     }
 
     var languages: [KeyboardLanguage] {

@@ -14,6 +14,13 @@ class KeyboardViewController: UIInputViewController {
     private weak var stripNotice: UIButton?
     private weak var microphonePreview: KeyboardMicPreview?
     private var micDockedLeading = false
+    /// The bottom-row key beside 123 types a comma instead of opening emoji; holding it switches, and the last choice sticks.
+    private var emojiKeyIsComma = UserDefaults.standard.bool(forKey: "mw.keyboard.emojiKeyComma")
+    /// What choosing an entry in the open hold popup does (accents, period symbols, emoji/comma).
+    private var popupAction: ((String) -> Void)?
+    private lazy var haptic = UIImpactFeedbackGenerator(style: .light)
+    /// One delay for every press-and-hold (cursor, accents, symbols, delete repeat), so they all feel the same.
+    private static let holdDelay: TimeInterval = 0.35
     private var pendingUndo: (original: String, replacement: String)?
     /// Text a suggestion tap inserted, ending in its automatic space. Punctuation typed next goes before that space.
     private var suggestionInsert: String?
@@ -72,12 +79,15 @@ class KeyboardViewController: UIInputViewController {
     private struct SuggestionInput: Equatable {
         var document: UUID
         var word: String
+        /// Letters of `word` after the caret, when the caret sits inside an earlier word.
+        var trailing: Int
         var allowsCorrection: Bool
     }
 
     private struct Suggestion {
         var document: UUID
         var word: String
+        var trailing: Int
         var correction: String?
     }
     private var heightConstraint: NSLayoutConstraint?
@@ -121,9 +131,15 @@ class KeyboardViewController: UIInputViewController {
         inputView = keyboard
     }
 
+    // Keys sit at the screen edges; let them win over the system edge gestures.
+    override var preferredScreenEdgesDeferringSystemGestures: UIRectEdge { .all }
+
     override func viewDidLoad() {
         super.viewDidLoad()
         rowsView.translatesAutoresizingMaskIntoConstraints = false
+        // Fast two-thumb typing overlaps touches; a single-touch view drops the second key.
+        view.isMultipleTouchEnabled = true
+        rowsView.isMultipleTouchEnabled = true
         view.addSubview(rowsView)
         swipeGesture.delegate = self
         rowsView.addGestureRecognizer(swipeGesture)
@@ -286,13 +302,13 @@ class KeyboardViewController: UIInputViewController {
             return
         }
         lastSwipe = nil
-        let word = currentWord
+        let (word, trailing) = wordAtCaret
         guard (2...28).contains(word.count) else {
             clearSuggestions()
             return
         }
         let proxy = textDocumentProxy
-        let input = SuggestionInput(document: proxy.documentIdentifier, word: word,
+        let input = SuggestionInput(document: proxy.documentIdentifier, word: word, trailing: trailing,
                                     allowsCorrection: proxy.autocorrectionType != .no)
         guard input != scheduledSuggestion else { return }
         scheduledSuggestion = input
@@ -301,7 +317,8 @@ class KeyboardViewController: UIInputViewController {
         predictionTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 42_000_000)
             guard !Task.isCancelled, let self, self.visible,
-                  self.textDocumentProxy.documentIdentifier == input.document, self.currentWord == input.word else { return }
+                  self.textDocumentProxy.documentIdentifier == input.document,
+                  self.wordAtCaret.word == input.word, self.wordAtCaret.trailing == input.trailing else { return }
             self.updateSuggestions(for: input)
         }
     }
@@ -323,22 +340,46 @@ class KeyboardViewController: UIInputViewController {
         }
         let word = input.word
         let correction = input.allowsCorrection ? correction(for: word, language: language) : nil
-        suggestion = Suggestion(document: input.document, word: word, correction: correction)
+        suggestion = Suggestion(document: input.document, word: word, trailing: input.trailing, correction: correction)
         guard settings.predictive else { return }
         let range = NSRange(word.startIndex..., in: word)
-        let completions = checker.completions(forPartialWordRange: range, in: word, language: language) ?? []
+        // Inside an earlier word only corrections make sense, not completions.
+        let completions = input.trailing > 0 ? [] : checker.completions(forPartialWordRange: range, in: word, language: language) ?? []
         var seen = Set<String>()
-        let choices = ([correction].compactMap { $0 } + completions).filter {
+        var choices = ([correction].compactMap { $0 } + completions).filter {
             $0.caseInsensitiveCompare(word) != .orderedSame && seen.insert($0.lowercased()).inserted
         }
-        // iOS offers the typed word in quotes whenever Space would correct it.
-        showSuggestions(correction == nil ? choices : [Self.quoted(word)] + choices)
+        // iOS offers the typed word in quotes whenever Space would correct it, and marks the correction.
+        let spaceCorrects = correction != nil && input.trailing == 0
+        if spaceCorrects { choices.insert(Self.quoted(word), at: 0) }
+        if input.trailing == 0, let emoji = KeyboardEmojiPicker.suggestion(for: word) {
+            choices = Array(choices.prefix(predictionButtons.count - 1)) + [emoji]
+        }
+        showSuggestions(choices, emphasized: spaceCorrects ? 1 : nil)
     }
 
-    private func showSuggestions(_ choices: [String]) {
+    private func showSuggestions(_ choices: [String], emphasized: Int? = nil) {
         for (index, button) in predictionButtons.enumerated() {
             button.display(choices.indices.contains(index) ? choices[index] : nil)
+            button.emphasized = index == emphasized
         }
+    }
+
+    /// The word the suggestions act on: the one being typed, or the earlier word the caret was placed inside.
+    private var wordAtCaret: (word: String, trailing: Int) {
+        let typed = currentWord
+        let proxy = textDocumentProxy
+        guard typed.isEmpty, !isAddressField, !isNumberField, proxy.selectedText?.isEmpty != false,
+              let before = proxy.documentContextBeforeInput,
+              let after = proxy.documentContextAfterInput else { return (typed, 0) }
+        let head = String(before.reversed().prefix(29).prefix(while: Self.isWordCharacter).reversed())
+        let tail = String(after.prefix(29).prefix(while: Self.isWordCharacter))
+        guard !head.isEmpty, !tail.isEmpty else { return (typed, 0) }
+        return (head + tail, tail.count)
+    }
+
+    private static func isWordCharacter(_ character: Character) -> Bool {
+        character.isLetter || character == "'" || character == "’"
     }
 
     @objc private func predictionTapped(_ button: UIButton) {
@@ -349,13 +390,25 @@ class KeyboardViewController: UIInputViewController {
             replaceSwipe(swipe, with: replacement)
             return
         }
-        guard let suggestion, suggestion.document == textDocumentProxy.documentIdentifier, suggestion.word == currentWord else { return }
-        if replacement == Self.quoted(suggestion.word) {
+        let caret = wordAtCaret
+        guard let suggestion, suggestion.document == textDocumentProxy.documentIdentifier,
+              suggestion.word == caret.word, suggestion.trailing == caret.trailing else { return }
+        if suggestion.trailing > 0 {
+            // Fix an earlier word in place: move to its end, swap it, keep the text after it.
+            textDocumentProxy.adjustTextPosition(byCharacterOffset: suggestion.trailing)
+            replacingText = true
+            for _ in suggestion.word { textDocumentProxy.deleteBackward() }
+            textDocumentProxy.insertText(replacement)
+            replacingText = false
+            pendingUndo = nil
+            suggestionInsert = nil
+        } else if replacement == Self.quoted(suggestion.word) {
             learn(suggestion.word)
             pendingUndo = nil
             textDocumentProxy.insertText(" ")
             suggestionInsert = suggestion.word + " "
         } else {
+            if KeyboardEmojiPicker.suggestion(for: suggestion.word) == replacement { KeyboardEmojiPicker.remember(replacement) }
             replaceWord(suggestion.word, with: replacement)
             suggestionInsert = replacement + " "
         }
@@ -412,7 +465,10 @@ class KeyboardViewController: UIInputViewController {
             addEmojiSearch(query: query, width: width, pad: pad, rowHeight: rowHeight, gap: gap)
             return
         }
-        let height = stripHeight + 4 * rowHeight + 3 * gap + 10
+        let numberRow = settings.showsNumberRow && !isNumberField
+        let numberHeight: CGFloat = layout.compact ? 26 : 38
+        let extra = numberRow ? numberHeight + gap : 0
+        let height = stripHeight + extra + 4 * rowHeight + 3 * gap + 10
         if heightConstraint?.constant != height { heightConstraint?.constant = height }
 
         if emojiMode {
@@ -421,41 +477,51 @@ class KeyboardViewController: UIInputViewController {
         }
 
         addPredictionRow(width: width, pad: pad, height: stripHeight)
-        let y = stripHeight + 4
-        let step = rowHeight + gap
+        var y = stripHeight + 4
+        var keyHeight = rowHeight
+        if numberRow, page == .letters {
+            placeRow("1234567890".map { (characterKey(String($0), cased: false), 1) },
+                     y: y, height: numberHeight, width: width, pad: pad)
+            y += numberHeight + gap
+        } else {
+            // Symbol pages already start with digits: stretch their keys so the height never jumps.
+            keyHeight += extra / 4
+        }
+        let step = keyHeight + gap
         if isNumberField {
             addNumberPad(y: y, step: step, height: rowHeight, width: width, pad: pad)
             return
         }
         switch page {
         case .letters:
-            addLettersRow(keys: "QWERTYUIOP", y: y, h: rowHeight, width: width, pad: pad)
+            addLettersRow(keys: "QWERTYUIOP", y: y, h: keyHeight, width: width, pad: pad)
             let spanish = language == .spanish
             addLettersRow(keys: spanish ? "ASDFGHJKLÑ" : "ASDFGHJKL", y: y + step,
-                          h: rowHeight, width: width, pad: pad, inset: spanish ? 0 : 0.5)
-            addLettersRow(keys: "ZXCVBNM", y: y + 2 * step, h: rowHeight, width: width, pad: pad,
+                          h: keyHeight, width: width, pad: pad, inset: spanish ? 0 : 0.5)
+            addLettersRow(keys: "ZXCVBNM", y: y + 2 * step, h: keyHeight, width: width, pad: pad,
                           left: shiftKey(), right: deleteKey())
         case .symbols:
-            addLettersRow(keys: "1234567890", y: y, h: rowHeight, width: width, pad: pad)
+            addLettersRow(keys: "1234567890", y: y, h: keyHeight, width: width, pad: pad)
             let symbol = language == .spanish ? "€" : (Locale(identifier: language.rawValue).currencySymbol ?? "$")
             let currency = symbol.count == 1 ? symbol : "$"
-            addLettersRow(keys: "-/:;()\(currency)&@\"", y: y + step, h: rowHeight, width: width, pad: pad)
-            addLettersRow(keys: ".,?!'", y: y + 2 * step, h: rowHeight, width: width, pad: pad,
+            addLettersRow(keys: "-/:;()\(currency)&@\"", y: y + step, h: keyHeight, width: width, pad: pad)
+            addLettersRow(keys: ".,?!'", y: y + 2 * step, h: keyHeight, width: width, pad: pad,
                           left: pageKey("#+="), right: deleteKey())
         case .more:
-            addLettersRow(keys: "[]{}#%^*+=", y: y, h: rowHeight, width: width, pad: pad)
-            addLettersRow(keys: "_\\|~<>€£¥•", y: y + step, h: rowHeight, width: width, pad: pad)
-            addLettersRow(keys: ".,?!'", y: y + 2 * step, h: rowHeight, width: width, pad: pad,
+            addLettersRow(keys: "[]{}#%^*+=", y: y, h: keyHeight, width: width, pad: pad)
+            addLettersRow(keys: "_\\|~<>€£¥•", y: y + step, h: keyHeight, width: width, pad: pad)
+            addLettersRow(keys: ".,?!'", y: y + 2 * step, h: keyHeight, width: width, pad: pad,
                           left: pageKey("123"), right: deleteKey())
         }
-        addBottomRow(y: y + 3 * step, h: rowHeight, width: width, pad: pad)
+        addBottomRow(y: y + 3 * step, h: keyHeight, width: width, pad: pad)
     }
 
     private func addPredictionRow(width: CGFloat, pad: CGFloat, height: CGFloat) {
         let toolbarWidth = width - pad * 2
         let microphoneWidth = min(50, height)
-        let available = toolbarWidth - microphoneWidth
-        let suggestionsX = pad + (micDockedLeading ? microphoneWidth : 0)
+        let side = settings.showsSideButton
+        let available = toolbarWidth - microphoneWidth * (side ? 2 : 1)
+        let suggestionsX = pad + (micDockedLeading || side ? microphoneWidth : 0)
         let slot = available / 3
         for index in 0..<3 {
             let x = suggestionsX + CGFloat(index) * slot
@@ -486,10 +552,14 @@ class KeyboardViewController: UIInputViewController {
         rowsView.addSubview(notice)
         stripNotice = notice
         updateTransferAction()
+        if side {
+            let x = micDockedLeading ? pad + toolbarWidth - microphoneWidth : pad
+            addSideButton(frame: CGRect(x: x, y: 0, width: microphoneWidth, height: height))
+        }
         let preview = KeyboardMicPreview(
             frame: CGRect(x: pad, y: 0, width: toolbarWidth, height: height),
             dockedLeading: micDockedLeading,
-            openSession: hasFullAccess ? { [weak self] in self?.openMyWhisperMic() } : nil
+            openSession: hasFullAccess ? { [weak self] in self?.openMyWhisper("keyboard-mic") } : nil
         ) { [weak self] leading in
             guard let self else { return }
             self.micDockedLeading = leading
@@ -500,10 +570,50 @@ class KeyboardViewController: UIInputViewController {
         microphonePreview = preview
     }
 
-    /// Keyboards can't record. Like Wispr Flow, open MyWhisper to start its
-    /// background mic session; iOS shows a back link to the previous app.
-    private func openMyWhisperMic() {
-        guard let url = NSURL(string: "mywhisper://keyboard-mic") else { return }
+    /// Same face as the mic, on the other side: settings, or emoji when the emoji key types commas.
+    /// Holding always opens settings without changing what a tap does.
+    private func addSideButton(frame: CGRect) {
+        let button = UIButton(type: .custom)
+        button.frame = frame
+        let face = UIView(frame: button.bounds.insetBy(dx: 1, dy: 1))
+        face.backgroundColor = .white
+        face.alpha = 0.65
+        face.layer.borderWidth = 1
+        face.layer.borderColor = UIColor.black.cgColor
+        face.layer.cornerRadius = min(16, face.bounds.height / 2)
+        face.isUserInteractionEnabled = false
+        let icon = UIImageView(image: UIImage(
+            systemName: emojiKeyIsComma ? "face.smiling" : "gearshape",
+            withConfiguration: UIImage.SymbolConfiguration(pointSize: 20, weight: .medium)))
+        icon.tintColor = .black
+        icon.contentMode = .center
+        icon.frame = face.bounds
+        face.addSubview(icon)
+        button.addSubview(face)
+        button.accessibilityLabel = emojiKeyIsComma ? "Emoji" : "Keyboard settings"
+        button.accessibilityHint = "Hold for keyboard settings"
+        button.addTarget(self, action: #selector(sideButtonTapped), for: .touchUpInside)
+        let hold = UILongPressGestureRecognizer(target: self, action: #selector(sideButtonHeld(_:)))
+        hold.minimumPressDuration = Self.holdDelay
+        button.addGestureRecognizer(hold)
+        rowsView.addSubview(button)
+    }
+
+    @objc private func sideButtonTapped() {
+        playHaptic()
+        if emojiKeyIsComma { openEmojiPicker() } else { openMyWhisper("keyboard-settings") }
+    }
+
+    @objc private func sideButtonHeld(_ gesture: UILongPressGestureRecognizer) {
+        guard gesture.state == .began else { return }
+        playHaptic(hold: true)
+        openMyWhisper("keyboard-settings")
+    }
+
+    /// Keyboards can't record or show app screens. Like Wispr Flow, open MyWhisper
+    /// (mic session, settings); iOS shows a back link to the previous app.
+    private func openMyWhisper(_ destination: String) {
+        guard let url = NSURL(string: "mywhisper://" + destination) else { return }
         // UIApplication.open is unavailable to extensions; reach the host app through the responder chain.
         let selector = NSSelectorFromString("openURL:options:completionHandler:")
         var responder: UIResponder? = self
@@ -617,9 +727,7 @@ class KeyboardViewController: UIInputViewController {
     private func addBottomRow(y: CGFloat, h: CGFloat, width: CGFloat, pad: CGFloat) {
         var keys: [(KeyboardKeyButton, CGFloat)] = [(pageKey(page == .letters ? "123" : "ABC"), 1.15)]
         if layout?.globe == true { keys.append((globeKey(), 1)) }
-        let emoji = symbolKey("face.smiling", label: "Emoji")
-        emoji.addTarget(self, action: #selector(openEmojiPicker), for: .touchUpInside)
-        keys.append((emoji, 1))
+        keys.append((emojiKey(), 1))
 
         let space = makeKey(background: keyColor)
         let swipesLanguage = settings.switchesLanguageBySwipe && settings.languages.count > 1
@@ -633,7 +741,7 @@ class KeyboardViewController: UIInputViewController {
         space.addTarget(self, action: #selector(spaceTapped), for: .touchUpInside)
 
         let cursor = UILongPressGestureRecognizer(target: self, action: #selector(dragCursor(_:)))
-        cursor.minimumPressDuration = 0.30
+        cursor.minimumPressDuration = Self.holdDelay
         space.addGestureRecognizer(cursor)
         let vertical = UIPanGestureRecognizer(target: self, action: #selector(dragSpacebarVertically(_:)))
         vertical.maximumNumberOfTouches = 1
@@ -652,11 +760,43 @@ class KeyboardViewController: UIInputViewController {
             ]
         }
         keys.append((space, 4.6))
+        var periodKey = false
         if page == .letters {
-            keys.append(contentsOf: fieldShortcuts.map { (characterKey($0, cased: false), 1) })
+            let shortcuts = fieldShortcuts
+            keys.append(contentsOf: shortcuts.map { (characterKey($0, cased: false), 1) })
+            if settings.showsPeriodKey, shortcuts.isEmpty {
+                let period = characterKey(".", cased: false)
+                period.accessibilityIdentifier = "period-key"
+                addHold(to: period)
+                keys.append((period, 1))
+                periodKey = true
+            }
         }
-        keys.append((returnKey(), 2.1))
+        keys.append((returnKey(), periodKey ? 1.5 : 2.1))
         placeRow(keys, y: y, height: h, width: width, pad: pad)
+    }
+
+    private func emojiKey() -> KeyboardKeyButton {
+        let key: KeyboardKeyButton
+        if emojiKeyIsComma {
+            key = characterKey(",", cased: false)
+        } else {
+            key = symbolKey("face.smiling", label: "Emoji")
+            key.addTarget(self, action: #selector(openEmojiPicker), for: .touchUpInside)
+        }
+        key.accessibilityIdentifier = "emoji-key"
+        key.accessibilityHint = "Hold to switch between emoji and comma"
+        addHold(to: key)
+        return key
+    }
+
+    private func chooseEmojiKey(comma: Bool) {
+        if comma != emojiKeyIsComma {
+            emojiKeyIsComma = comma
+            UserDefaults.standard.set(comma, forKey: "mw.keyboard.emojiKeyComma")
+            rebuild()
+        }
+        if comma { insert(",") } else { openEmojiPicker() }
     }
 
     private func addNumberPad(y: CGFloat, step: CGFloat, height: CGFloat, width: CGFloat, pad: CGFloat) {
@@ -714,11 +854,7 @@ class KeyboardViewController: UIInputViewController {
         if cased {
             letterKeys.append((button, value))
             button.setTitle(shift == .off ? value.lowercased() : value, for: .normal)
-            if accents[value.lowercased()] != nil {
-                let hold = UILongPressGestureRecognizer(target: self, action: #selector(selectAccent(_:)))
-                hold.minimumPressDuration = 0.34
-                button.addGestureRecognizer(hold)
-            }
+            if accents[value.lowercased()] != nil { addHold(to: button) }
         } else {
             button.setTitle(value, for: .normal)
         }
@@ -805,7 +941,14 @@ class KeyboardViewController: UIInputViewController {
     // MARK: - Editing
 
     @objc private func keyPressed(_ button: UIButton) {
+        playHaptic()
         showPopup(for: button)
+    }
+
+    /// Light tap on key down; a firmer second tap when a hold activates. Off unless enabled in settings.
+    private func playHaptic(hold: Bool = false) {
+        guard settings.usesHaptics else { return }
+        haptic.impactOccurred(intensity: hold ? 1 : 0.55)
     }
 
     @objc private func keyReleased(_ button: UIButton) {
@@ -925,9 +1068,10 @@ class KeyboardViewController: UIInputViewController {
     @objc private func deleteDown() {
         stopDelete()
         deleteRepeated = false
-        let delay = Timer(timeInterval: 0.42, repeats: false) { [weak self] _ in
+        let delay = Timer(timeInterval: Self.holdDelay, repeats: false) { [weak self] _ in
             guard let self else { return }
             self.deleteRepeated = true
+            self.playHaptic(hold: true)
             self.playClick()
             self.performDelete()
             let repeating = Timer(timeInterval: 0.07, repeats: true) { [weak self] _ in self?.performDelete() }
@@ -1132,7 +1276,7 @@ class KeyboardViewController: UIInputViewController {
 
     /// Apple's trackpad look: blank key labels and the strip so the caret is the focus.
     private func setTrackpadMode(_ on: Bool) {
-        if on { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
+        if on { playHaptic(hold: true) }
         let alpha: CGFloat = on ? 0 : 1
         UIView.animate(withDuration: UIAccessibility.isReduceMotionEnabled ? 0 : 0.15, delay: 0,
                        options: [.beginFromCurrentState, .allowUserInteraction]) {
@@ -1204,21 +1348,29 @@ class KeyboardViewController: UIInputViewController {
         }
     }
 
-    @objc private func selectAccent(_ gesture: UILongPressGestureRecognizer) {
-        guard let button = gesture.view as? UIButton, let key = button.accessibilityIdentifier,
-              let variants = accents[key] else { return }
+    private func addHold(to key: KeyboardKeyButton) {
+        let hold = UILongPressGestureRecognizer(target: self, action: #selector(holdForChoices(_:)))
+        hold.minimumPressDuration = Self.holdDelay
+        key.addGestureRecognizer(hold)
+    }
+
+    /// Press-and-hold popup: slide to a choice and release, like accents on the system keyboard.
+    @objc private func holdForChoices(_ gesture: UILongPressGestureRecognizer) {
+        guard let button = gesture.view as? KeyboardKeyButton else { return }
         let point = gesture.location(in: rowsView)
         switch gesture.state {
         case .began:
             hidePopup()
-            showAccents(variants, from: button)
-            selectAccent(at: point.x)
+            guard let choices = holdChoices(for: button) else { return }
+            showChoices(choices.rows, from: button, onSelect: choices.action)
+            selectChoice(at: point)
         case .changed:
-            selectAccent(at: point.x)
+            selectChoice(at: point)
         case .ended:
             let value = selectedAccent.map { accentChoices[$0].1 }
+            let action = popupAction
             clearAccents()
-            if let value { insert(value) }
+            if let value { action?(value) }
         case .cancelled, .failed:
             clearAccents()
         default:
@@ -1226,35 +1378,54 @@ class KeyboardViewController: UIInputViewController {
         }
     }
 
-    private func showAccents(_ variants: String, from button: UIButton) {
+    private func holdChoices(for button: KeyboardKeyButton) -> (rows: [[String]], action: (String) -> Void)? {
+        switch button.accessibilityIdentifier {
+        case "period-key":
+            return ([[":", "^", "%", "$", "#"], ["@", "'", "!", "?", ","]], { [weak self] in self?.insert($0) })
+        case "emoji-key":
+            return ([["🙂", ","]], { [weak self] in self?.chooseEmojiKey(comma: $0 == ",") })
+        default:
+            guard let key = button.accessibilityIdentifier, let variants = accents[key] else { return nil }
+            let values = variants.map { shift == .off ? String($0) : String($0).uppercased() }
+            return ([values], { [weak self] in self?.insert($0) })
+        }
+    }
+
+    private func showChoices(_ rows: [[String]], from button: UIButton, onSelect: @escaping (String) -> Void) {
         clearAccents()
         let cell: CGFloat = 34
-        let width = CGFloat(variants.count) * cell
+        let rowHeight: CGFloat = 40
+        let width = CGFloat(rows.map(\.count).max() ?? 0) * cell
+        let height = CGFloat(rows.count) * rowHeight
         let x = min(max(4, button.frame.midX - cell / 2), max(4, rowsView.bounds.width - width - 4))
-        let strip = UIView(frame: CGRect(x: x, y: max(1, button.frame.minY - 42), width: width, height: 40))
+        let strip = UIView(frame: CGRect(x: x, y: max(1, button.frame.minY - height - 2), width: width, height: height))
         strip.backgroundColor = isDark ? UIColor(white: 0.24, alpha: 1) : .white
         strip.layer.cornerRadius = 10
         strip.isUserInteractionEnabled = false
-        for (index, variant) in variants.enumerated() {
-            let value = shift == .off ? String(variant) : String(variant).uppercased()
-            let label = UILabel(frame: CGRect(x: CGFloat(index) * cell, y: 0, width: cell, height: 40))
-            label.text = value
-            label.font = .systemFont(ofSize: 23)
-            label.textAlignment = .center
-            label.textColor = labelColor
-            label.clipsToBounds = true
-            label.layer.cornerRadius = 8
-            strip.addSubview(label)
-            accentChoices.append((label, value))
+        for (row, values) in rows.enumerated() {
+            for (column, value) in values.enumerated() {
+                let label = UILabel(frame: CGRect(x: CGFloat(column) * cell, y: CGFloat(row) * rowHeight, width: cell, height: rowHeight))
+                label.text = value
+                label.font = .systemFont(ofSize: 23)
+                label.textAlignment = .center
+                label.textColor = labelColor
+                label.clipsToBounds = true
+                label.layer.cornerRadius = 8
+                strip.addSubview(label)
+                accentChoices.append((label, value))
+            }
         }
         rowsView.addSubview(strip)
         accentStrip = strip
+        popupAction = onSelect
+        playHaptic(hold: true)
     }
 
-    private func selectAccent(at x: CGFloat) {
+    private func selectChoice(at point: CGPoint) {
         guard let strip = accentStrip else { return }
-        let index = min(max(0, Int((x - strip.frame.minX) / 34)), accentChoices.count - 1)
-        guard index != selectedAccent else { return }
+        let local = CGPoint(x: point.x - strip.frame.minX, y: point.y - strip.frame.minY)
+        guard let index = KeyboardKeyGeometry.nearestIndex(at: local, in: accentChoices.map { $0.0.frame }),
+              index != selectedAccent else { return }
         if let previous = selectedAccent {
             accentChoices[previous].0.backgroundColor = .clear
             accentChoices[previous].0.textColor = labelColor
@@ -1269,6 +1440,7 @@ class KeyboardViewController: UIInputViewController {
         accentStrip = nil
         accentChoices.removeAll(keepingCapacity: true)
         selectedAccent = nil
+        popupAction = nil
     }
 
     // MARK: - Popup and key clicks

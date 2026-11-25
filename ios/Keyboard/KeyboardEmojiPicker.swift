@@ -182,6 +182,56 @@ final class KeyboardEmojiPicker: UIView {
         revealSelectedTab()
     }
 
+    // shortcut: CLDR keywords can't rank relevance ("dog" also tags bone and hot dog), so common words
+    // get a hand-picked emoji; replace with frequency data if suggestions need to get smarter.
+    private static let topPicks: [String: String] = [
+        "heart": "❤️", "corazon": "❤️", "love": "❤️", "amor": "❤️", "kiss": "😘", "beso": "😘",
+        "happy": "😀", "feliz": "😀", "smile": "😊", "sonrisa": "😊", "laugh": "😂", "risa": "😂",
+        "sad": "😢", "triste": "😢", "cool": "😎", "thanks": "🙏", "gracias": "🙏", "yes": "👍",
+        "dog": "🐶", "perro": "🐶", "cat": "🐱", "gato": "🐱", "fire": "🔥", "fuego": "🔥",
+        "sun": "☀️", "sol": "☀️", "moon": "🌙", "luna": "🌙", "star": "⭐", "estrella": "⭐",
+        "rain": "🌧️", "lluvia": "🌧️", "car": "🚗", "coche": "🚗", "house": "🏠", "casa": "🏠",
+        "pizza": "🍕", "beer": "🍺", "cerveza": "🍺", "coffee": "☕", "cafe": "☕",
+        "party": "🎉", "fiesta": "🎉", "music": "🎵", "musica": "🎵", "money": "💰", "dinero": "💰",
+        "cake": "🎂", "tarta": "🎂", "birthday": "🎂", "cumpleanos": "🎂", "christmas": "🎄", "navidad": "🎄",
+    ]
+
+    /// Keyword -> best emoji: exact name first, then names containing the word, then plain keywords.
+    private static let keywordIndex: [String: String] = {
+        guard let search = catalog.search else { return [:] }
+        var best: [String: (rank: Int, emoji: String)] = [:]
+        var position = 0
+        for emoji in catalog.order.flatMap({ catalog.groups[$0, default: []] }) {
+            position += 1
+            let key = emoji.replacingOccurrences(of: "\u{FE0F}", with: "")
+            guard let annotation = search[key] else { continue }
+            let segments = annotation.split(separator: "|").map { normalized(String($0)) }
+            // The first two segments are the Spanish and English names when CLDR has them.
+            let names = segments.prefix(2)
+            for word in Set(segments) where word.count >= 3 && word.allSatisfy(\.isLetter) {
+                var tier = 2
+                if names.contains(word) {
+                    tier = 0
+                } else if names.contains(where: { name in name.split(separator: " ").contains(Substring(word)) }) {
+                    tier = 1
+                }
+                let rank = tier * 10_000 + position
+                if rank < best[word]?.rank ?? .max { best[word] = (rank, emoji) }
+            }
+        }
+        return best.mapValues(\.emoji)
+    }()
+
+    private static func normalized(_ text: String) -> String {
+        text.trimmingCharacters(in: .whitespaces).folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+    }
+
+    /// Emoji the suggestion strip can offer for a typed word, as the system keyboard does.
+    static func suggestion(for word: String) -> String? {
+        let key = normalized(word)
+        return topPicks[key] ?? keywordIndex[key]
+    }
+
     static func searchEmoji(matching query: String) -> [String] {
         let words = query.split(whereSeparator: \.isWhitespace)
         guard !words.isEmpty, let search = catalog.search else { return [] }

@@ -59,7 +59,13 @@ final class KeyboardSuggestionButton: UIButton {
     private let stem = UILabel()
     private let suffix = UILabel()
     private let outgoing = UILabel()
+    private let highlight = UIView()
     private let ink: UIColor
+
+    /// Marks the word Space will insert, like the system keyboard's autocorrect pill.
+    var emphasized = false {
+        didSet { highlight.isHidden = !emphasized }
+    }
 
     init(ink: UIColor) {
         self.ink = ink
@@ -67,6 +73,11 @@ final class KeyboardSuggestionButton: UIButton {
         clipsToBounds = true
         setTitleColor(.clear, for: .normal)
         setTitleColor(.clear, for: .disabled)
+        highlight.backgroundColor = ink.withAlphaComponent(0.16)
+        highlight.layer.cornerCurve = .continuous
+        highlight.isUserInteractionEnabled = false
+        highlight.isHidden = true
+        addSubview(highlight)
         for label in [stem, outgoing, suffix] {
             label.font = .systemFont(ofSize: 16, weight: .medium)
             label.textAlignment = .center
@@ -81,6 +92,8 @@ final class KeyboardSuggestionButton: UIButton {
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        highlight.frame = bounds.insetBy(dx: 3, dy: max(4, bounds.height * 0.12))
+        highlight.layer.cornerRadius = highlight.bounds.height / 2
         for label in [stem, outgoing, suffix] {
             label.bounds = bounds.insetBy(dx: 5, dy: 0)
             label.center = CGPoint(x: bounds.midX, y: bounds.midY)

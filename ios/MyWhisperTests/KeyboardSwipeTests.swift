@@ -403,6 +403,13 @@ final class KeyboardSwipeTests: XCTestCase {
         XCTAssertTrue(animals.accessibilityTraits.contains(.selected))
     }
 
+    func testEmojiSuggestionsPreferCommonPicksThenNames() {
+        XCTAssertEqual(KeyboardEmojiPicker.suggestion(for: "Perro"), "🐶")
+        XCTAssertEqual(KeyboardEmojiPicker.suggestion(for: "corazón"), "❤️")
+        XCTAssertEqual(KeyboardEmojiPicker.suggestion(for: "keyboard"), "⌨️")
+        XCTAssertNil(KeyboardEmojiPicker.suggestion(for: "the"))
+    }
+
     @MainActor
     func testEmojiSearchTypesIntoTheQueryAndInsertsResults() throws {
         let controller = TestKeyboardController()

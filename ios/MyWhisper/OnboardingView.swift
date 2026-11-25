@@ -283,6 +283,10 @@ struct KeyboardSetupView: View {
                 Toggle(label("Enable Caps Lock", "Activar bloqueo de mayúsculas"), isOn: $preferences.enableCapsLock)
                 Toggle(label("Character preview", "Vista previa de teclas"), isOn: $preferences.characterPreview)
                 Toggle(label("Key clicks", "Sonido de teclas"), isOn: $preferences.keyClicks)
+                Toggle(label("Haptic feedback", "Respuesta háptica"), isOn: $preferences.usesHaptics)
+                Toggle(label("Number row", "Fila de números"), isOn: $preferences.showsNumberRow)
+                Toggle(label("Period key beside Space", "Tecla de punto junto al espacio"), isOn: $preferences.showsPeriodKey)
+                Toggle(label("Button beside suggestions", "Botón junto a las sugerencias"), isOn: $preferences.showsSideButton)
             } header: {
                 WhisperSectionHeading(label("Typing", "Escritura"))
             }

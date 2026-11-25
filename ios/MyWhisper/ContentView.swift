@@ -8,6 +8,7 @@ struct ContentView: View {
     @StateObject private var cleanupStore = CleanupSettingsStore()
     @State private var selectedTab = AppTab.activity
     @State private var voiceCleanup = false
+    @State private var keyboardSettingsOpen = false
     @State private var showOnboarding = {
         #if DEBUG
         if CommandLine.arguments.contains("-mwSkipOnboarding") { return false }
@@ -32,7 +33,22 @@ struct ContentView: View {
         }
         // The keyboard can't record; its mic button opens this link to start the shared session.
         .onOpenURL { url in
-            if url.scheme == "mywhisper", url.host == "keyboard-mic" { flow.startKeyboardMicPreview() }
+            guard url.scheme == "mywhisper" else { return }
+            switch url.host {
+            case "keyboard-mic": flow.startKeyboardMicPreview()
+            case "keyboard-settings": keyboardSettingsOpen = true
+            default: break
+            }
+        }
+        .sheet(isPresented: $keyboardSettingsOpen) {
+            NavigationStack {
+                KeyboardSetupView(strings: keyboardStrings, flow: flow)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button(keyboardStrings.done) { keyboardSettingsOpen = false }
+                        }
+                    }
+            }
         }
     }
 
