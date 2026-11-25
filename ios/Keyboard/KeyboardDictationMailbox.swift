@@ -1,6 +1,6 @@
 import Foundation
 
-/// Only control messages and the finished transcript cross the App Group.
+/// Carries keyboard commands, transcript replies, and preview levels in the App Group.
 struct KeyboardDictationMailbox {
     struct Session: Codable {
         let id: UUID
@@ -40,6 +40,15 @@ struct KeyboardDictationMailbox {
         var text: String? = nil
     }
 
+    struct MeterReading: Codable {
+        let level: Float
+        let measured: Date
+
+        func isCurrent(at now: Date) -> Bool {
+            (0...0.5).contains(now.timeIntervalSince(measured)) && (0...1).contains(level)
+        }
+    }
+
     let directory: URL
 
     static var shared: Self? {
@@ -49,10 +58,14 @@ struct KeyboardDictationMailbox {
     var session: Session? { read("session") }
     var request: Request? { read("request") }
     var reply: Reply? { read("reply") }
+    var meter: MeterReading? { read("meter") }
 
     func publish(_ session: Session) throws { try write(session, to: "session") }
     func send(_ request: Request) throws { try write(request, to: "request") }
     func respond(_ reply: Reply) throws { try write(reply, to: "reply") }
+
+    func publishMeter(_ reading: MeterReading) throws { try write(reading, to: "meter") }
+    func clearMeter() { remove("meter") }
 
     func clearSession() { remove("session") }
     func clearReply() { remove("reply") }

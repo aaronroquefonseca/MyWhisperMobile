@@ -207,3 +207,78 @@ private final class KeyboardDictationInput: DictationCapture {
         level = nil
     }
 }
+
+
+/// A user-started, five-minute microphone session for the keyboard preview.
+final class KeyboardMicLevelSession: ObservableObject {
+    @Published private(set) var isEnabled = false
+    @Published private(set) var error: String?
+    let isAvailable = KeyboardDictationMailbox.shared != nil
+
+    private var monitor: AudioCapture?
+    private var timer: Timer?
+    private var end = Date.distantPast
+    private let peak = Peak()
+
+    func start() {
+        guard !isEnabled, let mailbox = KeyboardDictationMailbox.shared else { return }
+        error = nil
+        peak.set(0)
+        mailbox.clearMeter()
+        let capture = AudioCapture()
+        capture.onLevel = { [peak] in peak.set($0) }
+        capture.onInterruption = { [weak self] in
+            DispatchQueue.main.async { self?.stop() }
+        }
+        guard capture.start(prepareUtterance: false) else {
+            error = "Couldn’t start the microphone preview."
+            return
+        }
+        monitor = capture
+        end = Date().addingTimeInterval(300)
+        isEnabled = true
+        let timer = Timer(timeInterval: 0.08, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            let now = Date()
+            guard now < self.end, self.monitor?.running == true else {
+                self.stop()
+                return
+            }
+            do {
+                try mailbox.publishMeter(.init(level: self.peak.get(), measured: now))
+            } catch {
+                self.stop()
+                self.error = "Couldn’t share microphone levels with the keyboard."
+            }
+        }
+        self.timer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    func stop() {
+        guard isEnabled else { return }
+        timer?.invalidate()
+        timer = nil
+        monitor?.stop()
+        monitor = nil
+        KeyboardDictationMailbox.shared?.clearMeter()
+        isEnabled = false
+    }
+
+    private final class Peak {
+        private let lock = NSLock()
+        private var value: Float = 0
+
+        func set(_ level: Float) {
+            lock.lock()
+            defer { lock.unlock() }
+            value = level
+        }
+
+        func get() -> Float {
+            lock.lock()
+            defer { lock.unlock() }
+            return value
+        }
+    }
+}

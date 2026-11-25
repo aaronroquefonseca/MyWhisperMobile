@@ -101,7 +101,14 @@ class KeyboardViewController: UIInputViewController {
 
     // MARK: - Lifecycle
 
+    // The remote host can query this before UIKit loads the extension's view.
+    override var hasDictationKey: Bool {
+        get { true }
+        set { super.hasDictationKey = true }
+    }
+
     override func loadView() {
+        super.hasDictationKey = true
         let keyboard = KeyboardInputView(frame: .zero, inputViewStyle: .keyboard)
         // Let UIKit draw the keyboard surface and its device-specific rounded edge.
         keyboard.isOpaque = false
@@ -111,8 +118,6 @@ class KeyboardViewController: UIInputViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        // UIKit owns the footer. MyWhisper provides the dictation control in its toolbar.
-        hasDictationKey = true
         rowsView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(rowsView)
         swipeGesture.delegate = self
@@ -137,6 +142,7 @@ class KeyboardViewController: UIInputViewController {
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        super.hasDictationKey = true
         visible = true
         applySettings(KeyboardPreferences.load())
         refreshLayout()

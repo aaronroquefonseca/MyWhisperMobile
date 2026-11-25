@@ -107,7 +107,7 @@ struct ContentView: View {
             .whisperRowSurface()
             Section {
                 NavigationLink {
-                    KeyboardSetupView(strings: keyboardStrings)
+                    KeyboardSetupView(strings: keyboardStrings, flow: flow)
                 } label: {
                     WhisperDestinationLabel(
                         title: keyboardStrings.keyboardTitle,

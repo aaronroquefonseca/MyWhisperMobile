@@ -309,6 +309,22 @@ final class KeyboardSwipeTests: XCTestCase {
         XCTAssertEqual(controller.document.text, "4 ~ q")
     }
 
+    func testKeyboardMicLevelsExpireAndRejectInvalidReadings() {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let reading = KeyboardDictationMailbox.MeterReading(level: 0.5, measured: now)
+        XCTAssertTrue(reading.isCurrent(at: now.addingTimeInterval(0.1)))
+        XCTAssertFalse(reading.isCurrent(at: now.addingTimeInterval(1)))
+        XCTAssertFalse(KeyboardDictationMailbox.MeterReading(level: 2, measured: now).isCurrent(at: now))
+    }
+
+    @MainActor
+    func testEmojiSearchUsesEnglishAndSpanishAnnotations() {
+        XCTAssertTrue(KeyboardEmojiPicker.searchEmoji(matching: "red heart").contains("❤️"))
+        XCTAssertTrue(KeyboardEmojiPicker.searchEmoji(matching: "corazon rojo").contains("❤️"))
+        XCTAssertTrue(KeyboardEmojiPicker.searchEmoji(matching: "dog face").contains("🐶"))
+        XCTAssertTrue(KeyboardEmojiPicker.searchEmoji(matching: "notanemojiquery").isEmpty)
+    }
+
     func testMicPreviewMatchesSmartModeReleases() {
         var mic = KeyboardMicPreviewState()
         mic.release(after: 0.07)
@@ -338,6 +354,9 @@ final class KeyboardSwipeTests: XCTestCase {
     @MainActor
     func testKeyboardOwnsDictationAndTypingResetsThePreview() throws {
         let controller = TestKeyboardController()
+        XCTAssertTrue(controller.hasDictationKey)
+        controller.hasDictationKey = false
+        XCTAssertTrue(controller.hasDictationKey)
         controller.loadViewIfNeeded()
         let input = try XCTUnwrap(controller.inputView)
         input.frame = CGRect(x: 0, y: 0, width: 390, height: 260)

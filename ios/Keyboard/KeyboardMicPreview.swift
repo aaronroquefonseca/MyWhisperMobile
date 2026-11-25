@@ -46,6 +46,10 @@ final class KeyboardMicPreview: UIView {
     private let pill = UIView()
     private let cancelButton = UIButton(type: .system)
     private let waveform = UIStackView()
+    private let meterHint = UILabel()
+    private var meterTask: Task<Void, Never>?
+    private var recentLevels = Array(repeating: CGFloat.zero, count: 11)
+    private var renderedPhase = KeyboardMicPreviewState.Phase.idle
     private var state = KeyboardMicPreviewState()
     private var touchStart: (point: CGPoint, time: TimeInterval)?
     private var holdTask: Task<Void, Never>?
@@ -62,6 +66,7 @@ final class KeyboardMicPreview: UIView {
 
         pill.backgroundColor = UIColor(red: 29 / 255, green: 27 / 255, blue: 32 / 255, alpha: 0.8)
         pill.layer.cornerRadius = 16
+        pill.clipsToBounds = true
         addSubview(pill)
 
         waveform.axis = .horizontal
@@ -69,15 +74,23 @@ final class KeyboardMicPreview: UIView {
         waveform.alignment = .center
         waveform.isUserInteractionEnabled = false
         waveform.isAccessibilityElement = false
-        for height in [6, 11, 17, 9, 24, 14, 21, 8, 16, 10, 6] {
+        for _ in recentLevels {
             let bar = UIView()
             bar.backgroundColor = .white
             bar.layer.cornerRadius = 1.5
             bar.widthAnchor.constraint(equalToConstant: 3).isActive = true
-            bar.heightAnchor.constraint(equalToConstant: CGFloat(height)).isActive = true
+            bar.heightAnchor.constraint(equalToConstant: 24).isActive = true
             waveform.addArrangedSubview(bar)
         }
         pill.addSubview(waveform)
+        meterHint.text = "Enable mic preview in MyWhisper"
+        meterHint.textColor = .white
+        meterHint.font = .systemFont(ofSize: 10, weight: .medium)
+        meterHint.textAlignment = .center
+        meterHint.numberOfLines = 2
+        meterHint.isUserInteractionEnabled = false
+        meterHint.isHidden = true
+        pill.addSubview(meterHint)
 
         cancelButton.setImage(UIImage(systemName: "xmark", withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold)), for: .normal)
         cancelButton.tintColor = .white
@@ -126,13 +139,21 @@ final class KeyboardMicPreview: UIView {
         mark.frame = CGRect(x: (face.bounds.width - iconSize) / 2, y: (face.bounds.height - iconSize) / 2,
                             width: iconSize, height: iconSize)
 
-        let pillWidth = min(178, bounds.width)
+        let phase = state.phase
+        let pillWidth = min(bounds.width, phase == .locked ? 178 : phase == .held ? 144 : side)
         pill.frame = CGRect(x: dockedLeading ? 0 : bounds.width - pillWidth, y: 2, width: pillWidth, height: bounds.height - 4)
         let cancelWidth: CGFloat = 44
-        let cancelX = dockedLeading ? pill.bounds.width - cancelWidth : 0
+        let cancelX = dockedLeading ? pillWidth - cancelWidth : 0
         cancelButton.frame = CGRect(x: cancelX, y: 0, width: cancelWidth, height: pill.bounds.height)
-        let waveCenter = (pill.bounds.width + (dockedLeading ? side - cancelWidth : cancelWidth - side)) / 2
+        let waveCenter: CGFloat
+        if phase == .locked {
+            waveCenter = (pillWidth + (dockedLeading ? side - cancelWidth : cancelWidth - side)) / 2
+        } else {
+            waveCenter = (pillWidth + (dockedLeading ? side : -side)) / 2
+        }
         waveform.frame = CGRect(x: waveCenter - 31.5, y: 0, width: 63, height: pill.bounds.height)
+        meterHint.frame = CGRect(x: waveCenter - 40, y: 0, width: 80, height: pill.bounds.height)
+
     }
 
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
@@ -228,9 +249,24 @@ final class KeyboardMicPreview: UIView {
     private func render() {
         let phase = state.phase
         let active = phase == .held || phase == .locked
-        pill.isHidden = !active
-        face.backgroundColor = phase == .held ? UIColor(white: 0.91, alpha: 1) : .white
-        face.alpha = phase == .locked ? 1 : 0.65
+        let phaseChanged = phase != renderedPhase
+        renderedPhase = phase
+        let duration = UIAccessibility.isReduceMotionEnabled ? 0 : 0.12
+        pill.isUserInteractionEnabled = active
+        cancelButton.isEnabled = phase == .locked || state.target == .cancel
+        cancelButton.accessibilityElementsHidden = !cancelButton.isEnabled
+
+        setNeedsLayout()
+        UIView.animate(withDuration: duration, delay: 0, options: [.curveEaseOut, .beginFromCurrentState, .allowUserInteraction]) {
+            self.layoutIfNeeded()
+            self.pill.alpha = active ? 1 : 0
+            self.face.backgroundColor = phase == .held ? UIColor(white: 0.91, alpha: 1) : .white
+            self.face.alpha = phase == .locked ? 1 : 0.65
+        }
+        UIView.animate(withDuration: duration == 0 ? 0 : (active ? 0.1 : 0.08), delay: 0,
+                       options: [.beginFromCurrentState, .allowUserInteraction]) {
+            self.cancelButton.alpha = self.cancelButton.isEnabled ? 1 : 0
+        }
         let icon: String?
         switch phase {
         case .processing: icon = "ellipsis"
@@ -238,7 +274,10 @@ final class KeyboardMicPreview: UIView {
         case .held: icon = state.target == .lock ? "lock.fill" : nil
         case .idle: icon = nil
         }
-        mark.image = icon.flatMap { UIImage(systemName: $0)?.withRenderingMode(.alwaysTemplate) } ?? idleImage
+        let nextImage = icon.flatMap { UIImage(systemName: $0)?.withRenderingMode(.alwaysTemplate) } ?? idleImage
+        UIView.transition(with: mark, duration: phaseChanged ? duration : 0, options: [.transitionCrossDissolve, .allowUserInteraction]) {
+            self.mark.image = nextImage
+        }
         button.accessibilityLabel = "MyWhisper dictation preview"
         switch phase {
         case .idle: button.accessibilityValue = "Ready"
@@ -247,19 +286,48 @@ final class KeyboardMicPreview: UIView {
         case .processing: button.accessibilityValue = "Processing. Activate to cancel"
         }
         cancelButton.tintColor = state.target == .cancel ? .systemRed : .white
-        for (index, bar) in waveform.arrangedSubviews.enumerated() {
+        for bar in waveform.arrangedSubviews {
             bar.backgroundColor = state.target == .lock ? .systemTeal : .white
-            if active && !UIAccessibility.isReduceMotionEnabled {
-                guard bar.layer.animation(forKey: "wave") == nil else { continue }
-                let wave = CABasicAnimation(keyPath: "transform.scale.y")
-                wave.fromValue = 0.4
-                wave.toValue = 1
-                wave.duration = 0.22 + Double(index % 4) * 0.07
-                wave.autoreverses = true
-                wave.repeatCount = .infinity
-                bar.layer.add(wave, forKey: "wave")
-            } else {
-                bar.layer.removeAnimation(forKey: "wave")
+        }
+        if active {
+            if meterTask == nil { startMeter() }
+        } else {
+            meterTask?.cancel()
+            meterTask = nil
+            recentLevels = recentLevels.map { _ in 0 }
+            meterHint.isHidden = true
+            waveform.isHidden = false
+            drawMeter(level: 0)
+        }
+    }
+
+    private func startMeter() {
+        meterTask = Task { @MainActor [weak self] in
+            let mailbox = KeyboardDictationMailbox.shared
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(nanoseconds: 80_000_000)
+                } catch {
+                    return
+                }
+                guard let self else { return }
+                let now = Date()
+                let reading = mailbox?.meter
+                let available = reading?.isCurrent(at: now) == true
+                self.meterHint.isHidden = available
+                self.waveform.isHidden = !available
+                self.drawMeter(level: available ? CGFloat(reading?.level ?? 0) : 0)
+            }
+        }
+    }
+
+    private func drawMeter(level: CGFloat) {
+        recentLevels.removeFirst()
+        recentLevels.append(level)
+        let duration = UIAccessibility.isReduceMotionEnabled ? 0 : 0.08
+        UIView.animate(withDuration: duration, delay: 0, options: [.curveEaseOut, .beginFromCurrentState, .allowUserInteraction]) {
+            for (bar, sample) in zip(self.waveform.arrangedSubviews, self.recentLevels) {
+                bar.transform = CGAffineTransform(scaleX: 1, y: max(0.12, min(1, sqrt(sample) * 1.6)))
             }
         }
     }

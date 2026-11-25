@@ -240,6 +240,7 @@ private struct KeyboardInstallInstructions: View {
 
 struct KeyboardSetupView: View {
     let strings: OnboardingStrings
+    @ObservedObject var flow: AppFlow
     @State private var practiceText = ""
     @State private var preferences = KeyboardPreferences.load()
     @State private var needsTransfer = KeyboardPreferences.sharedURL == nil
@@ -248,6 +249,9 @@ struct KeyboardSetupView: View {
 
     var body: some View {
         List {
+            KeyboardMicPreviewSetup(session: flow.keyboardMicPreview, isSpanish: strings.isSpanish,
+                                    start: flow.startKeyboardMicPreview)
+
             Section {
                 ForEach(KeyboardLanguage.allCases) { language in
                     Toggle(language.title, isOn: Binding(
@@ -334,5 +338,33 @@ struct KeyboardSetupView: View {
 
     private func label(_ english: String, _ spanish: String) -> String {
         strings.isSpanish ? spanish : english
+    }
+}
+
+
+private struct KeyboardMicPreviewSetup: View {
+    @ObservedObject var session: KeyboardMicLevelSession
+    let isSpanish: Bool
+    let start: () -> Void
+
+    var body: some View {
+        Section {
+            if !session.isAvailable {
+                Text(label("Live levels require the shared App Group.", "El nivel en directo requiere un grupo de apps compartido."))
+            } else if session.isEnabled {
+                Button(label("Stop microphone preview", "Detener vista previa del micrófono"), action: session.stop)
+            } else {
+                Button(label("Enable microphone preview for 5 minutes", "Activar la vista previa del micrófono durante 5 minutos"), action: start)
+            }
+            if let error = session.error { Text(error).foregroundStyle(.secondary) }
+        } footer: {
+            Text(label("Return to your app and tap the MyWhisper mic. The microphone stays on for up to five minutes and shares only volume levels.",
+                       "Vuelve a tu app y toca el micrófono de MyWhisper. El micrófono permanece activo hasta cinco minutos y solo comparte el nivel de volumen."))
+        }
+        .whisperRowSurface()
+    }
+
+    private func label(_ english: String, _ spanish: String) -> String {
+        isSpanish ? spanish : english
     }
 }
