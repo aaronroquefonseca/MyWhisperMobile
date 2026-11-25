@@ -146,7 +146,9 @@ final class KeyboardEmojiPicker: UIView {
         let width = bounds.width
         guard width > 0 else { return }
         let searchHeight: CGFloat = footerHeight < 40 ? 28 : 38
-        let categoryHeight: CGFloat = 22
+        // Like the system picker: no category heading, so the grid gets the height.
+        let categoryHeight: CGFloat = 0
+        heading.isHidden = true
         let gridTop = searchHeight + categoryHeight + 3
         let footerY = bounds.height - footerHeight
         let gridBottom = footerY
@@ -355,7 +357,7 @@ private final class KeyboardEmojiCell: UICollectionViewCell {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        label.font = .systemFont(ofSize: showsEmoji ? min(35, bounds.height * 0.76) : 13)
+        label.font = .systemFont(ofSize: showsEmoji ? min(42, bounds.height * 0.8) : 13)
     }
 
     func configure(emoji: String?, emptyMessage: String, ink: UIColor) {
@@ -471,7 +473,7 @@ final class KeyboardEmojiSearchBar: UIView {
         results.frame = CGRect(x: 0, y: rowY, width: width, height: rowHeight)
         empty.frame = results.frame
         let cellWidth = min(57, max(41, floor((width - 12) / 7)))
-        let font = UIFont.systemFont(ofSize: min(35, rowHeight * 0.76))
+        let font = UIFont.systemFont(ofSize: min(42, rowHeight * 0.8))
         for (index, button) in buttons.enumerated() {
             button.titleLabel?.font = font
             button.frame = CGRect(x: CGFloat(index) * cellWidth, y: 0, width: cellWidth, height: rowHeight)

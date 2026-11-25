@@ -481,7 +481,9 @@ class KeyboardViewController: UIInputViewController {
         let numberRow = settings.showsNumberRow && !isNumberField
         let numberHeight: CGFloat = layout.compact ? 26 : 38
         let extra = numberRow ? numberHeight + gap : 0
-        let height = stripHeight + extra + 4 * rowHeight + 3 * gap + 10
+        // The emoji picker is taller, as on the system keyboard, so emoji draw at full size.
+        let emojiExtra: CGFloat = emojiMode && !layout.compact ? 44 : 0
+        let height = stripHeight + extra + 4 * rowHeight + 3 * gap + 10 + emojiExtra
         if heightConstraint?.constant != height { heightConstraint?.constant = height }
 
         if emojiMode {
