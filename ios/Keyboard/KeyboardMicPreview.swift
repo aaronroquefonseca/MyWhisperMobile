@@ -45,10 +45,9 @@ final class KeyboardMicPreview: UIView {
     private let feedback = UIImpactFeedbackGenerator(style: .light)
     private let pill = UIView()
     private let cancelButton = UIButton(type: .system)
-    private let waveform = UIStackView()
+    private let waveform = KeyboardBarsView()
     private let meterHint = UILabel()
     private var meterTask: Task<Void, Never>?
-    private var recentLevels = Array(repeating: CGFloat.zero, count: 11)
     private var renderedPhase = KeyboardMicPreviewState.Phase.idle
     private var state = KeyboardMicPreviewState()
     private var touchStart: (point: CGPoint, time: TimeInterval)?
@@ -57,10 +56,14 @@ final class KeyboardMicPreview: UIView {
     private var dockedLeading: Bool
     private var dragging = false
     private var consumesRelease = false
+    private var tapOpensSession = false
     private let onDock: (Bool) -> Void
+    /// Nil when MyWhisper can't share levels (no Full Access); the mockup then runs without them.
+    private let openSession: (() -> Void)?
 
-    init(frame: CGRect, dockedLeading: Bool, onDock: @escaping (Bool) -> Void) {
+    init(frame: CGRect, dockedLeading: Bool, openSession: (() -> Void)?, onDock: @escaping (Bool) -> Void) {
         self.dockedLeading = dockedLeading
+        self.openSession = openSession
         self.onDock = onDock
         super.init(frame: frame)
 
@@ -69,19 +72,6 @@ final class KeyboardMicPreview: UIView {
         pill.clipsToBounds = true
         addSubview(pill)
 
-        waveform.axis = .horizontal
-        waveform.spacing = 3
-        waveform.alignment = .center
-        waveform.isUserInteractionEnabled = false
-        waveform.isAccessibilityElement = false
-        for _ in recentLevels {
-            let bar = UIView()
-            bar.backgroundColor = .white
-            bar.layer.cornerRadius = 1.5
-            bar.widthAnchor.constraint(equalToConstant: 3).isActive = true
-            bar.heightAnchor.constraint(equalToConstant: 24).isActive = true
-            waveform.addArrangedSubview(bar)
-        }
         pill.addSubview(waveform)
         meterHint.text = "Enable mic preview in MyWhisper"
         meterHint.textColor = .white
@@ -122,7 +112,11 @@ final class KeyboardMicPreview: UIView {
         button.onUp = { [weak self] point in self?.release(at: point) }
         button.onCancel = { [weak self] in self?.reset() }
         button.onActivate = { [weak self] in self?.activate() }
-        render()
+        // Every keyboard rebuild makes a new preview: start docked, don't animate in from .zero.
+        UIView.performWithoutAnimation {
+            render()
+            layoutIfNeeded()
+        }
     }
 
     required init?(coder: NSCoder) { nil }
@@ -151,7 +145,7 @@ final class KeyboardMicPreview: UIView {
         } else {
             waveCenter = (pillWidth + (dockedLeading ? side : -side)) / 2
         }
-        waveform.frame = CGRect(x: waveCenter - 31.5, y: 0, width: 63, height: pill.bounds.height)
+        waveform.frame = CGRect(x: waveCenter - 31.5, y: (pill.bounds.height - 24) / 2, width: 63, height: 24)
         meterHint.frame = CGRect(x: waveCenter - 40, y: 0, width: 80, height: pill.bounds.height)
 
     }
@@ -167,6 +161,7 @@ final class KeyboardMicPreview: UIView {
         finishTask?.cancel()
         touchStart = nil
         dragging = false
+        tapOpensSession = false
         state.reset()
         render()
     }
@@ -181,6 +176,9 @@ final class KeyboardMicPreview: UIView {
         guard state.phase == .idle || state.phase == .locked else { return }
         touchStart = (point, ProcessInfo.processInfo.systemUptime)
         guard state.phase == .idle else { return }
+        // No live mic session: a tap opens MyWhisper to start one; a drag still docks.
+        tapOpensSession = openSession != nil && !Self.sessionIsLive
+        guard !tapOpensSession else { return }
         holdTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 80_000_000)
             guard !Task.isCancelled, let self else { return }
@@ -225,11 +223,24 @@ final class KeyboardMicPreview: UIView {
             setNeedsLayout()
             return
         }
+        if tapOpensSession {
+            tapOpensSession = false
+            openSession?()
+            return
+        }
         state.release(after: ProcessInfo.processInfo.systemUptime - touchStart.time)
         completeTransition()
     }
 
+    private static var sessionIsLive: Bool {
+        KeyboardDictationMailbox.shared?.meter?.isCurrent(at: Date()) == true
+    }
+
     private func activate() {
+        if state.phase == .idle, let openSession, !Self.sessionIsLive {
+            openSession()
+            return
+        }
         state.release(after: 0)
         completeTransition()
     }
@@ -286,48 +297,34 @@ final class KeyboardMicPreview: UIView {
         case .processing: button.accessibilityValue = "Processing. Activate to cancel"
         }
         cancelButton.tintColor = state.target == .cancel ? .systemRed : .white
-        for bar in waveform.arrangedSubviews {
-            bar.backgroundColor = state.target == .lock ? .systemTeal : .white
-        }
+        waveform.barColor = state.target == .lock ? .systemTeal : .white
         if active {
             if meterTask == nil { startMeter() }
         } else {
             meterTask?.cancel()
             meterTask = nil
-            recentLevels = recentLevels.map { _ in 0 }
             meterHint.isHidden = true
             waveform.isHidden = false
-            drawMeter(level: 0)
+            waveform.clear()
         }
     }
 
     private func startMeter() {
+        meterHint.text = openSession == nil ? "Allow Full Access for mic levels" : "Start the mic in MyWhisper"
         meterTask = Task { @MainActor [weak self] in
             let mailbox = KeyboardDictationMailbox.shared
             while !Task.isCancelled {
+                guard let self else { return }
+                let reading = mailbox?.meter
+                let available = reading?.isCurrent(at: Date()) == true
+                self.meterHint.isHidden = available
+                self.waveform.isHidden = !available
+                self.waveform.push(available ? reading?.level ?? 0 : 0)
                 do {
-                    try await Task.sleep(nanoseconds: 80_000_000)
+                    try await Task.sleep(nanoseconds: 40_000_000)
                 } catch {
                     return
                 }
-                guard let self else { return }
-                let now = Date()
-                let reading = mailbox?.meter
-                let available = reading?.isCurrent(at: now) == true
-                self.meterHint.isHidden = available
-                self.waveform.isHidden = !available
-                self.drawMeter(level: available ? CGFloat(reading?.level ?? 0) : 0)
-            }
-        }
-    }
-
-    private func drawMeter(level: CGFloat) {
-        recentLevels.removeFirst()
-        recentLevels.append(level)
-        let duration = UIAccessibility.isReduceMotionEnabled ? 0 : 0.08
-        UIView.animate(withDuration: duration, delay: 0, options: [.curveEaseOut, .beginFromCurrentState, .allowUserInteraction]) {
-            for (bar, sample) in zip(self.waveform.arrangedSubviews, self.recentLevels) {
-                bar.transform = CGAffineTransform(scaleX: 1, y: max(0.12, min(1, sqrt(sample) * 1.6)))
             }
         }
     }
@@ -362,5 +359,153 @@ private final class KeyboardMicTouchSurface: UIControl {
     override func accessibilityActivate() -> Bool {
         onActivate?()
         return true
+    }
+}
+
+/// Port of Android `BloomBars`: silence = dots; voice opens the bars from the
+/// middle out, every bar showing the current level under a mirrored bell.
+/// Smoothing rates are "per 60 Hz frame", rescaled by dt for 120 Hz screens.
+struct KeyboardBloomBars {
+    static let voiceGate: Float = 0.08
+    /// Voice stays "on" this long after the last loud reading, bridging word gaps.
+    static let hangover: TimeInterval = 0.22
+    private static let bellSigma: Float = 0.32
+    private static let wobbleDepth: Float = 0.16
+    private static let settled: Float = 0.002
+
+    private(set) var heights: [Float]
+    private var input: Float = 0
+    private var level: Float = 0
+    private var spread: Float = 0
+    private var clock: Float = 0
+    private var lastVoice = -TimeInterval.infinity
+    /// One phase set per mirrored pair, so left and right halves move together.
+    private let phases: [(Float, Float, Float, Float)]
+
+    init(count: Int = 11) {
+        heights = Array(repeating: 0, count: count)
+        phases = (0..<(count + 1) / 2).map { _ in
+            (Float.random(in: 0..<(2 * .pi)), Float.random(in: 0..<(2 * .pi)),
+             Float.random(in: 2..<5), Float.random(in: 3..<7))
+        }
+    }
+
+    mutating func push(_ value: Float, at now: TimeInterval) {
+        input = min(max(value, 0), 1)
+        if input > Self.voiceGate { lastVoice = now }
+    }
+
+    mutating func reset() {
+        heights = heights.map { _ in 0 }
+        input = 0
+        level = 0
+        spread = 0
+        lastVoice = -.infinity
+    }
+
+    /// Advance `dt` seconds; returns true while still moving (keep drawing).
+    mutating func step(_ dt: Float, at now: TimeInterval) -> Bool {
+        clock += dt
+        let voice = now - lastVoice < Self.hangover
+        level = Self.approach(level, input, input > level ? 0.55 : 0.18, dt)
+        // ~120 ms to open, ~400 ms to close.
+        spread = Self.approach(spread, voice ? 1 : 0, voice ? 0.22 : 0.07, dt)
+        let center = Float(heights.count - 1) / 2
+        var moving = voice || spread > Self.settled
+        for index in heights.indices {
+            let distance: Float = center == 0 ? 0 : abs(Float(index) - center) / center
+            let reveal: Float = min(max((spread * 1.25 - distance) / 0.25, 0), 1)
+            let bellExponent: Float = -(distance * distance) / (2 * Self.bellSigma * Self.bellSigma)
+            let bell: Float = 0.12 + 0.88 * exp(bellExponent)
+            let phase = phases[min(index, heights.count - 1 - index)]
+            let slow: Float = sin(clock * phase.2 + phase.0)
+            let fast: Float = sin(clock * phase.3 + phase.1)
+            let wobble: Float = 1 - Self.wobbleDepth + Self.wobbleDepth * (0.5 + 0.25 * slow + 0.25 * fast)
+            heights[index] = Self.approach(heights[index], reveal * level * bell * wobble, 0.45, dt)
+            if heights[index] > Self.settled { moving = true }
+        }
+        return moving
+    }
+
+    private static func approach(_ current: Float, _ target: Float, _ perFrame60: Float, _ dt: Float) -> Float {
+        current + (target - current) * (1 - pow(1 - perFrame60, dt * 60))
+    }
+}
+
+/// Android `BarsView` on iOS: 11 white bars, 3 pt wide, 3 pt gap, 4 pt resting dots.
+final class KeyboardBarsView: UIView {
+    private var bloom = KeyboardBloomBars()
+    private var bars: [CALayer] = []
+    private var link: CADisplayLink?
+    private var lastFrame: CFTimeInterval = 0
+
+    var barColor: UIColor = .white {
+        didSet { bars.forEach { $0.backgroundColor = barColor.cgColor } }
+    }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = false
+        isAccessibilityElement = false
+        bars = bloom.heights.map { _ in
+            let bar = CALayer()
+            bar.backgroundColor = barColor.cgColor
+            bar.cornerRadius = 1.5
+            layer.addSublayer(bar)
+            return bar
+        }
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    func push(_ level: Float) {
+        bloom.push(level, at: CACurrentMediaTime())
+        guard link == nil, window != nil else { return }
+        let link = CADisplayLink(target: self, selector: #selector(advance(_:)))
+        link.add(to: .main, forMode: .common)
+        self.link = link
+    }
+
+    func clear() {
+        stopLink()
+        bloom.reset()
+        layoutBars()
+    }
+
+    override func willMove(toWindow newWindow: UIWindow?) {
+        super.willMove(toWindow: newWindow)
+        // The display link retains its target; never outlive the keyboard.
+        if newWindow == nil { stopLink() }
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        layoutBars()
+    }
+
+    @objc private func advance(_ link: CADisplayLink) {
+        let now = CACurrentMediaTime()
+        let dt = lastFrame == 0 ? 1.0 / 60 : min(max(now - lastFrame, 0), 0.1)
+        lastFrame = now
+        if !bloom.step(Float(dt), at: now) { stopLink() }
+        layoutBars()
+    }
+
+    private func stopLink() {
+        link?.invalidate()
+        link = nil
+        lastFrame = 0
+    }
+
+    private func layoutBars() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        let middle = bounds.height / 2
+        for (index, bar) in bars.enumerated() {
+            // Mirrors Android HardeningGuards.barHalfHeight: 2..18 pt half height, capped by the view.
+            let half = min(2 + CGFloat(bloom.heights[index]) * 16, max(middle - 1, 0))
+            bar.frame = CGRect(x: CGFloat(index) * 6, y: middle - half, width: 3, height: half * 2)
+        }
+        CATransaction.commit()
     }
 }

@@ -432,3 +432,53 @@ final class DictationTests: XCTestCase {
         XCTAssertEqual(harness.results, ["hello world"])
     }
 }
+
+/// Port of Android `LevelNormalizerTest`.
+final class LevelNormalizerTests: XCTestCase {
+    private func rms(_ db: Double) -> Double { pow(10, db / 20) }
+
+    @discardableResult
+    private func feed(_ normalizer: LevelNormalizer, db: Double, blocks: Int) -> Float {
+        var last: Float = 0
+        for _ in 0..<blocks { last = normalizer.push(rms: rms(db)) }
+        return last
+    }
+
+    func testSteadyRoomNoiseIsGatedToZero() {
+        XCTAssertEqual(feed(LevelNormalizer(), db: -45, blocks: 200), 0)
+    }
+
+    func testNormalSpeechAfterSilenceFillsMostOfTheBar() {
+        let normalizer = LevelNormalizer()
+        feed(normalizer, db: -65, blocks: 30)
+        XCTAssertGreaterThan(normalizer.push(rms: rms(-30)), 0.9)
+        XCTAssertTrue((0.4...0.9).contains(normalizer.push(rms: rms(-40))))
+    }
+
+    func testQuietTalkerIsAutoGained() {
+        let normalizer = LevelNormalizer()
+        feed(normalizer, db: -70, blocks: 30)
+        feed(normalizer, db: -42, blocks: 60)
+        XCTAssertGreaterThan(normalizer.push(rms: rms(-42)), 0.9)
+    }
+
+    func testDigitalSilenceWarmupDoesNotPinFloor() {
+        let normalizer = LevelNormalizer()
+        for _ in 0..<10 { _ = normalizer.push(rms: 0) }
+        XCTAssertEqual(feed(normalizer, db: -50, blocks: 120), 0)
+    }
+
+    func testNoisyRoomIsLearnedImmediately() {
+        let normalizer = LevelNormalizer()
+        XCTAssertEqual(feed(normalizer, db: -35, blocks: 3), 0)
+        XCTAssertGreaterThan(normalizer.push(rms: rms(-12)), 0.9)
+    }
+
+    func testTapBuffersSplitIntoAndroidSizedBlocks() {
+        let normalizer = LevelNormalizer()
+        // A 2048-sample buffer whose last 32 ms block is loud: the loud block wins.
+        let quiet = [Int16](repeating: 3, count: LevelNormalizer.blockSize * 3)
+        let loud = (0..<LevelNormalizer.blockSize).map { $0 % 2 == 0 ? Int16(8_000) : Int16(-8_000) }
+        XCTAssertGreaterThan(normalizer.push(samples: (quiet + loud)[...]), 0.9)
+    }
+}

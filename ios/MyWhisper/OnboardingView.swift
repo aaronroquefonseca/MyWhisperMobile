@@ -352,14 +352,14 @@ private struct KeyboardMicPreviewSetup: View {
             if !session.isAvailable {
                 Text(label("Live levels require the shared App Group.", "El nivel en directo requiere un grupo de apps compartido."))
             } else if session.isEnabled {
-                Button(label("Stop microphone preview", "Detener vista previa del micrófono"), action: session.stop)
+                Button(label("Stop keyboard microphone", "Detener micrófono del teclado"), action: session.stop)
             } else {
-                Button(label("Enable microphone preview for 5 minutes", "Activar la vista previa del micrófono durante 5 minutos"), action: start)
+                Button(label("Start keyboard microphone", "Iniciar micrófono del teclado"), action: start)
             }
             if let error = session.error { Text(error).foregroundStyle(.secondary) }
         } footer: {
-            Text(label("Return to your app and tap the MyWhisper mic. The microphone stays on for up to five minutes and shares only volume levels.",
-                       "Vuelve a tu app y toca el micrófono de MyWhisper. El micrófono permanece activo hasta cinco minutos y solo comparte el nivel de volumen."))
+            Text(label("Tapping the MyWhisper key starts this for you. The microphone stays on in the background until you stop it, and shares only volume levels with the keyboard.",
+                       "Al tocar la tecla de MyWhisper se inicia solo. El micrófono sigue activo en segundo plano hasta que lo detengas y solo comparte el nivel de volumen con el teclado."))
         }
         .whisperRowSurface()
     }

@@ -476,3 +476,52 @@ private final class TestKeyboardDocument: NSObject, UITextDocumentProxy {
     func setMarkedText(_ markedText: String, selectedRange: NSRange) {}
     func unmarkText() {}
 }
+
+/// Port of Android `BloomBarsTest`.
+final class KeyboardBloomBarsTests: XCTestCase {
+    /// 60 Hz frames, a level reading every 32 ms; returns the end time.
+    @discardableResult
+    private func run(_ bars: inout KeyboardBloomBars, level: Float, seconds: Double, from start: Double = 0) -> Double {
+        var now = start
+        var nextPush = start
+        while now < start + seconds {
+            if now >= nextPush {
+                bars.push(level, at: now)
+                nextPush += 0.032
+            }
+            _ = bars.step(1 / 60, at: now)
+            now += 1.0 / 60
+        }
+        return now
+    }
+
+    func testSilenceStaysFlat() {
+        var bars = KeyboardBloomBars()
+        run(&bars, level: 0, seconds: 1)
+        XCTAssertTrue(bars.heights.allSatisfy { $0 == 0 })
+    }
+
+    func testVoiceIsSymmetricAndCenterTallest() {
+        var bars = KeyboardBloomBars()
+        run(&bars, level: 0.8, seconds: 0.6)
+        for index in 0..<5 { XCTAssertEqual(bars.heights[index], bars.heights[10 - index], accuracy: 1e-6) }
+        XCTAssertGreaterThan(bars.heights[5], 0.5)
+        XCTAssertGreaterThan(bars.heights[5], bars.heights[2])
+        XCTAssertGreaterThan(bars.heights[2], bars.heights[0])
+    }
+
+    func testOpensFromCenterFirst() {
+        var bars = KeyboardBloomBars()
+        run(&bars, level: 0.8, seconds: 0.048)
+        XCTAssertGreaterThan(bars.heights[5], 0)
+        XCTAssertEqual(bars.heights[0], 0)
+    }
+
+    func testClosesAndSettlesAfterVoiceStops() {
+        var bars = KeyboardBloomBars()
+        let end = run(&bars, level: 0.8, seconds: 0.6)
+        let settled = run(&bars, level: 0, seconds: 2, from: end)
+        XCTAssertFalse(bars.step(1 / 60, at: settled))
+        XCTAssertTrue(bars.heights.allSatisfy { $0 < 0.01 })
+    }
+}

@@ -30,6 +30,10 @@ struct ContentView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { flow.refreshMicPermission() }
         }
+        // The keyboard can't record; its mic button opens this link to start the shared session.
+        .onOpenURL { url in
+            if url.scheme == "mywhisper", url.host == "keyboard-mic" { flow.startKeyboardMicPreview() }
+        }
     }
 
     private var mainView: some View {

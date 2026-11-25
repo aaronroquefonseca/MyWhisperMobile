@@ -381,7 +381,8 @@ class KeyboardViewController: UIInputViewController {
         let pad: CGFloat = layout.compact ? 10 : 6
         let rowHeight: CGFloat = layout.compact ? 31 : 44
         let gap: CGFloat = layout.compact ? 6 : 10
-        let stripHeight: CGFloat = layout.compact ? 36 : 52
+        // Fits the 44 pt mic face; iOS already adds its own margin above the keyboard view.
+        let stripHeight: CGFloat = layout.compact ? 36 : 46
         let height = stripHeight + 4 * rowHeight + 3 * gap + 10
         if heightConstraint?.constant != height { heightConstraint?.constant = height }
 
@@ -458,7 +459,8 @@ class KeyboardViewController: UIInputViewController {
         updateTransferAction()
         let preview = KeyboardMicPreview(
             frame: CGRect(x: pad, y: 0, width: toolbarWidth, height: height),
-            dockedLeading: micDockedLeading
+            dockedLeading: micDockedLeading,
+            openSession: hasFullAccess ? { [weak self] in self?.openMyWhisperMic() } : nil
         ) { [weak self] leading in
             guard let self else { return }
             self.micDockedLeading = leading
@@ -467,6 +469,23 @@ class KeyboardViewController: UIInputViewController {
         }
         rowsView.addSubview(preview)
         microphonePreview = preview
+    }
+
+    /// Keyboards can't record. Like Wispr Flow, open MyWhisper to start its
+    /// background mic session; iOS shows a back link to the previous app.
+    private func openMyWhisperMic() {
+        guard let url = NSURL(string: "mywhisper://keyboard-mic") else { return }
+        // UIApplication.open is unavailable to extensions; reach the host app through the responder chain.
+        let selector = NSSelectorFromString("openURL:options:completionHandler:")
+        var responder: UIResponder? = self
+        while let current = responder {
+            if let application = current as? UIApplication, application.responds(to: selector) {
+                typealias Open = @convention(c) (AnyObject, Selector, NSURL, NSDictionary, AnyObject?) -> Void
+                unsafeBitCast(application.method(for: selector), to: Open.self)(application, selector, url, NSDictionary(), nil)
+                return
+            }
+            responder = current.next
+        }
     }
 
     private func setStripNoticeVisible(_ visible: Bool) {

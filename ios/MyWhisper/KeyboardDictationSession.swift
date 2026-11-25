@@ -209,7 +209,8 @@ private final class KeyboardDictationInput: DictationCapture {
 }
 
 
-/// A user-started, five-minute microphone session for the keyboard preview.
+/// A user-started microphone session for the keyboard preview. Stays on in the
+/// background (audio background mode) until the user stops it or iOS interrupts it.
 final class KeyboardMicLevelSession: ObservableObject {
     @Published private(set) var isEnabled = false
     @Published private(set) var error: String?
@@ -217,7 +218,6 @@ final class KeyboardMicLevelSession: ObservableObject {
 
     private var monitor: AudioCapture?
     private var timer: Timer?
-    private var end = Date.distantPast
     private let peak = Peak()
 
     func start() {
@@ -226,7 +226,10 @@ final class KeyboardMicLevelSession: ObservableObject {
         peak.set(0)
         mailbox.clearMeter()
         let capture = AudioCapture()
-        capture.onLevel = { [peak] in peak.set($0) }
+        let normalizer = LevelNormalizer()
+        capture.onPcm = { [peak] samples, count in
+            peak.set(normalizer.push(samples: samples.prefix(count)))
+        }
         capture.onInterruption = { [weak self] in
             DispatchQueue.main.async { self?.stop() }
         }
@@ -235,12 +238,11 @@ final class KeyboardMicLevelSession: ObservableObject {
             return
         }
         monitor = capture
-        end = Date().addingTimeInterval(300)
         isEnabled = true
         let timer = Timer(timeInterval: 0.08, repeats: true) { [weak self] _ in
             guard let self else { return }
             let now = Date()
-            guard now < self.end, self.monitor?.running == true else {
+            guard self.monitor?.running == true else {
                 self.stop()
                 return
             }
@@ -280,5 +282,49 @@ final class KeyboardMicLevelSession: ObservableObject {
             defer { lock.unlock() }
             return value
         }
+    }
+}
+
+/// Port of Android `LevelNormalizer`: RMS in dB against a learned noise floor
+/// and a relaxing ceiling, so speech fills the bars and room noise reads 0.
+/// Constants are per 32 ms block, as on Android; `push(samples:)` splits
+/// longer tap buffers into 32 ms blocks and reports the loudest one.
+final class LevelNormalizer {
+    static let blockSize = 512
+    private static let floorRiseDb = 0.05
+    private static let ceilingFallDb = 0.2
+    private static let minFloorDb = -70.0
+    private static let gateDb = 6.0
+    private static let minSpanDb = 24.0
+
+    // Seeded from the first real block: a noisy room is learned at once.
+    private var floorDb = Double.nan
+    private var ceilingDb = Double.nan
+
+    func push(samples: ArraySlice<Int16>) -> Float {
+        var level: Float = 0
+        var start = samples.startIndex
+        while start < samples.endIndex {
+            let end = min(start + Self.blockSize, samples.endIndex)
+            let block = samples[start..<end]
+            let energy = block.reduce(0.0) { $0 + Double($1) * Double($1) }
+            level = max(level, push(rms: (energy / Double(block.count)).squareRoot() / 32_768))
+            start = end
+        }
+        return level
+    }
+
+    func push(rms: Double) -> Float {
+        // Digital-zero warm-up blocks say nothing about room noise.
+        guard rms > 0 else { return 0 }
+        let db = 20 * log10(max(rms, 1e-6))
+        if floorDb.isNaN {
+            floorDb = db
+            ceilingDb = db + Self.minSpanDb
+        }
+        floorDb = min(max(db < floorDb ? db : floorDb + Self.floorRiseDb, Self.minFloorDb), -20)
+        ceilingDb = max(db, ceilingDb - Self.ceilingFallDb, floorDb + Self.minSpanDb)
+        let gate = floorDb + Self.gateDb
+        return Float(min(max((db - gate) / (ceilingDb - gate), 0), 1))
     }
 }

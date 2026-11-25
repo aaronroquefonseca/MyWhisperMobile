@@ -190,7 +190,14 @@ final class AppFlow: ObservableObject, Dictation.Listener {
         guard dictation.current == .idle else { return }
         refreshMicPermission()
         guard micGranted else {
-            requestMic()
+            if MicPermission.isDenied {
+                openSystemSettings()
+            } else {
+                MicPermission.request { [weak self] granted in
+                    self?.micGranted = granted
+                    if granted { self?.keyboardMicPreview.start() }
+                }
+            }
             return
         }
         keyboardMicPreview.start()
