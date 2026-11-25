@@ -240,6 +240,7 @@ private struct KeyboardInstallInstructions: View {
 
 struct KeyboardSetupView: View {
     let strings: OnboardingStrings
+    @ObservedObject var flow: AppFlow
     @State private var practiceText = ""
     @State private var preferences = KeyboardPreferences.load()
     @State private var needsTransfer = KeyboardPreferences.sharedURL == nil
@@ -248,6 +249,10 @@ struct KeyboardSetupView: View {
 
     var body: some View {
         List {
+            KeyboardDictationSetup(session: flow.keyboardDictation, strings: strings) {
+                flow.enableKeyboardDictation()
+            }
+
             Section {
                 ForEach(KeyboardLanguage.allCases) { language in
                     Toggle(language.title, isOn: Binding(
@@ -330,6 +335,45 @@ struct KeyboardSetupView: View {
         }
         .navigationTitle(strings.keyboardTitle)
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func label(_ english: String, _ spanish: String) -> String {
+        strings.isSpanish ? spanish : english
+    }
+}
+
+
+private struct KeyboardDictationSetup: View {
+    @ObservedObject var session: KeyboardDictationSession
+    let strings: OnboardingStrings
+    let enable: () -> Void
+
+    var body: some View {
+        Section {
+            if session.mailbox == nil {
+                Text(label("Keyboard dictation needs an install with a shared App Group.",
+                           "El dictado desde el teclado requiere una instalación con un grupo de apps compartido."))
+                    .foregroundStyle(.secondary)
+            } else if session.isEnabled {
+                Button(label("End keyboard dictation session", "Finalizar sesión de dictado del teclado"), action: session.disable)
+            } else {
+                Button(label("Enable keyboard dictation for 5 minutes", "Activar dictado del teclado durante 5 minutos"), action: enable)
+            }
+            if let error = session.error {
+                Text(error).foregroundStyle(.secondary)
+            }
+        } header: {
+            WhisperSectionHeading(label("Keyboard dictation", "Dictado del teclado"))
+        } footer: {
+            if session.isEnabled {
+                Text(label("Switch back to your app and tap the MyWhisper mic. iOS shows the microphone indicator until the session ends. Only speech between taps is transcribed.",
+                           "Vuelve a tu app y toca el micrófono de MyWhisper. iOS muestra el indicador del micrófono hasta que termine la sesión. Solo se transcribe el audio entre pulsaciones."))
+            } else if session.mailbox != nil {
+                Text(label("Allow Full Access for MyWhisper Keyboard in iOS Settings to send dictation commands to this app. Typing works without it.",
+                           "Permite el acceso total al teclado MyWhisper en los ajustes de iOS para enviar los comandos de dictado a esta app. Puedes escribir sin activarlo."))
+            }
+        }
+        .whisperRowSurface()
     }
 
     private func label(_ english: String, _ spanish: String) -> String {

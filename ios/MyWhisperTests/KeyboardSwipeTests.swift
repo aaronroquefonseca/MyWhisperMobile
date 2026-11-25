@@ -250,8 +250,35 @@ final class KeyboardSwipeTests: XCTestCase {
         XCTAssertNil(key("/"))
     }
 
+    func testKeyboardDictationMailboxExpiresAndMatchesTheSession() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let mailbox = KeyboardDictationMailbox(directory: directory)
+        let now = Date(timeIntervalSinceReferenceDate: 100)
+        let session = KeyboardDictationMailbox.Session(id: UUID(), heartbeat: now)
+        try mailbox.publish(session)
+        let recovered = try XCTUnwrap(mailbox.session)
+        XCTAssertTrue(recovered.isAvailable(at: now))
+        XCTAssertFalse(recovered.isAvailable(at: now.addingTimeInterval(5)))
+
+        let command = KeyboardDictationMailbox.Request(id: UUID(), session: session.id, action: .start, created: now)
+        try mailbox.send(command)
+        let request = try XCTUnwrap(mailbox.request)
+        XCTAssertTrue(request.belongs(to: session.id, at: now))
+        XCTAssertFalse(request.belongs(to: UUID(), at: now))
+        XCTAssertFalse(request.belongs(to: session.id, at: now.addingTimeInterval(5)))
+
+        try mailbox.respond(.init(id: request.id, phase: .result, text: "Hello"))
+        XCTAssertEqual(mailbox.reply?.id, request.id)
+        XCTAssertEqual(mailbox.reply?.text, "Hello")
+        mailbox.clearReply()
+        XCTAssertNil(mailbox.reply)
+    }
+
     @MainActor
-    func testKeyboardDeclaresOwnDictationButtonAndShowsAppGuidance() throws {
+    func testKeyboardPreservesSystemDictationUntilMyWhisperIsReady() throws {
         let controller = TestKeyboardController()
         controller.loadViewIfNeeded()
         let input = try XCTUnwrap(controller.inputView)
@@ -259,13 +286,15 @@ final class KeyboardSwipeTests: XCTestCase {
         controller.viewWillAppear(false)
         defer { controller.viewDidDisappear(false) }
 
-        XCTAssertTrue(controller.hasDictationKey)
+        XCTAssertFalse(controller.hasDictationKey)
         let area = try XCTUnwrap(input.subviews.first { $0 is KeyboardKeyArea })
         let buttons = area.subviews.compactMap { $0 as? UIButton }
         let microphone = try XCTUnwrap(buttons.first { $0.accessibilityLabel == "MyWhisper dictation" })
         XCTAssertNotNil(microphone.configuration?.image)
         microphone.sendActions(for: .touchUpInside)
-        XCTAssertTrue(buttons.contains { !$0.isHidden && $0.title(for: .normal) == "Dictate in the MyWhisper app" })
+        let guidance = controller.hasFullAccess
+            ? "Enable keyboard dictation in MyWhisper" : "Allow Full Access to use MyWhisper dictation"
+        XCTAssertTrue(buttons.contains { !$0.isHidden && $0.title(for: .normal) == guidance })
     }
 
     @MainActor

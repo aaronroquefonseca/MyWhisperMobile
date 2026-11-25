@@ -24,6 +24,10 @@
 	<true/>
 	<key>UILaunchScreen</key>
 	<dict/>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>MyWhisper needs the microphone to transcribe your dictation.</string>
 	<key>NSLocalNetworkUsageDescription</key>

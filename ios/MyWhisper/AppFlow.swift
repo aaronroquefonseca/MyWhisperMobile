@@ -90,15 +90,6 @@ struct TabStrings: Equatable {
 /// `TranscriptionState`/`Dictation.State` (and the engine label
 /// `Dictation.Listener.onResult` drops) is convergence debt, not v1 work.
 ///
-/// Background modes (explicit v1 defers, foreground-only):
-/// - BGTask: NOT registered. Transcription runs on a GCD worker while the
-///   app is foreground; iOS suspends mic capture on backgrounding and the
-///   partial utterance stays in the core buffer. A future task schedules
-///   `finish_utterance` via BGProcessingTask when background dictation is
-///   a requirement.
-/// - Live Activity: NOT adopted. No ActivityKit widget, no lock-screen
-///   recording indicator beyond the system orange dot. A future task adds
-///   an ActivityKit extension showing record/working state.
 final class AppFlow: ObservableObject, Dictation.Listener {
     @Published var showRecorder = false
 
@@ -118,6 +109,7 @@ final class AppFlow: ObservableObject, Dictation.Listener {
     @Published private(set) var toggled = false
     @Published private(set) var micMode = "Smart"
     let levels = LevelStore()
+    let keyboardDictation = KeyboardDictationSession()
 
     // Result screen state.
     @Published private(set) var result: ResultView.Content?
@@ -175,6 +167,8 @@ final class AppFlow: ObservableObject, Dictation.Listener {
     // MARK: - Record gestures (RecordView owner)
 
     func pressDown() {
+        guard !keyboardDictation.isBusy else { return }
+        if keyboardDictation.isEnabled { keyboardDictation.disable() }
         guard micGranted else {
             MicPermission.request { [weak self] granted in
                 self?.micGranted = granted
@@ -191,6 +185,16 @@ final class AppFlow: ObservableObject, Dictation.Listener {
 
     func cancelRecording() {
         dictation.cancel()
+    }
+
+    func enableKeyboardDictation() {
+        guard coreError == nil, dictation.current == .idle else { return }
+        refreshMicPermission()
+        guard micGranted else {
+            requestMic()
+            return
+        }
+        keyboardDictation.enable()
     }
 
     // MARK: - Setup actions

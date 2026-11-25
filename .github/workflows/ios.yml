@@ -73,6 +73,10 @@ jobs:
           rm -rf Payload MyWhisper-unsigned-icon.ipa
           mkdir Payload
           cp -R MyWhisper.xcarchive/Products/Applications/MyWhisper.app Payload/
+          # Give SideStore the shared-group declaration to carry into provisioning.
+          codesign --force --sign - --entitlements ../ios/Keyboard/Keyboard.entitlements Payload/MyWhisper.app/PlugIns/MyWhisperKeyboard.appex
+          codesign --force --sign - --entitlements ../ios/Keyboard/Keyboard.entitlements Payload/MyWhisper.app
+          codesign --verify --deep --strict Payload/MyWhisper.app
           test -s Payload/MyWhisper.app/PlugIns/MyWhisperKeyboard.appex/emoji.json
           for lexicon in swipe-en_US.txt swipe-en_GB.txt swipe-es.txt SwipeWords-NOTICE.txt; do
             test -s "Payload/MyWhisper.app/PlugIns/MyWhisperKeyboard.appex/$lexicon"

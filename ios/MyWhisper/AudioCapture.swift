@@ -24,6 +24,7 @@ final class AudioCapture {
     /// PCM frames (16 kHz i16) + valid sample count. Buffer reused by
     /// the tap: copy before retaining.
     var onPcm: (([Int16], Int) -> Void)?
+    var wantsSamples: (() -> Bool)?
     var onError: ((String) -> Void)?
     /// 0..1 peak per tap buffer, for the level visualizer.
     var onLevel: ((Float) -> Void)?
@@ -51,7 +52,7 @@ final class AudioCapture {
     /// format is unavailable, the engine won't start, or the core
     /// rejects the utterance.
     @discardableResult
-    func start() -> Bool {
+    func start(prepareUtterance: Bool = true) -> Bool {
         mutex.lock()
         if isRunning {
             mutex.unlock()
@@ -78,7 +79,9 @@ final class AudioCapture {
             // HFP only when Bluetooth can win: enabling it alone may switch earbuds to call mode.
             let bluetooth = MicRoute.pick(priority: priority, items: [MicRoute.bluetooth, MicRoute.builtIn]) { $0 }
                 == MicRoute.bluetooth
-            try session.setCategory(.record, mode: .measurement, options: bluetooth ? [.allowBluetooth] : [])
+            var options: AVAudioSession.CategoryOptions = bluetooth ? [.allowBluetooth] : []
+            if !prepareUtterance { options.formUnion([.mixWithOthers, .defaultToSpeaker]) }
+            try session.setCategory(prepareUtterance ? .record : .playAndRecord, mode: .measurement, options: options)
             try session.setActive(true)
             if let port = MicRoute.pick(priority: priority, items: session.availableInputs ?? [], kind: {
                 MicRoute.kind(of: $0.portType)
@@ -89,28 +92,50 @@ final class AudioCapture {
             onError?("mic start: \(error.localizedDescription)")
             return false
         }
-        guard let format = AVAudioFormat(
-            commonFormat: .pcmFormatInt16,
-            sampleRate: Self.sampleRate,
-            channels: Self.channelCount,
-            interleaved: true
-        ) else {
+        let input = engine.inputNode
+        let hardware = input.outputFormat(forBus: 0)
+        guard hardware.sampleRate > 0, hardware.channelCount > 0,
+              let format = AVAudioFormat(
+                commonFormat: .pcmFormatInt16, sampleRate: Self.sampleRate,
+                channels: Self.channelCount, interleaved: true
+              ),
+              let converter = AVAudioConverter(from: hardware, to: format) else {
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
             onError?("mic unavailable on this device")
             return false
         }
-        let input = engine.inputNode
-        input.removeTap(onBus: 0)
-        input.installTap(onBus: 0, bufferSize: Self.tapBufferSize, format: format) { [weak self] buffer, _ in
-            guard let strongSelf = self else { return }
-            strongSelf.handleTap(buffer: buffer)
+        var wasDelivering = false
+        input.installTap(onBus: 0, bufferSize: Self.tapBufferSize, format: nil) { [weak self] buffer, _ in
+            guard let self else { return }
+            guard self.wantsSamples?() != false else {
+                if wasDelivering { converter.reset() }
+                wasDelivering = false
+                return
+            }
+            wasDelivering = true
+            let capacity = AVAudioFrameCount(ceil(Double(buffer.frameLength) * format.sampleRate / hardware.sampleRate)) + 64
+            guard let converted = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else { return }
+            var consumed = false
+            let status = converter.convert(to: converted, error: nil) { _, status in
+                status.pointee = consumed ? .noDataNow : .haveData
+                guard !consumed else { return nil }
+                consumed = true
+                return buffer
+            }
+            if status != .error { self.handleTap(buffer: converted) }
         }
         observeInterruptions()
         do {
+            if prepareUtterance {
+                try CoreBridge.startUtterance(sampleRate: UInt32(Self.sampleRate))
+            }
             engine.prepare()
             try engine.start()
-            try CoreBridge.startUtterance(sampleRate: UInt32(Self.sampleRate))
         } catch {
             teardownEngine()
+            removeInterruptionObserver()
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            if prepareUtterance { try? CoreBridge.cancelUtterance() }
             onError?("mic start: \(error.localizedDescription)")
             return false
         }
@@ -150,13 +175,14 @@ final class AudioCapture {
             memcpy(base, channels[0], frames * MemoryLayout<Int16>.size)
         }
         onPcm?(samples, frames)
+        guard let onLevel else { return }
         var peak = 0
         for i in 0..<frames {
             let sample = Int(samples[i])
             let magnitude = sample < 0 ? -sample : sample
             if magnitude > peak { peak = magnitude }
         }
-        onLevel?(min(max(Float(peak) / 32_768, 0), 1))
+        onLevel(min(max(Float(peak) / 32_768, 0), 1))
     }
 
     // MARK: - Interruptions
