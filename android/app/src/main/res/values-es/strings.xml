@@ -679,4 +679,18 @@
     <string name="sync_syncing">sincronizando…</string>
     <string name="sync_waiting_title">Esperando respuesta (%1$d)</string>
     <string name="sync_waiting_sub">Enviaste una solicitud de emparejamiento. Acéptala en el otro dispositivo; aquí solo puedes cancelarla.</string>
+    <!-- Guía de Ajustes (#125): una línea antes de abrir Ajustes y el texto de imagen en imagen. -->
+    <string name="guide_hint_overlay">Activa “Permitir mostrar sobre otras aplicaciones”. MyWhisper vuelve solo.</string>
+    <string name="guide_hint_channel">Desactiva el interruptor de arriba. MyWhisper vuelve solo.</string>
+    <string name="guide_hint_a11y">Android mostrará un aviso: toca Permitir. MyWhisper vuelve solo.</string>
+    <string name="guide_a11y_title">Activa MyWhisper</string>
+    <!-- Rutas de Accesibilidad por fabricante: sin confirmar en dispositivos reales. -->
+    <string name="guide_a11y_path_generic">Toca MyWhisper → activa “Usar MyWhisper”</string>
+    <string name="guide_a11y_path_samsung">Aplicaciones instaladas → MyWhisper → Activar</string>
+    <string name="guide_a11y_path_xiaomi">Aplicaciones descargadas → MyWhisper → Activar</string>
+    <string name="guide_a11y_warning">Android mostrará un aviso. Es normal: MyWhisper solo lo usa para escribir tu texto. Toca Permitir.</string>
+    <string name="guide_restricted_link">¿Bloqueado por “Ajuste restringido”?</string>
+    <string name="guide_restricted_title">Desbloquea MyWhisper</string>
+    <string name="guide_restricted_path">Toca ⋮ (arriba a la derecha) → Permitir ajustes restringidos</string>
+    <string name="guide_restricted_then">Después vuelve y activa el servicio de dictado.</string>
 </resources>
