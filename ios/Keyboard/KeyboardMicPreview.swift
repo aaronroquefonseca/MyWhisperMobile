@@ -204,7 +204,7 @@ final class KeyboardMicPreview: UIView {
         guard state.phase == .idle || state.phase == .locked else { return }
         touchStart = (point, ProcessInfo.processInfo.systemUptime)
         guard state.phase == .idle else { return }
-        // No live mic session: a quick tap opens MyWhisper to start one. Holding and dragging still work.
+        // No live mic session: releasing a tap or hold opens MyWhisper to start one. Dragging still works.
         tapOpensSession = openSession != nil && !Self.sessionIsLive
         holdTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 80_000_000)
@@ -251,8 +251,8 @@ final class KeyboardMicPreview: UIView {
             return
         }
         let duration = ProcessInfo.processInfo.systemUptime - touchStart.time
-        let quickTap = state.phase == .idle || (state.phase == .held && state.target == .none && duration < 0.23)
-        if tapOpensSession, quickTap {
+        // No live session: a tap or a hold (unless slid to cancel) opens MyWhisper to start one.
+        if tapOpensSession, state.phase == .idle || (state.phase == .held && state.target != .cancel) {
             tapOpensSession = false
             state.reset()
             render()

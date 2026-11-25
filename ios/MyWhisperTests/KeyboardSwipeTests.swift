@@ -496,13 +496,18 @@ final class KeyboardSwipeTests: XCTestCase {
 @MainActor
 private final class TestKeyboardController: KeyboardViewController {
     let document = TestKeyboardDocument()
-    override var textDocumentProxy: any UITextDocumentProxy { document }
+    override var textDocumentProxy: any UITextDocumentProxy {
+        // A real host reports each caret move back; the keyboard sends the next one after that.
+        document.onAdjust = { [unowned self] in self.selectionDidChange(nil) }
+        return document
+    }
 }
 
 @MainActor
 private final class TestKeyboardDocument: NSObject, UITextDocumentProxy {
     var text = ""
     var caret: Int?
+    var onAdjust: (() -> Void)?
     private var insertionIndex: String.Index { text.index(text.startIndex, offsetBy: caret ?? text.count) }
     var hasText: Bool { !text.isEmpty }
     var hidesNewlineContext = false
@@ -525,6 +530,7 @@ private final class TestKeyboardDocument: NSObject, UITextDocumentProxy {
     func deleteBackward() { if !text.isEmpty { text.removeLast() } }
     func adjustTextPosition(byCharacterOffset offset: Int) {
         caret = min(max(0, (caret ?? text.count) + offset), text.count)
+        onAdjust?()
     }
     func setMarkedText(_ markedText: String, selectedRange: NSRange) {}
     func unmarkText() {}

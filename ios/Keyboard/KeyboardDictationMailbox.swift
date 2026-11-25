@@ -80,7 +80,11 @@ struct KeyboardDictationMailbox {
     }
 
     private func write<Value: Encodable>(_ value: Value, to name: String) throws {
-        try JSONEncoder().encode(value).write(to: location(name), options: [.atomic, .completeFileProtection])
+        // Not `.completeFileProtection`: the mic session keeps writing levels while the phone is locked,
+        // and those writes failed and ended the session.
+        try JSONEncoder().encode(value).write(
+            to: location(name), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication]
+        )
     }
 
     private func remove(_ name: String) {

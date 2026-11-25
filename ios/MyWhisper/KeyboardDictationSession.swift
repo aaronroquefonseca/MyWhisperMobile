@@ -246,10 +246,11 @@ final class KeyboardMicLevelSession: ObservableObject {
                 self.stop()
                 return
             }
+            // A missed write (locked phone, busy disk) skips one reading; it doesn't end the session.
             do {
                 try mailbox.publishMeter(.init(level: self.peak.get(), measured: now))
+                if self.error != nil { self.error = nil }
             } catch {
-                self.stop()
                 self.error = "Couldn’t share microphone levels with the keyboard."
             }
         }

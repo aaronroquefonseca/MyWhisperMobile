@@ -61,6 +61,10 @@ class KeyboardViewController: UIInputViewController {
     private var replacingText = false
     private var lastShiftTap: TimeInterval?
     private var cursorDrag: KeyboardCursorDrag?
+    /// Caret steps not yet sent: one move goes to the host at a time, so a slow host never builds a backlog.
+    private var cursorPending = 0
+    private var cursorInFlight = false
+    private var cursorFlight = 0
     private var cursorDocument: UUID?
     private weak var cursorGesture: UIGestureRecognizer?
     private var lastSwipe: SwipeCommit?
@@ -234,6 +238,7 @@ class KeyboardViewController: UIInputViewController {
 
     override func textDidChange(_ textInput: UITextInput?) {
         super.textDidChange(textInput)
+        cursorMoveLanded()
         guard visible, cursorDrag == nil, !replacingText else { return }
         microphonePreview?.reset()
         refreshLayout()
@@ -243,6 +248,7 @@ class KeyboardViewController: UIInputViewController {
 
     override func selectionDidChange(_ textInput: UITextInput?) {
         super.selectionDidChange(textInput)
+        cursorMoveLanded()
         guard visible, cursorDrag == nil, !replacingText else { return }
         updateAutomaticShift()
         scheduleSuggestions()
@@ -1560,12 +1566,42 @@ class KeyboardViewController: UIInputViewController {
         if steps.characters != 0 { drag.preferredColumn = nil }
         cursorDrag = drag
         if offset != 0 {
-            proxy.adjustTextPosition(byCharacterOffset: offset)
+            if steps.lines != 0 {
+                // Line moves were measured against the current context: send them now, with any backlog.
+                proxy.adjustTextPosition(byCharacterOffset: offset + cursorPending)
+                cursorPending = 0
+            } else {
+                sendCursorOffset(offset)
+            }
             if settings.usesHaptics, hasFullAccess {
                 tick.selectionChanged()
                 tick.prepare()
             }
         }
+    }
+
+    /// Each `adjustTextPosition` is a round trip to the host app; queued ones play out
+    /// long after the finger stopped. Keep one in flight and merge the rest.
+    private func sendCursorOffset(_ offset: Int) {
+        cursorPending += offset
+        guard !cursorInFlight, cursorPending != 0 else { return }
+        let send = cursorPending
+        cursorPending = 0
+        cursorInFlight = true
+        cursorFlight += 1
+        let flight = cursorFlight
+        textDocumentProxy.adjustTextPosition(byCharacterOffset: send)
+        // Some hosts never report the move; wait at most a few frames.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            guard let self, self.cursorFlight == flight else { return }
+            self.cursorMoveLanded()
+        }
+    }
+
+    private func cursorMoveLanded() {
+        guard cursorInFlight else { return }
+        cursorInFlight = false
+        sendCursorOffset(0)
     }
 
     private func wrappedCursorMove(
