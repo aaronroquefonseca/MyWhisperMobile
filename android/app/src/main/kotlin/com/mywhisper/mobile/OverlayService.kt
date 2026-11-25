@@ -1092,7 +1092,7 @@ class OverlayService : Service(), Dictation.Listener {
         // the layout matches (no grip row <=> free drag).
         // Same for a fold/unfold or a Reset position: rebuild at that screen's saved spot.
         if (holder != null && (builtGrab != grabEnabled() || builtSize != appearanceSize() || builtScreen != FoldScreens.active(this) ||
-                positionReset()) && dictation.current == Dictation.State.IDLE) {
+                positionReset()) && FloatState.displayState(dictation.current, pendingDelivery.get()) == Dictation.State.IDLE) {
             removeBubble()
         }
         if (show) {
