@@ -17,6 +17,9 @@ import android.view.accessibility.AccessibilityNodeInfo
  */
 class MyWhisperAccessibility : AccessibilityService() {
 
+    /** Delivery outcome; MOVED means focus left the editor bound at record start. */
+    enum class Commit { OK, FAILED, MOVED }
+
     companion object {
         @Volatile var live: MyWhisperAccessibility? = null
             private set
@@ -161,38 +164,51 @@ class MyWhisperAccessibility : AccessibilityService() {
             }
         }
 
+        /** The editable field holding input focus now; bound at record start as the utterance's target. */
+        fun focusedEditor(): AccessibilityNodeInfo? = try {
+            val s = live
+            // A stale cache can name the previous field; drop it and ask again (the cache is API 33+).
+            liveFocus(s) ?: if (Build.VERSION.SDK_INT >= 33 && s?.clearCache() == true) liveFocus(s) else null
+        } catch (_: Exception) {
+            null
+        }
+
+        // findFocus can answer from the API 33+ accessibility cache; refresh() re-reads the live node.
+        private fun liveFocus(s: MyWhisperAccessibility?): AccessibilityNodeInfo? =
+            s?.rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+                ?.takeIf { it.refresh() && it.isFocused && it.isEditable }
+
         /**
-         * Paste [text] into the currently focused editable field at
-         * the app's own cursor via clipboard + ACTION_PASTE.
-         * Returns false when there is no service, no focus, the field
-         * is not editable, or the paste fails (caller surfaces a hint).
+         * Insert [text] at the app's own cursor in [bound], which must
+         * still hold input focus. Returns MOVED when focus left it or
+         * no editor has focus now (nothing inserted, no clip published),
+         * and FAILED when there is no service, nothing was bound at
+         * record start, or the insert fails.
          *
          * Diagnostics record lengths and delivery path only, never field or transcript text.
          */
         // InlinedApi: EXTRA_IS_SENSITIVE is API 33+ (min 29) — safe
         // because shouldMarkSensitive gates on SDK_INT >= 33 first.
         @android.annotation.SuppressLint("InlinedApi")
-        fun commit(text: String): Boolean {
+        fun commit(text: String, bound: AccessibilityNodeInfo?): Commit {
             val s = live ?: run {
                 android.util.Log.i("MwCommit", "commit no-service insertLen=${text.length}")
-                return false
+                return Commit.FAILED
             }
             if (text.isEmpty()) {
                 android.util.Log.i("MwCommit", "commit drop-empty")
-                return true
+                return Commit.OK
+            }
+            if (bound == null) {
+                android.util.Log.i("MwCommit", "commit unbound insertLen=${text.length}")
+                return Commit.FAILED
             }
             return try {
-                val root = s.rootInActiveWindow ?: run {
-                    android.util.Log.i("MwCommit", "commit no-root insertLen=${text.length}")
-                    return false
-                }
-                val node = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: run {
-                    android.util.Log.i("MwCommit", "commit no-focus insertLen=${text.length}")
-                    return false
-                }
-                if (!node.isEditable) {
-                    android.util.Log.i("MwCommit", "commit not-editable")
-                    return false
+                // Node equality is window id plus source node id: any other field, in this app or another, differs.
+                val node = focusedEditor()
+                if (node == null || node != bound) {
+                    android.util.Log.i("MwCommit", "commit moved focused=${node != null}")
+                    return Commit.MOVED
                 }
                 val rawExisting = node.text?.toString() ?: ""
                 // Hint text is API 26+; minSdk 29 makes this a direct
@@ -224,7 +240,7 @@ class MyWhisperAccessibility : AccessibilityService() {
                     ) {
                         connection.commitText(payload, 1, null)
                         android.util.Log.i("MwCommit", "commit direct insertLen=${payload.length}")
-                        return true
+                        return Commit.OK
                     }
                 }
                 val ok = try {
@@ -246,10 +262,10 @@ class MyWhisperAccessibility : AccessibilityService() {
                     )
                 } catch (e: Exception) {
                     android.util.Log.i("MwCommit", "commit clip-fail: ${e.message}")
-                    return false
+                    return Commit.FAILED
                 }
                 val after = try {
-                    root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)?.text?.toString()
+                    if (node.refresh()) node.text?.toString() else null
                 } catch (_: Exception) {
                     null
                 }
@@ -258,9 +274,9 @@ class MyWhisperAccessibility : AccessibilityService() {
                     "commit result ok=$ok afterLen=${after?.length} " +
                         "path=clipboard",
                 )
-                ok
+                if (ok) Commit.OK else Commit.FAILED
             } catch (_: Exception) {
-                false
+                Commit.FAILED
             }
         }
     }

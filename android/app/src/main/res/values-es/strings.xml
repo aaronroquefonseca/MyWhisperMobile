@@ -100,6 +100,7 @@
     <string name="float_stop">Cancelar — descartar el dictado</string>
     <string name="float_processing">Transcribiendo…</string>
     <string name="float_no_field">Ningún campo editable activo — abre uno y dicta de nuevo</string>
+    <string name="float_field_changed">El campo cambió durante el procesamiento — dictado no insertado</string>
     <string name="float_need_a11y">Activa el servicio de dictado de MyWhisper — Ajustes → Botón flotante</string>
     <string name="a11y_desc">Inserta los dictados de el botón flotante en el campo de texto activo.</string>
     <string name="setup_theme">Tema</string>
