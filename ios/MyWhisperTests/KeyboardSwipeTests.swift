@@ -278,7 +278,7 @@ final class KeyboardSwipeTests: XCTestCase {
     }
 
     @MainActor
-    func testKeyboardPreservesSystemDictationUntilMyWhisperIsReady() throws {
+    func testKeyboardOwnsDictationAndTypingDismissesTheNotice() throws {
         let controller = TestKeyboardController()
         controller.loadViewIfNeeded()
         let input = try XCTUnwrap(controller.inputView)
@@ -286,7 +286,7 @@ final class KeyboardSwipeTests: XCTestCase {
         controller.viewWillAppear(false)
         defer { controller.viewDidDisappear(false) }
 
-        XCTAssertFalse(controller.hasDictationKey)
+        XCTAssertTrue(controller.hasDictationKey)
         let area = try XCTUnwrap(input.subviews.first { $0 is KeyboardKeyArea })
         let buttons = area.subviews.compactMap { $0 as? UIButton }
         let microphone = try XCTUnwrap(buttons.first { $0.accessibilityLabel == "MyWhisper dictation" })
@@ -294,7 +294,39 @@ final class KeyboardSwipeTests: XCTestCase {
         microphone.sendActions(for: .touchUpInside)
         let guidance = controller.hasFullAccess
             ? "Enable keyboard dictation in MyWhisper" : "Allow Full Access to use MyWhisper dictation"
-        XCTAssertTrue(buttons.contains { !$0.isHidden && $0.title(for: .normal) == guidance })
+        let notice = try XCTUnwrap(buttons.first { !$0.isHidden && $0.title(for: .normal) == guidance })
+        let letter = try XCTUnwrap(buttons.first { $0.title(for: .normal)?.lowercased() == "a" })
+        letter.sendActions(for: .touchUpInside)
+        XCTAssertEqual(controller.document.text.lowercased(), "a")
+        XCTAssertTrue(notice.isHidden)
+        XCTAssertTrue(microphone.isEnabled)
+        XCTAssertTrue(controller.hasDictationKey)
+    }
+
+    @MainActor
+    func testEmojiDrawerScrollsAcrossCategoriesAndUpdatesTheFooter() throws {
+        let picker = KeyboardEmojiPicker(
+            frame: CGRect(x: 0, y: 0, width: 380, height: 254),
+            accent: .systemTeal, ink: .white, footerHeight: 44,
+            letters: UIButton(), delete: UIButton(), globe: nil, onInsert: { _ in }
+        )
+        picker.layoutIfNeeded()
+        let grid = try XCTUnwrap(picker.subviews.compactMap { $0 as? UICollectionView }.first)
+        let footer = try XCTUnwrap(picker.subviews.compactMap { $0 as? UIScrollView }.first { $0 !== grid })
+        XCTAssertGreaterThan(grid.numberOfSections, 3)
+
+        let firstFaces = try XCTUnwrap(grid.layoutAttributesForItem(at: IndexPath(item: 0, section: 1)))
+        let firstPeople = try XCTUnwrap(grid.layoutAttributesForItem(at: IndexPath(item: 0, section: 2)))
+        XCTAssertGreaterThan(firstPeople.frame.minX, firstFaces.frame.minX)
+        grid.setContentOffset(CGPoint(x: firstPeople.frame.minX - 1, y: 0), animated: false)
+        picker.scrollViewDidScroll(grid)
+        let people = try XCTUnwrap(footer.subviews.first { $0.accessibilityLabel == "People & Body" })
+        XCTAssertTrue(people.accessibilityTraits.contains(.selected))
+
+        let animals = try XCTUnwrap(footer.subviews.compactMap { $0 as? UIButton }.first { $0.accessibilityLabel == "Animals & Nature" })
+        animals.sendActions(for: .touchUpInside)
+        XCTAssertGreaterThan(grid.contentOffset.x, firstPeople.frame.minX)
+        XCTAssertTrue(animals.accessibilityTraits.contains(.selected))
     }
 
     @MainActor

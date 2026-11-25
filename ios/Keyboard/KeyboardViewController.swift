@@ -117,7 +117,8 @@ class KeyboardViewController: UIInputViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        refreshDictationAvailability()
+        // UIKit owns the footer. MyWhisper provides the dictation control in its toolbar.
+        hasDictationKey = true
         rowsView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(rowsView)
         swipeGesture.delegate = self
@@ -143,7 +144,6 @@ class KeyboardViewController: UIInputViewController {
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         visible = true
-        refreshDictationAvailability()
         applySettings(KeyboardPreferences.load())
         refreshLayout()
         updateAutomaticShift()
@@ -182,6 +182,7 @@ class KeyboardViewController: UIInputViewController {
     override func textDidChange(_ textInput: UITextInput?) {
         super.textDidChange(textInput)
         guard visible, cursorDrag == nil, !replacingText else { return }
+        dismissDictationNotice()
         refreshLayout()
         updateAutomaticShift()
         scheduleSuggestions()
@@ -338,6 +339,7 @@ class KeyboardViewController: UIInputViewController {
     }
 
     @objc private func predictionTapped(_ button: UIButton) {
+        dismissDictationNotice()
         guard let replacement = button.title(for: .normal) else { return }
         if let swipe = validSwipe {
             guard replacement != swipe.word, swipe.alternatives.contains(replacement) else { return }
@@ -485,11 +487,9 @@ class KeyboardViewController: UIInputViewController {
         }
         guard let mailbox = KeyboardDictationMailbox.shared, let session = mailbox.session,
               session.isAvailable(at: Date()) else {
-            hasDictationKey = false
             showDictationNotice("Enable keyboard dictation in MyWhisper", temporary: true)
             return
         }
-        hasDictationKey = true
         if var active = recording {
             guard active.stage == .recording else { return }
             do {
@@ -523,10 +523,6 @@ class KeyboardViewController: UIInputViewController {
         }
     }
 
-    private func refreshDictationAvailability() {
-        hasDictationKey = hasFullAccess && KeyboardDictationMailbox.shared?.session?.isAvailable(at: Date()) == true
-    }
-
     private func updateKeyboardDictation(from mailbox: KeyboardDictationMailbox) -> Bool {
         guard var active = recording else { return false }
         guard visible, textDocumentProxy.documentIdentifier == active.document else {
@@ -535,7 +531,6 @@ class KeyboardViewController: UIInputViewController {
         }
         guard let session = mailbox.session, session.id == active.session, session.isAvailable(at: Date()) else {
             clearKeyboardDictation()
-            hasDictationKey = false
             showDictationNotice("MyWhisper microphone session ended", temporary: true)
             return false
         }
@@ -584,7 +579,7 @@ class KeyboardViewController: UIInputViewController {
         recording = nil
         dictationTask?.cancel()
         dictationTask = nil
-        if transfer == nil { stripNotice?.isHidden = true }
+        dismissDictationNotice()
         renderDictationControls()
     }
 
@@ -602,6 +597,13 @@ class KeyboardViewController: UIInputViewController {
         case .finishing: showDictationNotice("Transcribing…", temporary: false)
         case nil: break
         }
+    }
+
+    private func dismissDictationNotice() {
+        guard transfer == nil, let stripNotice, !stripNotice.isEnabled else { return }
+        noticeTask?.cancel()
+        noticeTask = nil
+        stripNotice.isHidden = true
     }
 
     private func showDictationNotice(_ message: String, temporary: Bool) {
@@ -913,6 +915,7 @@ class KeyboardViewController: UIInputViewController {
     }
 
     private func insert(_ text: String) {
+        dismissDictationNotice()
         pendingSwipe?.cancel()
         let startsWord = text.first.map { $0.isLetter || $0.isNumber } == true
         let separator = startsWord && validSwipe != nil ? " " : ""
@@ -1015,6 +1018,7 @@ class KeyboardViewController: UIInputViewController {
     }
 
     func deleteWord() {
+        dismissDictationNotice()
         let proxy = textDocumentProxy
         if proxy.selectedText?.isEmpty == false {
             performDelete()
@@ -1033,6 +1037,7 @@ class KeyboardViewController: UIInputViewController {
     }
 
     private func performDelete() {
+        dismissDictationNotice()
         pendingSwipe?.cancel()
         let proxy = textDocumentProxy
         if let swipe = validSwipe {
@@ -1064,6 +1069,7 @@ class KeyboardViewController: UIInputViewController {
     }
 
     @objc private func spaceTapped() {
+        dismissDictationNotice()
         pendingSwipe?.cancel()
         lastSwipe = nil
         playClick()
@@ -1440,6 +1446,7 @@ class KeyboardViewController: UIInputViewController {
     }
 
     func insertSwipeCandidates(_ words: [String]) {
+        dismissDictationNotice()
         let cased = words.map { word in
             switch shift {
             case .off: return word
@@ -1492,25 +1499,17 @@ class KeyboardViewController: UIInputViewController {
 
     private func addEmojiView(width: CGFloat, pad: CGFloat, height: CGFloat, rowHeight: CGFloat) {
         let bottomY = height - rowHeight - 6
+        let letters = pageKey("ABC")
+        let delete = deleteKey()
+        let globe = layout?.globe == true ? globeKey() : nil
         let picker = KeyboardEmojiPicker(
-            frame: CGRect(x: pad, y: 2, width: width - 2 * pad, height: bottomY - 8),
-            accent: accentColor, ink: labelColor
+            frame: CGRect(x: pad, y: 2, width: width - 2 * pad, height: bottomY + rowHeight - 2),
+            accent: accentColor, ink: labelColor, footerHeight: rowHeight,
+            letters: letters, delete: delete, globe: globe
         ) { [weak self] emoji in
             self?.insert(emoji)
         }
         rowsView.addSubview(picker)
-        let letters = pageKey("ABC")
-        let delete = deleteKey()
-        let keyWidth: CGFloat = 51
-        letters.frame = CGRect(x: pad, y: bottomY, width: keyWidth, height: rowHeight)
-        delete.frame = CGRect(x: width - pad - keyWidth, y: bottomY, width: keyWidth, height: rowHeight)
-        rowsView.addSubview(letters)
-        rowsView.addSubview(delete)
-        if layout?.globe == true {
-            let globe = globeKey()
-            globe.frame = CGRect(x: pad + keyWidth + 7, y: bottomY, width: rowHeight, height: rowHeight)
-            rowsView.addSubview(globe)
-        }
     }
 }
 

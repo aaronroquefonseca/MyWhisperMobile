@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		EE11000000000000000000C0 /* emoji.json in Resources */ = {isa = PBXBuildFile; fileRef = EE11000000000000000016 /* emoji.json */; };
 		EE11000000000000000000B2 /* KeyboardDictationMailbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE11000000000000000000B0; };
 		EE11000000000000000000B3 /* KeyboardDictationMailbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE11000000000000000000B0; };
 		EE11000000000000000000B4 /* KeyboardDictationMailbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE11000000000000000000B0; };
@@ -339,6 +340,7 @@
 			buildPhases = (
 				D9C79732A6D8F08A153912AB /* Sources */,
 				46F8BF07BA88DDEA52A0F103 /* Frameworks */,
+				EE11000000000000000000C1 /* Resources */,
 			);
 			buildRules = (
 			);
@@ -417,6 +419,14 @@
 				DD6015F1000000000000000E /* swipe-en_GB.txt in Resources */,
 				DD6015F1000000000000000F /* swipe-es.txt in Resources */,
 				DD6015F10000000000000010 /* SwipeWords-NOTICE.txt in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EE11000000000000000000C1 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EE11000000000000000000C0 /* emoji.json in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
