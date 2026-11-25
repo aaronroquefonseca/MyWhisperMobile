@@ -278,6 +278,38 @@ final class KeyboardSwipeTests: XCTestCase {
     }
 
     @MainActor
+    func testSpaceReturnsToLettersFromBothSymbolPages() throws {
+        let controller = TestKeyboardController()
+        controller.loadViewIfNeeded()
+        let input = try XCTUnwrap(controller.inputView)
+        input.frame = CGRect(x: 0, y: 0, width: 390, height: 260)
+        controller.viewWillAppear(false)
+        defer { controller.viewDidDisappear(false) }
+        XCTAssertEqual(input.backgroundColor, UIColor.clear)
+        XCTAssertFalse(input.isOpaque)
+        let area = try XCTUnwrap(input.subviews.first { $0 is KeyboardKeyArea })
+
+        func tap(_ label: String) throws {
+            let button = area.subviews.compactMap { $0 as? UIButton }.first {
+                $0.title(for: .normal) == label || $0.accessibilityLabel == label
+            }
+            try XCTUnwrap(button).sendActions(for: .touchUpInside)
+        }
+
+        try tap("123")
+        try tap("4")
+        try tap("Space")
+        XCTAssertEqual(controller.document.text, "4 ")
+
+        try tap("123")
+        try tap("#+=")
+        try tap("~")
+        try tap("Space")
+        try tap("q")
+        XCTAssertEqual(controller.document.text, "4 ~ q")
+    }
+
+    @MainActor
     func testKeyboardOwnsDictationAndTypingDismissesTheNotice() throws {
         let controller = TestKeyboardController()
         controller.loadViewIfNeeded()

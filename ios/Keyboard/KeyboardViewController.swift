@@ -32,6 +32,7 @@ class KeyboardViewController: UIInputViewController {
     private var letterKeys: [(button: KeyboardKeyButton, letter: String)] = []
     private weak var shiftButton: KeyboardKeyButton?
     private var predictionButtons: [KeyboardSuggestionButton] = []
+    private var predictionDividers: [UIView] = []
     private var predictionTask: Task<Void, Never>?
     private var suggestion: Suggestion?
     private var scheduledSuggestion: SuggestionInput?
@@ -112,7 +113,11 @@ class KeyboardViewController: UIInputViewController {
     // MARK: - Lifecycle
 
     override func loadView() {
-        inputView = KeyboardInputView(frame: .zero, inputViewStyle: .keyboard)
+        let keyboard = KeyboardInputView(frame: .zero, inputViewStyle: .keyboard)
+        // Let UIKit draw the keyboard surface and its device-specific rounded edge.
+        keyboard.isOpaque = false
+        keyboard.backgroundColor = .clear
+        inputView = keyboard
     }
 
     override func viewDidLoad() {
@@ -156,7 +161,7 @@ class KeyboardViewController: UIInputViewController {
         visible = false
         cancelKeyboardDictation()
         noticeTask?.cancel()
-        stripNotice?.isHidden = true
+        setStripNoticeVisible(false)
         transfer = nil
         cursorDrag = nil
         cursorDocument = nil
@@ -224,9 +229,6 @@ class KeyboardViewController: UIInputViewController {
         }
         layout = next
         isDark = dark
-        view.backgroundColor = dark
-            ? UIColor(red: 30 / 255, green: 32 / 255, blue: 35 / 255, alpha: 1)
-            : UIColor(red: 217 / 255, green: 223 / 255, blue: 225 / 255, alpha: 1)
         rebuild()
     }
 
@@ -377,6 +379,7 @@ class KeyboardViewController: UIInputViewController {
         swipeTrail.removeFromSuperlayer()
         rowsView.clear()
         predictionButtons.removeAll(keepingCapacity: true)
+        predictionDividers.removeAll(keepingCapacity: true)
         letterKeys.removeAll(keepingCapacity: true)
         shiftButton = nil
 
@@ -460,6 +463,7 @@ class KeyboardViewController: UIInputViewController {
                 divider.backgroundColor = labelColor.withAlphaComponent(0.12)
                 divider.isUserInteractionEnabled = false
                 rowsView.addSubview(divider)
+                predictionDividers.append(divider)
             }
         }
 
@@ -467,7 +471,6 @@ class KeyboardViewController: UIInputViewController {
         notice.frame = CGRect(x: pad, y: 0, width: available, height: height)
         notice.titleLabel?.font = .systemFont(ofSize: 14, weight: .medium)
         notice.titleLabel?.adjustsFontSizeToFitWidth = true
-        notice.backgroundColor = view.backgroundColor
         notice.setTitleColor(accentColor, for: .normal)
         notice.setTitleColor(labelColor, for: .disabled)
         notice.addTarget(self, action: #selector(applyTransferredPreferences), for: .touchUpInside)
@@ -603,21 +606,28 @@ class KeyboardViewController: UIInputViewController {
         guard transfer == nil, let stripNotice, !stripNotice.isEnabled else { return }
         noticeTask?.cancel()
         noticeTask = nil
-        stripNotice.isHidden = true
+        setStripNoticeVisible(false)
+    }
+
+    private func setStripNoticeVisible(_ visible: Bool) {
+        stripNotice?.isHidden = !visible
+        predictionButtons.forEach { $0.isHidden = visible }
+        predictionDividers.forEach { $0.isHidden = visible }
     }
 
     private func showDictationNotice(_ message: String, temporary: Bool) {
         guard let stripNotice, transfer == nil else { return }
         stripNotice.setTitle(message, for: .normal)
         stripNotice.isEnabled = false
-        stripNotice.isHidden = false
+        setStripNoticeVisible(true)
         UIAccessibility.post(notification: .announcement, argument: message)
         noticeTask?.cancel()
         guard temporary else { return }
         noticeTask = Task { @MainActor [weak self, weak stripNotice] in
             try? await Task.sleep(nanoseconds: 3_500_000_000)
-            guard !Task.isCancelled, self?.transfer == nil else { return }
-            stripNotice?.isHidden = true
+            guard !Task.isCancelled, let self, let stripNotice,
+                  self.stripNotice === stripNotice, self.transfer == nil else { return }
+            self.setStripNoticeVisible(false)
         }
     }
 
@@ -648,9 +658,9 @@ class KeyboardViewController: UIInputViewController {
             noticeTask?.cancel()
             stripNotice.setTitle("Apply preferences", for: .normal)
             stripNotice.isEnabled = true
-            stripNotice.isHidden = false
+            setStripNoticeVisible(true)
         } else if stripNotice.isEnabled {
-            stripNotice.isHidden = true
+            setStripNoticeVisible(false)
         }
     }
 
@@ -1106,6 +1116,10 @@ class KeyboardViewController: UIInputViewController {
             }
             lastSpaceAt = now
             updateAutomaticShift(before: before.map { String($0.suffix(64)) + " " })
+        }
+        if page != .letters {
+            page = .letters
+            rebuild()
         }
         scheduleSuggestions()
     }
