@@ -66,7 +66,11 @@ class KeyboardViewController: UIInputViewController {
     private var loadingSwipeLocale: String?
     private var pendingSwipe: Task<Void, Never>?
     private lazy var swipeGesture = KeyboardSwipeGesture(target: self, action: #selector(handleSwipe(_:)))
-    private let swipeTrail = CAShapeLayer()
+    /// Comet-style swipe trail like the system keyboard: only the last stretch behind the finger,
+    /// thin and faint at the tail, thicker and brighter at the head.
+    private var trailLayers: [CAShapeLayer] = []
+    private static let trailLength: CGFloat = 170
+    private static let trailSegments = 14
 
     private struct SwipeCommit {
         let document: UUID
@@ -162,10 +166,6 @@ class KeyboardViewController: UIInputViewController {
         view.addSubview(rowsView)
         swipeGesture.delegate = self
         rowsView.addGestureRecognizer(swipeGesture)
-        swipeTrail.lineCap = .round
-        swipeTrail.lineJoin = .round
-        swipeTrail.lineWidth = 5
-        swipeTrail.fillColor = UIColor.clear.cgColor
         NSLayoutConstraint.activate([
             rowsView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             rowsView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
@@ -202,7 +202,7 @@ class KeyboardViewController: UIInputViewController {
         cursorGesture = nil
         pendingSwipe?.cancel()
         lastSwipe = nil
-        swipeTrail.removeFromSuperlayer()
+        clearSwipeTrail(animated: false)
         predictionTask?.cancel()
         clearSuggestions()
         stopDelete()
@@ -499,7 +499,7 @@ class KeyboardViewController: UIInputViewController {
         swipeGesture.isEnabled = false
         clearSuggestions()
         swipeGesture.isEnabled = settings.usesSwipeTyping
-        swipeTrail.removeFromSuperlayer()
+        clearSwipeTrail(animated: false)
         rowsView.clear()
         predictionButtons.removeAll(keepingCapacity: true)
         predictionDividers.removeAll(keepingCapacity: true)
@@ -1730,22 +1730,87 @@ class KeyboardViewController: UIInputViewController {
                 pendingSwipe?.cancel()
                 predictionTask?.cancel()
                 scheduledSuggestion = nil
-                swipeTrail.strokeColor = accentColor.withAlphaComponent(0.85).cgColor
-                rowsView.layer.addSublayer(swipeTrail)
             }
-            let trail = UIBezierPath()
-            if let first = gesture.points.first { trail.move(to: first) }
-            for point in gesture.points.dropFirst() { trail.addLine(to: point) }
-            swipeTrail.path = trail.cgPath
+            drawSwipeTrail(gesture.points)
         case .ended:
-            swipeTrail.removeFromSuperlayer()
+            clearSwipeTrail(animated: true)
             completeSwipe(trace: gesture.points, pauses: gesture.pauses)
         case .cancelled, .failed:
-            swipeTrail.removeFromSuperlayer()
+            clearSwipeTrail(animated: true)
             scheduleSuggestions()
         default:
             break
         }
+    }
+
+    private func drawSwipeTrail(_ points: [CGPoint]) {
+        guard let head = points.last else { return }
+        // Walk back from the finger, keeping only the last `trailLength` points of the path.
+        var tail = [head]
+        var length: CGFloat = 0
+        for point in points.reversed().dropFirst() {
+            guard let last = tail.last else { break }
+            let step = hypot(point.x - last.x, point.y - last.y)
+            if length + step > Self.trailLength {
+                let fraction = (Self.trailLength - length) / step
+                tail.append(CGPoint(x: last.x + (point.x - last.x) * fraction, y: last.y + (point.y - last.y) * fraction))
+                break
+            }
+            length += step
+            tail.append(point)
+        }
+        tail.reverse()
+        if trailLayers.isEmpty {
+            trailLayers = (0..<Self.trailSegments).map { _ in
+                let layer = CAShapeLayer()
+                layer.lineCap = .round
+                layer.lineJoin = .round
+                layer.fillColor = UIColor.clear.cgColor
+                rowsView.layer.addSublayer(layer)
+                return layer
+            }
+        }
+        let color = isDark ? UIColor.white : UIColor(white: 0.3, alpha: 1)
+        let chunk = max(1, Int((Double(tail.count - 1) / Double(Self.trailSegments)).rounded(.up)))
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for (index, layer) in trailLayers.enumerated() {
+            let start = index * chunk
+            let end = min(tail.count - 1, start + chunk)
+            guard start < end else {
+                layer.path = nil
+                continue
+            }
+            let path = UIBezierPath()
+            path.move(to: tail[start])
+            for point in tail[(start + 1)...end] { path.addLine(to: point) }
+            layer.path = path.cgPath
+            // 0 at the faded tail, 1 at the finger.
+            let progress = CGFloat(end) / CGFloat(max(1, tail.count - 1))
+            layer.lineWidth = 1.5 + 4.5 * progress
+            layer.strokeColor = color.withAlphaComponent(0.1 + 0.8 * progress).cgColor
+        }
+        CATransaction.commit()
+    }
+
+    private func clearSwipeTrail(animated: Bool) {
+        let layers = trailLayers
+        trailLayers = []
+        guard animated, !UIAccessibility.isReduceMotionEnabled else {
+            layers.forEach { $0.removeFromSuperlayer() }
+            return
+        }
+        CATransaction.begin()
+        CATransaction.setCompletionBlock { layers.forEach { $0.removeFromSuperlayer() } }
+        for layer in layers {
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = 1
+            fade.toValue = 0
+            fade.duration = 0.18
+            layer.opacity = 0
+            layer.add(fade, forKey: "fade")
+        }
+        CATransaction.commit()
     }
 
     private func completeSwipe(trace: [CGPoint], pauses: [CGPoint]) {
