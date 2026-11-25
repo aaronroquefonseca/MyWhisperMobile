@@ -6035,7 +6035,9 @@ class MainActivity : ComponentActivity() {
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             TextButton(onClick = {
                                 priv.put("transcript_auto_delete_days", daysStr.toIntOrNull() ?: 0)
-                                save { applyRetention() }
+                                save()
+                                // Queued behind the save on the same worker; applies whatever committed.
+                                applyRetention()
                             }) { Text(stringResource(R.string.action_save)) }
                             TextButton(onClick = {
                                 val n = daysStr.toIntOrNull() ?: 0
