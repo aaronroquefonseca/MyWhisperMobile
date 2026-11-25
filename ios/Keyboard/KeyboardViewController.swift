@@ -10,7 +10,16 @@ class KeyboardViewController: UIInputViewController {
     private var page: Page = .letters
     private var shift: Shift = .off
     private var settings = KeyboardPreferences.load()
-    private lazy var language = settings.defaultLanguage
+    private lazy var language = startingLanguage
+    private static let lastLanguageKey = "mw.keyboard.lastLanguage"
+
+    /// iOS builds a fresh keyboard each time it appears: default language, or the last one used if enabled.
+    private var startingLanguage: KeyboardLanguage {
+        guard settings.remembersLanguage,
+              let saved = UserDefaults.standard.string(forKey: Self.lastLanguageKey).flatMap(KeyboardLanguage.init(rawValue:)),
+              settings.languages.contains(saved) else { return settings.defaultLanguage }
+        return saved
+    }
     private weak var stripNotice: UIButton?
     private weak var microphonePreview: KeyboardMicPreview?
     private var micDockedLeading = false
@@ -1236,6 +1245,7 @@ class KeyboardViewController: UIInputViewController {
         let next = settings.language(after: language, movingRight: movingRight)
         guard next != language else { return }
         language = next
+        UserDefaults.standard.set(next.rawValue, forKey: Self.lastLanguageKey)
         pendingSwipe?.cancel()
         lastSwipe = nil
         lastSpaceAt = nil

@@ -267,6 +267,8 @@ struct KeyboardSetupView: View {
                 }
                 Toggle(label("Swipe spacebar to switch languages", "Deslizar en la barra espaciadora para cambiar de idioma"), isOn: $preferences.switchesLanguageBySwipe)
                     .disabled(preferences.languages.count < 2)
+                Toggle(label("Keep the last language used", "Mantener el último idioma usado"), isOn: $preferences.remembersLanguage)
+                    .disabled(preferences.languages.count < 2)
             } header: {
                 WhisperSectionHeading(label("Languages", "Idiomas"))
             } footer: {

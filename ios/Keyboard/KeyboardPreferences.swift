@@ -54,6 +54,7 @@ struct KeyboardPreferences: Codable, Equatable {
     var numberRow: Bool?
     var periodKey: Bool?
     var sideButton: Bool?
+    var rememberLanguage: Bool?
 
     static let defaultsKey = "mw.keyboard.settings.v1"
     static let group = "group.com.mywhisper.mobile"
@@ -86,6 +87,12 @@ struct KeyboardPreferences: Codable, Equatable {
     var showsPeriodKey: Bool {
         get { periodKey == true }
         set { periodKey = newValue }
+    }
+
+    /// Start in the last language used instead of the default one.
+    var remembersLanguage: Bool {
+        get { rememberLanguage == true }
+        set { rememberLanguage = newValue }
     }
 
     /// Settings/emoji button opposite the mic, so suggestions sit centered.
