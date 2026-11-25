@@ -4,6 +4,9 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Added
+- Foldables: an optional "Different settings for cover and inner screen" switch in Floating button settings. When on, Grab point, size, Extra small, When idle, Start reduced in search fields and position are saved separately for each screen and follow you when you fold or unfold. Off by default.
+
 ### Fixed
 - Cancelling the floating button while it is processing now stops right away. The cancelled dictation is no longer saved to History, pasted, or sent to a fallback provider, and the next dictation no longer waits for the slow request.
 
