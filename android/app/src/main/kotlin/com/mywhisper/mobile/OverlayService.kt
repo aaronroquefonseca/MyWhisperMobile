@@ -666,6 +666,7 @@ class OverlayService : Service(), Dictation.Listener {
                     startForegroundWithType(microphone = true)
                     val cap = AudioCapture(this, onPcm = onPcm, onError = onError, onLevel = onLevel)
                     if (cap.start()) object : Dictation.Capture {
+                        override val utterance = cap.utterance
                         override fun stop() {
                             cap.stop()
                             if (foregrounded) try { startForegroundWithType(microphone = false) } catch (_: Exception) { }
@@ -684,7 +685,9 @@ class OverlayService : Service(), Dictation.Listener {
             // without the pack.
             localTranscribe = { pcm -> if (practiceMode) null else LocalStt.transcribeIfEnabled(this, pcm) },
             remotesAroundLocal = { if (practiceMode) true to false else LocalStt.remotesAroundLocal() },
-            finishTranscription = { afterLocal -> if (practiceMode) practiceResult() else CoreBridge.finishUtterance(afterLocal) },
+            finishTranscription = { utterance, afterLocal ->
+                if (practiceMode) practiceResult(utterance) else CoreBridge.finishUtterance(utterance, afterLocal)
+            },
             // Shutdown releases the native recognizer (no resident ORT
             // session across service restarts in one process).
             releaseLocal = {
@@ -2128,8 +2131,9 @@ class OverlayService : Service(), Dictation.Listener {
     }
 
     /** Practice dictation: drop the audio, pretend to work, return the next example. */
-    private fun practiceResult(): Pair<String, String> {
-        try { CoreBridge.cancelUtterance() } catch (_: Exception) { }
+    private fun practiceResult(utterance: Long): Pair<String, String> {
+        // Scoped to this recording: a late practice worker never cancels a real dictation.
+        try { CoreBridge.discardUtterance(utterance) } catch (_: Exception) { }
         Thread.sleep(TUTORIAL_WORKING_MS)
         val samples = resources.getStringArray(R.array.tutorial_samples)
         return samples[practiceIndex++ % samples.size] to "practice"

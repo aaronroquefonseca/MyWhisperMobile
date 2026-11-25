@@ -804,6 +804,12 @@ fn bump_generation() {
     SERVER_GENERATION.fetch_add(1, Ordering::AcqRel);
 }
 
+/// Lock-free cancel signal: revokes every in-flight witness (STT
+/// chain, cleanup, history commit) without touching Stop suppression.
+pub fn revoke_in_flight() {
+    bump_generation();
+}
+
 /// True while an utterance is recording or transcribing.
 pub fn inference_active() -> bool {
     ACTIVE_UTTERANCES.load(Ordering::Acquire) > 0

@@ -4,6 +4,9 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Fixed
+- Cancelling the floating button while it is processing now stops right away. The cancelled dictation is no longer saved to History, pasted, or sent to a fallback provider, and the next dictation no longer waits for the slow request.
+
 ## [1.4.0] - 2026-11-24
 
 ### Added

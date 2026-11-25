@@ -20,11 +20,12 @@ object CoreBridge {
     @JvmStatic external fun nativeGetSettings(): String
     @JvmStatic external fun nativePutSettings(json: String): String
     @JvmStatic external fun nativeStartUtterance(sampleRate: Int): String
-    @JvmStatic external fun nativePushPcm(data: ShortArray, length: Int): String
-    @JvmStatic external fun nativeFinishUtterance(afterLocal: Boolean): String
-    @JvmStatic external fun nativeFinishLocalUtterance(raw: String, text: String, engine: String, durationSecs: Int): String
+    @JvmStatic external fun nativePushPcm(data: ShortArray, length: Int, utterance: Long): String
+    @JvmStatic external fun nativeFinishUtterance(utterance: Long, afterLocal: Boolean): String
+    @JvmStatic external fun nativeFinishLocalUtterance(raw: String, text: String, engine: String, durationSecs: Int, utterance: Long): String
     @JvmStatic external fun nativeSetLocalLlmRunner(runner: LocalLlmCleanupRunner?): String
     @JvmStatic external fun nativeCancelUtterance(): String
+    @JvmStatic external fun nativeDiscardUtterance(utterance: Long): String
     @JvmStatic external fun nativeGetHistory(limit: Int): String
     /** Keyset page: rows older than (beforeTs, beforeUuid); empty uuid = newest. `query` filters text. */
     @JvmStatic external fun nativeGetHistoryPage(limit: Int, beforeTs: Long, beforeUuid: String, query: String): String
@@ -77,42 +78,44 @@ object CoreBridge {
         Unit
     }
 
-    fun startUtterance(rate: Int) {
-        nativeStartUtterance(rate)
-    }
+    /** Starts the core recorder; returns the utterance token its finish must present (0 on failure). */
+    fun startUtterance(rate: Int): Long =
+        runCatching { (dataOf(nativeStartUtterance(rate)) as Number).toLong() }.getOrDefault(0L)
 
-    fun pushPcm(data: ShortArray, n: Int) {
-        nativePushPcm(data, n)
+    /** Appends to the core recorder only while [utterance] is the current recording. */
+    fun pushPcm(data: ShortArray, n: Int, utterance: Long) {
+        nativePushPcm(data, n, utterance)
     }
 
     /**
      * Blocks on the server entries above the Local entry, or with
      * [afterLocal] those below it (the core keeps the audio between the
-     * two calls). Returns (text, engine) or throws.
+     * two calls). Returns (text, engine) or throws. A stale [utterance]
+     * token (cancelled or superseded) throws without touching the
+     * current recording.
      */
-    fun finishUtterance(afterLocal: Boolean): Pair<String, String> {
-        lastCleanup = DictationIssue.Cleanup.OK
-        return finishReply(nativeFinishUtterance(afterLocal))
+    fun finishUtterance(utterance: Long, afterLocal: Boolean): Pair<String, String> {
+        cleanup.set(DictationIssue.Cleanup.OK)
+        return finishReply(nativeFinishUtterance(utterance, afterLocal))
     }
 
     /**
-     * Cleanup outcome of the last finish (failed or unconfigured means the
-     * text was delivered as transcribed).
-     * shortcut: one global value read by the single dictation listener; move into the
-     * finish result if a second concurrent dictation surface ever appears.
+     * Cleanup outcome of the last finish on the calling thread (failed or
+     * unconfigured means the text was delivered as transcribed). Per
+     * thread because finishes run concurrently and the dictation
+     * listener reads it on the worker thread that ran the finish.
      */
-    @Volatile
-    internal var lastCleanup = DictationIssue.Cleanup.OK
-        private set
+    internal val lastCleanup: DictationIssue.Cleanup get() = cleanup.get()
+    private val cleanup = ThreadLocal.withInitial { DictationIssue.Cleanup.OK }
 
     /**
      * On-device STT hit: run the same LLM cleanup chain + history
      * write as [finishUtterance]. Blocks on cleanup — worker thread
      * only. Returns (text, engine) or throws.
      */
-    fun finishLocalUtterance(raw: String, text: String, engine: String, durationSecs: Int): Pair<String, String> {
-        lastCleanup = DictationIssue.Cleanup.OK
-        return finishReply(nativeFinishLocalUtterance(raw, text, engine, durationSecs))
+    fun finishLocalUtterance(raw: String, text: String, engine: String, durationSecs: Int, utterance: Long): Pair<String, String> {
+        cleanup.set(DictationIssue.Cleanup.OK)
+        return finishReply(nativeFinishLocalUtterance(raw, text, engine, durationSecs, utterance))
     }
 
     /** Wire the on-device LLM into the dictation cleanup chain (once per process). */
@@ -126,7 +129,7 @@ object CoreBridge {
         // trace of why cleanup did or did not apply.
         d.optJSONArray("cleanup")?.let { notes ->
             val list = (0 until notes.length()).map { notes.optString(it) }
-            lastCleanup = DictationIssue.cleanupOutcome(list)
+            cleanup.set(DictationIssue.cleanupOutcome(list))
             try {
                 android.util.Log.i("MwCleanup", list.joinToString(" | "))
             } catch (_: Throwable) {
@@ -137,6 +140,11 @@ object CoreBridge {
 
     fun cancelUtterance() {
         nativeCancelUtterance()
+    }
+
+    /** Drops [utterance]'s audio only if it is still the core's current recording. */
+    fun discardUtterance(utterance: Long) {
+        nativeDiscardUtterance(utterance)
     }
 
     fun defaultCleanupPrompt(): Result<String> = runCatching {

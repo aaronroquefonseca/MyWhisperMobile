@@ -192,15 +192,15 @@ class LocalWordBoostTest {
                         override fun stop() = Unit
                     }
                 },
-                finishTranscription = {
+                finishTranscription = { _, _ ->
                     serverHit.set(true)
                     "server text" to "test-engine"
                 },
                 cancelTranscription = {},
-                finishLocal = { _, text, engine, _ -> text to engine },
+                finishLocal = { _, text, engine, _, _ -> text to engine },
                 localTranscribe = { "deploy to kuberrnetes" to "local moonshine-v2-tiny.en" },
                 localPostProcess = { LocalStt.postProcessLocal(it, words) },
-                pushPcm = { _, _ -> },
+                pushPcm = { _, _, _ -> },
                 log = {},
                 workers = executor,
             ).also {

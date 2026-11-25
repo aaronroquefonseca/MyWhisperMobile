@@ -120,26 +120,29 @@ pub fn utterance_start_rs(sample_rate: u32) -> String {
 }
 
 pub fn utterance_cancel_rs() -> String {
-    with_engine(
-        |e| {
-            let secs = e.cancel_utterance();
-            ok_json(serde_json::json!({"durationSecs": secs}))
-        },
-        || err_json("engine not open"),
-    )
+    match ENGINE.get().map(crate::engine::cancel_unlocked) {
+        Some(Ok(secs)) => ok_json(serde_json::json!({"durationSecs": secs})),
+        Some(Err(err)) => err_json(err),
+        None => err_json("engine not open"),
+    }
 }
 
 pub fn utterance_finish_rs() -> String {
-    with_engine(
-        |e| match e.finish_utterance() {
-            Ok(o) => ok_json(serde_json::json!({
-                "text": o.text, "raw": o.raw, "engine": o.engine,
-                "durationSecs": o.duration_secs, "words": o.words,
-            })),
-            Err(err) => err_json(err),
-        },
-        || err_json("engine not open"),
-    )
+    match ENGINE.get().map(|m| {
+        crate::engine::finish_unlocked(m, |e| {
+            e.begin_finish(
+                crate::engine::current_utterance(),
+                crate::server_stt::ChainPart::All,
+            )
+        })
+    }) {
+        Some(Ok(o)) => ok_json(serde_json::json!({
+            "text": o.text, "raw": o.raw, "engine": o.engine,
+            "durationSecs": o.duration_secs, "words": o.words,
+        })),
+        Some(Err(err)) => err_json(err),
+        None => err_json("engine not open"),
+    }
 }
 
 pub fn history_get_rs(limit: usize) -> String {

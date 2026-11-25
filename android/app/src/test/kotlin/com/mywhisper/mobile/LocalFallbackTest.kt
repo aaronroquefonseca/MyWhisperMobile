@@ -44,7 +44,7 @@ class LocalFallbackTest {
         val releases = AtomicInteger(0)
         val results: MutableList<String> = Collections.synchronizedList(mutableListOf())
         val logs: MutableList<String> = Collections.synchronizedList(mutableListOf())
-        val pcmSinks: MutableList<(ShortArray, Int) -> Unit> =
+        val pcmSinks: MutableList<(ShortArray, Int, Long) -> Unit> =
             Collections.synchronizedList(mutableListOf())
         val dictation = Dictation(
             mode = { "Push" },
@@ -54,7 +54,7 @@ class LocalFallbackTest {
                     override fun stop() = Unit
                 }
             },
-            finishTranscription = { afterLocal ->
+            finishTranscription = { _, afterLocal ->
                 serverHit.set(true)
                 attempts.add(if (afterLocal) "below" else "above")
                 server?.invoke(afterLocal) ?: run {
@@ -64,7 +64,7 @@ class LocalFallbackTest {
             },
             cancelTranscription = {},
             remotesAroundLocal = { around },
-            finishLocal = { raw, text, engine, secs ->
+            finishLocal = { raw, text, engine, secs, _ ->
                 finishSecs.set(secs)
                 coreFinishes.add(Triple(raw, text, engine))
                 coreCleanup(text) to engine
@@ -74,7 +74,7 @@ class LocalFallbackTest {
                 attempts.add("local")
                 (local ?: { null })(pcm)
             },
-            pushPcm = { _, _ -> },
+            pushPcm = { _, _, _ -> },
             releaseLocal = { releases.incrementAndGet() },
             log = { logs.add(it) },
             workers = executor,
@@ -176,7 +176,7 @@ class LocalFallbackTest {
 
     private fun Harness.finishWithSpeech() {
         dictation.pressDown()
-        pcmSinks.single()(ShortArray(16_000) { 1000 }, 16_000)
+        pcmSinks.single()(ShortArray(16_000) { 1000 }, 16_000, 0L)
         dictation.pressUp()
         executor.submit {}.get(10, TimeUnit.SECONDS)
         executor.shutdownNow()
@@ -230,7 +230,7 @@ class LocalFallbackTest {
         )
         try {
             h.dictation.pressDown()
-            h.pcmSinks.single()(ShortArray(16_000) { 1000 }, 16_000)
+            h.pcmSinks.single()(ShortArray(16_000) { 1000 }, 16_000, 0L)
             h.dictation.pressUp()
             assertTrue(entered.await(10, TimeUnit.SECONDS))
             h.dictation.cancel()
@@ -306,8 +306,8 @@ class LocalFallbackTest {
     private fun recordLong(h: Harness) {
         h.dictation.pressDown()
         val feed = h.pcmSinks.single()
-        repeat(60) { feed(ShortArray(16_000) { 1000 }, 16_000) }
-        feed(ShortArray(16_000) { 3000 }, 16_000)
+        repeat(60) { feed(ShortArray(16_000) { 1000 }, 16_000, 0L) }
+        feed(ShortArray(16_000) { 3000 }, 16_000, 0L)
         h.dictation.pressUp() // Push -> WORKING
     }
 
@@ -349,8 +349,8 @@ class LocalFallbackTest {
         try {
             h.dictation.pressDown()
             val feed = h.pcmSinks.single()
-            feed(lead, lead.size)
-            repeat(7) { feed(ShortArray(16_000) { 3000 }, 16_000) }
+            feed(lead, lead.size, 0L)
+            repeat(7) { feed(ShortArray(16_000) { 3000 }, 16_000, 0L) }
             h.dictation.pressUp()
             h.executor.submit {}.get(10, TimeUnit.SECONDS)
             assertFalse(h.serverHit.get())
