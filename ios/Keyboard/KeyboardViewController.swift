@@ -89,10 +89,18 @@ class KeyboardViewController: UIInputViewController {
         let alternatives: [String]
         let contextAfter: String
     }
-    private let accents: [String: String] = [
-        "a": "áàâäãåæā", "c": "çćč", "e": "éèêëēėę", "i": "íìîïī",
-        "n": "ñń", "o": "óòôöõøœō", "s": "ßśš", "u": "úùûüū", "y": "ýÿ", "z": "źżž",
+    /// Hold choices in the system keyboard's order for each language; the first opens under the finger.
+    private static let englishAccents: [String: String] = [
+        "a": "àáâäæãåā", "c": "çćč", "e": "èéêëēėę", "i": "îïíīįì", "l": "ł",
+        "n": "ñń", "o": "ôöòóœøōõ", "s": "ßśš", "u": "ûüùúū", "y": "ÿ", "z": "žźż",
     ]
+    private static let spanishAccents: [String: String] = [
+        "a": "áàäâãåąæāª", "c": "çćč", "e": "éèëêęėē", "i": "íïìîįī", "l": "ł",
+        "n": "ń", "o": "óòöôõøœōº", "s": "śš", "u": "úüùûū", "z": "žźż",
+    ]
+    private var accents: [String: String] {
+        language == .spanish ? Self.spanishAccents : Self.englishAccents
+    }
     private var accentChoices: [(UILabel, String)] = []
     private var accentStrip: UIView?
     private var selectedAccent: Int?
@@ -1252,7 +1260,11 @@ class KeyboardViewController: UIInputViewController {
             self.playHaptic(hold: true)
             self.playClick()
             self.performDelete()
-            let repeating = Timer(timeInterval: 0.07, repeats: true) { [weak self] _ in self?.performDelete() }
+            let repeating = Timer(timeInterval: 0.07, repeats: true) { [weak self] _ in
+                // A light tick for every character, like the system keyboard.
+                self?.playHaptic()
+                self?.performDelete()
+            }
             self.deleteTimer = repeating
             RunLoop.main.add(repeating, forMode: .common)
         }
@@ -1666,18 +1678,27 @@ class KeyboardViewController: UIInputViewController {
             return ([["🙂", ","]], { [weak self] in self?.chooseEmojiKey(comma: $0 == ",") })
         default:
             guard let key = button.accessibilityIdentifier, let variants = accents[key] else { return nil }
-            let values = variants.map { shift == .off ? String($0) : String($0).uppercased() }
+            // ª and º have no capitals; uppercased() would turn them into A and O.
+            let values = variants.map { shift == .off || "ªº".contains($0) ? String($0) : String($0).uppercased() }
             return ([values], { [weak self] in self?.insert($0) })
         }
     }
 
     private func showChoices(_ rows: [[String]], from button: UIButton, onSelect: @escaping (String) -> Void) {
         clearAccents()
+        var rows = rows
         let cell: CGFloat = 34
         let rowHeight: CGFloat = 40
         let width = CGFloat(rows.map(\.count).max() ?? 0) * cell
         let height = CGFloat(rows.count) * rowHeight
-        let x = min(max(4, button.frame.midX - cell / 2), max(4, rowsView.bounds.width - width - 4))
+        var x = button.frame.midX - cell / 2
+        // As on the system keyboard, the first choice sits over the key and the rest run away from
+        // the nearer edge: a single row near the right edge is mirrored to run left.
+        if x + width > rowsView.bounds.width - 4, rows.count == 1 {
+            rows = [Array(rows[0].reversed())]
+            x = button.frame.midX + cell / 2 - width
+        }
+        x = min(max(4, x), max(4, rowsView.bounds.width - width - 4))
         let strip = UIView(frame: CGRect(x: x, y: max(1, button.frame.minY - height - 2), width: width, height: height))
         strip.backgroundColor = isDark ? UIColor(white: 0.24, alpha: 1) : .white
         strip.layer.cornerRadius = 10
