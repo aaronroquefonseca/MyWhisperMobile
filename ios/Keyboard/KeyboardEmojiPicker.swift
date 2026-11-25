@@ -16,6 +16,24 @@ final class KeyboardEmojiPicker: UIView {
         return catalog
     }()
     private static let recentsKey = "mw.emoji.recent.v1"
+
+    static var recentEmoji: [String] {
+        UserDefaults.standard.stringArray(forKey: recentsKey) ?? []
+    }
+
+    /// Moves `emoji` to the front of the shared recents; returns the new list.
+    @discardableResult
+    static func remember(_ emoji: String) -> [String] {
+        let updated = Array(([emoji] + recentEmoji.filter { $0 != emoji }).prefix(30))
+        UserDefaults.standard.set(updated, forKey: recentsKey)
+        return updated
+    }
+
+    /// Apple shows recents before the first search letter; fall back to the first smileys.
+    static var searchSuggestions: [String] {
+        let recents = recentEmoji
+        return recents.isEmpty ? Array(catalog.groups[catalog.order.first ?? "", default: []].prefix(24)) : recents
+    }
     private static let categoryIcons = [
         "Recent": "clock",
         "Smileys & Emotion": "face.smiling",
@@ -34,11 +52,6 @@ final class KeyboardEmojiPicker: UIView {
     private let tabs = UIScrollView()
     private let heading = UILabel()
     private let searchBar = UIButton(type: .system)
-    private let clearSearch = UIButton(type: .system)
-    private let searchKeys = UIStackView()
-    private var searching = false
-    private var query = ""
-    private var matches: [String] = []
     private let gridLayout = UICollectionViewFlowLayout()
     private lazy var grid = UICollectionView(frame: .zero, collectionViewLayout: gridLayout)
     private let accent: UIColor
@@ -48,15 +61,17 @@ final class KeyboardEmojiPicker: UIView {
     private let delete: UIButton
     private let globe: UIButton?
     private let onInsert: (String) -> Void
+    private let onSearch: () -> Void
     private let categories = [KeyboardEmojiPicker.recentCategory] + KeyboardEmojiPicker.catalog.order
-    private var recents = UserDefaults.standard.stringArray(forKey: KeyboardEmojiPicker.recentsKey) ?? []
+    private var recents = KeyboardEmojiPicker.recentEmoji
     private var categoryButtons: [UIButton] = []
     private var selectedSection: Int?
     private var initialSection: Int?
 
     init(
         frame: CGRect, accent: UIColor, ink: UIColor, footerHeight: CGFloat,
-        letters: UIButton, delete: UIButton, globe: UIButton?, onInsert: @escaping (String) -> Void
+        letters: UIButton, delete: UIButton, globe: UIButton?,
+        onSearch: @escaping () -> Void, onInsert: @escaping (String) -> Void
     ) {
         self.accent = accent
         self.ink = ink
@@ -65,6 +80,7 @@ final class KeyboardEmojiPicker: UIView {
         self.delete = delete
         self.globe = globe
         self.onInsert = onInsert
+        self.onSearch = onSearch
         super.init(frame: frame)
 
         heading.font = .systemFont(ofSize: 13, weight: .semibold)
@@ -83,41 +99,9 @@ final class KeyboardEmojiPicker: UIView {
         searchBar.backgroundColor = ink.withAlphaComponent(0.12)
         searchBar.layer.cornerCurve = .continuous
         searchBar.accessibilityLabel = "Search Emoji"
-        searchBar.addAction(UIAction { [weak self] _ in self?.beginSearch() }, for: .touchUpInside)
+        searchBar.addAction(UIAction { [weak self] _ in self?.onSearch() }, for: .touchUpInside)
         addSubview(searchBar)
 
-        clearSearch.setImage(UIImage(systemName: "xmark.circle.fill"), for: .normal)
-        clearSearch.tintColor = ink.withAlphaComponent(0.7)
-        clearSearch.accessibilityLabel = "Clear emoji search"
-        clearSearch.isHidden = true
-        clearSearch.addAction(UIAction { [weak self] _ in self?.updateQuery("") }, for: .touchUpInside)
-        addSubview(clearSearch)
-
-        searchKeys.axis = .vertical
-        searchKeys.spacing = 4
-        searchKeys.distribution = .fillEqually
-        searchKeys.isHidden = true
-        let letterRows = ["qwertyuiop", "asdfghjklñ", "zxcvbnm"]
-        let searchRows = letterRows.map { row in row.map { String($0) } } + [["Done", "Space", "Delete"]]
-        for labels in searchRows {
-            let row = UIStackView()
-            row.axis = .horizontal
-            row.spacing = 3
-            row.distribution = .fillEqually
-            for label in labels {
-                let key = UIButton(type: .system)
-                key.setTitle(label, for: .normal)
-                key.setTitleColor(ink, for: .normal)
-                key.titleLabel?.font = .systemFont(ofSize: 16, weight: .medium)
-                key.titleLabel?.adjustsFontSizeToFitWidth = true
-                key.backgroundColor = ink.withAlphaComponent(0.16)
-                key.layer.cornerRadius = 6
-                key.addAction(UIAction { [weak self] _ in self?.searchKey(label) }, for: .touchUpInside)
-                row.addArrangedSubview(key)
-            }
-            searchKeys.addArrangedSubview(row)
-        }
-        addSubview(searchKeys)
 
         gridLayout.scrollDirection = .horizontal
         gridLayout.minimumInteritemSpacing = 4
@@ -162,19 +146,15 @@ final class KeyboardEmojiPicker: UIView {
         let width = bounds.width
         guard width > 0 else { return }
         let searchHeight: CGFloat = footerHeight < 40 ? 28 : 38
-        let categoryHeight: CGFloat = searching ? 0 : 22
+        let categoryHeight: CGFloat = 22
         let gridTop = searchHeight + categoryHeight + 3
-        let searchKeysHeight: CGFloat = footerHeight < 40 ? 98 : 128
         let footerY = bounds.height - footerHeight
-        let gridBottom = searching ? bounds.height - searchKeysHeight : footerY
+        let gridBottom = footerY
         let gridHeight = max(1, gridBottom - gridTop - 6)
         searchBar.frame = CGRect(x: 4, y: 0, width: width - 8, height: searchHeight)
         searchBar.layer.cornerRadius = searchHeight / 2
-        clearSearch.frame = CGRect(x: width - 44, y: 0, width: 40, height: searchHeight)
         heading.frame = CGRect(x: 8, y: searchHeight, width: width - 16, height: categoryHeight)
         grid.frame = CGRect(x: 0, y: gridTop, width: width, height: gridHeight)
-        searchKeys.frame = CGRect(x: 0, y: bounds.height - searchKeysHeight,
-                                  width: width, height: searchKeysHeight)
 
         let keyWidth: CGFloat = 44
         letters.frame = CGRect(x: 0, y: footerY, width: keyWidth, height: footerHeight)
@@ -212,57 +192,6 @@ final class KeyboardEmojiPicker: UIView {
         }.prefix(160).map { $0 }
     }
 
-    private func beginSearch() {
-        guard !searching else { return }
-        searching = true
-        setSearchControlsVisible(true)
-        updateQuery("")
-    }
-
-    private func endSearch() {
-        searching = false
-        query = ""
-        matches = []
-        setSearchControlsVisible(false)
-        searchBar.configuration?.title = "Search Emoji"
-        searchBar.accessibilityValue = nil
-        initialSection = selectedSection ?? 0
-        grid.reloadData()
-        setNeedsLayout()
-    }
-
-    private func setSearchControlsVisible(_ visible: Bool) {
-        searchKeys.isHidden = !visible
-        heading.isHidden = visible
-        tabs.isHidden = visible
-        letters.isHidden = visible
-        delete.isHidden = visible
-        globe?.isHidden = visible
-        clearSearch.isHidden = true
-    }
-
-    private func updateQuery(_ value: String) {
-        query = value
-        matches = value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? (recents.isEmpty ? Array(Self.catalog.groups[Self.catalog.order.first ?? "", default: []].prefix(24)) : recents)
-            : Self.searchEmoji(matching: value)
-        searchBar.configuration?.title = value.isEmpty ? "Search Emoji" : value
-        searchBar.accessibilityValue = value
-        clearSearch.isHidden = value.isEmpty
-        grid.reloadData()
-        grid.setContentOffset(.zero, animated: false)
-        setNeedsLayout()
-    }
-
-    private func searchKey(_ key: String) {
-        switch key {
-        case "Done": endSearch()
-        case "Delete": if !query.isEmpty { updateQuery(String(query.dropLast())) }
-        default:
-            if query.count < 60 { updateQuery(query + (key == "Space" ? " " : key)) }
-        }
-    }
-
     private func jumpToSection(_ section: Int) {
         grid.layoutIfNeeded()
         guard let first = gridLayout.layoutAttributesForItem(at: IndexPath(item: 0, section: section)) else { return }
@@ -291,8 +220,7 @@ final class KeyboardEmojiPicker: UIView {
     }
 
     private func values(in section: Int) -> [String] {
-        if searching { return matches }
-        return section == 0 ? recents : Self.catalog.groups[categories[section], default: []]
+        section == 0 ? recents : Self.catalog.groups[categories[section], default: []]
     }
 
     private var leadingItem: IndexPath? {
@@ -305,7 +233,7 @@ final class KeyboardEmojiPicker: UIView {
 }
 
 extension KeyboardEmojiPicker: UICollectionViewDataSource, UICollectionViewDelegateFlowLayout {
-    func numberOfSections(in collectionView: UICollectionView) -> Int { searching ? 1 : categories.count }
+    func numberOfSections(in collectionView: UICollectionView) -> Int { categories.count }
 
     func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {
         section == 0 ? max(1, values(in: section).count) : values(in: section).count
@@ -322,7 +250,7 @@ extension KeyboardEmojiPicker: UICollectionViewDataSource, UICollectionViewDeleg
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
-        guard scrollView === grid, !searching, let item = leadingItem else { return }
+        guard scrollView === grid, let item = leadingItem else { return }
         highlightSection(item.section)
     }
 
@@ -331,7 +259,7 @@ extension KeyboardEmojiPicker: UICollectionViewDataSource, UICollectionViewDeleg
         if let cell = cell as? KeyboardEmojiCell {
             let values = values(in: indexPath.section)
             let value = values.indices.contains(indexPath.item) ? values[indexPath.item] : nil
-            cell.configure(emoji: value, emptyMessage: searching ? "No matching emoji" : "No recent emoji", ink: ink)
+            cell.configure(emoji: value, emptyMessage: "No recent emoji", ink: ink)
         }
         return cell
     }
@@ -341,18 +269,15 @@ extension KeyboardEmojiPicker: UICollectionViewDataSource, UICollectionViewDeleg
         let values = values(in: indexPath.section)
         guard values.indices.contains(indexPath.item) else { return }
         let value = values[indexPath.item]
-        let updated = Array(([value] + recents.filter { $0 != value }).prefix(30))
+        let updated = Self.remember(value)
         if updated != recents {
             let anchor = leadingItem
             let previousOffset = grid.contentOffset.x
             let previousX = anchor.flatMap { gridLayout.layoutAttributesForItem(at: $0)?.frame.minX }
             recents = updated
-            UserDefaults.standard.set(recents, forKey: Self.recentsKey)
-            if !searching {
-                grid.reloadData()
-                grid.layoutIfNeeded()
-            }
-            if !searching, let anchor, let previousX, let currentX = gridLayout.layoutAttributesForItem(at: anchor)?.frame.minX {
+            grid.reloadData()
+            grid.layoutIfNeeded()
+            if let anchor, let previousX, let currentX = gridLayout.layoutAttributesForItem(at: anchor)?.frame.minX {
                 let edge = previousOffset + currentX - previousX
                 let lastOffset = max(0, grid.contentSize.width - grid.bounds.width)
                 grid.setContentOffset(CGPoint(x: min(max(0, edge), lastOffset), y: 0), animated: false)
@@ -390,5 +315,117 @@ private final class KeyboardEmojiCell: UICollectionViewCell {
         accessibilityLabel = label.text
         accessibilityTraits = showsEmoji ? .button : .staticText
         setNeedsLayout()
+    }
+}
+
+/// Apple's emoji search header: a field with the typed query and a caret,
+/// then one horizontally scrolling row of results above the normal keys.
+final class KeyboardEmojiSearchBar: UIView {
+    private let field = UIView()
+    private let icon = UIImageView(image: UIImage(systemName: "magnifyingglass"))
+    private let text = UILabel()
+    private let caret = UIView()
+    private let clear = UIButton(type: .system)
+    private let results = UIScrollView()
+    private let empty = UILabel()
+    private var buttons: [UIButton] = []
+    private let ink: UIColor
+    private let fieldHeight: CGFloat
+    private let onClear: () -> Void
+    private let onPick: (String) -> Void
+
+    init(frame: CGRect, ink: UIColor, accent: UIColor, fieldHeight: CGFloat,
+         onClear: @escaping () -> Void, onPick: @escaping (String) -> Void) {
+        self.ink = ink
+        self.fieldHeight = fieldHeight
+        self.onClear = onClear
+        self.onPick = onPick
+        super.init(frame: frame)
+
+        field.backgroundColor = ink.withAlphaComponent(0.12)
+        field.layer.cornerCurve = .continuous
+        field.isAccessibilityElement = true
+        field.accessibilityTraits = .searchField
+        field.accessibilityLabel = "Search Emoji"
+        addSubview(field)
+        icon.tintColor = ink.withAlphaComponent(0.6)
+        icon.contentMode = .scaleAspectFit
+        field.addSubview(icon)
+        text.font = .systemFont(ofSize: 17)
+        field.addSubview(text)
+        caret.backgroundColor = accent
+        caret.layer.cornerRadius = 1
+        field.addSubview(caret)
+        let blink = CABasicAnimation(keyPath: "opacity")
+        blink.fromValue = 1
+        blink.toValue = 0
+        blink.duration = 0.5
+        blink.autoreverses = true
+        blink.repeatCount = .infinity
+        blink.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        if !UIAccessibility.isReduceMotionEnabled { caret.layer.add(blink, forKey: "blink") }
+        clear.setImage(UIImage(systemName: "xmark.circle.fill"), for: .normal)
+        clear.tintColor = ink.withAlphaComponent(0.5)
+        clear.accessibilityLabel = "Clear emoji search"
+        clear.addAction(UIAction { [weak self] _ in self?.onClear() }, for: .touchUpInside)
+        field.addSubview(clear)
+
+        results.showsHorizontalScrollIndicator = false
+        results.contentInsetAdjustmentBehavior = .never
+        results.accessibilityLabel = "Emoji results"
+        addSubview(results)
+        empty.text = "No emoji found"
+        empty.font = .systemFont(ofSize: 14)
+        empty.textColor = ink.withAlphaComponent(0.6)
+        empty.textAlignment = .center
+        addSubview(empty)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    func show(query: String, matches: [String]) {
+        text.text = query.isEmpty ? "Search Emoji" : query
+        text.textColor = query.isEmpty ? ink.withAlphaComponent(0.5) : ink
+        field.accessibilityValue = query
+        clear.isHidden = query.isEmpty
+        buttons.forEach { $0.removeFromSuperview() }
+        buttons = matches.map { emoji in
+            let button = UIButton(type: .custom)
+            button.setTitle(emoji, for: .normal)
+            button.accessibilityLabel = emoji
+            button.addAction(UIAction { [weak self] _ in self?.onPick(emoji) }, for: .touchUpInside)
+            results.addSubview(button)
+            return button
+        }
+        empty.isHidden = !matches.isEmpty
+        results.contentOffset = .zero
+        setNeedsLayout()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let width = bounds.width
+        field.frame = CGRect(x: 0, y: 0, width: width, height: fieldHeight)
+        field.layer.cornerRadius = fieldHeight / 2
+        icon.frame = CGRect(x: 12, y: (fieldHeight - 20) / 2, width: 20, height: 20)
+        clear.frame = CGRect(x: width - fieldHeight, y: 0, width: fieldHeight, height: fieldHeight)
+        let textX = icon.frame.maxX + 8
+        let textWidth = min(text.intrinsicContentSize.width, clear.frame.minX - textX - 4)
+        let queryEmpty = clear.isHidden
+        // The caret sits before the placeholder, after typed text.
+        text.frame = CGRect(x: queryEmpty ? textX + 4 : textX, y: 0, width: max(0, textWidth), height: fieldHeight)
+        caret.frame = CGRect(x: queryEmpty ? textX : text.frame.maxX + 1, y: fieldHeight * 0.22, width: 2, height: fieldHeight * 0.56)
+
+        let rowY = fieldHeight + 4
+        let rowHeight = max(1, bounds.height - rowY)
+        results.frame = CGRect(x: 0, y: rowY, width: width, height: rowHeight)
+        empty.frame = results.frame
+        let cellWidth = min(57, max(41, floor((width - 12) / 7)))
+        let font = UIFont.systemFont(ofSize: min(35, rowHeight * 0.76))
+        for (index, button) in buttons.enumerated() {
+            button.titleLabel?.font = font
+            button.frame = CGRect(x: CGFloat(index) * cellWidth, y: 0, width: cellWidth, height: rowHeight)
+        }
+        results.contentSize = CGSize(width: CGFloat(buttons.count) * cellWidth, height: rowHeight)
     }
 }

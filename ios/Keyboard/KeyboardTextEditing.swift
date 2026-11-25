@@ -102,17 +102,35 @@ enum KeyboardTextEditing {
 struct KeyboardCursorDrag {
     private(set) var origin: CGPoint
     var preferredColumn: Int?
+    /// Finger x after acceleration: slow drags stay precise, fast flicks cover long lines.
+    private var travelX: CGFloat
+    private var last: (x: CGFloat, time: TimeInterval)?
+    private var speed: CGFloat = 0
 
-    init(origin: CGPoint) { self.origin = origin }
+    init(origin: CGPoint) {
+        self.origin = origin
+        travelX = origin.x
+    }
 
-    mutating func steps(towards point: CGPoint) -> (characters: Int, lines: Int) {
+    /// `time` enables acceleration (up to 3x above ~120 pt/s, like the system trackpad); nil keeps 1:1.
+    mutating func steps(towards finger: CGPoint, at time: TimeInterval? = nil) -> (characters: Int, lines: Int) {
+        var gain: CGFloat = 1
+        if let time, let last, time > last.time {
+            let instant = abs(finger.x - last.x) / CGFloat(time - last.time)
+            speed = speed == 0 ? instant : speed * 0.6 + instant * 0.4
+            gain = 1 + min(max((speed - 120) / 300, 0), 2)
+        }
+        travelX += (finger.x - (last?.x ?? origin.x)) * gain
+        last = (finger.x, time ?? 0)
+        let point = CGPoint(x: travelX, y: finger.y)
         let dx = point.x - origin.x
         let dy = point.y - origin.y
-        let characters = Int(dx / 12)
+        // 10 pt per character at slow speed; acceleration widens it for fast drags.
+        let characters = Int(dx / 10)
         // Vertical motion needs a larger threshold to avoid jumping lines
         // when a horizontal drag wobbles slightly.
         let lines = Int(dy / 25)
-        origin.x += CGFloat(characters) * 12
+        origin.x += CGFloat(characters) * 10
         origin.y += CGFloat(lines) * 25
         if characters != 0 && lines == 0 && abs(dx) > abs(dy) * 2 {
             origin.y = point.y

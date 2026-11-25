@@ -382,7 +382,7 @@ final class KeyboardSwipeTests: XCTestCase {
         let picker = KeyboardEmojiPicker(
             frame: CGRect(x: 0, y: 0, width: 380, height: 254),
             accent: .systemTeal, ink: .white, footerHeight: 44,
-            letters: UIButton(), delete: UIButton(), globe: nil, onInsert: { _ in }
+            letters: UIButton(), delete: UIButton(), globe: nil, onSearch: {}, onInsert: { _ in }
         )
         picker.layoutIfNeeded()
         let grid = try XCTUnwrap(picker.subviews.compactMap { $0 as? UICollectionView }.first)
@@ -401,6 +401,36 @@ final class KeyboardSwipeTests: XCTestCase {
         animals.sendActions(for: .touchUpInside)
         XCTAssertGreaterThan(grid.contentOffset.x, firstPeople.frame.minX)
         XCTAssertTrue(animals.accessibilityTraits.contains(.selected))
+    }
+
+    @MainActor
+    func testEmojiSearchTypesIntoTheQueryAndInsertsResults() throws {
+        let controller = TestKeyboardController()
+        controller.loadViewIfNeeded()
+        let input = try XCTUnwrap(controller.inputView)
+        input.frame = CGRect(x: 0, y: 0, width: 390, height: 260)
+        controller.viewWillAppear(false)
+        defer { controller.viewDidDisappear(false) }
+        let area = try XCTUnwrap(input.subviews.first { $0 is KeyboardKeyArea })
+
+        func buttons(in view: UIView) -> [UIButton] {
+            view.subviews.flatMap { subview in (subview as? UIButton).map { [$0] } ?? buttons(in: subview) }
+        }
+        func tap(_ label: String) throws {
+            let button = buttons(in: area).first {
+                $0.title(for: .normal)?.caseInsensitiveCompare(label) == .orderedSame || $0.accessibilityLabel == label
+            }
+            try XCTUnwrap(button, label).sendActions(for: .touchUpInside)
+        }
+
+        try tap("Emoji")
+        try tap("Search Emoji")
+        for letter in "heart" { try tap(String(letter)) }
+        XCTAssertEqual(controller.document.text, "", "search letters must not reach the document")
+        try tap("❤️")
+        XCTAssertEqual(controller.document.text, "❤️")
+        try tap("Done")
+        XCTAssertNotNil(buttons(in: area).first { $0.accessibilityLabel == "Search Emoji" })
     }
 
     @MainActor

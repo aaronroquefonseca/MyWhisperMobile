@@ -15,7 +15,12 @@ class KeyboardViewController: UIInputViewController {
     private weak var microphonePreview: KeyboardMicPreview?
     private var micDockedLeading = false
     private var pendingUndo: (original: String, replacement: String)?
+    /// Text a suggestion tap inserted, ending in its automatic space. Punctuation typed next goes before that space.
+    private var suggestionInsert: String?
     private var emojiMode = false
+    /// Non-nil while the emoji search keyboard is up; typed letters edit this query.
+    private var emojiSearch: String?
+    private weak var emojiSearchBar: KeyboardEmojiSearchBar?
     private let rowsView = KeyboardKeyArea()
     private var layout: Layout?
     private var letterKeys: [(button: KeyboardKeyButton, letter: String)] = []
@@ -220,6 +225,7 @@ class KeyboardViewController: UIInputViewController {
         if layout?.keyboardType != next.keyboardType {
             page = next.keyboardType == .numbersAndPunctuation ? .symbols : .letters
             emojiMode = false
+            emojiSearch = nil
         }
         layout = next
         isDark = dark
@@ -325,7 +331,8 @@ class KeyboardViewController: UIInputViewController {
         let choices = ([correction].compactMap { $0 } + completions).filter {
             $0.caseInsensitiveCompare(word) != .orderedSame && seen.insert($0.lowercased()).inserted
         }
-        showSuggestions(choices)
+        // iOS offers the typed word in quotes whenever Space would correct it.
+        showSuggestions(correction == nil ? choices : [Self.quoted(word)] + choices)
     }
 
     private func showSuggestions(_ choices: [String]) {
@@ -343,11 +350,29 @@ class KeyboardViewController: UIInputViewController {
             return
         }
         guard let suggestion, suggestion.document == textDocumentProxy.documentIdentifier, suggestion.word == currentWord else { return }
-        replaceWord(suggestion.word, with: replacement)
+        if replacement == Self.quoted(suggestion.word) {
+            learn(suggestion.word)
+            pendingUndo = nil
+            textDocumentProxy.insertText(" ")
+            suggestionInsert = suggestion.word + " "
+        } else {
+            replaceWord(suggestion.word, with: replacement)
+            suggestionInsert = replacement + " "
+        }
         lastSpaceAt = nil
         playClick()
         updateAutomaticShift()
         scheduleSuggestions()
+    }
+
+    static func quoted(_ word: String) -> String { "\u{201C}\(word)\u{201D}" }
+
+    /// Adds a word to the keyboard's spelling dictionary so it is never autocorrected.
+    private func learn(_ text: String) {
+        let word = text.trimmingCharacters(in: CharacterSet.whitespaces.union(.punctuationCharacters))
+        guard !word.isEmpty, !UITextChecker.hasLearnedWord(word) else { return }
+        UITextChecker.learnWord(word)
+        suggestion = nil
     }
 
     private func replaceWord(_ word: String, with replacement: String) {
@@ -383,6 +408,10 @@ class KeyboardViewController: UIInputViewController {
         let gap: CGFloat = layout.compact ? 6 : 10
         // Fits the 44 pt mic face; iOS already adds its own margin above the keyboard view.
         let stripHeight: CGFloat = layout.compact ? 36 : 46
+        if emojiMode, let query = emojiSearch {
+            addEmojiSearch(query: query, width: width, pad: pad, rowHeight: rowHeight, gap: gap)
+            return
+        }
         let height = stripHeight + 4 * rowHeight + 3 * gap + 10
         if heightConstraint?.constant != height { heightConstraint?.constant = height }
 
@@ -593,7 +622,9 @@ class KeyboardViewController: UIInputViewController {
         keys.append((emoji, 1))
 
         let space = makeKey(background: keyColor)
-        space.setTitle(language.spaceTitle, for: .normal)
+        let swipesLanguage = settings.switchesLanguageBySwipe && settings.languages.count > 1
+        // Arrows hint that sliding the space bar sideways changes language.
+        space.setTitle(swipesLanguage ? "‹  \(language.spaceTitle)  ›" : language.spaceTitle, for: .normal)
         space.setTitleColor(labelColor.withAlphaComponent(0.8), for: .normal)
         space.titleLabel?.font = .systemFont(ofSize: 14)
         space.titleLabel?.adjustsFontSizeToFitWidth = true
@@ -609,7 +640,7 @@ class KeyboardViewController: UIInputViewController {
         vertical.delegate = self
         vertical.require(toFail: cursor)
         space.addGestureRecognizer(vertical)
-        if settings.switchesLanguageBySwipe, settings.languages.count > 1 {
+        if swipesLanguage {
             for direction: UISwipeGestureRecognizer.Direction in [.left, .right] {
                 let swipe = UISwipeGestureRecognizer(target: self, action: #selector(swipeSpacebar(_:)))
                 swipe.direction = direction
@@ -787,23 +818,58 @@ class KeyboardViewController: UIInputViewController {
     }
 
     private func insert(_ text: String) {
+        if emojiMode, let query = emojiSearch {
+            playClick()
+            updateEmojiSearch(query + text)
+            if shift == .on {
+                shift = .off
+                updateShiftKeys()
+            }
+            return
+        }
         microphonePreview?.reset()
         pendingSwipe?.cancel()
         let startsWord = text.first.map { $0.isLetter || $0.isNumber } == true
         let separator = startsWord && validSwipe != nil ? " " : ""
+        let punctuation = text.count == 1 && ".,!?;:".contains(text)
+        let word = punctuation && validSwipe == nil ? currentWord : ""
+        let autoSpace = suggestionInsert
         lastSwipe = nil
         pendingUndo = nil
+        suggestionInsert = nil
         lastSpaceAt = nil
         lastShiftTap = nil
         playClick()
         let proxy = textDocumentProxy
         let before = proxy.documentContextBeforeInput
-        let inserted = separator + text
+        var inserted = separator + text
+        var undo: (original: String, replacement: String)?
         replacingText = true
+        if punctuation, let autoSpace, before?.hasSuffix(autoSpace) == true {
+            // "word " + "." -> "word. ", as on the system keyboard.
+            proxy.deleteBackward()
+            inserted = text + " "
+        } else if punctuation, let fixed = autocorrection(for: word) {
+            for _ in word { proxy.deleteBackward() }
+            proxy.insertText(fixed)
+            undo = (original: word + text, replacement: fixed + text)
+        }
         proxy.insertText(inserted)
         replacingText = false
+        pendingUndo = undo
         updateAutomaticShift(before: before.map { String($0.suffix(64)) + inserted } ?? inserted)
         scheduleSuggestions()
+    }
+
+    /// The correction Space or punctuation would apply to `word`, if any.
+    private func autocorrection(for word: String) -> String? {
+        guard settings.autoCorrection, !word.isEmpty else { return nil }
+        let proxy = textDocumentProxy
+        if let suggestion, suggestion.word == word, suggestion.document == proxy.documentIdentifier {
+            return suggestion.correction
+        }
+        guard proxy.autocorrectionType != .no, let language = spellLanguage else { return nil }
+        return correction(for: word, language: language)
     }
 
     private func updateAutomaticShift(before editedContext: String? = nil) {
@@ -844,6 +910,7 @@ class KeyboardViewController: UIInputViewController {
     @objc private func pageTapped(_ button: UIButton) {
         playClick()
         emojiMode = false
+        emojiSearch = nil
         switch button.title(for: .normal) {
         case "123": page = .symbols
         case "#+=": page = .more
@@ -890,6 +957,10 @@ class KeyboardViewController: UIInputViewController {
     }
 
     func deleteWord() {
+        if emojiMode, let query = emojiSearch {
+            updateEmojiSearch(String(query.dropLast(KeyboardTextEditing.trailingWordDeletionCount(in: query))))
+            return
+        }
         microphonePreview?.reset()
         let proxy = textDocumentProxy
         if proxy.selectedText?.isEmpty == false {
@@ -909,6 +980,10 @@ class KeyboardViewController: UIInputViewController {
     }
 
     private func performDelete() {
+        if emojiMode, let query = emojiSearch {
+            updateEmojiSearch(String(query.dropLast()))
+            return
+        }
         microphonePreview?.reset()
         pendingSwipe?.cancel()
         let proxy = textDocumentProxy
@@ -922,12 +997,15 @@ class KeyboardViewController: UIInputViewController {
         lastSwipe = nil
         let undo = pendingUndo
         pendingUndo = nil
+        suggestionInsert = nil
         lastSpaceAt = nil
         lastShiftTap = nil
         if let undo, proxy.selectedText?.isEmpty != false,
            proxy.documentContextBeforeInput?.hasSuffix(undo.replacement) == true {
             for _ in undo.replacement { proxy.deleteBackward() }
             proxy.insertText(undo.original)
+            // Like iOS: a reverted correction is learned so it isn't corrected again.
+            learn(undo.original)
         } else {
             proxy.deleteBackward()
         }
@@ -941,6 +1019,11 @@ class KeyboardViewController: UIInputViewController {
     }
 
     @objc private func spaceTapped() {
+        if emojiMode, let query = emojiSearch {
+            playClick()
+            updateEmojiSearch(query + " ")
+            return
+        }
         microphonePreview?.reset()
         pendingSwipe?.cancel()
         lastSwipe = nil
@@ -961,16 +1044,9 @@ class KeyboardViewController: UIInputViewController {
             replacingText = false
             updateAutomaticShift(before: String(before.suffix(64).dropLast()) + ". ")
         } else {
-            let word = settings.autoCorrection ? currentWord : ""
-            let replacement: String?
-            if let suggestion, suggestion.word == word, suggestion.document == proxy.documentIdentifier {
-                replacement = suggestion.correction
-            } else if !word.isEmpty, proxy.autocorrectionType != .no, let language = spellLanguage {
-                replacement = correction(for: word, language: language)
-            } else {
-                replacement = nil
-            }
-            if let replacement {
+            let word = currentWord
+            suggestionInsert = nil
+            if let replacement = autocorrection(for: word) {
                 replaceWord(word, with: replacement)
             } else {
                 pendingUndo = nil
@@ -1030,12 +1106,12 @@ class KeyboardViewController: UIInputViewController {
             cursorGesture = gesture
             let travel = (gesture as? UIPanGestureRecognizer)?.translation(in: rowsView).y ?? 0
             startCursorDrag(at: CGPoint(x: point.x, y: point.y - travel))
-            continueCursorDrag(to: point)
+            continueCursorDrag(to: point, at: ProcessInfo.processInfo.systemUptime)
         case .changed:
-            if cursorGesture === gesture { continueCursorDrag(to: point) }
+            if cursorGesture === gesture { continueCursorDrag(to: point, at: ProcessInfo.processInfo.systemUptime) }
         case .ended, .cancelled, .failed:
             guard cursorGesture === gesture else { return }
-            if gesture.state == .ended { continueCursorDrag(to: point) }
+            if gesture.state == .ended { continueCursorDrag(to: point, at: ProcessInfo.processInfo.systemUptime) }
             finishCursorDrag()
         default:
             break
@@ -1051,11 +1127,29 @@ class KeyboardViewController: UIInputViewController {
         lastSpaceAt = nil
         pendingUndo = nil
         clearSuggestions()
+        setTrackpadMode(true)
     }
 
-    func continueCursorDrag(to point: CGPoint) {
+    /// Apple's trackpad look: blank key labels and the strip so the caret is the focus.
+    private func setTrackpadMode(_ on: Bool) {
+        if on { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
+        let alpha: CGFloat = on ? 0 : 1
+        UIView.animate(withDuration: UIAccessibility.isReduceMotionEnabled ? 0 : 0.15, delay: 0,
+                       options: [.beginFromCurrentState, .allowUserInteraction]) {
+            for view in self.rowsView.subviews {
+                if let key = view as? KeyboardKeyButton {
+                    key.titleLabel?.alpha = alpha
+                    key.imageView?.alpha = alpha
+                } else {
+                    view.alpha = alpha
+                }
+            }
+        }
+    }
+
+    func continueCursorDrag(to point: CGPoint, at time: TimeInterval? = nil) {
         guard var drag = cursorDrag else { return }
-        let steps = drag.steps(towards: point)
+        let steps = drag.steps(towards: point, at: time)
         guard steps.characters != 0 || steps.lines != 0 else { return }
 
         let proxy = textDocumentProxy
@@ -1099,6 +1193,7 @@ class KeyboardViewController: UIInputViewController {
     }
 
     func finishCursorDrag() {
+        if cursorDrag != nil { setTrackpadMode(false) }
         cursorDrag = nil
         cursorDocument = nil
         cursorGesture = nil
@@ -1381,18 +1476,92 @@ class KeyboardViewController: UIInputViewController {
         let picker = KeyboardEmojiPicker(
             frame: CGRect(x: pad, y: 2, width: width - 2 * pad, height: bottomY + rowHeight - 2),
             accent: accentColor, ink: labelColor, footerHeight: rowHeight,
-            letters: letters, delete: delete, globe: globe
+            letters: letters, delete: delete, globe: globe,
+            onSearch: { [weak self] in self?.beginEmojiSearch() }
         ) { [weak self] emoji in
             self?.insert(emoji)
         }
         rowsView.addSubview(picker)
+    }
+
+    // MARK: - Emoji search
+
+    private func beginEmojiSearch() {
+        playClick()
+        emojiSearch = ""
+        shift = .off
+        rebuild()
+    }
+
+    @objc private func endEmojiSearch() {
+        playClick()
+        emojiSearch = nil
+        rebuild()
+    }
+
+    private func updateEmojiSearch(_ query: String) {
+        let trimmed = String(query.prefix(60))
+        emojiSearch = trimmed
+        emojiSearchBar?.show(query: trimmed, matches: Self.emojiMatches(for: trimmed))
+    }
+
+    private static func emojiMatches(for query: String) -> [String] {
+        query.trimmingCharacters(in: .whitespaces).isEmpty
+            ? KeyboardEmojiPicker.searchSuggestions
+            : KeyboardEmojiPicker.searchEmoji(matching: query)
+    }
+
+    /// Apple's layout: search field, one row of results, then the normal letter keys.
+    private func addEmojiSearch(query: String, width: CGFloat, pad: CGFloat, rowHeight: CGFloat, gap: CGFloat) {
+        let compact = layout?.compact == true
+        let fieldHeight: CGFloat = compact ? 30 : 38
+        let resultsHeight: CGFloat = compact ? 34 : 50
+        let top = fieldHeight + resultsHeight + 12
+        let height = top + 4 * rowHeight + 3 * gap + 10
+        if heightConstraint?.constant != height { heightConstraint?.constant = height }
+
+        let bar = KeyboardEmojiSearchBar(
+            frame: CGRect(x: pad, y: 4, width: width - 2 * pad, height: fieldHeight + 4 + resultsHeight),
+            ink: labelColor, accent: accentColor, fieldHeight: fieldHeight,
+            onClear: { [weak self] in self?.updateEmojiSearch("") },
+            onPick: { [weak self] emoji in
+                KeyboardEmojiPicker.remember(emoji)
+                self?.playClick()
+                self?.textDocumentProxy.insertText(emoji)
+            }
+        )
+        rowsView.addSubview(bar)
+        emojiSearchBar = bar
+        bar.show(query: query, matches: Self.emojiMatches(for: query))
+
+        let step = rowHeight + gap
+        let spanish = language == .spanish
+        addLettersRow(keys: "QWERTYUIOP", y: top, h: rowHeight, width: width, pad: pad)
+        addLettersRow(keys: spanish ? "ASDFGHJKLÑ" : "ASDFGHJKL", y: top + step,
+                      h: rowHeight, width: width, pad: pad, inset: spanish ? 0 : 0.5)
+        addLettersRow(keys: "ZXCVBNM", y: top + 2 * step, h: rowHeight, width: width, pad: pad,
+                      left: shiftKey(), right: deleteKey())
+
+        let back = symbolKey("face.smiling", label: "Back to emoji")
+        back.addTarget(self, action: #selector(endEmojiSearch), for: .touchUpInside)
+        let space = makeKey(background: keyColor)
+        space.setTitle(language.spaceTitle, for: .normal)
+        space.setTitleColor(labelColor.withAlphaComponent(0.8), for: .normal)
+        space.titleLabel?.font = .systemFont(ofSize: 14)
+        space.accessibilityLabel = "Space"
+        space.addTarget(self, action: #selector(spaceTapped), for: .touchUpInside)
+        let done = symbolKey("checkmark", label: "Done")
+        done.backgroundColor = accentColor
+        done.tintColor = isDark ? .black : .white
+        done.addTarget(self, action: #selector(endEmojiSearch), for: .touchUpInside)
+        placeRow([(back, 1.15), (space, 5.6), (done, 2.1)], y: top + 3 * step, height: rowHeight, width: width, pad: pad)
     }
 }
 
 extension KeyboardViewController: UIGestureRecognizerDelegate {
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
         guard gestureRecognizer === swipeGesture else { return true }
-        guard settings.usesSwipeTyping,
+        guard settings.usesSwipeTyping, emojiSearch == nil,
               page == .letters, !emojiMode, !isNumberField, !isAddressField,
               let key = rowsView.nearestKey(at: touch.location(in: rowsView)) else { return false }
         return letterKeys.contains { $0.button === key }
