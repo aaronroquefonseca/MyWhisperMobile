@@ -151,7 +151,13 @@ class OverlayService : Service(), Dictation.Listener {
     }
 
     /** Per-screen settings (#113) read through the shared resolver for the screen in use. */
-    private fun screenKey(base: String) = FoldScreens.activeKey(this, base)
+    private fun screenKey(base: String) = FoldScreens.key(base, buildScreen ?: FoldScreens.active(this), true)
+
+    /** Split on and this screen's position was reset in Settings: rebuild at the default spot. */
+    private fun positionReset(): Boolean {
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        return FoldScreens.split(prefs) && !prefs.contains(screenKey(KEY_X))
+    }
 
     private fun extraSmall() = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(screenKey("float_extra_small"), false)
 
@@ -237,8 +243,10 @@ class OverlayService : Service(), Dictation.Listener {
     private var gripCancelled = false
     /** Layout built with the optional grip (rebuild when the pref flips). */
     private var builtGrab = false
-    /** Screen whose settings the bubble was built with (foldables, #113). */
-    private var builtScreen = FoldScreens.Screen.COVER
+    /** Screen whose settings the bubble was built with (foldables, #113); null = rebuild once idle. */
+    private var builtScreen: FoldScreens.Screen? = null
+    /** Pinned while [buildBubble] runs so one build reads one screen's settings. */
+    private var buildScreen: FoldScreens.Screen? = null
     /** Pending delayed hold start (no grip: wait out finger jitter). */
     private var pressStart: Runnable? = null
     /** Recording already opened by this touch (hold or deferred tap). */
@@ -659,6 +667,8 @@ class OverlayService : Service(), Dictation.Listener {
                 lp.x = cx
                 lp.y = cy
                 try { wm?.updateViewLayout(holder, lp) } catch (_: Exception) { }
+                // Clamped for this screen only: restore the saved spot once idle, even if unfolded again first.
+                builtScreen = null
             }
         }
     }
@@ -1082,7 +1092,7 @@ class OverlayService : Service(), Dictation.Listener {
         // the layout matches (no grip row <=> free drag).
         // Same for a fold/unfold or a Reset position: rebuild at that screen's saved spot.
         if (holder != null && (builtGrab != grabEnabled() || builtSize != appearanceSize() || builtScreen != FoldScreens.active(this) ||
-                !getSharedPreferences(PREFS, MODE_PRIVATE).contains(screenKey(KEY_X))) && dictation.current == Dictation.State.IDLE) {
+                positionReset()) && dictation.current == Dictation.State.IDLE) {
             removeBubble()
         }
         if (show) {
@@ -1115,12 +1125,21 @@ class OverlayService : Service(), Dictation.Listener {
     }
 
     /** Compact monochrome squircle with an optional full-width grip. */
-    @SuppressLint("ClickableViewAccessibility")
     private fun showBubble() {
         if (holder != null) {
             refreshChrome(Dictation.State.IDLE)
             return
         }
+        buildScreen = FoldScreens.active(this)
+        try {
+            buildBubble()
+        } finally {
+            buildScreen = null
+        }
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun buildBubble() {
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
 
         builtSize = appearanceSize()
@@ -1145,7 +1164,7 @@ class OverlayService : Service(), Dictation.Listener {
             it.gravity = Gravity.TOP or Gravity.START
             it.alpha = FloatState.overlayWindowOpacity(prefs.getInt("float_opacity", 65))
             val b = safeBubbleBounds(rootW, rootH)
-            builtScreen = FoldScreens.active(this)
+            builtScreen = buildScreen
             val keyX = screenKey(KEY_X)
             val keyY = screenKey(KEY_Y)
             val (cx, cy) = FloatState.clampBubble(
@@ -1154,8 +1173,8 @@ class OverlayService : Service(), Dictation.Listener {
             )
             it.x = cx
             it.y = cy
-            // A reset (or first) position is stored once placed, so the rebuild check above settles.
-            if (!prefs.contains(keyX)) prefs.edit { putInt(keyX, cx).putInt(keyY, cy) }
+            // A reset position is stored once placed, so the rebuild check in applyVisibility settles.
+            if (positionReset()) prefs.edit { putInt(keyX, cx).putInt(keyY, cy) }
         }
         params = lp
 
