@@ -90,12 +90,13 @@ internal suspend fun androidx.compose.foundation.lazy.LazyListState.scrollToTopT
         return firstVisibleItemIndex * step + firstVisibleItemScrollOffset
     }
     scroll {
-        var done = 0f
+        var previous = 0f
         androidx.compose.animation.core.animate(0f, 1f,
             animationSpec = androidx.compose.animation.core.tween(SCROLL_TOP_MS, easing = androidx.compose.animation.core.FastOutSlowInEasing)) { fraction, _ ->
             // Items above the viewport are unmeasured (tall overview cards vs short history rows), so a one-off
-            // estimate falls short; re-estimate each frame as they scroll in so the ease ends on the top.
-            done -= scrollBy(-(fraction * (done + remaining()) - done))
+            // estimate falls short; re-estimate each frame and spread only what remains over the time that remains.
+            scrollBy(-remaining() * (fraction - previous) / (1f - previous))
+            previous = fraction
         }
     }
     scrollToItem(0)
