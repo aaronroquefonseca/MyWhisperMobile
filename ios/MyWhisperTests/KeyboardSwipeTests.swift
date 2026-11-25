@@ -498,7 +498,7 @@ private final class TestKeyboardController: KeyboardViewController {
     let document = TestKeyboardDocument()
     override var textDocumentProxy: any UITextDocumentProxy {
         // A real host reports each caret move back; the keyboard sends the next one after that.
-        document.onAdjust = { [unowned self] in self.selectionDidChange(nil) }
+        document.onAdjust = { [weak self] in self?.selectionDidChange(nil) }
         return document
     }
 }
