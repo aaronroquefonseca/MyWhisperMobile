@@ -28,6 +28,7 @@ class KeyboardViewController: UIInputViewController {
     /// Non-nil while the emoji search keyboard is up; typed letters edit this query.
     private var emojiSearch: String?
     private weak var emojiSearchBar: KeyboardEmojiSearchBar?
+    private weak var spaceKey: KeyboardKeyButton?
     private let rowsView = KeyboardKeyArea()
     private var layout: Layout?
     private var letterKeys: [(button: KeyboardKeyButton, letter: String)] = []
@@ -140,6 +141,9 @@ class KeyboardViewController: UIInputViewController {
         // Fast two-thumb typing overlaps touches; a single-touch view drops the second key.
         view.isMultipleTouchEnabled = true
         rowsView.isMultipleTouchEnabled = true
+        // iOS passes touches on fully transparent keyboard pixels through, so taps in the
+        // gaps never reached nearestKey. 1% black is invisible over the system surface.
+        rowsView.backgroundColor = UIColor(white: 0, alpha: 0.01)
         view.addSubview(rowsView)
         swipeGesture.delegate = self
         rowsView.addGestureRecognizer(swipeGesture)
@@ -739,6 +743,7 @@ class KeyboardViewController: UIInputViewController {
         space.accessibilityLabel = "Space"
         space.accessibilityValue = language.title
         space.addTarget(self, action: #selector(spaceTapped), for: .touchUpInside)
+        spaceKey = space
 
         let cursor = UILongPressGestureRecognizer(target: self, action: #selector(dragCursor(_:)))
         cursor.minimumPressDuration = Self.holdDelay
@@ -1234,7 +1239,21 @@ class KeyboardViewController: UIInputViewController {
         pendingSwipe?.cancel()
         lastSwipe = nil
         lastSpaceAt = nil
-        rebuild()
+        playHaptic(hold: true)
+        let animate = !UIAccessibility.isReduceMotionEnabled
+        UIView.transition(with: rowsView, duration: animate ? 0.2 : 0, options: [.transitionCrossDissolve, .allowUserInteraction]) {
+            self.rebuild()
+        }
+        // The new language name slides in from the side the finger moved away from.
+        if animate, let label = spaceKey?.titleLabel {
+            label.transform = CGAffineTransform(translationX: movingRight ? -48 : 48, y: 0)
+            label.alpha = 0
+            UIView.animate(withDuration: 0.32, delay: 0, usingSpringWithDamping: 0.82, initialSpringVelocity: 0,
+                           options: [.allowUserInteraction]) {
+                label.transform = .identity
+                label.alpha = 1
+            }
+        }
         updateAutomaticShift()
         scheduleSuggestions()
         preloadSwipeWords()
@@ -1671,6 +1690,17 @@ class KeyboardViewController: UIInputViewController {
         rebuild()
     }
 
+    /// Done leaves emoji entirely, back to the letters, like the system keyboard.
+    @objc private func closeEmojiSearch() {
+        playClick()
+        emojiSearch = nil
+        emojiMode = false
+        page = .letters
+        rebuild()
+        updateAutomaticShift()
+        scheduleSuggestions()
+    }
+
     private func updateEmojiSearch(_ query: String) {
         let trimmed = String(query.prefix(60))
         emojiSearch = trimmed
@@ -1725,7 +1755,7 @@ class KeyboardViewController: UIInputViewController {
         let done = symbolKey("checkmark", label: "Done")
         done.backgroundColor = accentColor
         done.tintColor = isDark ? .black : .white
-        done.addTarget(self, action: #selector(endEmojiSearch), for: .touchUpInside)
+        done.addTarget(self, action: #selector(closeEmojiSearch), for: .touchUpInside)
         placeRow([(back, 1.15), (space, 5.6), (done, 2.1)], y: top + 3 * step, height: rowHeight, width: width, pad: pad)
     }
 }

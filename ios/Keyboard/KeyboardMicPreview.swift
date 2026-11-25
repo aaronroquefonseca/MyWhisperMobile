@@ -46,6 +46,11 @@ final class KeyboardMicPreview: UIView {
     private let pill = UIView()
     private let cancelButton = UIButton(type: .system)
     private let waveform = KeyboardBarsView()
+    /// While holding: slide up to lock, down to cancel. Android draws targets above and
+    /// below the button; a keyboard can't draw above itself, so the hint sits beside it.
+    private let lockHint = KeyboardMicPreview.hintRow(arrow: "chevron.up", symbol: "lock.fill")
+    private let cancelHint = KeyboardMicPreview.hintRow(arrow: "chevron.down", symbol: "xmark")
+    private static let hintWidth: CGFloat = 28
     private let meterHint = UILabel()
     private var meterTask: Task<Void, Never>?
     private var renderedPhase = KeyboardMicPreviewState.Phase.idle
@@ -73,6 +78,8 @@ final class KeyboardMicPreview: UIView {
         addSubview(pill)
 
         pill.addSubview(waveform)
+        pill.addSubview(lockHint)
+        pill.addSubview(cancelHint)
         meterHint.text = "Enable mic preview in MyWhisper"
         meterHint.textColor = .white
         meterHint.font = .systemFont(ofSize: 10, weight: .medium)
@@ -134,7 +141,8 @@ final class KeyboardMicPreview: UIView {
                             width: iconSize, height: iconSize)
 
         let phase = state.phase
-        let pillWidth = min(bounds.width, phase == .locked ? 178 : phase == .held ? 144 : side)
+        let hint = phase == .held ? Self.hintWidth : 0
+        let pillWidth = min(bounds.width, phase == .locked ? 178 : phase == .held ? 144 + hint : side)
         pill.frame = CGRect(x: dockedLeading ? 0 : bounds.width - pillWidth, y: 2, width: pillWidth, height: bounds.height - 4)
         let cancelWidth: CGFloat = 44
         let cancelX = dockedLeading ? pillWidth - cancelWidth : 0
@@ -143,8 +151,12 @@ final class KeyboardMicPreview: UIView {
         if phase == .locked {
             waveCenter = (pillWidth + (dockedLeading ? side - cancelWidth : cancelWidth - side)) / 2
         } else {
-            waveCenter = (pillWidth + (dockedLeading ? side : -side)) / 2
+            waveCenter = (pillWidth + (dockedLeading ? side + hint : -side - hint)) / 2
         }
+        let hintX = dockedLeading ? side : pillWidth - side - Self.hintWidth
+        let half = pill.bounds.height / 2
+        lockHint.frame = CGRect(x: hintX, y: 3, width: Self.hintWidth, height: half - 3)
+        cancelHint.frame = CGRect(x: hintX, y: half, width: Self.hintWidth, height: half - 3)
         waveform.frame = CGRect(x: waveCenter - 31.5, y: (pill.bounds.height - 24) / 2, width: 63, height: 24)
         meterHint.frame = CGRect(x: waveCenter - 40, y: 0, width: 80, height: pill.bounds.height)
 
@@ -275,6 +287,8 @@ final class KeyboardMicPreview: UIView {
         UIView.animate(withDuration: duration, delay: 0, options: [.curveEaseOut, .beginFromCurrentState, .allowUserInteraction]) {
             self.layoutIfNeeded()
             self.pill.alpha = active ? 1 : 0
+            self.lockHint.alpha = phase == .held ? 1 : 0
+            self.cancelHint.alpha = phase == .held ? 1 : 0
             self.face.backgroundColor = phase == .held ? UIColor(white: 0.91, alpha: 1) : .white
             self.face.alpha = phase == .locked ? 1 : 0.65
         }
@@ -296,11 +310,20 @@ final class KeyboardMicPreview: UIView {
         button.accessibilityLabel = "MyWhisper dictation preview"
         switch phase {
         case .idle: button.accessibilityValue = "Ready"
-        case .held: button.accessibilityValue = "Hold to dictate"
+        case .held: button.accessibilityValue = "Slide up to lock, down to cancel"
         case .locked: button.accessibilityValue = "Hands-free. Activate to finish"
         case .processing: button.accessibilityValue = "Processing. Activate to cancel"
         }
         cancelButton.tintColor = state.target == .cancel ? .systemRed : .white
+        lockHint.tintColor = state.target == .lock ? .systemTeal : .white
+        cancelHint.tintColor = state.target == .cancel ? .systemRed : .white
+        if phase == .held, !UIAccessibility.isReduceMotionEnabled {
+            Self.nudge(lockHint, by: -2)
+            Self.nudge(cancelHint, by: 2)
+        } else {
+            lockHint.layer.removeAnimation(forKey: "nudge")
+            cancelHint.layer.removeAnimation(forKey: "nudge")
+        }
         waveform.barColor = state.target == .lock ? .systemTeal : .white
         if active {
             if meterTask == nil { startMeter() }
@@ -334,6 +357,37 @@ final class KeyboardMicPreview: UIView {
     }
 
     private lazy var idleImage = mark.image
+
+    private static func hintRow(arrow: String, symbol: String) -> UIStackView {
+        let config = UIImage.SymbolConfiguration(pointSize: 9, weight: .bold)
+        let row = UIStackView(arrangedSubviews: [arrow, symbol].map { name in
+            let image = UIImageView(image: UIImage(systemName: name, withConfiguration: config))
+            image.contentMode = .center
+            return image
+        })
+        row.axis = .horizontal
+        row.spacing = 2
+        row.alignment = .center
+        row.distribution = .fillEqually
+        row.tintColor = .white
+        row.alpha = 0
+        row.isUserInteractionEnabled = false
+        row.isAccessibilityElement = false
+        return row
+    }
+
+    /// Gently points each hint the way the finger should go.
+    private static func nudge(_ view: UIView, by offset: CGFloat) {
+        guard view.layer.animation(forKey: "nudge") == nil else { return }
+        let nudge = CABasicAnimation(keyPath: "transform.translation.y")
+        nudge.fromValue = 0
+        nudge.toValue = offset
+        nudge.duration = 0.45
+        nudge.autoreverses = true
+        nudge.repeatCount = .infinity
+        nudge.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        view.layer.add(nudge, forKey: "nudge")
+    }
 }
 
 private final class KeyboardMicTouchSurface: UIControl {

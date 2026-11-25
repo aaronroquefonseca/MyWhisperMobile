@@ -437,7 +437,8 @@ final class KeyboardSwipeTests: XCTestCase {
         try tap("❤️")
         XCTAssertEqual(controller.document.text, "❤️")
         try tap("Done")
-        XCTAssertNotNil(buttons(in: area).first { $0.accessibilityLabel == "Search Emoji" })
+        XCTAssertNil(buttons(in: area).first { $0.accessibilityLabel == "Search Emoji" }, "Done returns to the letters")
+        XCTAssertNotNil(buttons(in: area).first { $0.title(for: .normal)?.lowercased() == "q" })
     }
 
     @MainActor
