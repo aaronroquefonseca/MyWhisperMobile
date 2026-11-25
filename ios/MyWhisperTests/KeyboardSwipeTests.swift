@@ -248,7 +248,24 @@ final class KeyboardSwipeTests: XCTestCase {
         controller.textDidChange(nil)
         XCTAssertNotNil(key("@"))
         XCTAssertNil(key("/"))
-        XCTAssertNotNil(area.subviews.first { $0.accessibilityLabel == "MyWhisper dictation" })
+    }
+
+    @MainActor
+    func testKeyboardDeclaresOwnDictationButtonAndShowsAppGuidance() throws {
+        let controller = TestKeyboardController()
+        controller.loadViewIfNeeded()
+        let input = try XCTUnwrap(controller.inputView)
+        input.frame = CGRect(x: 0, y: 0, width: 390, height: 260)
+        controller.viewWillAppear(false)
+        defer { controller.viewDidDisappear(false) }
+
+        XCTAssertTrue(controller.hasDictationKey)
+        let area = try XCTUnwrap(input.subviews.first { $0 is KeyboardKeyArea })
+        let buttons = area.subviews.compactMap { $0 as? UIButton }
+        let microphone = try XCTUnwrap(buttons.first { $0.accessibilityLabel == "MyWhisper dictation" })
+        XCTAssertNotNil(microphone.configuration?.image)
+        microphone.sendActions(for: .touchUpInside)
+        XCTAssertTrue(buttons.contains { !$0.isHidden && $0.title(for: .normal) == "Dictate in the MyWhisper app" })
     }
 
     @MainActor

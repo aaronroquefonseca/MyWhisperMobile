@@ -105,6 +105,7 @@ class KeyboardViewController: UIInputViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        hasDictationKey = true
         rowsView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(rowsView)
         swipeGesture.delegate = self
@@ -367,7 +368,7 @@ class KeyboardViewController: UIInputViewController {
         let pad: CGFloat = layout.compact ? 10 : 6
         let rowHeight: CGFloat = layout.compact ? 31 : 44
         let gap: CGFloat = layout.compact ? 6 : 10
-        let stripHeight: CGFloat = layout.compact ? 30 : 43
+        let stripHeight: CGFloat = layout.compact ? 30 : 44
         let height = stripHeight + 4 * rowHeight + 3 * gap + 10
         if heightConstraint?.constant != height { heightConstraint?.constant = height }
 
@@ -409,10 +410,20 @@ class KeyboardViewController: UIInputViewController {
 
     private func addPredictionRow(width: CGFloat, pad: CGFloat, height: CGFloat) {
         let microphoneWidth: CGFloat = 44
-        let microphone = plainButton(systemName: "mic", size: 19)
-        microphone.tintColor = accentColor
+        var configuration = UIButton.Configuration.filled()
+        configuration.image = UIImage(systemName: "mic.fill")
+        configuration.preferredSymbolConfigurationForImage = .init(
+            pointSize: height < 44 ? 16 : 19, weight: .semibold
+        )
+        configuration.baseBackgroundColor = accentColor
+        configuration.baseForegroundColor = isDark ? .black : .white
+        configuration.cornerStyle = .fixed
+        configuration.background.cornerRadius = 11
+        configuration.background.backgroundInsets = .init(top: 3, leading: 3, bottom: 3, trailing: 3)
+        let microphone = UIButton(configuration: configuration)
         microphone.frame = CGRect(x: width - pad - microphoneWidth, y: 0, width: microphoneWidth, height: height)
         microphone.accessibilityLabel = "MyWhisper dictation"
+        microphone.accessibilityHint = "Shows where to start dictation"
         microphone.addTarget(self, action: #selector(microphoneTapped), for: .touchUpInside)
         rowsView.addSubview(microphone)
 
@@ -435,7 +446,7 @@ class KeyboardViewController: UIInputViewController {
             }
         }
 
-        let notice = plainButton(systemName: nil, size: 15)
+        let notice = UIButton(type: .custom)
         notice.frame = CGRect(x: pad, y: 0, width: available, height: height)
         notice.titleLabel?.font = .systemFont(ofSize: 14, weight: .medium)
         notice.titleLabel?.adjustsFontSizeToFitWidth = true
@@ -634,15 +645,6 @@ class KeyboardViewController: UIInputViewController {
         key.addTarget(self, action: #selector(keyReleased(_:)),
                       for: [.touchUpInside, .touchUpOutside, .touchCancel, .touchDragExit])
         return key
-    }
-
-    private func plainButton(systemName: String?, size: CGFloat) -> UIButton {
-        let button = UIButton(type: .custom)
-        if let systemName {
-            button.setImage(symbol(systemName, size: size), for: .normal)
-            button.tintColor = labelColor
-        }
-        return button
     }
 
     private func symbol(_ name: String, size: CGFloat = 19) -> UIImage? {
