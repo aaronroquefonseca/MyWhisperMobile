@@ -78,21 +78,25 @@ private const val SCROLL_TOP_NEAR = 12
 
 /**
  * Scrolls to the top in exactly [SCROLL_TOP_MS]: a far list first jumps to
- * [SCROLL_TOP_NEAR] items from the top, then eases over the estimated
- * remaining distance and lands exactly on item 0.
+ * [SCROLL_TOP_NEAR] items from the top, then eases over the remaining
+ * distance and lands exactly on item 0.
  */
 internal suspend fun androidx.compose.foundation.lazy.LazyListState.scrollToTopTimed() {
     if (firstVisibleItemIndex == 0 && firstVisibleItemScrollOffset == 0) return
     if (firstVisibleItemIndex > SCROLL_TOP_NEAR) scrollToItem(SCROLL_TOP_NEAR, firstVisibleItemScrollOffset)
-    val visible = layoutInfo.visibleItemsInfo
-    val step = if (visible.isEmpty()) 0f else visible.sumOf { it.size }.toFloat() / visible.size + layoutInfo.mainAxisItemSpacing
-    val distance = firstVisibleItemIndex * step + firstVisibleItemScrollOffset
+    fun remaining(): Float {
+        val visible = layoutInfo.visibleItemsInfo
+        val step = if (visible.isEmpty()) 0f else visible.sumOf { it.size }.toFloat() / visible.size + layoutInfo.mainAxisItemSpacing
+        return firstVisibleItemIndex * step + firstVisibleItemScrollOffset
+    }
     scroll {
-        var done = 0f
-        androidx.compose.animation.core.animate(0f, distance,
-            animationSpec = androidx.compose.animation.core.tween(SCROLL_TOP_MS, easing = androidx.compose.animation.core.FastOutSlowInEasing)) { value, _ ->
-            scrollBy(-(value - done))
-            done = value
+        var previous = 0f
+        androidx.compose.animation.core.animate(0f, 1f,
+            animationSpec = androidx.compose.animation.core.tween(SCROLL_TOP_MS, easing = androidx.compose.animation.core.FastOutSlowInEasing)) { fraction, _ ->
+            // Items above the viewport are unmeasured (tall overview cards vs short history rows), so a one-off
+            // estimate falls short; re-estimate each frame and spread only what remains over the time that remains.
+            scrollBy(-remaining() * (fraction - previous) / (1f - previous))
+            previous = fraction
         }
     }
     scrollToItem(0)
