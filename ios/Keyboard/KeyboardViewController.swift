@@ -22,7 +22,13 @@ class KeyboardViewController: UIInputViewController {
     }
     private weak var stripNotice: UIButton?
     private weak var microphonePreview: KeyboardMicPreview?
-    private var micDockedLeading = false
+    private var micDockedLeading = UserDefaults.standard.bool(forKey: "mw.keyboard.micLeading") {
+        didSet { UserDefaults.standard.set(micDockedLeading, forKey: "mw.keyboard.micLeading") }
+    }
+    private weak var sideButton: UIButton?
+    private weak var languagePan: UIPanGestureRecognizer?
+    private var languageCarousel: (view: UIView, labels: [UILabel])?
+    private lazy var tick = UISelectionFeedbackGenerator()
     /// The bottom-row key beside 123 types a comma instead of opening emoji; holding it switches, and the last choice sticks.
     private var emojiKeyIsComma = UserDefaults.standard.bool(forKey: "mw.keyboard.emojiKeyComma")
     /// What choosing an entry in the open hold popup does (accents, period symbols, emoji/comma).
@@ -138,9 +144,6 @@ class KeyboardViewController: UIInputViewController {
         // Let UIKit draw the keyboard surface and its device-specific rounded edge.
         keyboard.isOpaque = false
         keyboard.backgroundColor = .clear
-        // Size from our height constraint. Without this iOS can keep a taller height from an
-        // earlier layout (emoji, another keyboard) and leave empty space above the toolbar.
-        keyboard.allowsSelfSizing = true
         inputView = keyboard
     }
 
@@ -357,6 +360,17 @@ class KeyboardViewController: UIInputViewController {
         let word = input.word
         let correction = input.allowsCorrection ? correction(for: word, language: language) : nil
         suggestion = Suggestion(document: input.document, word: word, trailing: input.trailing, correction: correction)
+        if input.trailing != 0 {
+            // Editing an earlier or selected word: offer spelling replacements only.
+            let range = NSRange(word.startIndex..., in: word)
+            let guesses = checker.guesses(forWordRange: range, in: word, language: language) ?? []
+            var replacements: [String] = []
+            for candidate in [correction].compactMap({ $0 }) + guesses where !replacements.contains(candidate) {
+                replacements.append(candidate)
+            }
+            showSuggestions(Array(replacements.prefix(predictionButtons.count)))
+            return
+        }
         guard settings.predictive else { return }
         let range = NSRange(word.startIndex..., in: word)
         // Inside an earlier word only corrections make sense, not completions.
@@ -385,7 +399,13 @@ class KeyboardViewController: UIInputViewController {
     private var wordAtCaret: (word: String, trailing: Int) {
         let typed = currentWord
         let proxy = textDocumentProxy
-        guard typed.isEmpty, !isAddressField, !isNumberField, proxy.selectedText?.isEmpty != false,
+        // A selected word gets replacements, since iOS's own Replace menu can't use this keyboard.
+        if let selected = proxy.selectedText, !selected.isEmpty {
+            guard !isAddressField, !isNumberField, (2...28).contains(selected.count),
+                  selected.allSatisfy(Self.isWordCharacter) else { return ("", 0) }
+            return (selected, Self.selectedWord)
+        }
+        guard typed.isEmpty, !isAddressField, !isNumberField,
               let before = proxy.documentContextBeforeInput,
               let after = proxy.documentContextAfterInput else { return (typed, 0) }
         let head = String(before.reversed().prefix(29).prefix(while: Self.isWordCharacter).reversed())
@@ -393,6 +413,9 @@ class KeyboardViewController: UIInputViewController {
         guard !head.isEmpty, !tail.isEmpty else { return (typed, 0) }
         return (head + tail, tail.count)
     }
+
+    /// `trailing` value for a selected word: replace the selection rather than text before the caret.
+    private static let selectedWord = -1
 
     private static func isWordCharacter(_ character: Character) -> Bool {
         character.isLetter || character == "'" || character == "’"
@@ -409,7 +432,13 @@ class KeyboardViewController: UIInputViewController {
         let caret = wordAtCaret
         guard let suggestion, suggestion.document == textDocumentProxy.documentIdentifier,
               suggestion.word == caret.word, suggestion.trailing == caret.trailing else { return }
-        if suggestion.trailing > 0 {
+        if suggestion.trailing == Self.selectedWord {
+            replacingText = true
+            textDocumentProxy.insertText(replacement)
+            replacingText = false
+            pendingUndo = nil
+            suggestionInsert = nil
+        } else if suggestion.trailing > 0 {
             // Fix an earlier word in place: move to its end, swap it, keep the text after it.
             textDocumentProxy.adjustTextPosition(byCharacterOffset: suggestion.trailing)
             replacingText = true
@@ -479,10 +508,11 @@ class KeyboardViewController: UIInputViewController {
 
         let width = layout.width
         let pad: CGFloat = layout.compact ? 10 : 6
-        let rowHeight: CGFloat = layout.compact ? 31 : 44
-        let gap: CGFloat = layout.compact ? 6 : 10
-        // Fits the 44 pt mic face; iOS already adds its own margin above the keyboard view.
-        let stripHeight: CGFloat = layout.compact ? 36 : 46
+        // About 280 pt in portrait: iOS sometimes forces roughly that height anyway and drew the
+        // difference as empty space above the toolbar, so the keyboard now always fills it.
+        let rowHeight: CGFloat = layout.compact ? 31 : 46
+        let gap: CGFloat = layout.compact ? 6 : 12
+        let stripHeight: CGFloat = layout.compact ? 36 : 48
         if emojiMode, let query = emojiSearch {
             addEmojiSearch(query: query, width: width, pad: pad, rowHeight: rowHeight, gap: gap)
             return
@@ -583,15 +613,58 @@ class KeyboardViewController: UIInputViewController {
         let preview = KeyboardMicPreview(
             frame: CGRect(x: pad, y: 0, width: toolbarWidth, height: height),
             dockedLeading: micDockedLeading,
-            openSession: hasFullAccess ? { [weak self] in self?.openMyWhisper("keyboard-mic") } : nil
+            openSession: hasFullAccess ? { [weak self] in self?.openMyWhisper("keyboard-mic", otherwise: "Open MyWhisper to start the mic") } : nil
         ) { [weak self] leading in
             guard let self else { return }
             self.micDockedLeading = leading
             self.rebuild()
             self.scheduleSuggestions()
         }
+        // Dragging the mic across moves the other button to the free side as it happens.
+        preview.onDrag = { [weak self, weak preview] centerX in
+            guard let preview else { return }
+            self?.moveSideButton(leading: centerX > preview.bounds.midX)
+        }
         rowsView.addSubview(preview)
         microphonePreview = preview
+    }
+
+    private func moveSideButton(leading: Bool) {
+        guard let button = sideButton, let toolbar = microphonePreview?.frame else { return }
+        let x = leading ? toolbar.minX : toolbar.maxX - button.bounds.width
+        guard button.frame.minX != x else { return }
+        UIView.animate(withDuration: UIAccessibility.isReduceMotionEnabled ? 0 : 0.32, delay: 0,
+                       usingSpringWithDamping: 0.86, initialSpringVelocity: 0,
+                       options: [.allowUserInteraction, .beginFromCurrentState]) {
+            button.frame.origin.x = x
+        }
+    }
+
+    /// The side button can be dragged too; the mic trades places live and both settle with a spring.
+    @objc private func dragSideButton(_ pan: UIPanGestureRecognizer) {
+        guard let button = pan.view, let preview = microphonePreview else { return }
+        let toolbar = preview.frame
+        let half = button.bounds.width / 2
+        switch pan.state {
+        case .began, .changed:
+            button.center.x = min(max(pan.location(in: rowsView).x, toolbar.minX + half), toolbar.maxX - half)
+            let micLeading = button.center.x > toolbar.midX
+            if micLeading != preview.dockedLeading {
+                playHaptic()
+                preview.dock(leading: micLeading)
+            }
+        case .ended, .cancelled:
+            let micLeading = button.center.x > toolbar.midX
+            moveSideButton(leading: !micLeading)
+            preview.dock(leading: micLeading) { [weak self] in
+                guard let self, micLeading != self.micDockedLeading else { return }
+                self.micDockedLeading = micLeading
+                self.rebuild()
+                self.scheduleSuggestions()
+            }
+        default:
+            break
+        }
     }
 
     /// Same face as the mic, on the other side: settings, or emoji when the emoji key types commas.
@@ -620,23 +693,30 @@ class KeyboardViewController: UIInputViewController {
         let hold = UILongPressGestureRecognizer(target: self, action: #selector(sideButtonHeld(_:)))
         hold.minimumPressDuration = Self.holdDelay
         button.addGestureRecognizer(hold)
+        let drag = UIPanGestureRecognizer(target: self, action: #selector(dragSideButton(_:)))
+        drag.maximumNumberOfTouches = 1
+        button.addGestureRecognizer(drag)
         rowsView.addSubview(button)
+        sideButton = button
     }
 
     @objc private func sideButtonTapped() {
         playHaptic()
-        if emojiKeyIsComma { openEmojiPicker() } else { openMyWhisper("keyboard-settings") }
+        if emojiKeyIsComma { openEmojiPicker() } else { openMyWhisper("keyboard-settings", otherwise: Self.settingsHint) }
     }
 
     @objc private func sideButtonHeld(_ gesture: UILongPressGestureRecognizer) {
         guard gesture.state == .began else { return }
         playHaptic(hold: true)
-        openMyWhisper("keyboard-settings")
+        openMyWhisper("keyboard-settings", otherwise: Self.settingsHint)
     }
+
+    // iOS 26 refuses keyboard requests to open their app, so say where to go instead.
+    private static let settingsHint = "Keyboard settings are in the MyWhisper app"
 
     /// Keyboards can't record or show app screens. Like Wispr Flow, open MyWhisper
     /// (mic session, settings); iOS shows a back link to the previous app.
-    private func openMyWhisper(_ destination: String) {
+    private func openMyWhisper(_ destination: String, otherwise hint: String) {
         guard let url = NSURL(string: "mywhisper://" + destination) else { return }
         // UIApplication.shared is unavailable to extensions: ask the class for it, else walk the responder chain.
         var application = (UIApplication.self as AnyObject)
@@ -648,14 +728,14 @@ class KeyboardViewController: UIInputViewController {
         }
         let selector = NSSelectorFromString("openURL:options:completionHandler:")
         guard let application, application.responds(to: selector) else {
-            showNotice("Keyboard can't reach MyWhisper")
+            showNotice(hint)
             return
         }
         typealias Completion = @convention(block) (Bool) -> Void
         typealias Open = @convention(c) (AnyObject, Selector, NSURL, NSDictionary, Completion?) -> Void
         let completion: Completion = { [weak self] opened in
             guard !opened else { return }
-            DispatchQueue.main.async { self?.showNotice("iOS blocked opening MyWhisper") }
+            DispatchQueue.main.async { self?.showNotice(hint) }
         }
         unsafeBitCast(application.method(for: selector), to: Open.self)(application, selector, url, NSDictionary(), completion)
     }
@@ -797,12 +877,12 @@ class KeyboardViewController: UIInputViewController {
         vertical.require(toFail: cursor)
         space.addGestureRecognizer(vertical)
         if swipesLanguage {
-            for direction: UISwipeGestureRecognizer.Direction in [.left, .right] {
-                let swipe = UISwipeGestureRecognizer(target: self, action: #selector(swipeSpacebar(_:)))
-                swipe.direction = direction
-                swipe.require(toFail: cursor)
-                space.addGestureRecognizer(swipe)
-            }
+            let slide = UIPanGestureRecognizer(target: self, action: #selector(slideLanguage(_:)))
+            slide.maximumNumberOfTouches = 1
+            slide.delegate = self
+            slide.require(toFail: cursor)
+            space.addGestureRecognizer(slide)
+            languagePan = slide
             space.accessibilityCustomActions = [
                 UIAccessibilityCustomAction(name: "Next language", target: self, selector: #selector(nextLanguage))
             ]
@@ -1048,6 +1128,8 @@ class KeyboardViewController: UIInputViewController {
         proxy.insertText(inserted)
         replacingText = false
         pendingUndo = undo
+        // Keep chaining, so "..." or "?!" after a suggestion all land before its space.
+        if punctuation, autoSpace != nil, inserted == text + " " { suggestionInsert = inserted }
         updateAutomaticShift(before: before.map { String($0.suffix(64)) + inserted } ?? inserted)
         scheduleSuggestions()
     }
@@ -1266,8 +1348,71 @@ class KeyboardViewController: UIInputViewController {
         moveCursor(for: gesture, verticalOnly: true)
     }
 
-    @objc private func swipeSpacebar(_ gesture: UISwipeGestureRecognizer) {
-        switchLanguage(movingRight: gesture.direction == .right)
+    /// The space bar label follows the finger; the next language slides in beside it.
+    @objc private func slideLanguage(_ pan: UIPanGestureRecognizer) {
+        guard let space = pan.view as? KeyboardKeyButton else { return }
+        let width = space.bounds.width
+        let dx = pan.translation(in: space).x
+        switch pan.state {
+        case .began:
+            showLanguageCarousel(in: space)
+            layoutLanguageCarousel(offset: dx, width: width)
+        case .changed:
+            layoutLanguageCarousel(offset: dx, width: width)
+        case .ended:
+            let velocity = pan.velocity(in: space).x
+            let commit = abs(dx) > width * 0.25 || (abs(velocity) > 450 && velocity * dx > 0)
+            let slot = width * 0.55
+            UIView.animate(withDuration: 0.18, delay: 0, options: [.curveEaseOut, .allowUserInteraction]) {
+                self.layoutLanguageCarousel(offset: commit ? (dx > 0 ? slot : -slot) : 0, width: width)
+            } completion: { _ in
+                if commit { self.switchLanguage(movingRight: dx > 0) } else { self.hideLanguageCarousel() }
+            }
+        default:
+            hideLanguageCarousel()
+        }
+    }
+
+    private func showLanguageCarousel(in space: KeyboardKeyButton) {
+        hideLanguageCarousel()
+        let clip = UIView(frame: space.bounds)
+        clip.clipsToBounds = true
+        clip.isUserInteractionEnabled = false
+        let titles = [
+            settings.language(after: language, movingRight: true).spaceTitle,
+            language.spaceTitle,
+            settings.language(after: language, movingRight: false).spaceTitle,
+        ]
+        let labels = titles.map { title -> UILabel in
+            let label = UILabel()
+            label.text = title
+            label.font = space.titleLabel?.font ?? .systemFont(ofSize: 14)
+            label.textColor = labelColor.withAlphaComponent(0.8)
+            label.textAlignment = .center
+            label.sizeToFit()
+            clip.addSubview(label)
+            return label
+        }
+        space.addSubview(clip)
+        space.titleLabel?.alpha = 0
+        languageCarousel = (clip, labels)
+    }
+
+    private func layoutLanguageCarousel(offset: CGFloat, width: CGFloat) {
+        guard let carousel = languageCarousel else { return }
+        let slot = width * 0.55
+        let clamped = min(max(offset, -slot), slot)
+        for (index, label) in carousel.labels.enumerated() {
+            let x = width / 2 + clamped + CGFloat(index - 1) * slot
+            label.center = CGPoint(x: x, y: carousel.view.bounds.midY)
+            label.alpha = 1 - min(1, abs(x - width / 2) / slot) * 0.75
+        }
+    }
+
+    private func hideLanguageCarousel() {
+        languageCarousel?.view.removeFromSuperview()
+        languageCarousel = nil
+        spaceKey?.titleLabel?.alpha = 1
     }
 
     @objc private func nextLanguage() -> Bool {
@@ -1283,21 +1428,9 @@ class KeyboardViewController: UIInputViewController {
         pendingSwipe?.cancel()
         lastSwipe = nil
         lastSpaceAt = nil
-        playHaptic(hold: true)
-        let animate = !UIAccessibility.isReduceMotionEnabled
-        UIView.transition(with: rowsView, duration: animate ? 0.2 : 0, options: [.transitionCrossDissolve, .allowUserInteraction]) {
-            self.rebuild()
-        }
-        // The new language name slides in from the side the finger moved away from.
-        if animate, let label = spaceKey?.titleLabel {
-            label.transform = CGAffineTransform(translationX: movingRight ? -48 : 48, y: 0)
-            label.alpha = 0
-            UIView.animate(withDuration: 0.32, delay: 0, usingSpringWithDamping: 0.82, initialSpringVelocity: 0,
-                           options: [.allowUserInteraction]) {
-                label.transform = .identity
-                label.alpha = 1
-            }
-        }
+        playHaptic()
+        languageCarousel = nil
+        rebuild()
         updateAutomaticShift()
         scheduleSuggestions()
         preloadSwipeWords()
@@ -1384,7 +1517,10 @@ class KeyboardViewController: UIInputViewController {
         }
         if steps.characters != 0 { drag.preferredColumn = nil }
         cursorDrag = drag
-        if offset != 0 { proxy.adjustTextPosition(byCharacterOffset: offset) }
+        if offset != 0 {
+            proxy.adjustTextPosition(byCharacterOffset: offset)
+            if settings.usesHaptics { tick.selectionChanged() }
+        }
     }
 
     private func wrappedCursorMove(
@@ -1816,6 +1952,7 @@ extension KeyboardViewController: UIGestureRecognizerDelegate {
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return true }
         let movement = pan.translation(in: rowsView)
+        if pan === languagePan { return cursorDrag == nil && abs(movement.x) > abs(movement.y) }
         switch pan.view?.accessibilityLabel {
         case "Space": return cursorDrag == nil && !isAddressField && abs(movement.y) > abs(movement.x) * 1.5
         case "Delete": return !deleteRepeated && movement.x < -abs(movement.y)

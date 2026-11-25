@@ -58,7 +58,9 @@ final class KeyboardMicPreview: UIView {
     private var touchStart: (point: CGPoint, time: TimeInterval)?
     private var holdTask: Task<Void, Never>?
     private var finishTask: Task<Void, Never>?
-    private var dockedLeading: Bool
+    private(set) var dockedLeading: Bool
+    /// Button center x while the user drags it, so the button opposite can trade places live.
+    var onDrag: ((CGFloat) -> Void)?
     private var dragging = false
     private var consumesRelease = false
     private var tapOpensSession = false
@@ -167,6 +169,19 @@ final class KeyboardMicPreview: UIView {
         return hit === self || hit === pill ? nil : hit
     }
 
+    /// Slides the button to an edge, e.g. when the user drags the other button across.
+    func dock(leading: Bool, completion: (() -> Void)? = nil) {
+        dockedLeading = leading
+        setNeedsLayout()
+        UIView.animate(withDuration: UIAccessibility.isReduceMotionEnabled ? 0 : 0.32, delay: 0,
+                       usingSpringWithDamping: 0.86, initialSpringVelocity: 0,
+                       options: [.allowUserInteraction, .beginFromCurrentState]) {
+            self.layoutIfNeeded()
+        } completion: { _ in
+            completion?()
+        }
+    }
+
     func reset() {
         guard state.phase != .idle || touchStart != nil || dragging else { return }
         holdTask?.cancel()
@@ -208,6 +223,7 @@ final class KeyboardMicPreview: UIView {
             dragging = true
             let half = button.bounds.width / 2
             button.center.x = min(max(point.x, half), bounds.width - half)
+            onDrag?(button.center.x)
         } else if state.phase == .held {
             let oldTarget = state.target
             state.move(vertical: dy)
@@ -227,11 +243,10 @@ final class KeyboardMicPreview: UIView {
         if dragging {
             dragging = false
             let leading = button.center.x < bounds.midX
-            if leading != dockedLeading {
-                dockedLeading = leading
-                onDock(leading)
+            let changed = leading != dockedLeading
+            dock(leading: leading) { [weak self] in
+                if changed { self?.onDock(leading) }
             }
-            setNeedsLayout()
             return
         }
         let duration = ProcessInfo.processInfo.systemUptime - touchStart.time

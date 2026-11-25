@@ -112,13 +112,13 @@ struct KeyboardCursorDrag {
         travelX = origin.x
     }
 
-    /// `time` enables acceleration (up to 3x above ~120 pt/s, like the system trackpad); nil keeps 1:1.
+    /// `time` enables gentle acceleration (up to 2x above ~250 pt/s); nil keeps 1:1.
     mutating func steps(towards finger: CGPoint, at time: TimeInterval? = nil) -> (characters: Int, lines: Int) {
         var gain: CGFloat = 1
         if let time, let last, time > last.time {
             let instant = abs(finger.x - last.x) / CGFloat(time - last.time)
             speed = speed == 0 ? instant : speed * 0.6 + instant * 0.4
-            gain = 1 + min(max((speed - 120) / 300, 0), 2)
+            gain = 1 + min(max((speed - 250) / 400, 0), 1)
         }
         travelX += (finger.x - (last?.x ?? origin.x)) * gain
         last = (finger.x, time ?? 0)
@@ -127,9 +127,9 @@ struct KeyboardCursorDrag {
         let dy = point.y - origin.y
         // 10 pt per character at slow speed; acceleration widens it for fast drags.
         let characters = Int(dx / 10)
-        // Vertical motion needs a larger threshold to avoid jumping lines
-        // when a horizontal drag wobbles slightly.
-        let lines = Int(dy / 25)
+        // Vertical motion needs a larger threshold, and must dominate, so a horizontal
+        // drag that drifts up or down never jumps lines.
+        let lines = abs(dy) >= abs(dx) * 0.6 ? Int(dy / 25) : 0
         origin.x += CGFloat(characters) * 10
         origin.y += CGFloat(lines) * 25
         if characters != 0 && lines == 0 && abs(dx) > abs(dy) * 2 {
