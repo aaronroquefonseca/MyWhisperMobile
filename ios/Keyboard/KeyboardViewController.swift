@@ -1730,6 +1730,11 @@ class KeyboardViewController: UIInputViewController {
         if let previous = selectedAccent {
             accentChoices[previous].0.backgroundColor = .clear
             accentChoices[previous].0.textColor = labelColor
+            // A tick per choice crossed; the first highlight already got the hold haptic.
+            if settings.usesHaptics, hasFullAccess {
+                tick.selectionChanged()
+                tick.prepare()
+            }
         }
         selectedAccent = index
         accentChoices[index].0.backgroundColor = accentColor
