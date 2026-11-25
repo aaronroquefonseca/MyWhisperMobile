@@ -97,8 +97,9 @@ final class KeyboardEmojiPicker: UIView {
         searchKeys.spacing = 4
         searchKeys.distribution = .fillEqually
         searchKeys.isHidden = true
-        for labels in ["qwertyuiop".map(String.init), "asdfghjklñ".map(String.init),
-                       "zxcvbnm".map(String.init), ["Done", "Space", "Delete"]] {
+        let letterRows = ["qwertyuiop", "asdfghjklñ", "zxcvbnm"]
+        let searchRows = letterRows.map { row in row.map { String($0) } } + [["Done", "Space", "Delete"]]
+        for labels in searchRows {
             let row = UIStackView()
             row.axis = .horizontal
             row.spacing = 3
