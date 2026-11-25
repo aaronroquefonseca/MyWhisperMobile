@@ -209,6 +209,14 @@ final class KeyboardMicPreview: UIView {
         holdTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 80_000_000)
             guard !Task.isCancelled, let self else { return }
+            // No live session: a hold can't record yet, so open MyWhisper now instead of waiting for the release.
+            if self.tapOpensSession {
+                self.tapOpensSession = false
+                self.consumesRelease = true
+                self.feedback.impactOccurred()
+                self.openSession?()
+                return
+            }
             self.state.hold()
             self.feedback.impactOccurred()
             self.render()

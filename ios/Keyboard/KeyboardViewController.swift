@@ -1603,8 +1603,8 @@ class KeyboardViewController: UIInputViewController {
         cursorFlight += 1
         let flight = cursorFlight
         textDocumentProxy.adjustTextPosition(byCharacterOffset: send)
-        // Some hosts never report the move; wait at most a few frames.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+        // Some hosts never report the move; wait at most one frame.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.016) { [weak self] in
             guard let self, self.cursorFlight == flight else { return }
             self.cursorMoveLanded()
         }
