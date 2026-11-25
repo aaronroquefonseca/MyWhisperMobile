@@ -677,11 +677,14 @@ class OverlayService : Service(), Dictation.Listener {
                     null
                 }
             },
-            // On-device first (selected local model); miss or
-            // throw → server chain. Pack-gated: null without the pack.
+            // On-device decode (selected local model) in its Settings
+            // chain slot; miss or throw → next entry. Pack-gated: null
+            // without the pack.
             localTranscribe = { pcm -> if (practiceMode) null else LocalStt.transcribeIfEnabled(this, pcm) },
-            localFirst = { !practiceMode && LocalStt.isLocalFirst() },
-            finishTranscription = { utterance -> if (practiceMode) practiceResult(utterance) else CoreBridge.finishUtterance(utterance) },
+            remotesAroundLocal = { if (practiceMode) true to false else LocalStt.remotesAroundLocal() },
+            finishTranscription = { utterance, afterLocal ->
+                if (practiceMode) practiceResult(utterance) else CoreBridge.finishUtterance(utterance, afterLocal)
+            },
             // Shutdown releases the native recognizer (no resident ORT
             // session across service restarts in one process).
             releaseLocal = {

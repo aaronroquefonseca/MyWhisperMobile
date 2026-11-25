@@ -21,7 +21,7 @@ object CoreBridge {
     @JvmStatic external fun nativePutSettings(json: String): String
     @JvmStatic external fun nativeStartUtterance(sampleRate: Int): String
     @JvmStatic external fun nativePushPcm(data: ShortArray, length: Int, utterance: Long): String
-    @JvmStatic external fun nativeFinishUtterance(utterance: Long): String
+    @JvmStatic external fun nativeFinishUtterance(utterance: Long, afterLocal: Boolean): String
     @JvmStatic external fun nativeFinishLocalUtterance(raw: String, text: String, engine: String, durationSecs: Int, utterance: Long): String
     @JvmStatic external fun nativeSetLocalLlmRunner(runner: LocalLlmCleanupRunner?): String
     @JvmStatic external fun nativeCancelUtterance(): String
@@ -88,13 +88,15 @@ object CoreBridge {
     }
 
     /**
-     * Blocks on the server chain. Returns (text, engine) or throws. A
-     * stale [utterance] token (cancelled or superseded) throws without
-     * touching the current recording.
+     * Blocks on the server entries above the Local entry, or with
+     * [afterLocal] those below it (the core keeps the audio between the
+     * two calls). Returns (text, engine) or throws. A stale [utterance]
+     * token (cancelled or superseded) throws without touching the
+     * current recording.
      */
-    fun finishUtterance(utterance: Long): Pair<String, String> {
+    fun finishUtterance(utterance: Long, afterLocal: Boolean): Pair<String, String> {
         cleanup.set(DictationIssue.Cleanup.OK)
-        return finishReply(nativeFinishUtterance(utterance))
+        return finishReply(nativeFinishUtterance(utterance, afterLocal))
     }
 
     /**

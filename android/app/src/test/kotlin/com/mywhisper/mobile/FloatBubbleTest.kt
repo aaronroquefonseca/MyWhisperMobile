@@ -390,7 +390,7 @@ class FloatBubbleTest {
         val d = Dictation(
             mode = { mode },
             startCapture = { _, _, _ -> object : Dictation.Capture { override fun stop() {} } },
-            finishTranscription = { finishTranscription() },
+            finishTranscription = { _, _ -> finishTranscription() },
             cancelTranscription = {},
             log = {},
             workers = ex,

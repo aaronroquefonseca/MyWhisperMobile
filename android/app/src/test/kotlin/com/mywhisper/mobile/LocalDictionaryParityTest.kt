@@ -35,7 +35,7 @@ class LocalDictionaryParityTest {
                         override fun stop() = Unit
                     }
                 },
-                finishTranscription = {
+                finishTranscription = { _, _ ->
                     localServerHit.set(true)
                     "server" to "test-engine"
                 },
@@ -73,7 +73,7 @@ class LocalDictionaryParityTest {
                         override fun stop() = Unit
                     }
                 },
-                finishTranscription = { "server text" to "test-engine" },
+                finishTranscription = { _, _ -> "server text" to "test-engine" },
                 cancelTranscription = {},
                 finishLocal = { _, text, engine, _, _ -> text to engine },
                 localTranscribe = { "local text" to "local moonshine-v2-tiny.en" },

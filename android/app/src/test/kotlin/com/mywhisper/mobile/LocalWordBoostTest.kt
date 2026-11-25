@@ -192,7 +192,7 @@ class LocalWordBoostTest {
                         override fun stop() = Unit
                     }
                 },
-                finishTranscription = {
+                finishTranscription = { _, _ ->
                     serverHit.set(true)
                     "server text" to "test-engine"
                 },

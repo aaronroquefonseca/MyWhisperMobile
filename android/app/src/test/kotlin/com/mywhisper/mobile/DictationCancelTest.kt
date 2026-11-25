@@ -45,7 +45,7 @@ class DictationCancelTest {
             mode = { "Push" },
             releaseDelayMs = { tailMs },
             startCapture = { _, _, _ -> FakeCapture() },
-            finishTranscription = {
+            finishTranscription = { _, _ ->
                 transcribed.set(true)
                 enteredTranscribe.countDown()
                 transcribeBlock?.let {
@@ -272,7 +272,7 @@ class DictationCancelTest {
         val dictation = Dictation(
             mode = { "Push" },
             startCapture = { _, _, _ -> FakeCapture() },
-            finishTranscription = {
+            finishTranscription = { _, _ ->
                 val witness = generation.get()
                 val text = if (calls.incrementAndGet() == 1) "stale" else "next"
                 if (text == "stale") {
@@ -357,7 +357,7 @@ class DictationCancelTest {
         val dictation = Dictation(
             mode = { "Push" },
             startCapture = { _, _, _ -> captures.removeAt(0) },
-            finishTranscription = { "text" to "engine" },
+            finishTranscription = { _, _ -> "text" to "engine" },
             cancelTranscription = {},
             log = {},
         )
@@ -401,14 +401,14 @@ class DictationCancelTest {
                 FakeCapture()
             },
             pushPcm = { _, _, _ -> },
-            localFirst = { false },
+            remotesAroundLocal = { true to false }, // server above Local, then the Local fallback
             localTranscribe = {
                 localStarted.countDown()
                 "stale local" to "local"
             },
             localPostProcess = { it },
             finishLocal = { _, text, engine, _, _ -> text to engine },
-            finishTranscription = {
+            finishTranscription = { _, _ ->
                 providerEntered.countDown()
                 assertTrue(providerRelease.await(10, TimeUnit.SECONDS))
                 throw IllegalStateException("cancelled (chain superseded)")
@@ -461,16 +461,16 @@ class DictationCancelTest {
             mode = { "Push" },
             startCapture = { _, _, _ -> FakeCapture() },
             pushPcm = { _, _, _ -> },
-            localFirst = {
+            remotesAroundLocal = {
                 inLocalFirst.countDown()
                 assertTrue(release.await(10, TimeUnit.SECONDS))
-                true
+                false to true // Local first
             },
             localTranscribe = {
                 decoded.set(true)
                 null
             },
-            finishTranscription = {
+            finishTranscription = { _, _ ->
                 serverCalled.set(true)
                 "x" to "y"
             },
@@ -510,9 +510,9 @@ class DictationCancelTest {
             mode = { "Push" },
             startCapture = { _, _, _ -> FakeCapture() },
             pushPcm = { _, _, _ -> },
-            localFirst = {
+            remotesAroundLocal = {
                 if (localFirstCalls.incrementAndGet() == 2) secondAtLocalFirst.countDown()
-                true
+                false to true // Local first
             },
             localTranscribe = {
                 if (decodes.incrementAndGet() == 1) {
@@ -521,7 +521,7 @@ class DictationCancelTest {
                 }
                 null
             },
-            finishTranscription = { "x" to "y" },
+            finishTranscription = { _, _ -> "x" to "y" },
             cancelTranscription = {},
             log = {},
             workers = executor,
