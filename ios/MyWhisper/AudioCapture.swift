@@ -82,6 +82,8 @@ final class AudioCapture {
             var options: AVAudioSession.CategoryOptions = bluetooth ? [.allowBluetooth] : []
             if !prepareUtterance { options.formUnion([.mixWithOthers, .defaultToSpeaker]) }
             try session.setCategory(prepareUtterance ? .record : .playAndRecord, mode: .measurement, options: options)
+            // The keyboard mic stays on in the background; without this iOS mutes haptics while it records.
+            try? session.setAllowHapticsAndSystemSoundsDuringRecording(true)
             try session.setActive(true)
             if let port = MicRoute.pick(priority: priority, items: session.availableInputs ?? [], kind: {
                 MicRoute.kind(of: $0.portType)

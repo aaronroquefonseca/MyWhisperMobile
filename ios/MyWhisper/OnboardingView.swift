@@ -249,8 +249,7 @@ struct KeyboardSetupView: View {
 
     var body: some View {
         List {
-            KeyboardMicPreviewSetup(session: flow.keyboardMicPreview, isSpanish: strings.isSpanish,
-                                    start: flow.startKeyboardMicPreview)
+            KeyboardMicPreviewSetup(session: flow.keyboardMicPreview, isSpanish: strings.isSpanish)
 
             Section {
                 ForEach(KeyboardLanguage.allCases) { language in
@@ -351,7 +350,6 @@ struct KeyboardSetupView: View {
 private struct KeyboardMicPreviewSetup: View {
     @ObservedObject var session: KeyboardMicLevelSession
     let isSpanish: Bool
-    let start: () -> Void
 
     var body: some View {
         Section {
@@ -360,7 +358,8 @@ private struct KeyboardMicPreviewSetup: View {
             } else if session.isEnabled {
                 Button(label("Stop keyboard microphone", "Detener micrófono del teclado"), action: session.stop)
             } else {
-                Button(label("Start keyboard microphone", "Iniciar micrófono del teclado"), action: start)
+                Text(label("Keyboard microphone is off", "Micrófono del teclado apagado"))
+                    .foregroundStyle(.secondary)
             }
             if let error = session.error { Text(error).foregroundStyle(.secondary) }
         } footer: {

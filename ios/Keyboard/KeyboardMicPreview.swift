@@ -153,9 +153,10 @@ final class KeyboardMicPreview: UIView {
         if phase == .locked {
             waveCenter = (pillWidth + (dockedLeading ? side - cancelWidth : cancelWidth - side)) / 2
         } else {
-            waveCenter = (pillWidth + (dockedLeading ? side + hint : -side - hint)) / 2
+            waveCenter = (pillWidth + (dockedLeading ? side - hint : hint - side)) / 2
         }
-        let hintX = dockedLeading ? side : pillWidth - side - Self.hintWidth
+        // At the far end of the pill, past the bars, where the thumb on the button can't cover it.
+        let hintX = dockedLeading ? pillWidth - Self.hintWidth - 4 : 4
         let half = pill.bounds.height / 2
         lockHint.frame = CGRect(x: hintX, y: 3, width: Self.hintWidth, height: half - 3)
         cancelHint.frame = CGRect(x: hintX, y: half, width: Self.hintWidth, height: half - 3)
