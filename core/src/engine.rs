@@ -807,11 +807,7 @@ impl Engine {
                 )
             }
         };
-        let mut job = self.job(input, duration_secs, witness, active);
-        job.part = part;
-        job.stt = stt;
-        job.utterance = utterance;
-        Ok(job)
+        Ok(self.job(input, part, stt, duration_secs, witness, utterance, active))
     }
 
     /// Phase 3 for a failed job: keeps its audio for the pass below
@@ -868,27 +864,42 @@ impl Engine {
             text: text.to_string(),
             engine: engine.to_string(),
         };
-        let mut job = self.job(input, duration_secs.max(1), witness, active);
-        job.utterance = utterance;
+        let plan = self.settings.stt.clone();
+        let job = self.job(
+            input,
+            ChainPart::All,
+            plan,
+            duration_secs.max(1),
+            witness,
+            utterance,
+            active,
+        );
         Ok(job)
     }
 
+    /// One settings snapshot per job, with `plan` as its STT chain.
+    #[allow(clippy::too_many_arguments)]
     fn job(
         &self,
         input: FinishInput,
+        part: ChainPart,
+        plan: SttSettings,
         duration_secs: i64,
         witness: u64,
+        utterance: u64,
         active: ActiveGuard,
     ) -> FinishJob {
         FinishJob {
             input,
-            part: ChainPart::All,
-            stt: self.settings.stt.clone(),
-            settings: self.settings.clone(),
+            part,
+            settings: AppSettings {
+                stt: plan,
+                ..self.settings.clone()
+            },
             words: self.store.load_words().unwrap_or_default(),
             duration_secs,
             witness,
-            utterance: 0,
+            utterance,
             dir: self._dir.clone(),
             active,
         }
@@ -1118,9 +1129,9 @@ enum FinishInput {
 /// lock so the blocking chain and cleanup can run without it.
 pub struct FinishJob {
     input: FinishInput,
-    /// Chain part and plan to transcribe (see [`Engine::begin_finish`]).
+    /// Chain part to transcribe (see [`Engine::begin_finish`]); the plan
+    /// is `settings.stt`.
     part: ChainPart,
-    stt: SttSettings,
     settings: AppSettings,
     words: Vec<String>,
     duration_secs: i64,
@@ -1180,19 +1191,24 @@ impl FinishJob {
                 // On-device inference lives in Kotlin `LocalStt`, never
                 // in Rust: the server chain skips `Local` entries, so
                 // there is deliberately no pack hashing on this path.
-                let chain =
-                    transcribe_chain_witnessed(&self.stt, self.part, &pcm16, &self.words, witness);
+                let chain = transcribe_chain_witnessed(
+                    &self.settings.stt,
+                    self.part,
+                    &pcm16,
+                    &self.words,
+                    witness,
+                );
                 let Transcript { text: raw, engine } = match chain {
                     Ok(t) => t,
                     Err(error) => {
                         // Keep the audio only when a server below Local can still use it.
-                        let below = part_entries(&self.stt, ChainPart::AfterLocal)
+                        let below = part_entries(&self.settings.stt, ChainPart::AfterLocal)
                             .any(|e| e.kind != SttEntryKind::Local);
                         let held = (self.part == ChainPart::BeforeLocal && below).then_some(
                             Box::new(HeldUtterance {
                                 pcm16,
                                 duration_secs: self.duration_secs,
-                                stt: self.stt,
+                                stt: self.settings.stt,
                                 generation: witness,
                             }),
                         );
@@ -2417,7 +2433,7 @@ mod tests {
             .unwrap()
             .begin_finish(stale, ChainPart::BeforeLocal)
             .unwrap();
-        let _next = record(&eng); // cancel + new recording while the pass runs
+        let _next = record(&eng); // a newer recording supersedes the pass's token
         let failed = job.run().err().expect("the pass above Local fails");
         assert!(
             failed.held.is_some(),
