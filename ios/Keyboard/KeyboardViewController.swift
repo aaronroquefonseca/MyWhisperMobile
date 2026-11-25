@@ -138,6 +138,9 @@ class KeyboardViewController: UIInputViewController {
         // Let UIKit draw the keyboard surface and its device-specific rounded edge.
         keyboard.isOpaque = false
         keyboard.backgroundColor = .clear
+        // Size from our height constraint. Without this iOS can keep a taller height from an
+        // earlier layout (emoji, another keyboard) and leave empty space above the toolbar.
+        keyboard.allowsSelfSizing = true
         inputView = keyboard
     }
 
@@ -453,6 +456,12 @@ class KeyboardViewController: UIInputViewController {
 
     // MARK: - Layout
 
+    private func setKeyboardHeight(_ height: CGFloat) {
+        guard heightConstraint?.constant != height else { return }
+        heightConstraint?.constant = height
+        view.setNeedsLayout()
+    }
+
     private func rebuild() {
         guard let layout else { return }
         stopDelete()
@@ -484,7 +493,7 @@ class KeyboardViewController: UIInputViewController {
         // The emoji picker is taller, as on the system keyboard, so emoji draw at full size.
         let emojiExtra: CGFloat = emojiMode && !layout.compact ? 44 : 0
         let height = stripHeight + extra + 4 * rowHeight + 3 * gap + 10 + emojiExtra
-        if heightConstraint?.constant != height { heightConstraint?.constant = height }
+        setKeyboardHeight(height)
 
         if emojiMode {
             addEmojiView(width: width, pad: pad, height: height, rowHeight: rowHeight)
@@ -1732,7 +1741,7 @@ class KeyboardViewController: UIInputViewController {
         let resultsHeight: CGFloat = compact ? 34 : 50
         let top = fieldHeight + resultsHeight + 12
         let height = top + 4 * rowHeight + 3 * gap + 10
-        if heightConstraint?.constant != height { heightConstraint?.constant = height }
+        setKeyboardHeight(height)
 
         let bar = KeyboardEmojiSearchBar(
             frame: CGRect(x: pad, y: 4, width: width - 2 * pad, height: fieldHeight + 4 + resultsHeight),
