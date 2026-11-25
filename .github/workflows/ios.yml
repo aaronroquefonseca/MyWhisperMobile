@@ -125,11 +125,8 @@ jobs:
           shot dictionary -mwSkipOnboarding -mwTab dictionary
           shot settings -mwSkipOnboarding -mwTab settings
           # The keyboard's side button opens this link; the settings sheet must appear.
-          xcrun simctl launch --terminate-running-process "$UDID" com.mywhisper.mobile -mwSkipOnboarding >/dev/null
-          sleep 4
-          xcrun simctl openurl "$UDID" mywhisper://keyboard-settings
-          sleep 3
-          xcrun simctl io "$UDID" screenshot build/sim-keyboard-settings-link.png
+          # (simctl openurl stops at an "Open in MyWhisper?" prompt, so call the handler directly.)
+          shot keyboard-settings-link -mwSkipOnboarding -mwOpenURL mywhisper://keyboard-settings
           ls -l build/sim-*.png
 
       - name: Upload screenshots

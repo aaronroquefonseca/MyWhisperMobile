@@ -32,14 +32,7 @@ struct ContentView: View {
             if phase == .active { flow.refreshMicPermission() }
         }
         // The keyboard can't record; its mic button opens this link to start the shared session.
-        .onOpenURL { url in
-            guard url.scheme == "mywhisper" else { return }
-            switch url.host {
-            case "keyboard-mic": flow.startKeyboardMicPreview()
-            case "keyboard-settings": keyboardSettingsOpen = true
-            default: break
-            }
-        }
+        .onOpenURL(perform: openLink)
         .sheet(isPresented: $keyboardSettingsOpen) {
             NavigationStack {
                 KeyboardSetupView(strings: keyboardStrings, flow: flow)
@@ -283,9 +276,24 @@ struct ContentView: View {
         return 0
     }
 
+    /// Links from the keyboard, which can't record or show settings itself.
+    private func openLink(_ url: URL) {
+        guard url.scheme == "mywhisper" else { return }
+        switch url.host {
+        case "keyboard-mic": flow.startKeyboardMicPreview()
+        case "keyboard-settings": keyboardSettingsOpen = true
+        default: break
+        }
+    }
+
     private func selectDebugTab() {
         #if DEBUG
         let args = CommandLine.arguments
+        // CI: exercise the link handler without iOS's "Open in MyWhisper?" prompt.
+        if let index = args.firstIndex(of: "-mwOpenURL"), args.indices.contains(index + 1),
+           let url = URL(string: args[index + 1]) {
+            openLink(url)
+        }
         guard let index = args.firstIndex(of: "-mwTab"), args.indices.contains(index + 1) else { return }
         switch args[index + 1] {
         case "record": flow.showRecorder = true
