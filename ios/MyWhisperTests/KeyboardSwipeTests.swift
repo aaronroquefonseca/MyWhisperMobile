@@ -309,8 +309,34 @@ final class KeyboardSwipeTests: XCTestCase {
         XCTAssertEqual(controller.document.text, "4 ~ q")
     }
 
+    func testMicPreviewMatchesSmartModeReleases() {
+        var mic = KeyboardMicPreviewState()
+        mic.release(after: 0.07)
+        XCTAssertEqual(mic.phase, .locked)
+        mic.release(after: 0.06)
+        XCTAssertEqual(mic.phase, .processing)
+        mic.release(after: 0.06)
+        XCTAssertEqual(mic.phase, .idle)
+
+        mic.hold()
+        mic.release(after: 0.3)
+        XCTAssertEqual(mic.phase, .processing)
+        mic.reset()
+
+        mic.hold()
+        mic.move(vertical: -50)
+        mic.release(after: 0.4)
+        XCTAssertEqual(mic.phase, .locked)
+        mic.reset()
+
+        mic.hold()
+        mic.move(vertical: 50)
+        mic.release(after: 0.4)
+        XCTAssertEqual(mic.phase, .idle)
+    }
+
     @MainActor
-    func testKeyboardOwnsDictationAndTypingDismissesTheNotice() throws {
+    func testKeyboardOwnsDictationAndTypingResetsThePreview() throws {
         let controller = TestKeyboardController()
         controller.loadViewIfNeeded()
         let input = try XCTUnwrap(controller.inputView)
@@ -320,18 +346,15 @@ final class KeyboardSwipeTests: XCTestCase {
 
         XCTAssertTrue(controller.hasDictationKey)
         let area = try XCTUnwrap(input.subviews.first { $0 is KeyboardKeyArea })
-        let buttons = area.subviews.compactMap { $0 as? UIButton }
-        let microphone = try XCTUnwrap(buttons.first { $0.accessibilityLabel == "MyWhisper dictation" })
-        XCTAssertNotNil(microphone.configuration?.image)
-        microphone.sendActions(for: .touchUpInside)
-        let guidance = controller.hasFullAccess
-            ? "Enable keyboard dictation in MyWhisper" : "Allow Full Access to use MyWhisper dictation"
-        let notice = try XCTUnwrap(buttons.first { !$0.isHidden && $0.title(for: .normal) == guidance })
-        let letter = try XCTUnwrap(buttons.first { $0.title(for: .normal)?.lowercased() == "a" })
+        let preview = try XCTUnwrap(area.subviews.first { $0 is KeyboardMicPreview })
+        let mic = try XCTUnwrap(preview.subviews.first { $0.accessibilityLabel == "MyWhisper dictation preview" })
+        XCTAssertTrue(mic.accessibilityActivate())
+        XCTAssertEqual(mic.accessibilityValue, "Hands-free. Activate to finish")
+        XCTAssertTrue(controller.document.text.isEmpty)
+        let letter = try XCTUnwrap(area.subviews.compactMap { $0 as? UIButton }.first { $0.title(for: .normal)?.lowercased() == "a" })
         letter.sendActions(for: .touchUpInside)
         XCTAssertEqual(controller.document.text.lowercased(), "a")
-        XCTAssertTrue(notice.isHidden)
-        XCTAssertTrue(microphone.isEnabled)
+        XCTAssertEqual(mic.accessibilityValue, "Ready")
         XCTAssertTrue(controller.hasDictationKey)
     }
 

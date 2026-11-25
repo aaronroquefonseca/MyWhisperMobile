@@ -12,19 +12,8 @@ class KeyboardViewController: UIInputViewController {
     private var settings = KeyboardPreferences.load()
     private lazy var language = settings.defaultLanguage
     private weak var stripNotice: UIButton?
-    private weak var microphone: UIButton?
-    private var recording: KeyboardRecording?
-    private var dictationTask: Task<Void, Never>?
-
-    private struct KeyboardRecording {
-        enum Stage { case starting, recording, finishing }
-        let id: UUID
-        let session: UUID
-        let document: UUID
-        var stage: Stage = .starting
-        var deadline = Date().addingTimeInterval(5)
-    }
-    private var noticeTask: Task<Void, Never>?
+    private weak var microphonePreview: KeyboardMicPreview?
+    private var micDockedLeading = false
     private var pendingUndo: (original: String, replacement: String)?
     private var emojiMode = false
     private let rowsView = KeyboardKeyArea()
@@ -159,8 +148,7 @@ class KeyboardViewController: UIInputViewController {
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
         visible = false
-        cancelKeyboardDictation()
-        noticeTask?.cancel()
+        microphonePreview?.reset()
         setStripNoticeVisible(false)
         transfer = nil
         cursorDrag = nil
@@ -187,7 +175,7 @@ class KeyboardViewController: UIInputViewController {
     override func textDidChange(_ textInput: UITextInput?) {
         super.textDidChange(textInput)
         guard visible, cursorDrag == nil, !replacingText else { return }
-        dismissDictationNotice()
+        microphonePreview?.reset()
         refreshLayout()
         updateAutomaticShift()
         scheduleSuggestions()
@@ -341,7 +329,7 @@ class KeyboardViewController: UIInputViewController {
     }
 
     @objc private func predictionTapped(_ button: UIButton) {
-        dismissDictationNotice()
+        microphonePreview?.reset()
         guard let replacement = button.title(for: .normal) else { return }
         if let swipe = validSwipe {
             guard replacement != swipe.word, swipe.alternatives.contains(replacement) else { return }
@@ -387,7 +375,7 @@ class KeyboardViewController: UIInputViewController {
         let pad: CGFloat = layout.compact ? 10 : 6
         let rowHeight: CGFloat = layout.compact ? 31 : 44
         let gap: CGFloat = layout.compact ? 6 : 10
-        let stripHeight: CGFloat = layout.compact ? 30 : 44
+        let stripHeight: CGFloat = layout.compact ? 36 : 52
         let height = stripHeight + 4 * rowHeight + 3 * gap + 10
         if heightConstraint?.constant != height { heightConstraint?.constant = height }
 
@@ -428,29 +416,13 @@ class KeyboardViewController: UIInputViewController {
     }
 
     private func addPredictionRow(width: CGFloat, pad: CGFloat, height: CGFloat) {
-        let microphoneWidth: CGFloat = 44
-        var configuration = UIButton.Configuration.filled()
-        configuration.image = UIImage(systemName: "mic.fill")
-        configuration.preferredSymbolConfigurationForImage = .init(
-            pointSize: height < 44 ? 16 : 19, weight: .semibold
-        )
-        configuration.baseBackgroundColor = accentColor
-        configuration.baseForegroundColor = isDark ? .black : .white
-        configuration.cornerStyle = .fixed
-        configuration.background.cornerRadius = 11
-        configuration.background.backgroundInsets = .init(top: 3, leading: 3, bottom: 3, trailing: 3)
-        let microphone = UIButton(configuration: configuration)
-        microphone.frame = CGRect(x: width - pad - microphoneWidth, y: 0, width: microphoneWidth, height: height)
-        microphone.accessibilityLabel = "MyWhisper dictation"
-        microphone.accessibilityHint = "Starts dictation after you enable it in MyWhisper"
-        microphone.addTarget(self, action: #selector(microphoneTapped), for: .touchUpInside)
-        rowsView.addSubview(microphone)
-        self.microphone = microphone
-
-        let available = width - pad * 2 - microphoneWidth
+        let toolbarWidth = width - pad * 2
+        let microphoneWidth = min(50, height)
+        let available = toolbarWidth - microphoneWidth
+        let suggestionsX = pad + (micDockedLeading ? microphoneWidth : 0)
         let slot = available / 3
         for index in 0..<3 {
-            let x = pad + CGFloat(index) * slot
+            let x = suggestionsX + CGFloat(index) * slot
             let button = KeyboardSuggestionButton(ink: labelColor)
             button.frame = CGRect(x: x, y: 0, width: slot, height: height)
             button.isEnabled = false
@@ -468,7 +440,7 @@ class KeyboardViewController: UIInputViewController {
         }
 
         let notice = UIButton(type: .custom)
-        notice.frame = CGRect(x: pad, y: 0, width: available, height: height)
+        notice.frame = CGRect(x: suggestionsX, y: 0, width: available, height: height)
         notice.titleLabel?.font = .systemFont(ofSize: 14, weight: .medium)
         notice.titleLabel?.adjustsFontSizeToFitWidth = true
         notice.setTitleColor(accentColor, for: .normal)
@@ -478,157 +450,23 @@ class KeyboardViewController: UIInputViewController {
         rowsView.addSubview(notice)
         stripNotice = notice
         updateTransferAction()
-        renderDictationControls()
-    }
-
-    @objc private func microphoneTapped() {
-        playClick()
-        guard transfer == nil else { return }
-        guard hasFullAccess else {
-            showDictationNotice("Allow Full Access to use MyWhisper dictation", temporary: true)
-            return
+        let preview = KeyboardMicPreview(
+            frame: CGRect(x: pad, y: 0, width: toolbarWidth, height: height),
+            dockedLeading: micDockedLeading
+        ) { [weak self] leading in
+            guard let self else { return }
+            self.micDockedLeading = leading
+            self.rebuild()
+            self.scheduleSuggestions()
         }
-        guard let mailbox = KeyboardDictationMailbox.shared, let session = mailbox.session,
-              session.isAvailable(at: Date()) else {
-            showDictationNotice("Enable keyboard dictation in MyWhisper", temporary: true)
-            return
-        }
-        if var active = recording {
-            guard active.stage == .recording else { return }
-            do {
-                try mailbox.send(.init(id: active.id, session: active.session, action: .stop))
-                active.stage = .finishing
-                active.deadline = Date().addingTimeInterval(50)
-                recording = active
-                renderDictationControls()
-            } catch {
-                cancelKeyboardDictation()
-                showDictationNotice("Couldn’t stop dictation. Try again.", temporary: true)
-            }
-            return
-        }
-
-        let active = KeyboardRecording(id: UUID(), session: session.id, document: textDocumentProxy.documentIdentifier)
-        do {
-            try mailbox.send(.init(id: active.id, session: active.session, action: .start))
-        } catch {
-            showDictationNotice("Couldn’t connect to MyWhisper", temporary: true)
-            return
-        }
-        recording = active
-        renderDictationControls()
-
-        dictationTask = Task { @MainActor [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 160_000_000)
-                guard !Task.isCancelled, let self, self.updateKeyboardDictation(from: mailbox) else { return }
-            }
-        }
-    }
-
-    private func updateKeyboardDictation(from mailbox: KeyboardDictationMailbox) -> Bool {
-        guard var active = recording else { return false }
-        guard visible, textDocumentProxy.documentIdentifier == active.document else {
-            cancelKeyboardDictation()
-            return false
-        }
-        guard let session = mailbox.session, session.id == active.session, session.isAvailable(at: Date()) else {
-            clearKeyboardDictation()
-            showDictationNotice("MyWhisper microphone session ended", temporary: true)
-            return false
-        }
-        if Date() >= active.deadline {
-            cancelKeyboardDictation()
-            showDictationNotice("MyWhisper didn’t respond. Try again.", temporary: true)
-            return false
-        }
-        guard let reply = mailbox.reply, reply.id == active.id else { return true }
-        switch reply.phase {
-        case .recording:
-            if active.stage == .starting {
-                active.stage = .recording
-                active.deadline = Date().addingTimeInterval(65)
-                recording = active
-                renderDictationControls()
-            }
-        case .working:
-            if active.stage != .finishing {
-                active.stage = .finishing
-                active.deadline = Date().addingTimeInterval(50)
-                recording = active
-                renderDictationControls()
-            }
-        case .result:
-            clearKeyboardDictation()
-            try? mailbox.send(.init(id: active.id, session: active.session, action: .consume))
-            if let text = reply.text, !text.isEmpty { insert(text) }
-            return false
-        case .error:
-            clearKeyboardDictation()
-            try? mailbox.send(.init(id: active.id, session: active.session, action: .consume))
-            showDictationNotice(reply.text ?? "Dictation couldn’t finish", temporary: true)
-            return false
-        }
-        return true
-    }
-
-    private func cancelKeyboardDictation() {
-        guard let active = recording else { return }
-        try? KeyboardDictationMailbox.shared?.send(.init(id: active.id, session: active.session, action: .cancel))
-        clearKeyboardDictation()
-    }
-
-    private func clearKeyboardDictation() {
-        recording = nil
-        dictationTask?.cancel()
-        dictationTask = nil
-        dismissDictationNotice()
-        renderDictationControls()
-    }
-
-    private func renderDictationControls() {
-        guard let microphone, var configuration = microphone.configuration else { return }
-        let stage = recording?.stage
-        configuration.image = UIImage(systemName: stage == .recording ? "stop.fill" : "mic.fill")
-        microphone.configuration = configuration
-        microphone.isEnabled = stage == nil || stage == .recording
-        microphone.accessibilityLabel = stage == .recording ? "Stop dictation" : "MyWhisper dictation"
-        microphone.accessibilityHint = stage == nil ? "Starts dictation after you enable it in MyWhisper" : nil
-        switch stage {
-        case .starting: showDictationNotice("Starting MyWhisper dictation…", temporary: false)
-        case .recording: showDictationNotice("Listening…", temporary: false)
-        case .finishing: showDictationNotice("Transcribing…", temporary: false)
-        case nil: break
-        }
-    }
-
-    private func dismissDictationNotice() {
-        guard transfer == nil, let stripNotice, !stripNotice.isEnabled else { return }
-        noticeTask?.cancel()
-        noticeTask = nil
-        setStripNoticeVisible(false)
+        rowsView.addSubview(preview)
+        microphonePreview = preview
     }
 
     private func setStripNoticeVisible(_ visible: Bool) {
         stripNotice?.isHidden = !visible
         predictionButtons.forEach { $0.isHidden = visible }
         predictionDividers.forEach { $0.isHidden = visible }
-    }
-
-    private func showDictationNotice(_ message: String, temporary: Bool) {
-        guard let stripNotice, transfer == nil else { return }
-        stripNotice.setTitle(message, for: .normal)
-        stripNotice.isEnabled = false
-        setStripNoticeVisible(true)
-        UIAccessibility.post(notification: .announcement, argument: message)
-        noticeTask?.cancel()
-        guard temporary else { return }
-        noticeTask = Task { @MainActor [weak self, weak stripNotice] in
-            try? await Task.sleep(nanoseconds: 3_500_000_000)
-            guard !Task.isCancelled, let self, let stripNotice,
-                  self.stripNotice === stripNotice, self.transfer == nil else { return }
-            self.setStripNoticeVisible(false)
-        }
     }
 
     private func applySettings(_ updated: KeyboardPreferences) {
@@ -655,7 +493,6 @@ class KeyboardViewController: UIInputViewController {
             transfer = nil
         }
         if transfer != nil {
-            noticeTask?.cancel()
             stripNotice.setTitle("Apply preferences", for: .normal)
             stripNotice.isEnabled = true
             setStripNoticeVisible(true)
@@ -925,7 +762,7 @@ class KeyboardViewController: UIInputViewController {
     }
 
     private func insert(_ text: String) {
-        dismissDictationNotice()
+        microphonePreview?.reset()
         pendingSwipe?.cancel()
         let startsWord = text.first.map { $0.isLetter || $0.isNumber } == true
         let separator = startsWord && validSwipe != nil ? " " : ""
@@ -1028,7 +865,7 @@ class KeyboardViewController: UIInputViewController {
     }
 
     func deleteWord() {
-        dismissDictationNotice()
+        microphonePreview?.reset()
         let proxy = textDocumentProxy
         if proxy.selectedText?.isEmpty == false {
             performDelete()
@@ -1047,7 +884,7 @@ class KeyboardViewController: UIInputViewController {
     }
 
     private func performDelete() {
-        dismissDictationNotice()
+        microphonePreview?.reset()
         pendingSwipe?.cancel()
         let proxy = textDocumentProxy
         if let swipe = validSwipe {
@@ -1079,7 +916,7 @@ class KeyboardViewController: UIInputViewController {
     }
 
     @objc private func spaceTapped() {
-        dismissDictationNotice()
+        microphonePreview?.reset()
         pendingSwipe?.cancel()
         lastSwipe = nil
         playClick()
@@ -1460,7 +1297,7 @@ class KeyboardViewController: UIInputViewController {
     }
 
     func insertSwipeCandidates(_ words: [String]) {
-        dismissDictationNotice()
+        microphonePreview?.reset()
         let cased = words.map { word in
             switch shift {
             case .off: return word
@@ -1504,7 +1341,7 @@ class KeyboardViewController: UIInputViewController {
     // MARK: - Emoji picker
 
     @objc private func openEmojiPicker() {
-        guard recording == nil else { return }
+        microphonePreview?.reset()
         playClick()
         predictionTask?.cancel()
         emojiMode = true

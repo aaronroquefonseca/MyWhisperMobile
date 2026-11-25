@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		EE11000000000000000000D2 /* KeyboardMicPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE11000000000000000000D0; };
+		EE11000000000000000000D3 /* KeyboardMicPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE11000000000000000000D0; };
+		EE11000000000000000000D4 /* floating-mic-mark.png in Resources */ = {isa = PBXBuildFile; fileRef = EE11000000000000000000D1; };
 		EE11000000000000000000C0 /* emoji.json in Resources */ = {isa = PBXBuildFile; fileRef = EE11000000000000000016 /* emoji.json */; };
 		EE11000000000000000000B2 /* KeyboardDictationMailbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE11000000000000000000B0; };
 		EE11000000000000000000B3 /* KeyboardDictationMailbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE11000000000000000000B0; };
@@ -98,6 +101,8 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		EE11000000000000000000D0 /* KeyboardMicPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardMicPreview.swift; sourceTree = "<group>"; };
+		EE11000000000000000000D1 /* floating-mic-mark.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "floating-mic-mark.png"; sourceTree = "<group>"; };
 		EE11000000000000000000B0 /* KeyboardDictationMailbox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardDictationMailbox.swift; sourceTree = "<group>"; };
 		EE11000000000000000000B1 /* KeyboardDictationSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardDictationSession.swift; sourceTree = "<group>"; };
 		EE11000000000000000000A0 /* KeyboardPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardPreferences.swift; sourceTree = "<group>"; };
@@ -260,6 +265,8 @@
 			isa = PBXGroup;
 			children = (
 				EE11000000000000000000B0 /* KeyboardDictationMailbox.swift */,
+				EE11000000000000000000D0 /* KeyboardMicPreview.swift */,
+				EE11000000000000000000D1 /* floating-mic-mark.png */,
 				EE11000000000000000000A0 /* KeyboardPreferences.swift */,
 				EE1100000000000000000002 /* KeyboardViewController.swift */,
 				DB257A200000000000000005 /* KeyboardKeyView.swift */,
@@ -415,6 +422,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				EE11000000000000000017 /* emoji.json in Resources */,
+				EE11000000000000000000D4 /* floating-mic-mark.png in Resources */,
 				DD6015F1000000000000000D /* swipe-en_US.txt in Resources */,
 				DD6015F1000000000000000E /* swipe-en_GB.txt in Resources */,
 				DD6015F1000000000000000F /* swipe-es.txt in Resources */,
@@ -475,6 +483,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				EE11000000000000000000B3 /* KeyboardDictationMailbox.swift in Sources */,
+				EE11000000000000000000D2 /* KeyboardMicPreview.swift in Sources */,
 				EE11000000000000000000A2 /* KeyboardPreferences.swift in Sources */,
 				EE1100000000000000000008 /* KeyboardViewController.swift in Sources */,
 				DB257A200000000000000001 /* KeyboardKeyView.swift in Sources */,
@@ -506,6 +515,7 @@
 				DB257A200000000000000004 /* KeyboardKeyGeometryTests.swift in Sources */,
 				DB257A200000000000000008 /* KeyboardKeyView.swift in Sources */,
 				EE11000000000000000000B4 /* KeyboardDictationMailbox.swift in Sources */,
+				EE11000000000000000000D3 /* KeyboardMicPreview.swift in Sources */,
 				EE11000000000000000000A3 /* KeyboardPreferences.swift in Sources */,
 				DB257A200000000000000009 /* KeyboardViewController.swift in Sources */,
 				DB257A200000000000000011 /* KeyboardEmojiPicker.swift in Sources */,

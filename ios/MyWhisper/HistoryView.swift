@@ -45,7 +45,7 @@ struct ActivityView: View {
     private var inputSection: some View {
         Section {
             NavigationLink {
-                KeyboardSetupView(strings: keyboardStrings, flow: flow)
+                KeyboardSetupView(strings: keyboardStrings)
             } label: {
                 WhisperDestinationLabel(
                     title: keyboardStrings.keyboardTitle,

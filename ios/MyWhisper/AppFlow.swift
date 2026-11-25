@@ -109,7 +109,6 @@ final class AppFlow: ObservableObject, Dictation.Listener {
     @Published private(set) var toggled = false
     @Published private(set) var micMode = "Smart"
     let levels = LevelStore()
-    let keyboardDictation = KeyboardDictationSession()
 
     // Result screen state.
     @Published private(set) var result: ResultView.Content?
@@ -167,8 +166,6 @@ final class AppFlow: ObservableObject, Dictation.Listener {
     // MARK: - Record gestures (RecordView owner)
 
     func pressDown() {
-        guard !keyboardDictation.isBusy else { return }
-        if keyboardDictation.isEnabled { keyboardDictation.disable() }
         guard micGranted else {
             MicPermission.request { [weak self] granted in
                 self?.micGranted = granted
@@ -185,16 +182,6 @@ final class AppFlow: ObservableObject, Dictation.Listener {
 
     func cancelRecording() {
         dictation.cancel()
-    }
-
-    func enableKeyboardDictation() {
-        guard coreError == nil, dictation.current == .idle else { return }
-        refreshMicPermission()
-        guard micGranted else {
-            requestMic()
-            return
-        }
-        keyboardDictation.enable()
     }
 
     // MARK: - Setup actions
