@@ -496,11 +496,16 @@ final class KeyboardSwipeTests: XCTestCase {
 @MainActor
 private final class TestKeyboardController: KeyboardViewController {
     let document = TestKeyboardDocument()
-    override var textDocumentProxy: any UITextDocumentProxy {
+    override var textDocumentProxy: any UITextDocumentProxy { document }
+
+    init() {
+        super.init(nibName: nil, bundle: nil)
         // A real host reports each caret move back; the keyboard sends the next one after that.
+        // Set here: UIKit reads the proxy during dealloc, when no reference may be formed.
         document.onAdjust = { [weak self] in self?.selectionDidChange(nil) }
-        return document
     }
+
+    required init?(coder: NSCoder) { nil }
 }
 
 @MainActor
