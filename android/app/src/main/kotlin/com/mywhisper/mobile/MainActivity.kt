@@ -5802,7 +5802,6 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-        fun refreshHist() = histJob({})
         /** False when refused: nothing loaded, no more rows, or paging busy. */
         fun loadMore(count: Int = HISTORY_PAGE): Boolean {
             val last = items.lastOrNull() ?: return false
@@ -5830,13 +5829,24 @@ class MainActivity : ComponentActivity() {
                 onOk = { statsVersion++; bgToast(resources.getQuantityString(R.plurals.hist_purged, purged, purged)) },
                 onFail = { bgToast(getString(R.string.hist_purge_failed, it)) })
         }
+        // The engine purges only on open and after a dictation, so History applies the
+        // committed auto-delete setting itself (0 = keep). Read on the worker: after any queued save.
+        fun applyRetention() = histJob({
+            val days = CoreBridge.getSettings().getOrNull()?.optJSONObject("privacy")
+                ?.optInt("transcript_auto_delete_days", 0) ?: 0
+            if (days > 0 && CoreBridge.purgeHistory(days).getOrThrow() > 0) {
+                kickSync()
+                // Not onOk: a newer history job (search) would drop it, leaving stats stale.
+                runOnUiThread { statsVersion++ }
+            }
+        })
         fun clearHist() = histJob({ CoreBridge.dataOf(CoreBridge.nativeClearHistory()); kickSync() },
             onOk = { statsVersion++; toast(getString(R.string.hist_cleared)) },
             onFail = { toast(getString(R.string.hist_clear_failed, it)) })
         fun deleteHist(uuid: String) = histJob({ CoreBridge.dataOf(CoreBridge.nativeDeleteHistory(uuid)); kickSync() },
             onOk = { statsVersion++; if (expanded == uuid) expanded = null },
             onFail = { toast(getString(R.string.hist_delete_failed, it)) })
-        LaunchedEffect(tick) { refreshHist() }
+        LaunchedEffect(tick) { applyRetention() }
         // Search runs in the database (all history, not just loaded pages), debounced.
         var searched by remember { mutableStateOf(histQuery) }
         LaunchedEffect(histQuery) {
@@ -6026,6 +6036,8 @@ class MainActivity : ComponentActivity() {
                             TextButton(onClick = {
                                 priv.put("transcript_auto_delete_days", daysStr.toIntOrNull() ?: 0)
                                 save()
+                                // Queued behind the save on the same worker; applies whatever committed.
+                                applyRetention()
                             }) { Text(stringResource(R.string.action_save)) }
                             TextButton(onClick = {
                                 val n = daysStr.toIntOrNull() ?: 0
