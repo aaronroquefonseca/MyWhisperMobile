@@ -28,12 +28,15 @@ class KeyboardViewController: UIInputViewController {
     private weak var sideButton: UIButton?
     private weak var languagePan: UIPanGestureRecognizer?
     private var languageCarousel: (view: UIView, labels: [UILabel])?
-    private lazy var tick = UISelectionFeedbackGenerator()
+    private lazy var tick: UISelectionFeedbackGenerator = {
+        if #available(iOS 17.5, *) { return UISelectionFeedbackGenerator(view: view) }
+        return UISelectionFeedbackGenerator()
+    }()
     /// The bottom-row key beside 123 types a comma instead of opening emoji; holding it switches, and the last choice sticks.
     private var emojiKeyIsComma = UserDefaults.standard.bool(forKey: "mw.keyboard.emojiKeyComma")
     /// What choosing an entry in the open hold popup does (accents, period symbols, emoji/comma).
     private var popupAction: ((String) -> Void)?
-    private lazy var haptic = UIImpactFeedbackGenerator(style: .light)
+    private lazy var haptic = makeHaptic()
     /// One delay for every press-and-hold (cursor, accents, symbols, delete repeat), so they all feel the same.
     private static let holdDelay: TimeInterval = 0.35
     private var pendingUndo: (original: String, replacement: String)?
@@ -66,11 +69,14 @@ class KeyboardViewController: UIInputViewController {
     private var loadingSwipeLocale: String?
     private var pendingSwipe: Task<Void, Never>?
     private lazy var swipeGesture = KeyboardSwipeGesture(target: self, action: #selector(handleSwipe(_:)))
-    /// Comet-style swipe trail like the system keyboard: only the last stretch behind the finger,
-    /// thin and faint at the tail, thicker and brighter at the head.
-    private var trailLayers: [CAShapeLayer] = []
-    private static let trailLength: CGFloat = 170
-    private static let trailSegments = 14
+    /// Swipe trail like the system keyboard: only where the finger was in the last moment,
+    /// a smooth ribbon that tapers to nothing at the tail and shrinks away when the finger rests.
+    private var trailLayer: CAShapeLayer?
+    private var trailPoints: [(point: CGPoint, time: CFTimeInterval)] = []
+    private var trailConsumed = 0
+    private var trailLink: CADisplayLink?
+    private static let trailDuration: CFTimeInterval = 0.2
+    private static let trailWidth: CGFloat = 7
 
     private struct SwipeCommit {
         let document: UUID
@@ -89,6 +95,8 @@ class KeyboardViewController: UIInputViewController {
 
     private struct Layout: Equatable {
         var width: CGFloat
+        /// The height iOS actually gave the view; it doesn't always honor the constraint.
+        var height: CGFloat
         var compact: Bool
         var dark: Bool
         var globe: Bool
@@ -184,6 +192,9 @@ class KeyboardViewController: UIInputViewController {
         super.viewWillAppear(animated)
         super.hasDictationKey = true
         visible = true
+        // Re-add the height once the view is in the window; iOS can skip a constraint set before that.
+        heightConstraint?.isActive = false
+        heightConstraint?.isActive = true
         applySettings(KeyboardPreferences.load())
         refreshLayout()
         updateAutomaticShift()
@@ -215,7 +226,10 @@ class KeyboardViewController: UIInputViewController {
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         let width = view.bounds.width
-        if layout == nil || (width > 0 && layout?.width != width) { refreshLayout() }
+        let height = view.bounds.height
+        if layout == nil || (width > 0 && layout?.width != width) || (height > 0 && layout?.height != height) {
+            refreshLayout()
+        }
     }
 
     override func textDidChange(_ textInput: UITextInput?) {
@@ -250,6 +264,7 @@ class KeyboardViewController: UIInputViewController {
             traitCollection.userInterfaceStyle == .dark)
         let next = Layout(
             width: view.bounds.width > 0 ? view.bounds.width : 390,
+            height: view.bounds.height,
             compact: traitCollection.verticalSizeClass == .compact,
             dark: dark,
             globe: needsInputModeSwitchKey,
@@ -531,8 +546,12 @@ class KeyboardViewController: UIInputViewController {
         }
 
         addPredictionRow(width: width, pad: pad, height: stripHeight)
-        var y = stripHeight + 4
+        // 2 pt under the bottom row: iOS already leaves room below the keyboard, like Apple's.
+        var y = stripHeight + 8
         var keyHeight = rowHeight
+        // If iOS gives a different height than asked, grow or shrink the keys instead of leaving a band.
+        let given = layout.height - height
+        if !emojiMode, layout.height > 0, abs(given) <= 60 { keyHeight += given / 4 }
         if numberRow, page == .letters {
             placeRow("1234567890".map { (characterKey(String($0), cased: false), 1) },
                      y: y, height: numberHeight, width: width, pad: pad)
@@ -711,20 +730,29 @@ class KeyboardViewController: UIInputViewController {
         openMyWhisper("keyboard-settings", otherwise: Self.settingsHint)
     }
 
-    // iOS 26 refuses keyboard requests to open their app, so say where to go instead.
+    // Said when iOS still refuses to open the app.
     private static let settingsHint = "Keyboard settings are in the MyWhisper app"
+    private static let fullAccessHint = "Turn on Allow Full Access in Settings › Keyboards"
 
     /// Keyboards can't record or show app screens. Like Wispr Flow, open MyWhisper
     /// (mic session, settings); iOS shows a back link to the previous app.
     private func openMyWhisper(_ destination: String, otherwise hint: String) {
         guard let url = NSURL(string: "mywhisper://" + destination) else { return }
-        // UIApplication.shared is unavailable to extensions: ask the class for it, else walk the responder chain.
-        var application = (UIApplication.self as AnyObject)
-            .perform(NSSelectorFromString("sharedApplication"))?.takeUnretainedValue() as? UIApplication
+        // iOS 26 refuses this from keyboards without Full Access (Wispr Flow needs it too).
+        guard hasFullAccess else {
+            showNotice(Self.fullAccessHint)
+            return
+        }
+        // UIApplication.shared is unavailable to extensions: walk the responder chain, else ask the class.
+        var application: UIApplication?
         var responder: UIResponder? = self
         while application == nil, let current = responder {
             application = current as? UIApplication
             responder = current.next
+        }
+        if application == nil {
+            application = (UIApplication.self as AnyObject)
+                .perform(NSSelectorFromString("sharedApplication"))?.takeUnretainedValue() as? UIApplication
         }
         let selector = NSSelectorFromString("openURL:options:completionHandler:")
         guard let application, application.responds(to: selector) else {
@@ -1075,8 +1103,22 @@ class KeyboardViewController: UIInputViewController {
 
     /// Light tap on key down; a firmer second tap when a hold activates. Off unless enabled in settings.
     private func playHaptic(hold: Bool = false) {
-        guard settings.usesHaptics else { return }
+        // Keyboards get no haptics without Full Access.
+        guard settings.usesHaptics, hasFullAccess else { return }
         haptic.impactOccurred(intensity: hold ? 1 : 0.55)
+        haptic.prepare()
+    }
+
+    /// iOS 17.5+ generators tied to a view play from extensions; the view-less init can stay silent there.
+    private func makeHaptic() -> UIImpactFeedbackGenerator {
+        let generator: UIImpactFeedbackGenerator
+        if #available(iOS 17.5, *) {
+            generator = UIImpactFeedbackGenerator(style: .light, view: view)
+        } else {
+            generator = UIImpactFeedbackGenerator(style: .light)
+        }
+        generator.prepare()
+        return generator
     }
 
     @objc private func keyReleased(_ button: UIButton) {
@@ -1450,8 +1492,8 @@ class KeyboardViewController: UIInputViewController {
         case .changed:
             if cursorGesture === gesture { continueCursorDrag(to: point, at: ProcessInfo.processInfo.systemUptime) }
         case .ended, .cancelled, .failed:
+            // No last step on lift: the finger rolls a few points as it leaves the glass.
             guard cursorGesture === gesture else { return }
-            if gesture.state == .ended { continueCursorDrag(to: point, at: ProcessInfo.processInfo.systemUptime) }
             finishCursorDrag()
         default:
             break
@@ -1519,7 +1561,10 @@ class KeyboardViewController: UIInputViewController {
         cursorDrag = drag
         if offset != 0 {
             proxy.adjustTextPosition(byCharacterOffset: offset)
-            if settings.usesHaptics { tick.selectionChanged() }
+            if settings.usesHaptics, hasFullAccess {
+                tick.selectionChanged()
+                tick.prepare()
+            }
         }
     }
 
@@ -1731,7 +1776,7 @@ class KeyboardViewController: UIInputViewController {
                 predictionTask?.cancel()
                 scheduledSuggestion = nil
             }
-            drawSwipeTrail(gesture.points)
+            addSwipeTrailPoints(gesture.points)
         case .ended:
             clearSwipeTrail(animated: true)
             completeSwipe(trace: gesture.points, pauses: gesture.pauses)
@@ -1743,73 +1788,103 @@ class KeyboardViewController: UIInputViewController {
         }
     }
 
-    private func drawSwipeTrail(_ points: [CGPoint]) {
-        guard let head = points.last else { return }
-        // Walk back from the finger, keeping only the last `trailLength` points of the path.
-        var tail = [head]
-        var length: CGFloat = 0
-        for point in points.reversed().dropFirst() {
-            guard let last = tail.last else { break }
-            let step = hypot(point.x - last.x, point.y - last.y)
-            if length + step > Self.trailLength {
-                let fraction = (Self.trailLength - length) / step
-                tail.append(CGPoint(x: last.x + (point.x - last.x) * fraction, y: last.y + (point.y - last.y) * fraction))
-                break
-            }
-            length += step
-            tail.append(point)
+    private func addSwipeTrailPoints(_ points: [CGPoint]) {
+        if trailLink == nil {
+            trailPoints = []
+            trailConsumed = 0
+            let link = CADisplayLink(target: self, selector: #selector(drawSwipeTrail))
+            link.add(to: .main, forMode: .common)
+            trailLink = link
         }
-        tail.reverse()
-        if trailLayers.isEmpty {
-            trailLayers = (0..<Self.trailSegments).map { _ in
-                let layer = CAShapeLayer()
-                layer.lineCap = .round
-                layer.lineJoin = .round
-                layer.fillColor = UIColor.clear.cgColor
-                rowsView.layer.addSublayer(layer)
-                return layer
-            }
+        let now = CACurrentMediaTime()
+        for point in points.dropFirst(trailConsumed) { trailPoints.append((point, now)) }
+        trailConsumed = points.count
+        drawSwipeTrail()
+    }
+
+    @objc private func drawSwipeTrail() {
+        let now = CACurrentMediaTime()
+        trailPoints.removeAll { now - $0.time > Self.trailDuration }
+        let layer: CAShapeLayer
+        if let existing = trailLayer {
+            layer = existing
+        } else {
+            layer = CAShapeLayer()
+            rowsView.layer.addSublayer(layer)
+            trailLayer = layer
         }
-        let color = isDark ? UIColor.white : UIColor(white: 0.3, alpha: 1)
-        let chunk = max(1, Int((Double(tail.count - 1) / Double(Self.trailSegments)).rounded(.up)))
+        let line = Self.smoothed(trailPoints.map(\.point))
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        for (index, layer) in trailLayers.enumerated() {
-            let start = index * chunk
-            let end = min(tail.count - 1, start + chunk)
-            guard start < end else {
-                layer.path = nil
-                continue
-            }
-            let path = UIBezierPath()
-            path.move(to: tail[start])
-            for point in tail[(start + 1)...end] { path.addLine(to: point) }
-            layer.path = path.cgPath
-            // 0 at the faded tail, 1 at the finger.
-            let progress = CGFloat(end) / CGFloat(max(1, tail.count - 1))
-            layer.lineWidth = 1.5 + 4.5 * progress
-            layer.strokeColor = color.withAlphaComponent(0.1 + 0.8 * progress).cgColor
-        }
+        layer.fillColor = (isDark ? UIColor(white: 1, alpha: 0.9) : UIColor(white: 0.25, alpha: 0.75)).cgColor
+        layer.path = line.count < 2 ? nil : Self.taperedRibbon(line, width: Self.trailWidth).cgPath
         CATransaction.commit()
     }
 
+    /// Two rounds of Chaikin corner cutting: touch samples become a smooth curve, no visible joints.
+    private static func smoothed(_ points: [CGPoint]) -> [CGPoint] {
+        var line = points
+        for _ in 0..<2 where line.count > 2 {
+            var next = [line[0]]
+            for index in 0..<(line.count - 1) {
+                let a = line[index]
+                let b = line[index + 1]
+                next.append(CGPoint(x: a.x * 0.75 + b.x * 0.25, y: a.y * 0.75 + b.y * 0.25))
+                next.append(CGPoint(x: a.x * 0.25 + b.x * 0.75, y: a.y * 0.25 + b.y * 0.75))
+            }
+            next.append(line[line.count - 1])
+            line = next
+        }
+        return line
+    }
+
+    /// One filled outline, zero width at the tail and `width` at the finger with a round head.
+    private static func taperedRibbon(_ line: [CGPoint], width: CGFloat) -> UIBezierPath {
+        var lengths: [CGFloat] = [0]
+        for index in 1..<line.count {
+            lengths.append(lengths[index - 1] + hypot(line[index].x - line[index - 1].x, line[index].y - line[index - 1].y))
+        }
+        let total = max(lengths[lengths.count - 1], 1)
+        var left: [CGPoint] = []
+        var right: [CGPoint] = []
+        for index in line.indices {
+            let a = line[max(index - 1, 0)]
+            let b = line[min(index + 1, line.count - 1)]
+            let length = max(hypot(b.x - a.x, b.y - a.y), 0.001)
+            let half = width * 0.5 * lengths[index] / total
+            let normal = CGPoint(x: -(b.y - a.y) / length * half, y: (b.x - a.x) / length * half)
+            left.append(CGPoint(x: line[index].x + normal.x, y: line[index].y + normal.y))
+            right.append(CGPoint(x: line[index].x - normal.x, y: line[index].y - normal.y))
+        }
+        let path = UIBezierPath()
+        path.move(to: left[0])
+        for point in left.dropFirst() { path.addLine(to: point) }
+        for point in right.reversed() { path.addLine(to: point) }
+        path.close()
+        path.append(UIBezierPath(arcCenter: line[line.count - 1], radius: width * 0.5,
+                                 startAngle: 0, endAngle: .pi * 2, clockwise: true))
+        return path
+    }
+
     private func clearSwipeTrail(animated: Bool) {
-        let layers = trailLayers
-        trailLayers = []
+        trailLink?.invalidate()
+        trailLink = nil
+        trailPoints = []
+        trailConsumed = 0
+        guard let layer = trailLayer else { return }
+        trailLayer = nil
         guard animated, !UIAccessibility.isReduceMotionEnabled else {
-            layers.forEach { $0.removeFromSuperlayer() }
+            layer.removeFromSuperlayer()
             return
         }
         CATransaction.begin()
-        CATransaction.setCompletionBlock { layers.forEach { $0.removeFromSuperlayer() } }
-        for layer in layers {
-            let fade = CABasicAnimation(keyPath: "opacity")
-            fade.fromValue = 1
-            fade.toValue = 0
-            fade.duration = 0.18
-            layer.opacity = 0
-            layer.add(fade, forKey: "fade")
-        }
+        CATransaction.setCompletionBlock { layer.removeFromSuperlayer() }
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 1
+        fade.toValue = 0
+        fade.duration = 0.15
+        layer.opacity = 0
+        layer.add(fade, forKey: "fade")
         CATransaction.commit()
     }
 

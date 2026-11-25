@@ -175,6 +175,21 @@ final class KeyboardSwipeTests: XCTestCase {
         controller.finishCursorDrag()
     }
 
+    func testCursorDragIgnoresDriftAndSmallReversals() {
+        var drag = KeyboardCursorDrag(origin: .zero)
+        var characters = 0
+        // 120 pt to the right while drifting 30 pt down: ten characters, no line jump.
+        for index in 1...40 {
+            let steps = drag.steps(towards: CGPoint(x: CGFloat(index) * 3, y: CGFloat(index) * 0.75))
+            characters += steps.characters
+            XCTAssertEqual(steps.lines, 0)
+        }
+        XCTAssertEqual(characters, 10)
+        // A 4 pt roll back as the finger lifts doesn't move the caret.
+        XCTAssertEqual(drag.steps(towards: CGPoint(x: 116, y: 30)).characters, 0)
+        XCTAssertEqual(drag.steps(towards: CGPoint(x: 108, y: 30)).characters, -1)
+    }
+
     func testCursorDragConsumesSmallHorizontalWobbleDuringVerticalMotion() {
         var drag = KeyboardCursorDrag(origin: .zero)
         for index in 1...4 {

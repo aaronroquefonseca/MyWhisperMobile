@@ -100,43 +100,58 @@ enum KeyboardTextEditing {
 }
 
 struct KeyboardCursorDrag {
-    private(set) var origin: CGPoint
+    /// Finger travel per caret step at slow speed: wider than a glyph so slow drags land exactly.
+    static let characterWidth: CGFloat = 12
+    static let lineHeight: CGFloat = 25
+    /// A step fires at 75% of its width and leaves the rest as a 6 pt band, so lift-off
+    /// jitter and tiny reversals don't nudge the caret, but backing up one step is quick.
+    private static let trigger: CGFloat = 0.75
+
     var preferredColumn: Int?
-    /// Finger x after acceleration: slow drags stay precise, fast flicks cover long lines.
-    private var travelX: CGFloat
-    private var last: (x: CGFloat, time: TimeInterval)?
+    private var last: CGPoint
+    private var lastTime: TimeInterval?
     private var speed: CGFloat = 0
+    /// Travel not yet spent on a step, per axis.
+    private var x: CGFloat = 0
+    private var y: CGFloat = 0
 
     init(origin: CGPoint) {
-        self.origin = origin
-        travelX = origin.x
+        last = origin
     }
 
-    /// `time` enables gentle acceleration (up to 2x above ~250 pt/s); nil keeps 1:1.
+    /// `time` enables acceleration for fast sweeps (up to 3x); nil keeps 1:1.
     mutating func steps(towards finger: CGPoint, at time: TimeInterval? = nil) -> (characters: Int, lines: Int) {
+        let dx = finger.x - last.x
+        let dy = finger.y - last.y
+        last = finger
         var gain: CGFloat = 1
-        if let time, let last, time > last.time {
-            let instant = abs(finger.x - last.x) / CGFloat(time - last.time)
-            speed = speed == 0 ? instant : speed * 0.6 + instant * 0.4
-            gain = 1 + min(max((speed - 250) / 400, 0), 1)
+        if let time, let lastTime, time > lastTime {
+            speed = speed * 0.7 + abs(dx) / CGFloat(time - lastTime) * 0.3
+            gain = 1 + min(max((speed - 300) / 450, 0), 2)
         }
-        travelX += (finger.x - (last?.x ?? origin.x)) * gain
-        last = (finger.x, time ?? 0)
-        let point = CGPoint(x: travelX, y: finger.y)
-        let dx = point.x - origin.x
-        let dy = point.y - origin.y
-        // 10 pt per character at slow speed; acceleration widens it for fast drags.
-        let characters = Int(dx / 10)
-        // Vertical motion needs a larger threshold, and must dominate, so a horizontal
-        // drag that drifts up or down never jumps lines.
-        let lines = abs(dy) >= abs(dx) * 0.6 ? Int(dy / 25) : 0
-        origin.x += CGFloat(characters) * 10
-        origin.y += CGFloat(lines) * 25
-        if characters != 0 && lines == 0 && abs(dx) > abs(dy) * 2 {
-            origin.y = point.y
-        } else if lines != 0 && characters == 0 && abs(dy) > abs(dx) * 2 {
-            origin.x = point.x
+        if let time { lastTime = time }
+        // Each movement counts toward the axis it mostly follows: a horizontal drag that
+        // drifts never jumps lines, and a vertical one doesn't creep sideways.
+        if abs(dy) > abs(dx) {
+            y += dy
+        } else {
+            x += dx * gain
+            let bleed = min(abs(y), abs(dx) * 0.5)
+            y += y < 0 ? bleed : -bleed
         }
-        return (characters, lines)
+        return (Self.spend(&x, step: Self.characterWidth), Self.spend(&y, step: Self.lineHeight))
+    }
+
+    private static func spend(_ travel: inout CGFloat, step: CGFloat) -> Int {
+        var count = 0
+        while travel > step * trigger {
+            travel -= step
+            count += 1
+        }
+        while travel < -step * trigger {
+            travel += step
+            count -= 1
+        }
+        return count
     }
 }
