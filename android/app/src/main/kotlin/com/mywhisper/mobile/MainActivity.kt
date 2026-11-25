@@ -114,6 +114,7 @@ import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.heading
 import kotlin.math.roundToInt
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -969,6 +970,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // A fold recreates this activity: record the panel so foldables get separate screen settings.
+        FoldScreens.observe(this)
         micDeniedBefore = getSharedPreferences("mw_state", MODE_PRIVATE)
             .getBoolean("mic_denied_before", false)
         // One-shot: recreations restore the saved tab (seed null),
@@ -2580,9 +2583,30 @@ class MainActivity : ComponentActivity() {
                     })
                 }
                 TextButton(onClick = onBehavior) { Text(getString(R.string.setup_mic_button)) }
+                // Foldables (#113): optional separate settings per screen. Off = one shared set, as before.
+                val foldable = remember { FoldScreens.supported(setupPrefs) }
+                var split by remember { mutableStateOf(foldable && FoldScreens.split(setupPrefs)) }
+                // The activity is recreated on fold/unfold, so this stays current.
+                val inUse = remember { FoldScreens.current(this@MainActivity) }
+                var screen by remember { mutableStateOf(inUse) }
+                val screenKey: (String) -> String = { FoldScreens.key(it, screen, split) }
+                if (foldable) {
+                    SplitScreensSetting(split) {
+                        split = it
+                        screen = inUse
+                        FoldScreens.setSplit(setupPrefs, it)
+                        OverlayService.start(this@MainActivity)
+                    }
+                }
+                if (split) ScreenPicker(screen, inUse) { screen = it }
                 // Optional grip (default off): the mic drags itself.
-                var grab by remember {
-                    mutableStateOf(setupPrefs.getBoolean("float_grab", false))
+                val grabKey = screenKey("float_grab")
+                var grab by remember(grabKey) {
+                    mutableStateOf(setupPrefs.getBoolean(grabKey, false))
+                }
+                // Grab point on the other screen, for the hold-delay hint below.
+                val otherGrab = remember(grab, screen, split) {
+                    setupPrefs.getBoolean(FoldScreens.key("float_grab", FoldScreens.other(screen), split), false)
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
@@ -2592,7 +2616,7 @@ class MainActivity : ComponentActivity() {
                     FeedbackSwitch(modifier = Modifier.semantics { contentDescription = getString(R.string.setup_float_grab) }, checked = grab, onCheckedChange = {
                         grab = it
                         // Keep the stored idle choice; dot choices pause while the grip is on and return after.
-                        setupPrefs.edit { putBoolean("float_grab", it) }
+                        setupPrefs.edit { putBoolean(grabKey, it) }
                         // Rebuild the bubble chrome for the new mode.
                         OverlayService.start(this@MainActivity)
                     })
@@ -2602,7 +2626,17 @@ class MainActivity : ComponentActivity() {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                BubbleAppearanceSettings(setupPrefs, grab) { OverlayService.start(this@MainActivity) }
+                BubbleAppearanceSettings(setupPrefs, grab, screenKey) { OverlayService.start(this@MainActivity) }
+                if (split) {
+                    // Idle delay is per screen, so it leaves Advanced while the screens are separate.
+                    Spacer(Modifier.height(8.dp))
+                    IdleDelaySetting(setupPrefs, grab, screenKey) { OverlayService.start(this@MainActivity) }
+                    Spacer(Modifier.height(8.dp))
+                    PositionSetting(setupPrefs, screen == inUse, screenKey) { OverlayService.start(this@MainActivity) }
+                    HorizontalDivider(Modifier.padding(top = 16.dp, bottom = 8.dp))
+                    Text(stringResource(R.string.fold_both), style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(bottom = 8.dp).semantics { heading() })
+                }
                 var upperLock by remember { mutableStateOf(setupPrefs.getBoolean("float_lock_enabled", true)) }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(stringResource(R.string.float_lock_enabled), modifier = Modifier.weight(1f))
@@ -2676,13 +2710,22 @@ class MainActivity : ComponentActivity() {
                         setupPrefs.edit { putInt("float_snooze_minutes", snoozeMinutes) }
                     }
                     ButtonShapeSetting(setupPrefs) { OverlayService.start(this@MainActivity) }
-                    Spacer(Modifier.height(8.dp))
-                    IdleDelaySetting(setupPrefs, grab) { OverlayService.start(this@MainActivity) }
+                    if (!split) {
+                        Spacer(Modifier.height(8.dp))
+                        IdleDelaySetting(setupPrefs, grab) { OverlayService.start(this@MainActivity) }
+                    }
                     run {
                         // No grip: a finger that stays put this long records;
                         // moving sooner means a drag (never a dictation).
                         // With the grip it does not apply: greyed out (value kept) instead of hidden, so nothing jumps.
-                        val delayAlpha = if (grab) 0.38f else 1f
+                        // Separate screens with Grab point on only one: the delay applies on the other one.
+                        val grabEverywhere = grab && (!split || otherGrab)
+                        val delayHint = when {
+                            !split || grab == otherGrab -> null
+                            (if (grab) FoldScreens.other(screen) else screen) == FoldScreens.Screen.COVER -> R.string.setup_float_delay_cover_only
+                            else -> R.string.setup_float_delay_inner_only
+                        }
+                        val delayAlpha = if (grabEverywhere) 0.38f else 1f
                         var delayMs by remember {
                             mutableIntStateOf(
                                 FloatState.pressDelayMs(
@@ -2703,7 +2746,7 @@ class MainActivity : ComponentActivity() {
                             value = delayOptions.indexOf(delayMs).coerceAtLeast(0).toFloat(),
                             valueRange = 0f..delayOptions.lastIndex.toFloat(),
                             steps = delayOptions.size - 2,
-                            enabled = !grab,
+                            enabled = !grabEverywhere,
                             onValueChange = {
                                 val next = delayOptions[it.roundToInt().coerceIn(delayOptions.indices)]
                                 if (next != delayMs) {
@@ -2717,8 +2760,9 @@ class MainActivity : ComponentActivity() {
                                 OverlayService.start(this@MainActivity)
                             },
                         )
-                        StableText(listOf(stringResource(R.string.setup_float_delay_sub), stringResource(R.string.setup_float_delay_off)),
-                            if (grab) 1 else 0, style = MaterialTheme.typography.bodySmall,
+                        StableText(listOf(stringResource(R.string.setup_float_delay_sub), stringResource(R.string.setup_float_delay_off)) +
+                            listOfNotNull(delayHint?.let { stringResource(it) }),
+                            if (delayHint != null) 2 else if (grabEverywhere) 1 else 0, style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }

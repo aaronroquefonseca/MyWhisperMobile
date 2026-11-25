@@ -25,15 +25,16 @@ import androidx.core.view.ViewCompat
 import kotlin.math.roundToInt
 
 @Composable
-internal fun BubbleAppearanceSettings(prefs: SharedPreferences, grip: Boolean, refresh: () -> Unit) {
+internal fun BubbleAppearanceSettings(prefs: SharedPreferences, grip: Boolean, key: (String) -> String = { it }, refresh: () -> Unit) {
     val hapticView = LocalView.current
-    var size by remember { mutableIntStateOf(prefs.getInt("float_size", 2).takeIf { it in 0..4 } ?: 2) }
+    val sizeKey = key("float_size")
+    var size by remember(sizeKey) { mutableIntStateOf(prefs.getInt(sizeKey, 2).takeIf { it in 0..4 } ?: 2) }
     // Stored choice survives Grab point; only the effective choice changes while it is on.
-    val stored by rememberIdleBehavior(prefs)
-    val extraSmall by rememberExtraSmall(prefs)
+    val stored by rememberIdleBehavior(prefs, key)
+    val extraSmall by rememberExtraSmall(prefs, key)
     val uniform by rememberUniformShape(prefs)
     val behavior = BubbleAppearance.effective(stored, grip, extraSmall)
-    val idleDelay by rememberIdleDelay(prefs)
+    val idleDelay by rememberIdleDelay(prefs, key)
     var previewOpacity by remember { mutableIntStateOf(prefs.getInt("float_opacity", 65)) }
     DisposableEffect(prefs) {
         val listener = SharedPreferences.OnSharedPreferenceChangeListener { changed, key ->
@@ -42,7 +43,8 @@ internal fun BubbleAppearanceSettings(prefs: SharedPreferences, grip: Boolean, r
         prefs.registerOnSharedPreferenceChangeListener(listener)
         onDispose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
     }
-    var search by remember { mutableStateOf(prefs.getBoolean("float_shrink_search", false)) }
+    val searchKey = key("float_shrink_search")
+    var search by remember(searchKey) { mutableStateOf(prefs.getBoolean(searchKey, false)) }
     Text(stringResource(R.string.bubble_size), style = MaterialTheme.typography.titleMedium)
     FloatingButtonPreview(BubbleAppearance.buttonSize(size, extraSmall), stored, grip, extraSmall, uniform, previewOpacity, idleDelay)
     val sizes = listOf(R.string.bubble_xs, R.string.bubble_s, R.string.bubble_m, R.string.bubble_l, R.string.bubble_xl)
@@ -56,7 +58,7 @@ internal fun BubbleAppearanceSettings(prefs: SharedPreferences, grip: Boolean, r
                 ViewCompat.performHapticFeedback(hapticView, HapticFeedbackConstantsCompat.SEGMENT_TICK)
             }
         },
-        onValueChangeFinished = { prefs.edit { putInt("float_size", size) }; refresh() },
+        onValueChangeFinished = { prefs.edit { putInt(sizeKey, size) }; refresh() },
         modifier = Modifier.fillMaxWidth().semantics { contentDescription = sizeLabel; stateDescription = selectedSize })
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         sizes.forEachIndexed { index, label ->
@@ -72,7 +74,7 @@ internal fun BubbleAppearanceSettings(prefs: SharedPreferences, grip: Boolean, r
     Row(Modifier.fillMaxWidth().padding(vertical = 8.dp).toggleable(extraSmall, role = Role.Switch, onValueChange = {
         ViewCompat.performHapticFeedback(hapticView, if (it) HapticFeedbackConstantsCompat.TOGGLE_ON else HapticFeedbackConstantsCompat.TOGGLE_OFF)
         // Size and Shrink smaller stay stored; they come back when Extra small turns off.
-        prefs.edit { putBoolean("float_extra_small", it) }
+        prefs.edit { putBoolean(key("float_extra_small"), it) }
         refresh()
     }), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
@@ -97,7 +99,7 @@ internal fun BubbleAppearanceSettings(prefs: SharedPreferences, grip: Boolean, r
                     val enabled = BubbleAppearance.effective(value, grip, extraSmall) == value
                     val selected = behavior == value
                     Surface(Modifier.weight(1f).selectable(selected, enabled = enabled, role = Role.RadioButton, onClick = {
-                        prefs.edit { putString("float_idle_style", value.key); remove("float_shrink_always") }
+                        prefs.edit { putString(key("float_idle_style"), value.key); remove("float_shrink_always") }
                         refresh()
                     }), shape = RoundedCornerShape(16.dp),
                         color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
@@ -125,7 +127,7 @@ internal fun BubbleAppearanceSettings(prefs: SharedPreferences, grip: Boolean, r
         Text(stringResource(R.string.bubble_search), Modifier.weight(1f),
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (behavior.usesDelay) 1f else 0.38f))
         Switch(checked = search, enabled = behavior.usesDelay,
-            onCheckedChange = { search = it; prefs.edit { putBoolean("float_shrink_search", it) }; refresh() })
+            onCheckedChange = { search = it; prefs.edit { putBoolean(searchKey, it) }; refresh() })
     }
     Reveal(behavior == BubbleAppearance.IdleBehavior.ALWAYS_DOT) {
         Text(stringResource(R.string.bubble_always_dot_help), style = MaterialTheme.typography.bodySmall)
@@ -134,16 +136,16 @@ internal fun BubbleAppearanceSettings(prefs: SharedPreferences, grip: Boolean, r
  }
 
 @Composable
-private fun rememberIdleBehavior(prefs: SharedPreferences): State<BubbleAppearance.IdleBehavior> =
-    rememberPref(prefs, "float_idle_style") { BubbleAppearance.idleBehavior(it.getString("float_idle_style", "full")) }
+private fun rememberIdleBehavior(prefs: SharedPreferences, key: (String) -> String): State<BubbleAppearance.IdleBehavior> =
+    rememberPref(prefs, key("float_idle_style")) { prefs, k -> BubbleAppearance.idleBehavior(prefs.getString(k, "full")) }
 
 @Composable
-private fun rememberExtraSmall(prefs: SharedPreferences): State<Boolean> =
-    rememberPref(prefs, "float_extra_small") { it.getBoolean("float_extra_small", false) }
+private fun rememberExtraSmall(prefs: SharedPreferences, key: (String) -> String): State<Boolean> =
+    rememberPref(prefs, key("float_extra_small")) { prefs, k -> prefs.getBoolean(k, false) }
 
 @Composable
 private fun rememberUniformShape(prefs: SharedPreferences): State<Boolean> =
-    rememberPref(prefs, "float_shape") { BubbleAppearance.uniformShape(it.getString("float_shape", null)) }
+    rememberPref(prefs, "float_shape") { prefs, k -> BubbleAppearance.uniformShape(prefs.getString(k, null)) }
 
 /** Advanced: adaptive corners (fixed radius, rounder when smaller) or one uniform shape at every size. */
 @Composable
@@ -160,14 +162,14 @@ internal fun ButtonShapeSetting(prefs: SharedPreferences, refresh: () -> Unit) {
 }
 
 @Composable
-private fun rememberIdleDelay(prefs: SharedPreferences): State<Int> =
-    rememberPref(prefs, "float_idle_delay") { BubbleAppearance.idleDelayMs(it.getInt("float_idle_delay", BubbleAppearance.IDLE_DELAY_DEFAULT_MS)) }
+private fun rememberIdleDelay(prefs: SharedPreferences, key: (String) -> String): State<Int> =
+    rememberPref(prefs, key("float_idle_delay")) { prefs, k -> BubbleAppearance.idleDelayMs(prefs.getInt(k, BubbleAppearance.IDLE_DELAY_DEFAULT_MS)) }
 
 @Composable
-private fun <T> rememberPref(prefs: SharedPreferences, key: String, read: (SharedPreferences) -> T): State<T> {
-    val state = remember(prefs) { mutableStateOf(read(prefs)) }
-    DisposableEffect(prefs) {
-        val listener = SharedPreferences.OnSharedPreferenceChangeListener { changed, changedKey -> if (changedKey == key) state.value = read(changed) }
+private fun <T> rememberPref(prefs: SharedPreferences, key: String, read: (SharedPreferences, String) -> T): State<T> {
+    val state = remember(prefs, key) { mutableStateOf(read(prefs, key)) }
+    DisposableEffect(prefs, key) {
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { changed, changedKey -> if (changedKey == key) state.value = read(changed, key) }
         prefs.registerOnSharedPreferenceChangeListener(listener)
         onDispose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
     }
@@ -176,10 +178,10 @@ private fun <T> rememberPref(prefs: SharedPreferences, key: String, read: (Share
 
 /** Advanced: how long the button stays full size before shrinking. Greyed out when no idle choice uses it. */
 @Composable
-internal fun IdleDelaySetting(prefs: SharedPreferences, grip: Boolean, refresh: () -> Unit) {
+internal fun IdleDelaySetting(prefs: SharedPreferences, grip: Boolean, key: (String) -> String = { it }, refresh: () -> Unit) {
     val hapticView = LocalView.current
-    val behavior = BubbleAppearance.effective(rememberIdleBehavior(prefs).value, grip, rememberExtraSmall(prefs).value)
-    val stored by rememberIdleDelay(prefs)
+    val behavior = BubbleAppearance.effective(rememberIdleBehavior(prefs, key).value, grip, rememberExtraSmall(prefs, key).value)
+    val stored by rememberIdleDelay(prefs, key)
     var delayMs by remember(stored) { mutableIntStateOf(stored) }
     val options = BubbleAppearance.idleDelayOptionsMs
     val enabled = behavior.usesDelay
@@ -197,7 +199,7 @@ internal fun IdleDelaySetting(prefs: SharedPreferences, grip: Boolean, refresh: 
                 ViewCompat.performHapticFeedback(hapticView, HapticFeedbackConstantsCompat.SEGMENT_TICK)
             }
         },
-        onValueChangeFinished = { prefs.edit { putInt("float_idle_delay", delayMs) }; refresh() },
+        onValueChangeFinished = { prefs.edit { putInt(key("float_idle_delay"), delayMs) }; refresh() },
         modifier = Modifier.fillMaxWidth().semantics { contentDescription = label; stateDescription = value })
     StableText(listOf(stringResource(R.string.bubble_idle_delay_sub), stringResource(R.string.bubble_idle_delay_off)), if (enabled) 0 else 1,
         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -209,4 +211,66 @@ private fun AppearanceMark(size: Int) {
         border = BorderStroke(1.dp, Color.Black)) {
         if (size > 8) Icon(painterResource(R.drawable.ic_stat_sync), null, Modifier.padding((size * 0.2f).dp), tint = Color.Black)
     }
+}
+
+/** Foldables only (#113): opt-in separate settings per screen; turning it off confirms first. */
+@Composable
+internal fun SplitScreensSetting(split: Boolean, onChange: (Boolean) -> Unit) {
+    var confirmOff by remember { mutableStateOf(false) }
+    val label = stringResource(R.string.fold_split)
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(vertical = 8.dp).toggleable(split, role = Role.Switch, onValueChange = {
+        if (it) onChange(true) else confirmOff = true
+    }), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(label, style = MaterialTheme.typography.bodyLarge)
+            Text(stringResource(R.string.fold_split_sub), style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Spacer(Modifier.width(16.dp))
+        Switch(checked = split, onCheckedChange = null)
+    }
+    if (confirmOff) AlertDialog(
+        onDismissRequest = { confirmOff = false },
+        title = { Text(stringResource(R.string.fold_split_off_title)) },
+        text = { Text(stringResource(R.string.fold_split_off_body)) },
+        confirmButton = { TextButton(onClick = { confirmOff = false; onChange(false) }) { Text(stringResource(R.string.fold_split_off_confirm)) } },
+        dismissButton = { TextButton(onClick = { confirmOff = false }) { Text(stringResource(android.R.string.cancel)) } },
+    )
+}
+
+/** "Cover screen | Inner screen": which screen's settings the controls below edit. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun ScreenPicker(selected: FoldScreens.Screen, inUse: FoldScreens.Screen, onSelect: (FoldScreens.Screen) -> Unit) {
+    val inUseLabel = stringResource(R.string.fold_in_use)
+    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+        FoldScreens.Screen.entries.forEachIndexed { index, screen ->
+            val name = stringResource(if (screen == FoldScreens.Screen.COVER) R.string.fold_cover else R.string.fold_inner)
+            SegmentedButton(
+                selected = screen == selected,
+                onClick = { onSelect(screen) },
+                shape = SegmentedButtonDefaults.itemShape(index, FoldScreens.Screen.entries.size),
+                modifier = Modifier.heightIn(min = 56.dp)
+                    .semantics { contentDescription = if (screen == inUse) "$name, $inUseLabel" else name },
+                label = {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(name)
+                        if (screen == inUse) Text(inUseLabel, style = MaterialTheme.typography.labelSmall)
+                    }
+                },
+            )
+        }
+    }
+}
+
+/** Per-screen position: placed by dragging on that screen; reset puts it back to the default spot. */
+@Composable
+internal fun PositionSetting(prefs: SharedPreferences, inUse: Boolean, key: (String) -> String, refresh: () -> Unit) {
+    Text(stringResource(R.string.fold_position), style = MaterialTheme.typography.bodyMedium)
+    Text(stringResource(if (inUse) R.string.fold_position_here else R.string.fold_position_elsewhere),
+        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    OutlinedButton(onClick = {
+        prefs.edit { remove(key("float_x")); remove(key("float_y")) }
+        refresh()
+    }) { Text(stringResource(R.string.fold_position_reset)) }
 }
