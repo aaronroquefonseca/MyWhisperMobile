@@ -638,16 +638,39 @@ class KeyboardViewController: UIInputViewController {
     /// (mic session, settings); iOS shows a back link to the previous app.
     private func openMyWhisper(_ destination: String) {
         guard let url = NSURL(string: "mywhisper://" + destination) else { return }
-        // UIApplication.open is unavailable to extensions; reach the host app through the responder chain.
-        let selector = NSSelectorFromString("openURL:options:completionHandler:")
+        // UIApplication.shared is unavailable to extensions: ask the class for it, else walk the responder chain.
+        var application = (UIApplication.self as AnyObject)
+            .perform(NSSelectorFromString("sharedApplication"))?.takeUnretainedValue() as? UIApplication
         var responder: UIResponder? = self
-        while let current = responder {
-            if let application = current as? UIApplication, application.responds(to: selector) {
-                typealias Open = @convention(c) (AnyObject, Selector, NSURL, NSDictionary, AnyObject?) -> Void
-                unsafeBitCast(application.method(for: selector), to: Open.self)(application, selector, url, NSDictionary(), nil)
-                return
-            }
+        while application == nil, let current = responder {
+            application = current as? UIApplication
             responder = current.next
+        }
+        let selector = NSSelectorFromString("openURL:options:completionHandler:")
+        guard let application, application.responds(to: selector) else {
+            showNotice("Keyboard can't reach MyWhisper")
+            return
+        }
+        typealias Completion = @convention(block) (Bool) -> Void
+        typealias Open = @convention(c) (AnyObject, Selector, NSURL, NSDictionary, Completion?) -> Void
+        let completion: Completion = { [weak self] opened in
+            guard !opened else { return }
+            DispatchQueue.main.async { self?.showNotice("iOS blocked opening MyWhisper") }
+        }
+        unsafeBitCast(application.method(for: selector), to: Open.self)(application, selector, url, NSDictionary(), completion)
+    }
+
+    /// A short message in place of the suggestions.
+    private func showNotice(_ message: String) {
+        guard let stripNotice, transfer == nil else { return }
+        stripNotice.setTitle(message, for: .normal)
+        stripNotice.isEnabled = false
+        setStripNoticeVisible(true)
+        UIAccessibility.post(notification: .announcement, argument: message)
+        Task { @MainActor [weak self, weak stripNotice] in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            guard let self, let stripNotice, self.stripNotice === stripNotice, self.transfer == nil else { return }
+            self.setStripNoticeVisible(false)
         }
     }
 
