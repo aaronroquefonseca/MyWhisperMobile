@@ -99,11 +99,11 @@
     <string name="fold_split_off_confirm">Desactivar</string>
     <string name="fold_cover">Pantalla exterior</string>
     <string name="fold_inner">Pantalla interior</string>
-    <string name="fold_in_use">En uso</string>
+    <string name="fold_to_cover">Pliega el teléfono para configurar la pantalla exterior.</string>
+    <string name="fold_to_inner">Despliega el teléfono para configurar la pantalla interior.</string>
     <string name="fold_both">Ambas pantallas</string>
     <string name="fold_position">Posición</string>
     <string name="fold_position_here">Arrastra el botón flotante en esta pantalla para moverlo.</string>
-    <string name="fold_position_elsewhere">Mueve el botón en esa pantalla para colocarlo.</string>
     <string name="fold_position_reset">Restablecer posición</string>
     <string name="unified_notif_channel">Estado del dictado y la sincronización</string>
     <string name="float_notif_title">Botón flotante MyWhisper</string>

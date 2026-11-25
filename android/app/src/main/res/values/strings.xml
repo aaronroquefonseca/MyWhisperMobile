@@ -99,11 +99,11 @@
     <string name="fold_split_off_confirm">Turn off</string>
     <string name="fold_cover">Cover screen</string>
     <string name="fold_inner">Inner screen</string>
-    <string name="fold_in_use">In use</string>
+    <string name="fold_to_cover">Fold the phone to set up the cover screen.</string>
+    <string name="fold_to_inner">Unfold the phone to set up the inner screen.</string>
     <string name="fold_both">Both screens</string>
     <string name="fold_position">Position</string>
     <string name="fold_position_here">Drag the floating button on this screen to move it.</string>
-    <string name="fold_position_elsewhere">Move the button on that screen to place it.</string>
     <string name="fold_position_reset">Reset position</string>
     <string name="unified_notif_channel">Dictation and sync status</string>
     <string name="float_notif_title">MyWhisper floating button</string>

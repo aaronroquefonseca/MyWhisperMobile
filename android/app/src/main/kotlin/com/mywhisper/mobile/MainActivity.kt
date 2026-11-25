@@ -2586,19 +2586,24 @@ class MainActivity : ComponentActivity() {
                 // Foldables (#113): optional separate settings per screen. Off = one shared set, as before.
                 val foldable = remember { FoldScreens.supported(setupPrefs) }
                 var split by remember { mutableStateOf(foldable && FoldScreens.split(setupPrefs)) }
+                // Per-screen settings edit the screen in use, so the preview matches the real button.
                 // The activity is recreated on fold/unfold, so this stays current.
-                val inUse = remember { FoldScreens.current(this@MainActivity) }
-                var screen by remember { mutableStateOf(inUse) }
+                val screen = remember { FoldScreens.current(this@MainActivity) }
                 val screenKey: (String) -> String = { FoldScreens.key(it, screen, split) }
                 if (foldable) {
                     SplitScreensSetting(split) {
                         split = it
-                        screen = inUse
                         FoldScreens.setSplit(setupPrefs, it)
                         OverlayService.start(this@MainActivity)
                     }
                 }
-                if (split) ScreenPicker(screen, inUse) { screen = it }
+                if (split) {
+                    val inner = screen == FoldScreens.Screen.INNER
+                    Text(stringResource(if (inner) R.string.fold_inner else R.string.fold_cover), style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(top = 8.dp).semantics { heading() })
+                    Text(stringResource(if (inner) R.string.fold_to_cover else R.string.fold_to_inner), style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
                 // Optional grip (default off): the mic drags itself.
                 val grabKey = screenKey("float_grab")
                 var grab by remember(grabKey) {
@@ -2632,7 +2637,7 @@ class MainActivity : ComponentActivity() {
                     Spacer(Modifier.height(8.dp))
                     IdleDelaySetting(setupPrefs, grab, screenKey) { OverlayService.start(this@MainActivity) }
                     Spacer(Modifier.height(8.dp))
-                    PositionSetting(setupPrefs, screen == inUse, screenKey) { OverlayService.start(this@MainActivity) }
+                    PositionSetting(setupPrefs, screenKey) { OverlayService.start(this@MainActivity) }
                     HorizontalDivider(Modifier.padding(top = 16.dp, bottom = 8.dp))
                     Text(stringResource(R.string.fold_both), style = MaterialTheme.typography.titleMedium,
                         modifier = Modifier.padding(bottom = 8.dp).semantics { heading() })

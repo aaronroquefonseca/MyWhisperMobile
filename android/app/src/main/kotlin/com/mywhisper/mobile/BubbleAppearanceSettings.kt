@@ -238,36 +238,11 @@ internal fun SplitScreensSetting(split: Boolean, onChange: (Boolean) -> Unit) {
     )
 }
 
-/** "Cover screen | Inner screen": which screen's settings the controls below edit. */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-internal fun ScreenPicker(selected: FoldScreens.Screen, inUse: FoldScreens.Screen, onSelect: (FoldScreens.Screen) -> Unit) {
-    val inUseLabel = stringResource(R.string.fold_in_use)
-    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-        FoldScreens.Screen.entries.forEachIndexed { index, screen ->
-            val name = stringResource(if (screen == FoldScreens.Screen.COVER) R.string.fold_cover else R.string.fold_inner)
-            SegmentedButton(
-                selected = screen == selected,
-                onClick = { onSelect(screen) },
-                shape = SegmentedButtonDefaults.itemShape(index, FoldScreens.Screen.entries.size),
-                modifier = Modifier.heightIn(min = 56.dp)
-                    .semantics { contentDescription = if (screen == inUse) "$name, $inUseLabel" else name },
-                label = {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(name)
-                        if (screen == inUse) Text(inUseLabel, style = MaterialTheme.typography.labelSmall)
-                    }
-                },
-            )
-        }
-    }
-}
-
 /** Per-screen position: placed by dragging on that screen; reset puts it back to the default spot. */
 @Composable
-internal fun PositionSetting(prefs: SharedPreferences, inUse: Boolean, key: (String) -> String, refresh: () -> Unit) {
+internal fun PositionSetting(prefs: SharedPreferences, key: (String) -> String, refresh: () -> Unit) {
     Text(stringResource(R.string.fold_position), style = MaterialTheme.typography.bodyMedium)
-    Text(stringResource(if (inUse) R.string.fold_position_here else R.string.fold_position_elsewhere),
+    Text(stringResource(R.string.fold_position_here),
         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     OutlinedButton(onClick = {
         prefs.edit { remove(key("float_x")); remove(key("float_y")) }
