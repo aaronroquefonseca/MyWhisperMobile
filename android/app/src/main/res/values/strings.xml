@@ -676,7 +676,7 @@
     <string name="sync_waiting_title">Waiting for response (%1$d)</string>
     <string name="sync_waiting_sub">You sent a pairing request. Accept it on the other device; no action needed here except cancel.</string>
     <!-- Settings guide (#125): one line before a Settings jump, and the picture-in-picture text. -->
-    <string name="guide_hint_overlay">Turn on “Allow display over other apps”. MyWhisper comes back on its own.</string>
+    <string name="guide_hint_overlay">Find MyWhisper and turn on “Allow display over other apps”. MyWhisper comes back on its own.</string>
     <string name="guide_hint_channel">Turn off the switch at the top. MyWhisper comes back on its own.</string>
     <string name="guide_hint_a11y">Android will show a warning: tap Allow. MyWhisper comes back on its own.</string>
     <string name="guide_a11y_title">Turn on MyWhisper</string>

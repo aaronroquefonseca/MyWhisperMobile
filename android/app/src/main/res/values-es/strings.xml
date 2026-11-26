@@ -680,7 +680,7 @@
     <string name="sync_waiting_title">Esperando respuesta (%1$d)</string>
     <string name="sync_waiting_sub">Enviaste una solicitud de emparejamiento. Acéptala en el otro dispositivo; aquí solo puedes cancelarla.</string>
     <!-- Guía de Ajustes (#125): una línea antes de abrir Ajustes y el texto de imagen en imagen. -->
-    <string name="guide_hint_overlay">Activa “Permitir mostrar sobre otras aplicaciones”. MyWhisper vuelve solo.</string>
+    <string name="guide_hint_overlay">Busca MyWhisper y activa “Permitir mostrar sobre otras aplicaciones”. MyWhisper vuelve solo.</string>
     <string name="guide_hint_channel">Desactiva el interruptor de arriba. MyWhisper vuelve solo.</string>
     <string name="guide_hint_a11y">Android mostrará un aviso: toca Permitir. MyWhisper vuelve solo.</string>
     <string name="guide_a11y_title">Activa MyWhisper</string>
