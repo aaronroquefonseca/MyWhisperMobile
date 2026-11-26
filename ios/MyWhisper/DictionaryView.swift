@@ -91,8 +91,12 @@ struct DictionaryView: View {
     @State private var pendingWordDelete: String?
     @State private var pendingSnippetDelete: String?
 
-    init(model: DictionaryViewModel = DictionaryViewModel()) {
+    /// Devices lives in Settings; this row switches there instead of pushing a copy here.
+    var onOpenSettings: (SettingsRoute) -> Void
+
+    init(model: DictionaryViewModel = DictionaryViewModel(), onOpenSettings: @escaping (SettingsRoute) -> Void = { _ in }) {
         _model = StateObject(wrappedValue: model)
+        self.onOpenSettings = onOpenSettings
     }
 
     var body: some View {
@@ -143,15 +147,14 @@ struct DictionaryView: View {
     private func dictionaryList<Rows: View>(@ViewBuilder rows: () -> Rows) -> some View {
         List {
             Section {
-                NavigationLink {
-                    DevicesView()
-                } label: {
+                Button { onOpenSettings(.devices) } label: {
                     WhisperDestinationLabel(
                         title: keyboardStrings.devices,
                         summary: keyboardStrings.syncSummary,
                         symbol: "antenna.radiowaves.left.and.right"
                     )
                 }
+                .foregroundStyle(.primary)
             }
             if let error = model.error {
                 Section {

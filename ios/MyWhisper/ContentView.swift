@@ -94,7 +94,7 @@ struct ContentView: View {
                 }
             }
         case .dictionary:
-            DictionaryView()
+            DictionaryView(onOpenSettings: openSettings)
                 .navigationTitle(tab.title(using: tabStrings))
         case .settings:
             EmptyView()
