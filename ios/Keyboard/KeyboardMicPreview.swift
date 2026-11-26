@@ -273,7 +273,7 @@ final class KeyboardMicPreview: UIView {
     }
 
     private static var sessionIsLive: Bool {
-        KeyboardDictationMailbox.shared?.meter?.isCurrent(at: Date()) == true
+        KeyboardDictationMailbox.shared?.standby?.isAvailable(at: Date()) == true
     }
 
     private func activate() {
@@ -352,6 +352,7 @@ final class KeyboardMicPreview: UIView {
         if active {
             if meterTask == nil { startMeter() }
         } else {
+            if meterTask != nil { KeyboardDictationMailbox.shared?.clearListen() }
             meterTask?.cancel()
             meterTask = nil
             meterHint.isHidden = true
@@ -364,13 +365,22 @@ final class KeyboardMicPreview: UIView {
         meterHint.text = openSession == nil ? "Allow Full Access for mic levels" : "Start the mic in MyWhisper"
         meterTask = Task { @MainActor [weak self] in
             let mailbox = KeyboardDictationMailbox.shared
+            var lastRequest = Date.distantPast
             while !Task.isCancelled {
                 guard let self else { return }
+                let now = Date()
+                // MyWhisper turns the mic on only while these keep coming.
+                if now.timeIntervalSince(lastRequest) > 0.2 {
+                    try? mailbox?.requestListening(at: now)
+                    lastRequest = now
+                }
                 let reading = mailbox?.meter
-                let available = reading?.isCurrent(at: Date()) == true
-                self.meterHint.isHidden = available
-                self.waveform.isHidden = !available
-                self.waveform.push(available ? reading?.level ?? 0 : 0)
+                let measured = reading?.isCurrent(at: now) == true
+                // While the mic warms up, show the resting bars rather than the setup hint.
+                let ready = measured || mailbox?.standby?.isAvailable(at: now) == true
+                self.meterHint.isHidden = ready
+                self.waveform.isHidden = !ready
+                self.waveform.push(measured ? reading?.level ?? 0 : 0)
                 do {
                     try await Task.sleep(nanoseconds: 40_000_000)
                 } catch {

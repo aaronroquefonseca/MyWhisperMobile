@@ -49,6 +49,15 @@ struct KeyboardDictationMailbox {
         }
     }
 
+    /// Sent by the keyboard while its mic key is held; MyWhisper records only while this is fresh.
+    struct ListenRequest: Codable {
+        let sent: Date
+
+        func isCurrent(at now: Date) -> Bool {
+            (0...0.6).contains(now.timeIntervalSince(sent))
+        }
+    }
+
     let directory: URL
 
     static var shared: Self? {
@@ -59,6 +68,9 @@ struct KeyboardDictationMailbox {
     var request: Request? { read("request") }
     var reply: Reply? { read("reply") }
     var meter: MeterReading? { read("meter") }
+    /// MyWhisper's heartbeat while it waits in the background, mic off, for the keyboard.
+    var standby: Session? { read("standby") }
+    var listen: ListenRequest? { read("listen") }
 
     func publish(_ session: Session) throws { try write(session, to: "session") }
     func send(_ request: Request) throws { try write(request, to: "request") }
@@ -66,6 +78,10 @@ struct KeyboardDictationMailbox {
 
     func publishMeter(_ reading: MeterReading) throws { try write(reading, to: "meter") }
     func clearMeter() { remove("meter") }
+    func publishStandby(_ session: Session) throws { try write(session, to: "standby") }
+    func clearStandby() { remove("standby") }
+    func requestListening(at now: Date = Date()) throws { try write(ListenRequest(sent: now), to: "listen") }
+    func clearListen() { remove("listen") }
 
     func clearSession() { remove("session") }
     func clearReply() { remove("reply") }

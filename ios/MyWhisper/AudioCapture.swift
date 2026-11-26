@@ -31,6 +31,8 @@ final class AudioCapture {
     /// Fired on audio-session interruption (call/Siri). Engine already
     /// stopped, partial audio kept in the core.
     var onInterruption: (() -> Void)?
+    /// Leave the audio session active on stop, for an owner that keeps it running (keyboard standby).
+    var keepsSessionActive = false
 
     private let engine = AVAudioEngine()
     private let mutex = NSLock()
@@ -102,7 +104,9 @@ final class AudioCapture {
                 channels: Self.channelCount, interleaved: true
               ),
               let converter = AVAudioConverter(from: hardware, to: format) else {
-            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            if !keepsSessionActive {
+                try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            }
             onError?("mic unavailable on this device")
             return false
         }
@@ -136,7 +140,9 @@ final class AudioCapture {
         } catch {
             teardownEngine()
             removeInterruptionObserver()
-            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            if !keepsSessionActive {
+                try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            }
             if prepareUtterance { try? CoreBridge.cancelUtterance() }
             onError?("mic start: \(error.localizedDescription)")
             return false
@@ -156,7 +162,9 @@ final class AudioCapture {
         if was {
             teardownEngine()
             removeInterruptionObserver()
-            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            if !keepsSessionActive {
+                try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            }
         }
     }
 

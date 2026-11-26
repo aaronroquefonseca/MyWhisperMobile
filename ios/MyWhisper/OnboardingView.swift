@@ -363,8 +363,8 @@ private struct KeyboardMicPreviewSetup: View {
             }
             if let error = session.error { Text(error).foregroundStyle(.secondary) }
         } footer: {
-            Text(label("Tapping the MyWhisper key starts this for you. The microphone stays on in the background until you stop it, and shares only volume levels with the keyboard.",
-                       "Al tocar la tecla de MyWhisper se inicia solo. El micrófono sigue activo en segundo plano hasta que lo detengas y solo comparte el nivel de volumen con el teclado."))
+            Text(label("Tapping the MyWhisper key starts this for you. MyWhisper then waits in the background: the microphone turns on only while you hold the key, and shares only volume levels with the keyboard.",
+                       "Al tocar la tecla de MyWhisper se inicia solo. MyWhisper espera en segundo plano: el micrófono solo se activa mientras mantienes pulsada la tecla y solo comparte el nivel de volumen con el teclado."))
         }
         .whisperRowSurface()
     }
