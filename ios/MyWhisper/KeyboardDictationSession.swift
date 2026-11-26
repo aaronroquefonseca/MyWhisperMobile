@@ -218,8 +218,10 @@ final class KeyboardMicLevelSession: ObservableObject {
     @Published private(set) var error: String?
     let isAvailable = KeyboardDictationMailbox.shared != nil
 
-    /// Renders silence: an active audio app keeps running in the background without the mic.
+    /// Plays a looping silent buffer: iOS keeps an app that is playing audio running in the
+    /// background, without the mic. An engine with nothing playing was suspended.
     private let keepAlive = AVAudioEngine()
+    private let silence = AVAudioPlayerNode()
     private var capture: AudioCapture?
     private var timer: Timer?
     private var interruptionObserver: NSObjectProtocol?
@@ -237,9 +239,7 @@ final class KeyboardMicLevelSession: ObservableObject {
                 .playAndRecord, mode: .measurement, options: [.mixWithOthers, .defaultToSpeaker]
             )
             try AVAudioSession.sharedInstance().setActive(true)
-            _ = keepAlive.mainMixerNode
-            keepAlive.prepare()
-            try keepAlive.start()
+            try startSilence()
         } catch {
             self.error = "Couldn’t keep MyWhisper ready for the keyboard."
             return
@@ -270,6 +270,7 @@ final class KeyboardMicLevelSession: ObservableObject {
         interruptionObserver = nil
         capture?.stop()
         capture = nil
+        silence.stop()
         keepAlive.stop()
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         if let mailbox = KeyboardDictationMailbox.shared {
@@ -282,9 +283,13 @@ final class KeyboardMicLevelSession: ObservableObject {
 
     private func tick(_ mailbox: KeyboardDictationMailbox) {
         let now = Date()
-        guard keepAlive.isRunning else {
-            stop()
-            return
+        // A route or category change stops the engine; restart it rather than dropping the session.
+        if !keepAlive.isRunning || !silence.isPlaying {
+            guard (try? startSilence()) != nil else {
+                stop()
+                error = "MyWhisper stopped waiting for the keyboard."
+                return
+            }
         }
         if now >= nextHeartbeat {
             try? mailbox.publishStandby(.init(id: sessionID, heartbeat: now))
@@ -309,6 +314,26 @@ final class KeyboardMicLevelSession: ObservableObject {
         guard let capture, capture.running else { return }
         // A missed write (busy disk) skips one reading; it doesn't end the session.
         try? mailbox.publishMeter(.init(level: peak.get(), measured: now))
+    }
+
+    private func startSilence() throws {
+        guard let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 1),
+              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 44_100) else { return }
+        buffer.frameLength = buffer.frameCapacity
+        if let samples = buffer.floatChannelData?[0] {
+            samples.update(repeating: 0, count: Int(buffer.frameLength))
+        }
+        if silence.engine == nil {
+            keepAlive.attach(silence)
+            keepAlive.connect(silence, to: keepAlive.mainMixerNode, format: format)
+        }
+        if !keepAlive.isRunning {
+            keepAlive.prepare()
+            try keepAlive.start()
+        }
+        silence.stop()
+        silence.scheduleBuffer(buffer, at: nil, options: .loops)
+        silence.play()
     }
 
     private func startCapture() -> Bool {
