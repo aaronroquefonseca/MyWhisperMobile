@@ -446,6 +446,228 @@ pub unsafe extern "C" fn mywhisper_delete_snippet(trigger: *const c_char) -> *mu
     string_to_c(&out)
 }
 
+fn engine_dir() -> Result<PathBuf, String> {
+    with_engine(
+        |e| Ok(e.dir().to_path_buf()),
+        || Err("engine not open".to_string()),
+    )
+}
+
+fn string_result(r: Result<String, String>) -> String {
+    match r {
+        Ok(s) => ok_json(serde_json::Value::String(s)),
+        Err(err) => err_json(err),
+    }
+}
+
+// -- stats, retention, prompt (JNI twins in lib.rs) ------------------------
+
+pub fn default_cleanup_prompt_rs() -> String {
+    ok_json(serde_json::Value::String(
+        crate::engine::DEFAULT_CLEANUP_PROMPT.to_string(),
+    ))
+}
+
+pub fn purge_history_rs(days: i32) -> String {
+    with_engine(
+        |e| match e.purge_history(days.max(0) as u32) {
+            Ok(n) => ok_json(serde_json::json!({"removed": n})),
+            Err(err) => err_json(err),
+        },
+        || err_json("engine not open"),
+    )
+}
+
+pub fn usage_stats_rs() -> String {
+    with_engine(
+        |e| {
+            let node = e.node_id().to_string();
+            match crate::store::Store::open(&e.dir().join("state.db")) {
+                Ok(s) => match s.usage_stats() {
+                    Ok(u) => ok_json(serde_json::json!({
+                        "wordsSpoken": u.words_spoken,
+                        "dictations": u.dictations,
+                        "wordsPerMinute": u.words_per_minute,
+                        "streakDays": crate::streak_days(&s),
+                        "nodeId": node,
+                    })),
+                    Err(err) => err_json(format!("stats: {err}")),
+                },
+                Err(err) => err_json(format!("open db: {err}")),
+            }
+        },
+        || err_json("engine not open"),
+    )
+}
+
+/// `[{dayStart, words, utterances}]` for the trailing `days` days (dayStart = epoch seconds).
+pub fn daily_activity_rs(days: i32) -> String {
+    with_engine(
+        |e| {
+            match crate::store::Store::open(&e.dir().join("state.db")) {
+            Ok(s) => match s.daily_aggregates(days.max(1) as u32) {
+                Ok(rows) => ok_json(serde_json::Value::Array(
+                    rows.iter()
+                        .map(|(day, words, n)| {
+                            serde_json::json!({"dayStart": day * 86400, "words": words, "utterances": n})
+                        })
+                        .collect(),
+                )),
+                Err(err) => err_json(format!("activity: {err}")),
+            },
+            Err(err) => err_json(format!("open db: {err}")),
+        }
+        },
+        || err_json("engine not open"),
+    )
+}
+
+/// The explicit sync device name, else the generated one (same as desktop).
+pub fn display_name_rs() -> String {
+    with_engine(
+        |e| {
+            let name = serde_json::from_str::<serde_json::Value>(&e.settings_json())
+                .ok()
+                .and_then(|v| {
+                    v.pointer("/sync/device_name")
+                        .and_then(|n| n.as_str())
+                        .map(str::to_string)
+                })
+                .unwrap_or_default();
+            ok_json(serde_json::Value::String(crate::device::display_name(
+                &name,
+                e.node_id(),
+            )))
+        },
+        || err_json("engine not open"),
+    )
+}
+
+/// Envelope (`data`: removed rows).
+#[unsafe(no_mangle)]
+pub extern "C" fn mywhisper_purge_history(days: c_int) -> *mut c_char {
+    string_to_c(&purge_history_rs(days))
+}
+
+/// Envelope (`data`: the built-in cleanup prompt).
+#[unsafe(no_mangle)]
+pub extern "C" fn mywhisper_default_cleanup_prompt() -> *mut c_char {
+    string_to_c(&default_cleanup_prompt_rs())
+}
+
+/// Envelope (`data`: `{wordsSpoken, dictations, wordsPerMinute, streakDays, nodeId}`).
+#[unsafe(no_mangle)]
+pub extern "C" fn mywhisper_usage_stats() -> *mut c_char {
+    string_to_c(&usage_stats_rs())
+}
+
+/// Envelope (`data`: `[{dayStart, words, utterances}]`).
+#[unsafe(no_mangle)]
+pub extern "C" fn mywhisper_daily_activity(days: c_int) -> *mut c_char {
+    string_to_c(&daily_activity_rs(days))
+}
+
+/// Envelope (`data`: this device's display name).
+#[unsafe(no_mangle)]
+pub extern "C" fn mywhisper_display_name() -> *mut c_char {
+    string_to_c(&display_name_rs())
+}
+
+// -- sync (JNI twins in lib.rs) ---------------------------------------------
+
+/// Envelope (`data`: status text). Starts listener, discovery and loops from settings.
+#[unsafe(no_mangle)]
+pub extern "C" fn mywhisper_sync_start() -> *mut c_char {
+    string_to_c(&string_result(
+        engine_dir().and_then(crate::sync_ctl::sync_start),
+    ))
+}
+
+/// Envelope (`data: null`).
+#[unsafe(no_mangle)]
+pub extern "C" fn mywhisper_sync_stop() -> *mut c_char {
+    crate::sync_ctl::sync_stop();
+    string_to_c(&ok_json(serde_json::Value::Null))
+}
+
+/// Raw status JSON (envelope on error, like the JNI twin).
+#[unsafe(no_mangle)]
+pub extern "C" fn mywhisper_sync_status() -> *mut c_char {
+    let out = match engine_dir() {
+        Ok(dir) => crate::sync_ctl::sync_status_json(&dir),
+        Err(err) => err_json(err),
+    };
+    string_to_c(&out)
+}
+
+/// Raw peers JSON array (`[]` when the engine is closed).
+#[unsafe(no_mangle)]
+pub extern "C" fn mywhisper_sync_peers() -> *mut c_char {
+    let out = match engine_dir() {
+        Ok(dir) => crate::sync_ctl::sync_peers_json(&dir),
+        Err(_) => "[]".to_string(),
+    };
+    string_to_c(&out)
+}
+
+/// Manual pairing by ID. Envelope (`data`: status text).
+/// # Safety
+/// Each pointer must be a valid NUL-terminated C string or NULL (fails closed).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mywhisper_sync_add(
+    node_id: *const c_char,
+    address: *const c_char,
+    name: *const c_char,
+) -> *mut c_char {
+    let out = (|| -> Result<String, String> {
+        let id = unsafe { cstr_to_string(node_id) }?;
+        let addr = unsafe { cstr_to_string(address) }.unwrap_or_default();
+        let nm = unsafe { cstr_to_string(name) }.unwrap_or_default();
+        crate::sync_ctl::sync_add(&engine_dir()?, &id, &addr, &nm)
+    })();
+    string_to_c(&string_result(out))
+}
+
+/// Accept or reject a peer. Envelope (`data`: status text).
+/// # Safety
+/// `node_id` must be a valid NUL-terminated C string or NULL (fails closed).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mywhisper_sync_trust(node_id: *const c_char, accept: bool) -> *mut c_char {
+    let out = (|| -> Result<String, String> {
+        let id = unsafe { cstr_to_string(node_id) }?;
+        crate::sync_ctl::sync_set_trust(&engine_dir()?, &id, accept)
+    })();
+    string_to_c(&string_result(out))
+}
+
+/// Blocking single-peer round (call off the main thread). Envelope (`data`: status text).
+/// # Safety
+/// `node_id` must be a valid NUL-terminated C string or NULL (fails closed).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mywhisper_sync_now(node_id: *const c_char) -> *mut c_char {
+    let out = (|| -> Result<String, String> {
+        let id = unsafe { cstr_to_string(node_id) }?;
+        crate::sync_ctl::sync_peer_now(&engine_dir()?, &id)
+    })();
+    string_to_c(&string_result(out))
+}
+
+/// Blocking round with every trusted peer (call off the main thread).
+/// Envelope (`data`: one status line per peer).
+#[unsafe(no_mangle)]
+pub extern "C" fn mywhisper_sync_all_now() -> *mut c_char {
+    let out = match engine_dir() {
+        Ok(dir) => ok_json(serde_json::Value::Array(
+            crate::sync_ctl::sync_all_now(&dir)
+                .into_iter()
+                .map(serde_json::Value::String)
+                .collect(),
+        )),
+        Err(err) => err_json(err),
+    };
+    string_to_c(&out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -519,6 +741,32 @@ mod tests {
         assert_eq!(data_of(&settings_put_rs(&body)), serde_json::Value::Null);
         let back: serde_json::Value = serde_json::from_str(&settings_get_rs()).unwrap();
         assert_eq!(back["privacy"]["history_enabled"], false);
+    }
+
+    #[test]
+    fn stats_prompt_purge_and_name_on_a_fresh_engine() {
+        let _guard = CAPPLE_TEST_LOCK.lock().unwrap();
+        open_test_engine();
+        let stats = data_of(&usage_stats_rs());
+        assert_eq!(stats["dictations"], 0);
+        assert_eq!(stats["streakDays"], 0);
+        assert!(data_of(&daily_activity_rs(7)).as_array().is_some());
+        assert!(
+            !data_of(&default_cleanup_prompt_rs())
+                .as_str()
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(data_of(&purge_history_rs(30))["removed"], 0);
+        assert!(!data_of(&display_name_rs()).as_str().unwrap().is_empty());
+        // Sync stays off until the user enables it in settings.
+        let refused: serde_json::Value = serde_json::from_str(
+            &engine_dir()
+                .and_then(crate::sync_ctl::sync_start)
+                .map_or_else(err_json, |s| ok_json(serde_json::Value::String(s))),
+        )
+        .unwrap();
+        assert_eq!(refused["ok"], false);
     }
 
     #[test]

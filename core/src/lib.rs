@@ -67,9 +67,8 @@ fn jstr(env: &mut JNIEnv, s: &str) -> jstring {
 /// Consecutive active days ending today or yesterday (desktop
 /// `app::streak` port over the local-day `active_days` list, desc).
 /// UTC day is used for the today/yesterday touch check (1-day
-/// tolerance covers the local-bucket skew).
-#[cfg(target_os = "android")]
-fn streak_days(store: &crate::store::Store) -> u32 {
+/// tolerance covers the local-bucket skew). Shared with `capple`.
+pub(crate) fn streak_days(store: &crate::store::Store) -> u32 {
     use std::time::{SystemTime, UNIX_EPOCH};
     let days = store.active_days().unwrap_or_default();
     let today_utc = SystemTime::now()
