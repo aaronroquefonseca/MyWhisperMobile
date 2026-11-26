@@ -166,7 +166,8 @@ struct OnboardingView: View {
         }
         .tint(WhisperColors.brandCyan)
         .background(WhisperColors.brandInk.ignoresSafeArea())
-        .preferredColorScheme(.dark)
+        // Always dark on the brand background; the app's theme sets the window's scheme above this.
+        .environment(\.colorScheme, .dark)
     }
 
     private var primaryTitle: String {
