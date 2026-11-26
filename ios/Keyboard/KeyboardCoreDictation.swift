@@ -42,12 +42,16 @@ final class KeyboardCoreDictation: KeyboardDictating {
             let result: Result<String, Error>
             if let error = self.beginError {
                 result = .failure(KeyboardDictationError(error))
+                DictationIssue.save(DictationIssue(cause: .other, detail: KeyboardDictationError(error).errorDescription ?? ""))
             } else {
                 result = Result { try CoreBridge.finishUtterance().text }.flatMapError { error in
                     // Same rules as the app: silence and too-short clips end quietly.
                     let failure = mapSttError(CoreError.displayMessage(for: error), languageCode: Locale.current.language.languageCode?.identifier)
-                    return shouldSurfaceSttError(failure) ? .failure(KeyboardDictationError.core(failure.userMessage)) : .success("")
+                    guard shouldSurfaceSttError(failure) else { return .success("") }
+                    DictationIssue.save(DictationIssue(cause: Self.cause(of: failure), detail: failure.raw))
+                    return .failure(KeyboardDictationError.core(failure.userMessage))
                 }
+                if case .success(let text) = result, !text.isEmpty { DictationIssue.save(nil) }
             }
             self.beginError = nil
             DispatchQueue.main.async { completion(result) }
@@ -58,6 +62,15 @@ final class KeyboardCoreDictation: KeyboardDictating {
         queue.async {
             self.beginError = nil
             try? CoreBridge.cancelUtterance()
+        }
+    }
+
+    private static func cause(of failure: SttFailure) -> DictationIssue.Cause {
+        switch failure.category {
+        case .localSkipped: return .noProvider
+        case .auth: return .signIn
+        case .network: return .unreachable
+        default: return .other
         }
     }
 

@@ -259,3 +259,12 @@
 "Cancel dictation" = "Cancelar dictado";
 "Microphone, recording, toggled on" = "Micrófono, grabando, manos libres";
 "Microphone, listening" = "Micrófono, escuchando";
+
+/* Last dictation problem */
+"Your last dictation didn’t work" = "Tu último dictado no funcionó";
+"There’s no speech provider set up yet, so nothing could be transcribed." = "Aún no hay ningún proveedor de voz configurado, así que no se pudo transcribir nada.";
+"Your speech provider refused the request. The API key may be missing or wrong." = "Tu proveedor de voz rechazó la petición. Puede que falte la clave de API o que sea incorrecta.";
+"MyWhisper couldn’t reach your speech provider. Check your internet connection or the server address." = "MyWhisper no pudo conectar con tu proveedor de voz. Revisa tu conexión a internet o la dirección del servidor.";
+"Something went wrong while turning your voice into text." = "Algo falló al convertir tu voz en texto.";
+"Check speech providers" = "Revisar proveedores de voz";
+"Dismiss" = "Descartar";

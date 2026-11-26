@@ -217,3 +217,31 @@ struct KeyboardPreferences: Codable, Equatable {
         guard self.transferText == transferText else { return nil }
     }
 }
+
+/// The keyboard's last failed dictation, shown as a card in the app's Activity tab like Android's
+/// `DictationIssue`. A small file in the shared container; a successful dictation clears it.
+struct DictationIssue: Codable, Equatable {
+    enum Cause: String, Codable { case noProvider, signIn, unreachable, other }
+
+    let cause: Cause
+    let detail: String
+
+    private static var url: URL? {
+        KeyboardPreferences.sharedContainerURL?.appendingPathComponent("last-dictation-issue.json")
+    }
+
+    static func load() -> DictationIssue? {
+        guard let url, let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(DictationIssue.self, from: data)
+    }
+
+    /// Nil clears it.
+    static func save(_ issue: DictationIssue?) {
+        guard let url else { return }
+        if let issue, let data = try? JSONEncoder().encode(issue) {
+            try? data.write(to: url, options: .atomic)
+        } else {
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
+}

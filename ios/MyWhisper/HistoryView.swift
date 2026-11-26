@@ -8,6 +8,7 @@ struct ActivityView: View {
     @State private var confirmingClear = false
     @State private var expandedOriginalID: String?
     @State private var lastCopied: String?
+    @State private var issue: DictationIssue?
     @State private var privacyOpen = false
     @State private var autoDeleteDays = "0"
     @State private var privacyMessage: String?
@@ -18,6 +19,7 @@ struct ActivityView: View {
     var body: some View {
         List {
             inputSection
+            if let issue { issueSection(issue) }
             usageSection
             privacySection
             historyHeader
@@ -36,9 +38,15 @@ struct ActivityView: View {
         .confirmationDialog("Delete all saved dictations?", isPresented: $confirmingClear, titleVisibility: .visible) {
             Button("Delete everything", role: .destructive, action: model.clearAll)
         }
-        .onAppear(perform: model.refresh)
+        .onAppear {
+            model.refresh()
+            issue = DictationIssue.load()
+        }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { model.refresh() }
+            if phase == .active {
+                model.refresh()
+                issue = DictationIssue.load()
+            }
         }
         .onChange(of: flow.showRecorder) { _, showing in
             if !showing { model.refresh() }
@@ -78,6 +86,40 @@ struct ActivityView: View {
             }
         }
         .whisperRowSurface()
+    }
+
+    /// Android's last-dictation problem card: the likely cause, the raw detail, a fix and a dismiss.
+    private func issueSection(_ issue: DictationIssue) -> some View {
+        Section {
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Your last dictation didn’t work", systemImage: "exclamationmark.triangle.fill")
+                    .font(.headline)
+                    .foregroundStyle(WhisperColors.error)
+                Text(Self.issueBody(issue.cause))
+                if !issue.detail.isEmpty {
+                    Text(issue.detail).font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
+                }
+                HStack {
+                    Button("Check speech providers", action: onOpenProviders)
+                    Spacer()
+                    Button("Dismiss") {
+                        DictationIssue.save(nil)
+                        self.issue = nil
+                    }
+                }
+                .buttonStyle(.borderless)
+            }
+        }
+        .whisperRowSurface()
+    }
+
+    private static func issueBody(_ cause: DictationIssue.Cause) -> LocalizedStringKey {
+        switch cause {
+        case .noProvider: return "There’s no speech provider set up yet, so nothing could be transcribed."
+        case .signIn: return "Your speech provider refused the request. The API key may be missing or wrong."
+        case .unreachable: return "MyWhisper couldn’t reach your speech provider. Check your internet connection or the server address."
+        case .other: return "Something went wrong while turning your voice into text."
+        }
     }
 
     private var usageSection: some View {
