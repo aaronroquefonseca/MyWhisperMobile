@@ -47,10 +47,13 @@ class KeyboardViewController: UIInputViewController {
     // Portrait metrics measured from the system keyboard on a 402 pt iPhone: 43 pt keys, 12 pt gaps.
     private static let rowHeight: CGFloat = 43
     private static let rowGap: CGFloat = 12
-    private static let stripHeight: CGFloat = 44
+    /// iOS draws a ~17 pt band above every third-party keyboard depending on the keyboard shown
+    /// before (Wispr Flow's too), and the keyboard can't see or prevent it. A slim strip keeps the
+    /// total within about 9 pt of the system keyboard's height with or without the band.
+    private static let stripHeight: CGFloat = 36
     /// Space between the strip and the first row; the bottom row sits on the keyboard's edge, as
     /// iOS already leaves room under it (the system keyboard's own row reaches lower, into the dock).
-    private static let stripGap: CGFloat = 8
+    private static let stripGap: CGFloat = 6
     private static let portraitHeight = stripHeight + stripGap + 4 * rowHeight + 3 * rowGap
     private static let numberRowHeight: CGFloat = 38
     private var pendingUndo: (original: String, replacement: String)?
