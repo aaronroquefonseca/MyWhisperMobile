@@ -547,22 +547,21 @@ class KeyboardViewController: UIInputViewController {
 
         let width = layout.width
         let pad: CGFloat = layout.compact ? 10 : 6
-        // About 280 pt in portrait: iOS sometimes forces roughly that height anyway and drew the
-        // difference as empty space above the toolbar, so the keyboard now always fills it.
         let rowHeight: CGFloat = layout.compact ? 31 : Self.rowHeight
         let gap: CGFloat = layout.compact ? 6 : Self.rowGap
         let stripHeight: CGFloat = layout.compact ? 36 : Self.stripHeight
-        if emojiMode, let query = emojiSearch {
-            addEmojiSearch(query: query, width: width, pad: pad, rowHeight: rowHeight, gap: gap)
-            return
-        }
         let numberRow = settings.showsNumberRow && !isNumberField
         let numberHeight: CGFloat = layout.compact ? 26 : Self.numberRowHeight
-        let extra = numberRow ? numberHeight + gap : 0
-        // The emoji picker is taller, as on the system keyboard, so emoji draw at full size.
-        let emojiExtra: CGFloat = emojiMode && !layout.compact ? 44 : 0
-        let height = stripHeight + extra + 4 * rowHeight + 3 * gap + 10 + emojiExtra
+        // Counted even in number fields, which spread it over their keys, so the height holds.
+        let extra = settings.showsNumberRow ? numberHeight + gap : 0
+        // One height for letters, symbols, emoji and emoji search: each change of the requested
+        // height risked iOS keeping a larger one and drawing it as an empty band above the toolbar.
+        let height = stripHeight + extra + 4 * rowHeight + 3 * gap + 10
         setKeyboardHeight(height)
+        if emojiMode, let query = emojiSearch {
+            addEmojiSearch(query: query, width: width, pad: pad, height: height, gap: gap)
+            return
+        }
 
         if emojiMode {
             addEmojiView(width: width, pad: pad, height: height, rowHeight: rowHeight)
@@ -586,7 +585,7 @@ class KeyboardViewController: UIInputViewController {
         }
         let step = keyHeight + gap
         if isNumberField {
-            addNumberPad(y: y, step: step, height: rowHeight, width: width, pad: pad)
+            addNumberPad(y: y, step: step, height: keyHeight, width: width, pad: pad)
             return
         }
         switch page {
@@ -2107,13 +2106,13 @@ class KeyboardViewController: UIInputViewController {
     }
 
     /// Apple's layout: search field, one row of results, then the normal letter keys.
-    private func addEmojiSearch(query: String, width: CGFloat, pad: CGFloat, rowHeight: CGFloat, gap: CGFloat) {
+    private func addEmojiSearch(query: String, width: CGFloat, pad: CGFloat, height: CGFloat, gap: CGFloat) {
         let compact = layout?.compact == true
         let fieldHeight: CGFloat = compact ? 30 : 38
         let resultsHeight: CGFloat = compact ? 34 : 50
         let top = fieldHeight + resultsHeight + 12
-        let height = top + 4 * rowHeight + 3 * gap + 10
-        setKeyboardHeight(height)
+        // The keys give up height so the keyboard keeps its size with the search bar on top.
+        let rowHeight = (height - top - 3 * gap - 10) / 4
 
         let bar = KeyboardEmojiSearchBar(
             frame: CGRect(x: pad, y: 4, width: width - 2 * pad, height: fieldHeight + 4 + resultsHeight),
