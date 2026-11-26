@@ -112,13 +112,17 @@ final class AppFlow: ObservableObject {
             coreVersion = try CoreBridge.open(filesDir: dir, dbKeyHex: key)
             coreError = nil
             reloadSettings()
-            // Android starts sync with the app when it's on; iOS keeps it running while open.
-            if (settings?["sync"] as? [String: Any])?["enabled"] as? Bool == true {
-                DispatchQueue.global(qos: .utility).async { _ = try? CoreBridge.syncStart() }
-            }
+            resumeSync()
         } catch {
             coreError = CoreError.displayMessage(for: error)
         }
+    }
+
+    /// Android starts sync with the app when it's on. iOS suspends the listener in the background,
+    /// so this also runs whenever the app comes back.
+    func resumeSync() {
+        guard (settings?["sync"] as? [String: Any])?["enabled"] as? Bool == true else { return }
+        DispatchQueue.global(qos: .utility).async { _ = try? CoreBridge.syncStart() }
     }
 
     func reloadSettings() {

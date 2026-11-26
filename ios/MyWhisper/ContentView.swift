@@ -14,6 +14,7 @@ struct ContentView: View {
     @State private var selectedTab = AppTab.activity
     @State private var voiceCleanup = false
     @State private var settingsPath: [SettingsRoute] = []
+    @State private var backgrounded = false
     @State private var showOnboarding = {
         #if DEBUG
         if CommandLine.arguments.contains("-mwSkipOnboarding") { return false }
@@ -34,7 +35,13 @@ struct ContentView: View {
         }
         .preferredColorScheme(flow.theme.colorScheme)
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { flow.refreshMicPermission() }
+            if phase == .background { backgrounded = true }
+            guard phase == .active else { return }
+            flow.refreshMicPermission()
+            if backgrounded {
+                backgrounded = false
+                flow.resumeSync()
+            }
         }
         // The keyboard's settings button opens this link.
         .onOpenURL(perform: openLink)

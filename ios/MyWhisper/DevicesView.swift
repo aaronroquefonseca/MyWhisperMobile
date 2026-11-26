@@ -17,6 +17,7 @@ import SwiftUI
 /// `Transcription.swift` deliver-on-main pattern. This is a struct,
 /// so closures capture it by value: no capture lists, no cycles.
 struct DevicesView: View {
+    @Environment(\.scenePhase) private var scenePhase
     var core: SyncCore = BridgeSyncCore()
     @StateObject private var store = DiscoveryStore()
 
@@ -36,6 +37,7 @@ struct DevicesView: View {
     @State private var portDraft = ""
     @State private var advertise = true
     @State private var shownName = ""
+    @State private var visible = false
 
     init(core: SyncCore = BridgeSyncCore()) {
         self.core = core
@@ -79,12 +81,30 @@ struct DevicesView: View {
         .navigationTitle(OnboardingStrings.current(languageCode: Locale.current.language.languageCode?.identifier).devices)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
+            visible = true
             store.discovery.startBrowsing()
             loadSyncSettings()
             pullState()
         }
         .onDisappear {
+            visible = false
             store.discovery.stopBrowsing()
+        }
+        // Android polls every 5 s while this screen is open, so requests, accepts and syncs
+        // from other devices show up without a tap. Cancelled when the screen goes away.
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(5))
+                if visible, !busy, scenePhase == .active { pullState(quiet: true) }
+            }
+        }
+        .refreshable { pullState() }
+        .onChange(of: scenePhase) { _, phase in
+            // AppFlow restarts the sync listener; Bonjour browsing also stops in the background.
+            guard phase == .active, visible else { return }
+            store.discovery.stopBrowsing()
+            store.discovery.startBrowsing()
+            pullState()
         }
     }
 
@@ -240,7 +260,6 @@ struct DevicesView: View {
                     Button("Request") { requestTapped(peer) }.disabled(busy)
                 }
             }
-            Button("Refresh", action: pullState).disabled(busy)
         }
     }
 
@@ -421,8 +440,9 @@ struct DevicesView: View {
     /// foreground advertising from the reported id/port (no-op until
     /// the bridge exposes status) and always records the own id so
     /// self-observations are filtered.
-    private func pullState() {
-        busy = true
+    /// `quiet`: a background poll, which leaves the buttons enabled.
+    private func pullState(quiet: Bool = false) {
+        if !quiet { busy = true }
         workers.async {
             var nextStatus: SyncStatus?
             var nextPeers: [SyncPeer] = []
@@ -442,7 +462,7 @@ struct DevicesView: View {
                 self.status = nextStatus
                 self.peers = nextPeers
                 self.applyAdvertise(status: nextStatus, name: deviceName)
-                self.busy = false
+                if !quiet { self.busy = false }
             }
         }
     }
