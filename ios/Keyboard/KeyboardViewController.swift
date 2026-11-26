@@ -145,9 +145,10 @@ class KeyboardViewController: UIInputViewController {
         var correction: String?
     }
     private var heightConstraint: NSLayoutConstraint?
-    /// Room iOS gives beyond the keys' natural height, left empty above the strip.
-    private var rowsTop: NSLayoutConstraint?
-    // shortcut: on-screen height readout to learn the height iOS picks; remove once tuned.
+    /// Extra surface iOS sometimes draws above the keyboard (about 17 pt; it toggles as keyboards
+    /// are switched). When it shows as an offset of the view, the keyboard asks for that much less.
+    private var surfaceBand: CGFloat = 0
+    // shortcut: on-screen height readout to learn where iOS puts that band; remove once understood.
     private let heightReadout = UILabel()
     private var popup: UILabel?
     private weak var pressedKey: UIButton?
@@ -204,18 +205,15 @@ class KeyboardViewController: UIInputViewController {
         view.addSubview(rowsView)
         swipeGesture.delegate = self
         rowsView.addGestureRecognizer(swipeGesture)
-        let rowsTop = rowsView.topAnchor.constraint(equalTo: view.topAnchor)
-        self.rowsTop = rowsTop
         NSLayoutConstraint.activate([
             rowsView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             rowsView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            rowsTop,
+            rowsView.topAnchor.constraint(equalTo: view.topAnchor),
             rowsView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
-        // Only landscape asks for a height. In portrait, asking made iOS sometimes draw an extra
-        // ~17 pt band above the keyboard, depending on the keyboard used before; its own height holds.
         heightConstraint = view.heightAnchor.constraint(equalToConstant: Self.portraitHeight)
         heightConstraint?.priority = .init(999)
+        heightConstraint?.isActive = true
         heightReadout.font = .monospacedSystemFont(ofSize: 8, weight: .regular)
         heightReadout.adjustsFontSizeToFitWidth = true
         heightReadout.textColor = .systemGray
@@ -232,10 +230,8 @@ class KeyboardViewController: UIInputViewController {
         super.hasDictationKey = true
         visible = true
         // Re-add the height once the view is in the window; iOS can skip a constraint set before that.
-        if heightConstraint?.isActive == true {
-            heightConstraint?.isActive = false
-            heightConstraint?.isActive = true
-        }
+        heightConstraint?.isActive = false
+        heightConstraint?.isActive = true
         applySettings(KeyboardPreferences.load())
         refreshLayout()
         updateAutomaticShift()
@@ -268,13 +264,23 @@ class KeyboardViewController: UIInputViewController {
         super.viewDidLayoutSubviews()
         let width = view.bounds.width
         let height = view.bounds.height
+        let top = view.frame.minY
         heightReadout.frame = CGRect(x: 0, y: 0, width: width, height: 10)
         heightReadout.text = String(
-            format: "h %.1f top %.1f req %@",
-            height, rowsTop?.constant ?? 0,
-            heightConstraint?.isActive == true ? String(format: "%.1f", heightConstraint?.constant ?? 0) : "none"
+            format: "y %.1f h %.1f req %.1f sup %.1f win %.1f/%.1f wf %.1f scr %.1f band %.1f",
+            top, height, heightConstraint?.constant ?? 0, view.superview?.bounds.height ?? 0,
+            view.convert(CGPoint.zero, to: nil).y, view.window?.bounds.height ?? 0,
+            view.window?.frame.minY ?? 0,
+            view.window.map { view.convert(CGPoint.zero, to: $0.screen.coordinateSpace).y } ?? 0,
+            surfaceBand
         )
         view.bringSubviewToFront(heightReadout)
+        let band: CGFloat = top > 0 && top <= 24 ? top : 0
+        if layout != nil, band != surfaceBand {
+            surfaceBand = band
+            rebuild()
+            return
+        }
         if layout == nil || (width > 0 && layout?.width != width) || (height > 0 && layout?.height != height) {
             refreshLayout()
         }
@@ -550,14 +556,9 @@ class KeyboardViewController: UIInputViewController {
 
     // MARK: - Layout
 
-    private func setKeyboardHeight(_ height: CGFloat?) {
-        guard let height else {
-            heightConstraint?.isActive = false
-            return
-        }
-        guard heightConstraint?.constant != height || heightConstraint?.isActive != true else { return }
+    private func setKeyboardHeight(_ height: CGFloat) {
+        guard heightConstraint?.constant != height else { return }
         heightConstraint?.constant = height
-        heightConstraint?.isActive = true
         view.setNeedsLayout()
     }
 
@@ -587,14 +588,9 @@ class KeyboardViewController: UIInputViewController {
         let extra = settings.showsNumberRow ? numberHeight + gap : 0
         // One height for letters, symbols, emoji and emoji search: each change of the requested
         // height risked iOS keeping a larger one and drawing it as an empty band above the toolbar.
-        let natural = (layout.compact ? stripHeight + Self.stripGap + 4 * rowHeight + 3 * gap : Self.portraitHeight)
-            + extra
-        setKeyboardHeight(layout.compact ? natural : nil)
-        // Keys keep the system keyboard's size: extra room goes above the strip, less room shrinks them.
-        let given = layout.height > 0 ? layout.height : natural
-        let top = max(0, given - natural)
-        rowsTop?.constant = top
-        let height = given - top
+        let height = (layout.compact ? stripHeight + Self.stripGap + 4 * rowHeight + 3 * gap : Self.portraitHeight)
+            + extra - surfaceBand
+        setKeyboardHeight(height)
         if emojiMode, let query = emojiSearch {
             addEmojiSearch(query: query, width: width, pad: pad, height: height, gap: gap)
             return
@@ -609,6 +605,9 @@ class KeyboardViewController: UIInputViewController {
         var y = stripHeight + Self.stripGap
         // Keys share what the strip and gaps leave; a number row takes its part from them below.
         var keyHeight = (height - y - 3 * gap) / 4
+        // If iOS gives a different height than asked, grow or shrink the keys instead of leaving a band.
+        let given = layout.height - height
+        if !emojiMode, layout.height > 0, abs(given) <= 60 { keyHeight += given / 4 }
         if numberRow, page == .letters {
             placeRow("1234567890".map { (characterKey(String($0), cased: false), 1) },
                      y: y, height: numberHeight, width: width, pad: pad)
