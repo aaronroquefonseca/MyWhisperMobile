@@ -1,4 +1,3 @@
-import CoreText
 import UIKit
 import XCTest
 
@@ -129,38 +128,6 @@ final class KeyboardSwipeTests: XCTestCase {
         let up = KeyboardTextEditing.verticalCursorMove(before: "abc\r\n", after: "", lines: -1, preferredColumn: nil)
         XCTAssertEqual(up?.offset, -4)
         XCTAssertNil(KeyboardTextEditing.verticalCursorMove(before: "ab", after: "cd", lines: 1, preferredColumn: nil))
-    }
-
-    func testWrappedRowsAllowMovementWithoutNewlines() throws {
-        let font = CTFontCreateWithName("Menlo" as CFString, 17, nil)
-        let text = String(repeating: "short words fit here ", count: 6)
-        let before = String(text.prefix(4))
-        let after = String(text.dropFirst(4))
-        let down = try XCTUnwrap(KeyboardTextEditing.wrappedCursorMove(
-            before: before, after: after, lines: 1, preferredColumn: nil, lineWidth: 216, font: font
-        ))
-        XCTAssertGreaterThan(down.offset, 4)
-        XCTAssertEqual(down.column, 4)
-        let moved = 4 + down.offset
-        let up = KeyboardTextEditing.wrappedCursorMove(
-            before: String(text.prefix(moved)), after: String(text.dropFirst(moved)),
-            lines: -1, preferredColumn: down.column, lineWidth: 216, font: font
-        )
-        XCTAssertEqual(up?.offset, -down.offset)
-    }
-
-    func testWrappedRowsKeepTheCaretsHorizontalPosition() throws {
-        // Narrow i's over wide M's: the same character count would land far to the right.
-        let font = CTFontCreateWithName("Helvetica" as CFString, 17, nil)
-        let narrow = String(repeating: "i", count: 20)
-        let wide = String(repeating: "M", count: 20)
-        let down = try XCTUnwrap(KeyboardTextEditing.wrappedCursorMove(
-            before: String(narrow.prefix(10)), after: String(narrow.dropFirst(10)) + " " + wide,
-            lines: 1, preferredColumn: nil, lineWidth: 150, font: font
-        ))
-        XCTAssertEqual(down.offset, 11 + down.column)
-        XCTAssertGreaterThan(down.column, 0)
-        XCTAssertLessThan(down.column, 5)
     }
 
     @MainActor
@@ -522,6 +489,16 @@ final class KeyboardSwipeTests: XCTestCase {
         controller.document.text = "Held there"
         controller.deleteWord()
         XCTAssertEqual(controller.document.text, "Held ")
+
+        // Holding delete repeats letters, then whole words after about two seconds.
+        controller.document.text = String(repeating: "abc ", count: 60)
+        delete.sendActions(for: .touchDown)
+        RunLoop.main.run(until: Date().addingTimeInterval(3.5))
+        delete.sendActions(for: .touchUpInside)
+        let left = controller.document.text.count
+        XCTAssertLessThan(left, 240 - 29, "words went after the letters")
+        XCTAssertEqual(left % 4, 0, "only whole words go once words start")
+        XCTAssertGreaterThan(left, 0)
         controller.viewDidDisappear(false)
     }
 }

@@ -1,4 +1,3 @@
-import CoreText
 import Foundation
 
 enum KeyboardTextEditing {
@@ -36,53 +35,6 @@ enum KeyboardTextEditing {
         let destinationEnd = destination + 1 < lineStarts.count ? lineStarts[destination + 1] - 1 : position
         let offset = destinationStart + min(column, destinationEnd - destinationStart) - caret
         return (offset, column)
-    }
-
-    /// The proxy exposes characters but no host geometry. Estimate visually
-    /// wrapped rows from the current paragraph when there is no explicit break.
-    static func wrappedCursorMove(
-        before: String, after: String, lines: Int, preferredColumn: Int?,
-        lineWidth: CGFloat, font: CTFont
-    ) -> (offset: Int, column: Int)? {
-        let preceding = String(before.suffix(512).reversed().prefix { !$0.isNewline }.reversed())
-        let following = String(after.prefix(512).prefix { !$0.isNewline })
-        let paragraph = preceding + following
-        guard !paragraph.isEmpty else { return nil }
-        let attributes = [NSAttributedString.Key(kCTFontAttributeName as String): font]
-        let text = NSAttributedString(string: paragraph, attributes: attributes)
-        let typesetter = CTTypesetterCreateWithAttributedString(text as CFAttributedString)
-        let length = paragraph.utf16.count
-        // UTF-16 offset of each character, plus the end: CoreText counts UTF-16.
-        var offsets = [0]
-        for character in paragraph { offsets.append(offsets[offsets.count - 1] + String(character).utf16.count) }
-        var breaks = [0]
-        var nextBreak = CTTypesetterSuggestLineBreak(typesetter, 0, Double(lineWidth))
-        guard nextBreak > 0, nextBreak < length else { return nil }
-        for characterIndex in 1..<offsets.count {
-            let characterEnd = offsets[characterIndex]
-            guard characterEnd >= nextBreak, nextBreak < length else { continue }
-            breaks.append(characterIndex)
-            let span = CTTypesetterSuggestLineBreak(typesetter, characterEnd, Double(lineWidth))
-            guard span > 0 else { break }
-            nextBreak = characterEnd + span
-        }
-
-        let caret = preceding.count
-        guard let row = breaks.lastIndex(where: { $0 <= caret }) else { return nil }
-        let target = min(max(row + lines, 0), breaks.count - 1)
-        guard row != target else { return nil }
-        func rowEnd(_ row: Int) -> Int { breaks.indices.contains(row + 1) ? breaks[row + 1] - 1 : paragraph.count }
-        func line(_ row: Int) -> CTLine {
-            CTTypesetterCreateLine(typesetter, CFRange(location: offsets[breaks[row]], length: offsets[rowEnd(row)] - offsets[breaks[row]]))
-        }
-        // Keep the caret's horizontal position, like the system keyboard: in a proportional font
-        // the same character count lands somewhere else on the next row.
-        let source = breaks[row] + min(preferredColumn ?? caret - breaks[row], rowEnd(row) - breaks[row])
-        let x = CTLineGetOffsetForStringIndex(line(row), offsets[source], nil)
-        let hit = CTLineGetStringIndexForPosition(line(target), CGPoint(x: x, y: 0))
-        let landing = hit == kCFNotFound ? rowEnd(target) : offsets.firstIndex { $0 >= hit } ?? rowEnd(target)
-        let column = min(max(landing, breaks[target]), rowEnd(target)) - breaks[target]
-        return (breaks[target] + column - caret, column)
     }
 
     static func trailingWordDeletionCount(in text: String) -> Int {

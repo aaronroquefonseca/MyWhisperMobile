@@ -1,4 +1,3 @@
-import CoreText
 import UIKit
 
 /// MyWhisper keyboard with local predictions, autocorrect, and emoji.
@@ -1303,16 +1302,33 @@ class KeyboardViewController: UIInputViewController {
             self.playHaptic(hold: true)
             self.playClick()
             self.performDelete()
-            let repeating = Timer(timeInterval: 0.07, repeats: true) { [weak self] _ in
+            var characters = 0
+            self.repeatDelete(every: 0.07) { [weak self] in
+                guard let self else { return }
                 // A light tick for every character, like the system keyboard.
-                self?.playHaptic()
-                self?.performDelete()
+                self.playHaptic()
+                self.performDelete()
+                characters += 1
+                // Held about two seconds: whole words from here on, like the system keyboard.
+                if characters == 28 {
+                    self.repeatDelete(every: 0.25) { [weak self] in
+                        self?.playHaptic()
+                        self?.deleteWord()
+                    }
+                }
             }
-            self.deleteTimer = repeating
-            RunLoop.main.add(repeating, forMode: .common)
         }
         deleteTimer = delay
         RunLoop.main.add(delay, forMode: .common)
+    }
+
+    private func repeatDelete(every interval: TimeInterval, _ step: @escaping () -> Void) {
+        deleteTimer?.invalidate()
+        let timer = Timer(timeInterval: interval, repeats: true) { _ in
+            MainActor.assumeIsolated { step() }
+        }
+        deleteTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
     }
 
     @objc private func deleteTapped() {
@@ -1615,7 +1631,7 @@ class KeyboardViewController: UIInputViewController {
             let after = proxy.documentContextAfterInput ?? ""
             let move = KeyboardTextEditing.verticalCursorMove(
                 before: before, after: after, lines: steps.lines, preferredColumn: drag.preferredColumn
-            ) ?? wrappedCursorMove(before: before, after: after, lines: steps.lines, preferredColumn: drag.preferredColumn)
+            )
             if let move {
                 offset += move.offset
                 drag.preferredColumn = move.column
@@ -1676,20 +1692,6 @@ class KeyboardViewController: UIInputViewController {
         guard cursorInFlight else { return }
         cursorInFlight = false
         sendCursorOffset(0)
-    }
-
-    private func wrappedCursorMove(
-        before: String, after: String, lines: Int, preferredColumn: Int?
-    ) -> (offset: Int, column: Int)? {
-        // UIFont is a CTFont; looking the system font up by name gets Times instead, which is narrower.
-        let font = UIFont.preferredFont(forTextStyle: .body) as CTFont
-        // shortcut: the host's field width is hidden, so assume a chat composer (attach and send
-        // buttons beside it, as in WhatsApp or Messages). Full-width editors wrap later than this.
-        let width = max(180, (layout?.width ?? 390) - 130)
-        return KeyboardTextEditing.wrappedCursorMove(
-            before: before, after: after, lines: lines, preferredColumn: preferredColumn,
-            lineWidth: width, font: font
-        )
     }
 
     func finishCursorDrag() {
