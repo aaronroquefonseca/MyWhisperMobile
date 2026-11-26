@@ -1681,12 +1681,14 @@ class KeyboardViewController: UIInputViewController {
     private func wrappedCursorMove(
         before: String, after: String, lines: Int, preferredColumn: Int?
     ) -> (offset: Int, column: Int)? {
-        let font = UIFont.preferredFont(forTextStyle: .body)
-        let width = max(180, (layout?.width ?? 390) - 44)
-        let typesettingFont = CTFontCreateWithName(font.fontName as CFString, font.pointSize, nil)
+        // UIFont is a CTFont; looking the system font up by name gets Times instead, which is narrower.
+        let font = UIFont.preferredFont(forTextStyle: .body) as CTFont
+        // shortcut: the host's field width is hidden, so assume a chat composer (attach and send
+        // buttons beside it, as in WhatsApp or Messages). Full-width editors wrap later than this.
+        let width = max(180, (layout?.width ?? 390) - 130)
         return KeyboardTextEditing.wrappedCursorMove(
             before: before, after: after, lines: lines, preferredColumn: preferredColumn,
-            lineWidth: width, font: typesettingFont
+            lineWidth: width, font: font
         )
     }
 

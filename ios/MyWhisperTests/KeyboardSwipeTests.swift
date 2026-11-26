@@ -149,6 +149,20 @@ final class KeyboardSwipeTests: XCTestCase {
         XCTAssertEqual(up?.offset, -down.offset)
     }
 
+    func testWrappedRowsKeepTheCaretsHorizontalPosition() throws {
+        // Narrow i's over wide M's: the same character count would land far to the right.
+        let font = CTFontCreateWithName("Helvetica" as CFString, 17, nil)
+        let narrow = String(repeating: "i", count: 20)
+        let wide = String(repeating: "M", count: 20)
+        let down = try XCTUnwrap(KeyboardTextEditing.wrappedCursorMove(
+            before: String(narrow.prefix(10)), after: String(narrow.dropFirst(10)) + " " + wide,
+            lines: 1, preferredColumn: nil, lineWidth: 150, font: font
+        ))
+        XCTAssertEqual(down.offset, 11 + down.column)
+        XCTAssertGreaterThan(down.column, 0)
+        XCTAssertLessThan(down.column, 5)
+    }
+
     @MainActor
     func testVerticalDragCrossesParagraphWhenHostHidesNewline() {
         let controller = TestKeyboardController()
