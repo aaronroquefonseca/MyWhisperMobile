@@ -17,7 +17,7 @@ import SwiftUI
 /// `Transcription.swift` deliver-on-main pattern. This is a struct,
 /// so closures capture it by value: no capture lists, no cycles.
 struct DevicesView: View {
-    var core: SyncCore = UnavailableSyncCore()
+    var core: SyncCore = BridgeSyncCore()
     @StateObject private var store = DiscoveryStore()
 
     @State private var status: SyncStatus?
@@ -31,7 +31,13 @@ struct DevicesView: View {
 
     private let workers = DispatchQueue(label: "devices-sync", qos: .userInitiated)
 
-    init(core: SyncCore = UnavailableSyncCore()) {
+    @State private var syncEnabled = false
+    @State private var deviceNameDraft = ""
+    @State private var portDraft = ""
+    @State private var advertise = true
+    @State private var shownName = ""
+
+    init(core: SyncCore = BridgeSyncCore()) {
         self.core = core
     }
 
@@ -61,6 +67,7 @@ struct DevicesView: View {
                 }
             }
             .whisperRowSurface()
+            settingsSection.whisperRowSurface()
             trustedSection.whisperRowSurface()
             requestsSection.whisperRowSurface()
             nearbySection.whisperRowSurface()
@@ -74,6 +81,7 @@ struct DevicesView: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             store.discovery.startBrowsing()
+            loadSyncSettings()
             pullState()
         }
         .onDisappear {
@@ -92,10 +100,83 @@ struct DevicesView: View {
                 LabeledContent("Port", value: String(status.port))
                 LabeledContent("LAN IP", value: status.lanIp.isEmpty ? "—" : status.lanIp)
             } else {
-                Text("status unavailable — core sync FFI not exposed yet")
+                Text("Sync is off. Turn it on below to pair with your other devices.")
                     .font(.footnote)
             }
         }
+    }
+
+    /// Android's sync settings (`sync.*`). iOS runs sync only while MyWhisper is open.
+    private var settingsSection: some View {
+        Section {
+            Toggle("Sync", isOn: Binding(get: { syncEnabled }, set: { on in
+                syncEnabled = on
+                saveSync { $0["enabled"] = on }
+                if on { startTapped() } else { stopTapped() }
+            }))
+            TextField(shownName.isEmpty ? "Device name" : "Device name (\(shownName))", text: $deviceNameDraft)
+                .onSubmit { saveSync { $0["device_name"] = deviceNameDraft.trimmingCharacters(in: .whitespaces) }; restartIfRunning() }
+            LabeledContent("Port") {
+                TextField("42973", text: $portDraft)
+                    .keyboardType(.numberPad)
+                    .multilineTextAlignment(.trailing)
+                    .frame(maxWidth: 90)
+                    .onSubmit(savePort)
+            }
+            Toggle(isOn: Binding(get: { advertise }, set: { on in
+                advertise = on
+                saveSync { $0["advertise"] = on }
+                restartIfRunning()
+            })) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Visible on the network")
+                    Text("Off = invisible, still sees others.").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Button("Save name and port") {
+                saveSync { $0["device_name"] = deviceNameDraft.trimmingCharacters(in: .whitespaces) }
+                savePort()
+            }
+        } header: {
+            Text("Settings")
+        } footer: {
+            Text("iPhone syncs while MyWhisper is open; your other devices catch up when you return.")
+        }
+    }
+
+    private func loadSyncSettings() {
+        let sync = (try? CoreBridge.getSettings())?["sync"] as? [String: Any] ?? [:]
+        syncEnabled = sync["enabled"] as? Bool ?? false
+        deviceNameDraft = sync["device_name"] as? String ?? ""
+        portDraft = String((sync["listen_port"] as? NSNumber)?.intValue ?? 42973)
+        advertise = sync["advertise"] as? Bool ?? true
+        shownName = core.displayName()
+        // iOS can't keep a listener alive in the background: resume on every visit when enabled.
+        if syncEnabled, status?.running != true { startTapped() }
+    }
+
+    private func savePort() {
+        let port = min(Int(portDraft.filter(\.isNumber).prefix(5)) ?? 42973, 65_535)
+        portDraft = String(port)
+        saveSync { $0["listen_port"] = port }
+        restartIfRunning()
+    }
+
+    private func saveSync(_ change: (inout [String: Any]) -> Void) {
+        do {
+            var settings = try CoreBridge.getSettings()
+            var sync = settings["sync"] as? [String: Any] ?? [:]
+            change(&sync)
+            settings["sync"] = sync
+            try CoreBridge.putSettings(settings)
+        } catch {
+            banner = CoreError.displayMessage(for: error)
+        }
+    }
+
+    private func restartIfRunning() {
+        guard status?.running == true else { return }
+        startTapped()
     }
 
     private var trustedSection: some View {

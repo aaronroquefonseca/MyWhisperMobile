@@ -155,6 +155,10 @@ final class AppFlow: ObservableObject, Dictation.Listener {
             coreVersion = try CoreBridge.open(filesDir: dir, dbKeyHex: key)
             coreError = nil
             reloadSettings()
+            // Android starts sync with the app when it's on; iOS keeps it running while open.
+            if (settings?["sync"] as? [String: Any])?["enabled"] as? Bool == true {
+                DispatchQueue.global(qos: .utility).async { _ = try? CoreBridge.syncStart() }
+            }
         } catch {
             coreError = CoreError.displayMessage(for: error)
         }
