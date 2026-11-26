@@ -32,6 +32,7 @@ final class DictionaryViewModel: ObservableObject {
             }
             try DictionaryStore.addWord(word)
             load()
+            Self.kickSync()
             return true
         } catch {
             self.error = error.localizedDescription
@@ -43,6 +44,7 @@ final class DictionaryViewModel: ObservableObject {
         do {
             try DictionaryStore.deleteWord(word)
             load()
+            Self.kickSync()
         } catch {
             self.error = error.localizedDescription
         }
@@ -55,15 +57,22 @@ final class DictionaryViewModel: ObservableObject {
                 try DictionaryStore.deleteSnippet(trigger: oldTrigger)
             }
             load()
+            Self.kickSync()
         } catch {
             self.error = error.localizedDescription
         }
+    }
+
+    /// Android `kickSync`: push dictionary edits to trusted devices right away (no-op when sync is off).
+    static func kickSync() {
+        DispatchQueue.global(qos: .utility).async { _ = try? CoreBridge.syncAllNow() }
     }
 
     func deleteSnippet(trigger: String) {
         do {
             try DictionaryStore.deleteSnippet(trigger: trigger)
             load()
+            Self.kickSync()
         } catch {
             self.error = error.localizedDescription
         }
@@ -102,23 +111,23 @@ struct DictionaryView: View {
                 model.saveSnippet(trigger: trigger, replacement: replacement, replacing: old)
             })
         }
-        .alert("Delete word?", isPresented: wordDeleteBinding) {
+        .alert("Delete this entry?", isPresented: wordDeleteBinding) {
             Button("Delete", role: .destructive) {
                 if let word = pendingWordDelete { model.deleteWord(word) }
                 pendingWordDelete = nil
             }
             Button("Cancel", role: .cancel) { pendingWordDelete = nil }
         } message: {
-            Text("Transcription stops preferring this spelling.")
+            Text("This cannot be undone. The deletion also applies to devices that sync this data.")
         }
-        .alert("Delete snippet?", isPresented: snippetDeleteBinding) {
+        .alert("Delete this entry?", isPresented: snippetDeleteBinding) {
             Button("Delete", role: .destructive) {
                 if let trigger = pendingSnippetDelete { model.deleteSnippet(trigger: trigger) }
                 pendingSnippetDelete = nil
             }
             Button("Cancel", role: .cancel) { pendingSnippetDelete = nil }
         } message: {
-            Text("This trigger stops expanding.")
+            Text("This cannot be undone. The deletion also applies to devices that sync this data.")
         }
     }
 
@@ -165,7 +174,7 @@ struct DictionaryView: View {
                 .disabled(newWord.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         } header: {
-            Text("Teach transcription your spellings.").textCase(nil)
+            Text("Names and terms you say often, spelled the way you want them written.").textCase(nil)
         }
         .whisperRowSurface()
 
@@ -210,10 +219,10 @@ struct DictionaryView: View {
             .listRowInsets(EdgeInsets())
             .listRowBackground(Color.clear)
         } header: {
-            Text("Expand a short trigger into text you use often.").textCase(nil)
+            Text("Say a short phrase and MyWhisper types the longer text for you.").textCase(nil)
         }
 
-        if model.snippets.count > 8 || !snippetQuery.isEmpty {
+        if model.snippets.count > 5 || !snippetQuery.isEmpty {
             Section {
                 WhisperSearchField(text: $snippetQuery, prompt: "Search snippets")
             }
@@ -234,7 +243,7 @@ struct DictionaryView: View {
                         showingSnippetForm = true
                     } label: {
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(snippet.trigger).foregroundStyle(.primary)
+                            Text("Say “\(snippet.trigger)”").font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
                             Text(snippet.replacement).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)

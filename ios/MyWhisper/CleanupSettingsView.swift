@@ -185,6 +185,9 @@ struct CleanupSettingsView: View {
     @State private var pendingDelete: Cleanup.Entry?
     @State private var guardBlocked = false
     @State private var whyText: String?
+    @State private var promptExpanded = false
+    /// The core's own default (what actually runs), with the app's copy as a fallback.
+    private static let builtInPrompt = (try? CoreBridge.defaultCleanupPrompt()) ?? Cleanup.defaultPrompt
     @State private var promptDraft = ""
     @State private var promptEditing = false
 
@@ -227,14 +230,20 @@ struct CleanupSettingsView: View {
                     }
                     .buttonStyle(.borderless)
                 } else {
-                    Text(store.draft.customPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        ? "(Default prompt)" : store.draft.customPrompt)
+                    let usesDefault = store.draft.customPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    if usesDefault {
+                        Text("Using the built-in prompt:").font(.caption.weight(.semibold))
+                    }
+                    Text(usesDefault ? Self.builtInPrompt : store.draft.customPrompt)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(6)
+                        .lineLimit(promptExpanded ? nil : 6)
+                        .textSelection(.enabled)
                     HStack {
+                        Button(promptExpanded ? "Show less" : "Read prompt") { promptExpanded.toggle() }
                         Button("Edit custom prompt") {
-                            promptDraft = store.draft.customPrompt
+                            // Start from the prompt in use, like Android, rather than an empty box.
+                            promptDraft = usesDefault ? Self.builtInPrompt : store.draft.customPrompt
                             promptEditing = true
                         }
                         if store.draft.customPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
