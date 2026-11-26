@@ -37,7 +37,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.SubcomposeLayout
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
@@ -88,26 +87,27 @@ class SetupGuideActivity : ComponentActivity() {
         val steps = resources.getStringArray(if (restricted) R.array.guide_restricted_steps else SettingsGuide.a11yStepsRes(Build.MANUFACTURER)).toList()
         val noteTitle = getString(if (restricted) R.string.guide_restricted_then else R.string.guide_a11y_allow)
         val noteBody = if (restricted) null else getString(R.string.guide_a11y_why)
+        // The badge matches the launcher icon the user picked.
+        val icon = LauncherIconManager(this).selected().takeIf { it != LauncherIconStyle.DEFAULT }
+            ?: LauncherIconStyle.defaultPalette(resources.getBoolean(R.bool.launcher_default_cobalt))
         val theme = getSharedPreferences("mw_state", MODE_PRIVATE).getString(MainActivity.PREF_THEME, "System")
         setContent {
             val dark = when (theme) { "Light" -> false; "Dark" -> true; else -> isSystemInDarkTheme() }
             MaterialTheme(colorScheme = whisperColorScheme(dark)) {
                 Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
-                    if (inPip.value) FitToWindow { GuideCard(title, steps, if (restricted) Icons.Filled.Info else Icons.Filled.CheckCircle, noteTitle, noteBody) }
+                    if (inPip.value) FitToWindow { GuideCard(icon, title, steps, if (restricted) Icons.Filled.Info else Icons.Filled.CheckCircle, noteTitle, noteBody) }
                 }
             }
         }
     }
 
     @Composable
-    private fun GuideCard(title: String, steps: List<String>, noteIcon: ImageVector, noteTitle: String, noteBody: String?) {
+    private fun GuideCard(icon: LauncherIconStyle, title: String, steps: List<String>, noteIcon: ImageVector, noteTitle: String, noteBody: String?) {
         val colors = MaterialTheme.colorScheme
         val type = MaterialTheme.typography
         Column(Modifier.width(CARD_WIDTH).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(22.dp).background(colors.primary, CircleShape), contentAlignment = Alignment.Center) {
-                    Icon(painterResource(R.drawable.ic_mic), null, Modifier.size(13.dp), tint = colors.onPrimary)
-                }
+                LauncherIconPreview(icon, 22.dp)
                 Text("MyWhisper", Modifier.padding(start = 6.dp), style = type.labelMedium, color = colors.onSurfaceVariant)
             }
             Text(title, style = type.titleMedium, fontWeight = FontWeight.SemiBold, color = colors.onSurface)
