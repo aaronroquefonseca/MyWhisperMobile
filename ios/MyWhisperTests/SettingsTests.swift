@@ -189,9 +189,13 @@ final class SettingsTests: XCTestCase {
     }
 
     func testCleanupApplyingKeepsFieldsThisAppDoesNotEdit() {
-        let draft = CleanupSettingsDraft(enabled: true, customPrompt: "", entries: [cleanupEntry(id: "a", kind: .ollama)])
+        // keep_alive and thinking are edited here now, so they come from the entry; num_ctx isn't.
+        var entry = cleanupEntry(id: "a", kind: .ollama)
+        entry.keepAlive = "10m"
+        entry.thinking = true
+        let draft = CleanupSettingsDraft(enabled: true, customPrompt: "", entries: [entry])
         let stored: [String: Any] = ["language_models": ["entries": [
-            ["id": "a", "kind": "Ollama", "keep_alive": "10m", "num_ctx": 8192, "thinking": true, "model": "old"],
+            ["id": "a", "kind": "Ollama", "keep_alive": "5m", "num_ctx": 8192, "thinking": false, "model": "old"],
         ]]]
         let models = CleanupChain.applying(draft, to: stored)["language_models"] as? [String: Any]
         let row = (models?["entries"] as? [[String: Any]])?.first
