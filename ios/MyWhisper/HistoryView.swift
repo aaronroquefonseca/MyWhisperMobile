@@ -183,7 +183,7 @@ struct ActivityView: View {
                     }
                 }
                 Picker("Delete dictations after", selection: autoDeleteBinding) {
-                    ForEach(Self.autoDeleteChoices(including: model.policy.autoDeleteDays), id: \.self) { days in
+                    ForEach(Self.autoDeleteChoices(including: Int(model.policy.autoDeleteDays)), id: \.self) { days in
                         Text(Self.autoDeleteLabel(days)).tag(days)
                     }
                 }
@@ -229,7 +229,7 @@ struct ActivityView: View {
     /// Applied on change, like Android after #139: shorter retention deletes older rows right away.
     private var autoDeleteBinding: Binding<Int> {
         Binding {
-            model.policy.autoDeleteDays
+            Int(model.policy.autoDeleteDays)
         } set: { days in
             flow.updateSettings { settings in
                 var privacy = settings["privacy"] as? [String: Any] ?? [:]
