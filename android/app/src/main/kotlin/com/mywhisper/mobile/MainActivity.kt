@@ -1080,9 +1080,13 @@ class MainActivity : ComponentActivity() {
      */
     private fun openSettingsAndReturn(step: SettingsGuide.Step) {
         if (step == SettingsGuide.Step.STATUS_CHANNEL) AppNotificationChannels.ensure(this)
-        SettingsGuide.watch(this) { SettingsGuide.granted(this, step) }
         // Settings opens in this task, so Back and auto-return behave as without the guide.
-        startActivity(SettingsGuide.intent(this, step))
+        try {
+            startActivity(SettingsGuide.intent(this, step))
+        } catch (_: android.content.ActivityNotFoundException) {
+            return // Locked-down or OEM Settings without this page: the step's hint line still applies.
+        }
+        SettingsGuide.watch(this) { SettingsGuide.granted(this, step) }
         // The guide opens on top in its own task and shrinks into a corner over Settings.
         if (SettingsGuide.usesPip(step) && SettingsGuide.pipAllowed(this)) SetupGuideActivity.start(this, step)
     }
@@ -2445,7 +2449,7 @@ class MainActivity : ComponentActivity() {
                             TextButton(onClick = { openSettingsAndReturn(SettingsGuide.Step.RESTRICTED) }) {
                                 Text(getString(R.string.guide_restricted_link))
                             }
-                            if (!SettingsGuide.pipAllowed(this@MainActivity)) SettingsHint(R.string.guide_hint_restricted)
+                            SettingsHint(R.string.guide_hint_restricted)
                         }
                     }
                     else -> Text(getString(R.string.onb_setup_complete), color = MaterialTheme.colorScheme.primary)

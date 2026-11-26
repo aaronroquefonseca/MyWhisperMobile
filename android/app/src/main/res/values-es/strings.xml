@@ -698,7 +698,7 @@
         <item>Toca MyWhisper y actívalo</item>
     </string-array>
     <string name="guide_a11y_allow">Toca Permitir en el aviso</string>
-    <string name="guide_a11y_why">MyWhisper solo lo usa para encontrar el campo de texto y escribir tu texto.</string>
+    <string name="guide_a11y_why">MyWhisper solo lo usa para mostrar el botón flotante y escribir tu texto.</string>
     <string name="guide_restricted_link">¿Bloqueado por “Ajuste restringido”?</string>
     <string name="guide_hint_restricted">Toca MyWhisper → ⋮ arriba a la derecha → Permitir ajustes restringidos.</string>
     <string name="guide_restricted_title">Desbloquea MyWhisper</string>
