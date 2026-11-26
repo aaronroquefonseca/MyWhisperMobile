@@ -83,6 +83,8 @@ class KeyboardViewController: UIInputViewController {
     private var cursorInFlight = false
     private var cursorFlight = 0
     private var cursorDocument: UUID?
+    /// Set once the host confirms a cursor move during this drag; then each move waits for that confirmation.
+    private var hostReportsCursor = false
     private weak var cursorGesture: UIGestureRecognizer?
     private var lastSwipe: SwipeCommit?
     private var swipeLexicon: (locale: String, words: KeyboardSwipeLexicon)?
@@ -270,7 +272,7 @@ class KeyboardViewController: UIInputViewController {
 
     override func textDidChange(_ textInput: UITextInput?) {
         super.textDidChange(textInput)
-        cursorMoveLanded()
+        hostConfirmedCursorMove()
         guard visible, cursorDrag == nil, !replacingText else { return }
         microphonePreview?.reset()
         refreshLayout()
@@ -280,7 +282,7 @@ class KeyboardViewController: UIInputViewController {
 
     override func selectionDidChange(_ textInput: UITextInput?) {
         super.selectionDidChange(textInput)
-        cursorMoveLanded()
+        hostConfirmedCursorMove()
         guard visible, cursorDrag == nil, !replacingText else { return }
         updateAutomaticShift()
         scheduleSuggestions()
@@ -676,17 +678,29 @@ class KeyboardViewController: UIInputViewController {
         }
         // Dragging the mic across moves the other button to the free side as it happens.
         preview.onDrag = { [weak self, weak preview] centerX in
-            guard let preview else { return }
-            self?.moveSideButton(leading: centerX > preview.bounds.midX)
+            guard let self, let preview else { return }
+            if self.moveSideButton(leading: centerX > preview.bounds.midX) { self.playHaptic() }
+        }
+        preview.haptic = { [weak self] hold in self?.playHaptic(hold: hold) }
+        // The pill is translucent: suggestions under it would show through the bars.
+        preview.onActive = { [weak self] active in
+            guard let self else { return }
+            let covered = (self.predictionButtons as [UIView]) + self.predictionDividers + [self.stripNotice].compactMap { $0 }
+            UIView.animate(withDuration: UIAccessibility.isReduceMotionEnabled ? 0 : 0.12, delay: 0,
+                           options: [.beginFromCurrentState, .allowUserInteraction]) {
+                covered.forEach { $0.alpha = active ? 0 : 1 }
+            }
         }
         rowsView.addSubview(preview)
         microphonePreview = preview
     }
 
-    private func moveSideButton(leading: Bool) {
-        guard let button = sideButton, let toolbar = microphonePreview?.frame else { return }
+    /// Returns whether the button changed sides.
+    @discardableResult
+    private func moveSideButton(leading: Bool) -> Bool {
+        guard let button = sideButton, let toolbar = microphonePreview?.frame else { return false }
         let x = leading ? toolbar.minX : toolbar.maxX - button.bounds.width
-        guard button.frame.minX != x else { return }
+        guard button.frame.minX != x else { return false }
         UIView.animate(withDuration: UIAccessibility.isReduceMotionEnabled ? 0 : 0.32, delay: 0,
                        usingSpringWithDamping: 0.86, initialSpringVelocity: 0,
                        options: [.allowUserInteraction, .beginFromCurrentState]) {
@@ -1545,6 +1559,7 @@ class KeyboardViewController: UIInputViewController {
     func startCursorDrag(at point: CGPoint) {
         cursorDocument = textDocumentProxy.documentIdentifier
         cursorDrag = KeyboardCursorDrag(origin: point)
+        hostReportsCursor = false
         pendingSwipe?.cancel()
         predictionTask?.cancel()
         lastSwipe = nil
@@ -1592,10 +1607,14 @@ class KeyboardViewController: UIInputViewController {
                 offset += move.offset
                 drag.preferredColumn = move.column
             } else if !before.isEmpty || !after.isEmpty || proxy.hasText {
-                // Some hosts stop their context at the paragraph boundary.
-                // Ask for a single character across that edge. iOS clamps at the document boundary.
+                // No row past this one in the context: go to the line's start or end, so the last line
+                // goes to the end. Exactly there: some hosts drop a move that overshoots the document.
+                // Already there: step one character, across a paragraph edge the host hid from us.
                 let edge = steps.lines < 0 ? before.suffix(512).count : after.prefix(512).count
-                if edge < 512 { offset += steps.lines < 0 ? -edge - 1 : edge + 1 }
+                if edge < 512 {
+                    let distance = edge == 0 ? 1 : edge
+                    offset += steps.lines < 0 ? -distance : distance
+                }
                 drag.preferredColumn = nil
             }
         }
@@ -1627,11 +1646,17 @@ class KeyboardViewController: UIInputViewController {
         cursorFlight += 1
         let flight = cursorFlight
         textDocumentProxy.adjustTextPosition(byCharacterOffset: send)
-        // Some hosts never report the move; wait at most one frame.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.016) { [weak self] in
+        // Hosts that confirm moves get one at a time, so a slow host never builds a queue that plays
+        // out after the finger stops. Hosts that never confirm get one move per frame.
+        DispatchQueue.main.asyncAfter(deadline: .now() + (hostReportsCursor ? 0.1 : 0.016)) { [weak self] in
             guard let self, self.cursorFlight == flight else { return }
             self.cursorMoveLanded()
         }
+    }
+
+    private func hostConfirmedCursorMove() {
+        if cursorInFlight { hostReportsCursor = true }
+        cursorMoveLanded()
     }
 
     private func cursorMoveLanded() {

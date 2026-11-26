@@ -43,7 +43,6 @@ final class KeyboardMicPreview: UIView {
     private let button = KeyboardMicTouchSurface()
     private let face = UIView()
     private let mark = UIImageView()
-    private let feedback = UIImpactFeedbackGenerator(style: .light)
     private let pill = UIView()
     private let cancelButton = UIButton(type: .system)
     private let waveform = KeyboardBarsView()
@@ -62,6 +61,10 @@ final class KeyboardMicPreview: UIView {
     private(set) var dockedLeading: Bool
     /// Button center x while the user drags it, so the button opposite can trade places live.
     var onDrag: ((CGFloat) -> Void)?
+    /// The keyboard's haptic (`true` for a hold): a generator without a view stays silent in an extension.
+    var haptic: ((Bool) -> Void)?
+    /// Whether the pill with the bars is showing, so the toolbar can hide what would show through it.
+    var onActive: ((Bool) -> Void)?
     private var dragging = false
     private var consumesRelease = false
     private var tapOpensSession = false
@@ -145,26 +148,25 @@ final class KeyboardMicPreview: UIView {
         mark.frame = CGRect(x: (face.bounds.width - iconSize) / 2, y: (face.bounds.height - iconSize) / 2,
                             width: iconSize, height: iconSize)
 
+        // Button, gap, bars, gap, then the hints (held) or the cancel button (locked) at the far end.
         let phase = state.phase
-        let hint = phase == .held ? Self.hintWidth : 0
-        let pillWidth = min(bounds.width, phase == .locked ? 178 : phase == .held ? 144 + hint : side)
-        pill.frame = CGRect(x: dockedLeading ? 0 : bounds.width - pillWidth, y: 2, width: pillWidth, height: bounds.height - 4)
+        let gap: CGFloat = 12
+        let waveWidth = KeyboardBarsView.width
         let cancelWidth: CGFloat = 44
-        let cancelX = dockedLeading ? pillWidth - cancelWidth : 0
+        let endWidth = phase == .locked ? cancelWidth : Self.hintWidth + 8
+        let open = phase == .held || phase == .locked
+        let pillWidth = min(bounds.width, open ? side + gap + waveWidth + gap + endWidth : side)
+        pill.frame = CGRect(x: dockedLeading ? 0 : bounds.width - pillWidth, y: 2, width: pillWidth, height: bounds.height - 4)
+        let endX = dockedLeading ? pillWidth - endWidth : 0
+        let waveX = dockedLeading ? side + gap : endWidth + gap
+        waveform.frame = CGRect(x: waveX, y: (pill.bounds.height - 24) / 2, width: waveWidth, height: 24)
+        meterHint.frame = CGRect(x: waveform.frame.midX - 40, y: 0, width: 80, height: pill.bounds.height)
+        // While sliding to cancel, the cross sits over the bars rather than on top of the hints.
+        let cancelX = phase == .held ? waveform.frame.midX - cancelWidth / 2 : endX
         cancelButton.frame = CGRect(x: cancelX, y: 0, width: cancelWidth, height: pill.bounds.height)
-        let waveCenter: CGFloat
-        if phase == .locked {
-            waveCenter = (pillWidth + (dockedLeading ? side - cancelWidth : cancelWidth - side)) / 2
-        } else {
-            waveCenter = (pillWidth + (dockedLeading ? side - hint : hint - side)) / 2
-        }
-        // At the far end of the pill, past the bars, where the thumb on the button can't cover it.
-        let hintX = dockedLeading ? pillWidth - Self.hintWidth - 4 : 4
         let half = pill.bounds.height / 2
-        lockHint.frame = CGRect(x: hintX, y: 3, width: Self.hintWidth, height: half - 3)
-        cancelHint.frame = CGRect(x: hintX, y: half, width: Self.hintWidth, height: half - 3)
-        waveform.frame = CGRect(x: waveCenter - 31.5, y: (pill.bounds.height - 24) / 2, width: 63, height: 24)
-        meterHint.frame = CGRect(x: waveCenter - 40, y: 0, width: 80, height: pill.bounds.height)
+        lockHint.frame = CGRect(x: endX + 4, y: 3, width: Self.hintWidth, height: half - 3)
+        cancelHint.frame = CGRect(x: endX + 4, y: half, width: Self.hintWidth, height: half - 3)
 
     }
 
@@ -216,12 +218,12 @@ final class KeyboardMicPreview: UIView {
             if self.tapOpensSession {
                 self.tapOpensSession = false
                 self.consumesRelease = true
-                self.feedback.impactOccurred()
+                self.haptic?(true)
                 self.openSession?()
                 return
             }
             self.state.hold()
-            self.feedback.impactOccurred()
+            self.haptic?(true)
             self.render()
         }
     }
@@ -240,7 +242,7 @@ final class KeyboardMicPreview: UIView {
             let oldTarget = state.target
             state.move(vertical: dy)
             if state.target != oldTarget {
-                feedback.impactOccurred()
+                haptic?(false)
                 render()
             }
         }
@@ -294,7 +296,7 @@ final class KeyboardMicPreview: UIView {
     }
 
     private func completeTransition() {
-        feedback.impactOccurred()
+        haptic?(false)
         finishTask?.cancel()
         render()
         guard state.phase == .processing else { return }
@@ -310,6 +312,7 @@ final class KeyboardMicPreview: UIView {
         let active = phase == .held || phase == .locked
         let phaseChanged = phase != renderedPhase
         renderedPhase = phase
+        if phaseChanged { onActive?(active) }
         let duration = UIAccessibility.isReduceMotionEnabled ? 0 : 0.12
         pill.isUserInteractionEnabled = active
         cancelButton.isEnabled = phase == .locked || state.target == .cancel
@@ -321,6 +324,7 @@ final class KeyboardMicPreview: UIView {
             self.pill.alpha = active ? 1 : 0
             self.lockHint.alpha = phase == .held ? 1 : 0
             self.cancelHint.alpha = phase == .held ? 1 : 0
+            self.waveform.alpha = self.state.target == .cancel ? 0.3 : 1
             self.face.backgroundColor = phase == .held ? UIColor(white: 0.91, alpha: 1) : .white
             self.face.alpha = phase == .locked ? 1 : 0.65
         }
@@ -552,6 +556,7 @@ struct KeyboardBloomBars {
 
 /// Android `BarsView` on iOS: 11 white bars, 3 pt wide, 3 pt gap, 4 pt resting dots.
 final class KeyboardBarsView: UIView {
+    static let width: CGFloat = 11 * 6 - 3
     private var bloom = KeyboardBloomBars()
     private var bars: [CALayer] = []
     private var link: CADisplayLink?

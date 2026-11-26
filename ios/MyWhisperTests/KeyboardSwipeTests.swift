@@ -156,10 +156,29 @@ final class KeyboardSwipeTests: XCTestCase {
         controller.document.caret = 5
         controller.document.hidesNewlineContext = true
         controller.startCursorDrag(at: .zero)
+        // The line's start first, then one character across the hidden newline.
+        controller.continueCursorDrag(to: CGPoint(x: 0, y: -25))
+        XCTAssertEqual(controller.document.caret, 4)
+        controller.continueCursorDrag(to: CGPoint(x: 0, y: -50))
+        XCTAssertEqual(controller.document.caret, 3)
+        controller.continueCursorDrag(to: CGPoint(x: 0, y: -25))
+        XCTAssertEqual(controller.document.caret, 4)
+        controller.finishCursorDrag()
+    }
+
+    @MainActor
+    func testVerticalDragPastLastLineGoesToTheEndWithoutOvershooting() {
+        let controller = TestKeyboardController()
+        controller.document.text = "abc\ndef"
+        controller.document.caret = 5
+        controller.document.ignoresOvershoot = true
+        controller.startCursorDrag(at: .zero)
+        controller.continueCursorDrag(to: CGPoint(x: 0, y: 25))
+        XCTAssertEqual(controller.document.caret, 7)
         controller.continueCursorDrag(to: CGPoint(x: 0, y: -25))
         XCTAssertEqual(controller.document.caret, 3)
-        controller.continueCursorDrag(to: .zero)
-        XCTAssertEqual(controller.document.caret, 4)
+        controller.continueCursorDrag(to: CGPoint(x: 0, y: -50))
+        XCTAssertEqual(controller.document.caret, 0)
         controller.finishCursorDrag()
     }
 
@@ -516,6 +535,8 @@ private final class TestKeyboardDocument: NSObject, UITextDocumentProxy {
     private var insertionIndex: String.Index { text.index(text.startIndex, offsetBy: caret ?? text.count) }
     var hasText: Bool { !text.isEmpty }
     var hidesNewlineContext = false
+    /// Like hosts that drop a move past either end of the document instead of clamping it.
+    var ignoresOvershoot = false
     var documentContextBeforeInput: String? {
         let before = text[..<insertionIndex]
         guard hidesNewlineContext else { return String(before) }
@@ -534,7 +555,9 @@ private final class TestKeyboardDocument: NSObject, UITextDocumentProxy {
     func insertText(_ string: String) { text += string }
     func deleteBackward() { if !text.isEmpty { text.removeLast() } }
     func adjustTextPosition(byCharacterOffset offset: Int) {
-        caret = min(max(0, (caret ?? text.count) + offset), text.count)
+        let target = (caret ?? text.count) + offset
+        if ignoresOvershoot, !(0...text.count).contains(target) { return }
+        caret = min(max(0, target), text.count)
         onAdjust?()
     }
     func setMarkedText(_ markedText: String, selectedRange: NSRange) {}
