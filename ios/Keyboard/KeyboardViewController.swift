@@ -145,8 +145,6 @@ class KeyboardViewController: UIInputViewController {
         var correction: String?
     }
     private var heightConstraint: NSLayoutConstraint?
-    // shortcut: on-screen height readout while the iOS band is investigated; remove once settled.
-    private let heightReadout = UILabel()
     private var popup: UILabel?
     private weak var pressedKey: UIButton?
     private var pressTint: UIView?
@@ -184,8 +182,6 @@ class KeyboardViewController: UIInputViewController {
         // Let UIKit draw the keyboard surface and its device-specific rounded edge.
         keyboard.isOpaque = false
         keyboard.backgroundColor = .clear
-        // Size from the height constraint rather than iOS's own guess.
-        keyboard.allowsSelfSizing = true
         inputView = keyboard
     }
 
@@ -213,12 +209,6 @@ class KeyboardViewController: UIInputViewController {
         heightConstraint = view.heightAnchor.constraint(equalToConstant: Self.portraitHeight)
         heightConstraint?.priority = .init(999)
         heightConstraint?.isActive = true
-        heightReadout.font = .monospacedSystemFont(ofSize: 8, weight: .regular)
-        heightReadout.adjustsFontSizeToFitWidth = true
-        heightReadout.textColor = .systemGray
-        heightReadout.textAlignment = .center
-        heightReadout.isUserInteractionEnabled = false
-        view.addSubview(heightReadout)
         registerForTraitChanges([UITraitUserInterfaceStyle.self, UITraitVerticalSizeClass.self]) {
             (controller: KeyboardViewController, _) in controller.refreshLayout()
         }
@@ -240,19 +230,9 @@ class KeyboardViewController: UIInputViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        // shortcut: experiment. iOS sometimes draws a ~17 pt band above the keyboard depending on the
-        // keyboard shown before, and a height change after appearing seemed to bring it on. Change
-        // the height once on every appearance so the keyboard looks the same each time.
-        guard let constraint = heightConstraint, constraint.isActive else { return }
-        let height = constraint.constant
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
-            guard let self, self.visible, constraint.constant == height else { return }
-            constraint.constant = height + 1
-            self.view.layoutIfNeeded()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                if constraint.constant == height + 1 { constraint.constant = height }
-            }
-        }
+        // iOS holds touches near the screen edges back while it checks for a system edge swipe, so
+        // edge keys (q, p, shift, delete) and the toolbar buttons sometimes started late.
+        view.window?.gestureRecognizers?.forEach { $0.delaysTouchesBegan = false }
     }
 
     override func viewDidDisappear(_ animated: Bool) {
@@ -280,11 +260,6 @@ class KeyboardViewController: UIInputViewController {
         super.viewDidLayoutSubviews()
         let width = view.bounds.width
         let height = view.bounds.height
-        heightReadout.frame = CGRect(x: 0, y: 0, width: width, height: 10)
-        heightReadout.text = String(
-            format: "h %.1f req %.1f self-sizing nudge", height, heightConstraint?.constant ?? 0
-        )
-        view.bringSubviewToFront(heightReadout)
         if layout == nil || (width > 0 && layout?.width != width) || (height > 0 && layout?.height != height) {
             refreshLayout()
         }
