@@ -204,7 +204,7 @@ final class SttSettingsStore: ObservableObject {
             vadThreshold = (stt["vad_threshold"] as? NSNumber)?.doubleValue ?? 0.1
             error = nil
         } catch {
-            self.error = error.localizedDescription
+            self.error = CoreError.displayMessage(for: error)
         }
     }
 
@@ -214,7 +214,7 @@ final class SttSettingsStore: ObservableObject {
             try CoreBridge.putSettings(settings)
             error = nil
         } catch {
-            self.error = error.localizedDescription
+            self.error = CoreError.displayMessage(for: error)
         }
     }
 
@@ -230,7 +230,7 @@ final class SttSettingsStore: ObservableObject {
             try CoreBridge.putSettings(settings)
             error = nil
         } catch {
-            self.error = error.localizedDescription
+            self.error = CoreError.displayMessage(for: error)
         }
     }
 

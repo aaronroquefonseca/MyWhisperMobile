@@ -150,6 +150,11 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(Set(CleanupChain.toDict(cleanupEntry(id: "x", kind: .ollama)).keys), CleanupChain.schemaKeys)
     }
 
+    func testOllamaCleanupRowWritesAProviderCoreAccepts() {
+        // Core rejects the whole settings save when `provider` isn't a cloud vendor.
+        XCTAssertEqual(CleanupChain.toDict(cleanupEntry(id: "x", kind: .ollama))["provider"] as? String, "OpenAI")
+    }
+
     func testCleanupRoundTripToDesktopSchema() {
         let entry = Cleanup.Entry(dict: [
             "id": "lm-1", "name": "Ollama (m)", "kind": "Ollama", "enabled": true,

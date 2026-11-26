@@ -32,7 +32,8 @@ enum CleanupChain {
         [
             "id": entry.id, "name": entry.name, "kind": capitalizedKind(entry.kind),
             "enabled": entry.enabled, "url": entry.url, "model": entry.model,
-            "provider": entry.provider, "api_key": entry.apiKey
+            // Core types `provider` as a cloud vendor even on Ollama rows; Android writes OpenAI there too.
+            "provider": entry.provider.isEmpty ? "OpenAI" : entry.provider, "api_key": entry.apiKey
         ]
     }
 
@@ -112,7 +113,7 @@ final class CleanupSettingsStore: ObservableObject {
             draft = CleanupSettingsDraft.from(Cleanup.configuration(settings: try CoreBridge.getSettings()))
             error = nil
         } catch {
-            self.error = error.localizedDescription
+            self.error = CoreError.displayMessage(for: error)
         }
     }
 
@@ -122,7 +123,7 @@ final class CleanupSettingsStore: ObservableObject {
             try CoreBridge.putSettings(settings)
             error = nil
         } catch {
-            self.error = error.localizedDescription
+            self.error = CoreError.displayMessage(for: error)
         }
     }
 
