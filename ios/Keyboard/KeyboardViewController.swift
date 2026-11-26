@@ -39,6 +39,11 @@ class KeyboardViewController: UIInputViewController {
     private lazy var haptic = makeHaptic()
     /// One delay for every press-and-hold (cursor, accents, symbols, delete repeat), so they all feel the same.
     private static let holdDelay: TimeInterval = 0.35
+    // Portrait metrics, shared by the first height constraint and the layout.
+    private static let rowHeight: CGFloat = 46
+    private static let rowGap: CGFloat = 12
+    private static let stripHeight: CGFloat = 48
+    private static let numberRowHeight: CGFloat = 38
     private var pendingUndo: (original: String, replacement: String)?
     /// Text a suggestion tap inserted, ending in its automatic space. Punctuation typed next goes before that space.
     private var suggestionInsert: String?
@@ -192,7 +197,12 @@ class KeyboardViewController: UIInputViewController {
             rowsView.topAnchor.constraint(equalTo: view.topAnchor),
             rowsView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
-        heightConstraint = view.heightAnchor.constraint(equalToConstant: 302)
+        // Start at the height the letters will ask for: iOS can size the keyboard from this first
+        // value and keep it, drawing the difference as empty space above the toolbar.
+        let numberRow = settings.showsNumberRow ? Self.numberRowHeight + Self.rowGap : 0
+        heightConstraint = view.heightAnchor.constraint(
+            equalToConstant: Self.stripHeight + numberRow + 4 * Self.rowHeight + 3 * Self.rowGap + 10
+        )
         heightConstraint?.priority = .init(999)
         heightConstraint?.isActive = true
         registerForTraitChanges([UITraitUserInterfaceStyle.self, UITraitVerticalSizeClass.self]) {
@@ -539,15 +549,15 @@ class KeyboardViewController: UIInputViewController {
         let pad: CGFloat = layout.compact ? 10 : 6
         // About 280 pt in portrait: iOS sometimes forces roughly that height anyway and drew the
         // difference as empty space above the toolbar, so the keyboard now always fills it.
-        let rowHeight: CGFloat = layout.compact ? 31 : 46
-        let gap: CGFloat = layout.compact ? 6 : 12
-        let stripHeight: CGFloat = layout.compact ? 36 : 48
+        let rowHeight: CGFloat = layout.compact ? 31 : Self.rowHeight
+        let gap: CGFloat = layout.compact ? 6 : Self.rowGap
+        let stripHeight: CGFloat = layout.compact ? 36 : Self.stripHeight
         if emojiMode, let query = emojiSearch {
             addEmojiSearch(query: query, width: width, pad: pad, rowHeight: rowHeight, gap: gap)
             return
         }
         let numberRow = settings.showsNumberRow && !isNumberField
-        let numberHeight: CGFloat = layout.compact ? 26 : 38
+        let numberHeight: CGFloat = layout.compact ? 26 : Self.numberRowHeight
         let extra = numberRow ? numberHeight + gap : 0
         // The emoji picker is taller, as on the system keyboard, so emoji draw at full size.
         let emojiExtra: CGFloat = emojiMode && !layout.compact ? 44 : 0
@@ -1019,7 +1029,8 @@ class KeyboardViewController: UIInputViewController {
 
     private func characterKey(_ value: String, cased: Bool) -> KeyboardKeyButton {
         let button = makeKey(background: keyColor)
-        button.titleLabel?.font = .systemFont(ofSize: layout?.compact == true ? 19 : 22)
+        // The system keyboard's key size: SF at 25 pt in portrait.
+        button.titleLabel?.font = .systemFont(ofSize: layout?.compact == true ? 21 : 25)
         button.accessibilityIdentifier = value.lowercased()
         if cased {
             letterKeys.append((button, value))
@@ -1119,17 +1130,18 @@ class KeyboardViewController: UIInputViewController {
     private func playHaptic(hold: Bool = false) {
         // Keyboards get no haptics without Full Access.
         guard settings.usesHaptics, hasFullAccess else { return }
-        haptic.impactOccurred(intensity: hold ? 1 : 0.55)
+        haptic.impactOccurred(intensity: hold ? 1 : 0.75)
         haptic.prepare()
     }
 
     /// iOS 17.5+ generators tied to a view play from extensions; the view-less init can stay silent there.
+    /// Rigid: a short, crisp tap closer to the system keyboard's than the soft light style.
     private func makeHaptic() -> UIImpactFeedbackGenerator {
         let generator: UIImpactFeedbackGenerator
         if #available(iOS 17.5, *) {
-            generator = UIImpactFeedbackGenerator(style: .light, view: view)
+            generator = UIImpactFeedbackGenerator(style: .rigid, view: view)
         } else {
-            generator = UIImpactFeedbackGenerator(style: .light)
+            generator = UIImpactFeedbackGenerator(style: .rigid)
         }
         generator.prepare()
         return generator
