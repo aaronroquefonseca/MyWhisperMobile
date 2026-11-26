@@ -8,6 +8,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
@@ -96,6 +97,12 @@ class SyncService : Service() {
      * leave an orphan ongoing notification STOP cannot remove.
      */
     @Volatile private var foregrounded = false
+    /**
+     * Held for the service's whole life: without it Wi-Fi drops
+     * multicast, so mDNS neither finds peers nor answers their
+     * queries once the activity is gone (boot start, app closed).
+     */
+    private var multicastLock: WifiManager.MulticastLock? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -228,10 +235,14 @@ class SyncService : Service() {
                     stopSelf()
                     return START_NOT_STICKY
                 }
+                holdMulticast()
                 workers.execute {
-                    try {
-                        CoreBridge.syncStart()
-                    } catch (_: Exception) {
+                    // A refused start (sync off, port taken, …) leaves no
+                    // listener: stop instead of showing a running sync
+                    // that peers can only reach with "connection refused".
+                    CoreBridge.syncStart().onFailure { e ->
+                        android.util.Log.w("MwSync", "core sync start failed: ${e.message}")
+                        stop(this)
                     }
                 }
                 foregrounded = true
@@ -350,7 +361,24 @@ class SyncService : Service() {
         }
     }
 
+    private fun holdMulticast() {
+        try {
+            val lock = multicastLock ?: (applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager)
+                .createMulticastLock("mywhisper-sync")
+                .apply { setReferenceCounted(false) }
+                .also { multicastLock = it }
+            lock.acquire()
+        } catch (e: Exception) {
+            android.util.Log.w("MwSync", "multicast lock: ${e.message}")
+        }
+    }
+
     override fun onDestroy() {
+        try {
+            multicastLock?.release()
+        } catch (_: Exception) {
+        }
+        multicastLock = null
         foregrounded = false
         NotifPolicy.UnifiedState.syncActive = false
         NotifPolicy.UnifiedState.syncing = false

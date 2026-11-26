@@ -475,12 +475,7 @@ pub fn exchange(
 
     // Contact bookkeeping: unknown nodes become pending requests,
     // known ones refresh addresses.
-    let mut contact_addrs: Vec<String> = peer.addresses.clone();
-    if let Some(remote) = remote
-        && !contact_addrs.contains(&remote)
-    {
-        contact_addrs.push(remote);
-    }
+    let contact_addrs = contact_addresses(&peer.addresses, remote.as_deref());
     let is_new = store
         .record_seen(&peer.node_id, &peer.name, &contact_addrs)
         .map_err(|e| format!("record contact: {e}"))?;
@@ -629,6 +624,31 @@ fn short(node_id: &str) -> String {
 
 /// Peers with a dialed round running in this process.
 static DIALING: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
+
+/// Addresses to store for a contact: what it advertised, plus its
+/// observed IP on each advertised port (corrects a wrong self-reported
+/// IP). The observed source port itself is ephemeral, never a
+/// listener: storing it made every later dial "connection refused".
+fn contact_addresses(advertised: &[String], remote: Option<&str>) -> Vec<String> {
+    let mut addrs = advertised.to_vec();
+    let Some(ip) = remote
+        .and_then(|r| r.parse::<SocketAddr>().ok())
+        .map(|a| a.ip())
+    else {
+        return addrs;
+    };
+    for port in advertised
+        .iter()
+        .filter_map(|a| a.parse::<SocketAddr>().ok())
+        .map(|a| a.port())
+    {
+        let addr = SocketAddr::new(ip, port).to_string();
+        if !addrs.contains(&addr) {
+            addrs.push(addr);
+        }
+    }
+    addrs
+}
 
 /// Dial a peer's known addresses (every resolved address of each) in
 /// order; first success wins. Runs the Noise handshake, then requires
@@ -901,6 +921,11 @@ pub fn start_mdns(
     advertise: bool,
 ) -> Result<MdnsHandles, String> {
     let daemon = mdns_sd::ServiceDaemon::new().map_err(|e| format!("mdns: {e}"))?;
+    // The listener is IPv4-only (`listen`): advertising IPv6 addresses
+    // hands peers addresses that always answer "connection refused".
+    daemon
+        .disable_interface(mdns_sd::IfKind::IPv6)
+        .map_err(|e| format!("mdns: {e}"))?;
     if advertise {
         let short_id = &node_id[..node_id.len().min(8)];
         let mut txt = std::collections::HashMap::new();
@@ -1313,6 +1338,19 @@ mod tests {
         let v6 = dial_address(&v6.into(), 7);
         assert!(v6.starts_with("[fe80::1") && v6.ends_with("]:7"), "{v6}");
         assert!(v6.to_socket_addrs().is_ok());
+    }
+
+    #[test]
+    fn contact_addresses_never_store_the_source_port() {
+        let advertised = vec!["10.0.0.9:42973".to_string()];
+        // Observed IP differs from the self-reported one: keep both, on the listen port.
+        assert_eq!(
+            contact_addresses(&advertised, Some("192.168.1.76:52686")),
+            ["10.0.0.9:42973", "192.168.1.76:42973"]
+        );
+        // Nothing advertised (not listening): nothing dialable to store.
+        assert!(contact_addresses(&[], Some("192.168.1.76:52686")).is_empty());
+        assert_eq!(contact_addresses(&advertised, None), advertised);
     }
 
     /// Full client/server round-trip over real loopback TCP with Noise

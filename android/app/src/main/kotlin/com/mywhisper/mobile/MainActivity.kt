@@ -5,7 +5,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
-import android.net.wifi.WifiManager
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.compose.BackHandler
@@ -188,7 +187,6 @@ class MainActivity : ComponentActivity() {
     private val llmVerifyCache = LocalModelDownload.PackVerifyCache()
     private val sttPackChanges = mutableIntStateOf(0)
     private val llmPackChanges = mutableIntStateOf(0)
-    private var multicastLock: WifiManager.MulticastLock? = null
     /** Active background-download WorkInfo observers, keyed by unique work name. */
     private val dlWorkObservers = mutableMapOf<String, Observer<List<WorkInfo>>>()
 
@@ -1028,11 +1026,6 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        try {
-            multicastLock?.release()
-        } catch (_: Exception) {
-        }
-        multicastLock = null
         // Drop late job results: the generation bump makes stale
         // workers no-ops instead of touching torn-down state.
         settingsGen.incrementAndGet()
@@ -6275,26 +6268,6 @@ class MainActivity : ComponentActivity() {
 
     // -- Sync -----------------------------------------------------------
 
-    private fun acquireMulticast() {
-        try {
-            if (multicastLock == null) {
-                val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-                multicastLock = wifi.createMulticastLock("mywhisper-sync").apply {
-                    setReferenceCounted(true)
-                }
-            }
-            if (multicastLock?.isHeld != true) multicastLock?.acquire()
-        } catch (_: Exception) {
-        }
-    }
-
-    private fun releaseMulticast() {
-        try {
-            if (multicastLock?.isHeld == true) multicastLock?.release()
-        } catch (_: Exception) {
-        }
-    }
-
     private fun agoText(epochSecs: Long): String {
         if (epochSecs <= 0) return getString(R.string.sync_ago_never)
         val dt = System.currentTimeMillis() / 1000 - epochSecs
@@ -6461,7 +6434,6 @@ getString(R.string.sync_running, shown)
                         if (!it && running) {
                             SyncService.stop(this@MainActivity)
                             CoreBridge.syncStop()
-                            releaseMulticast()
                             refresh()
                         } else {
                             restartSyncIfRunning(running && it)
@@ -6495,7 +6467,11 @@ getString(R.string.sync_running, shown)
                     Spacer(Modifier.width(8.dp))
                     if (!running) {
                         Button(onClick = {
-                            acquireMulticast()
+                            // Start is the opt-in: core refuses to start
+                            // without an explicitly stored enabled flag,
+                            // which a fresh install does not have yet.
+                            sync.put("enabled", true)
+                            version++
                             // Single-owner start: the service owns
                             // syncStart (sync_start() begins with
                             // sync_stop(), so a concurrent activity-side
@@ -6503,7 +6479,7 @@ getString(R.string.sync_running, shown)
                             // the first tap nets dead sync). Never call
                             // CoreBridge.syncStart() here; just refresh
                             // status once the service promotes.
-                            SyncService.start(this@MainActivity)
+                            save { SyncService.start(this@MainActivity) }
                             workers.execute {
                                 try {
                                     Thread.sleep(1_000)
@@ -6516,7 +6492,6 @@ getString(R.string.sync_running, shown)
                         OutlinedButton(onClick = {
                             SyncService.stop(this@MainActivity)
                             CoreBridge.syncStop()
-                            releaseMulticast()
                             refresh()
                         }) { Text(stringResource(R.string.action_stop)) }
                     }
@@ -6778,7 +6753,6 @@ getString(R.string.sync_running, shown)
             CoreBridge.syncStop()
         } catch (_: Exception) {
         }
-        acquireMulticast()
         SyncService.start(this)
         toast(getString(R.string.sync_restarted))
     }
