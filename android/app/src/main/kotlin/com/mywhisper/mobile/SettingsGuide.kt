@@ -87,11 +87,11 @@ internal object SettingsGuide {
         return restrictedLikely(Build.VERSION.SDK_INT, source)
     }
 
-    /** Accessibility path keyed by manufacturer. Strings need confirming on real devices. */
-    fun a11yPathRes(manufacturer: String): Int = when (manufacturer.lowercase()) {
-        "samsung" -> R.string.guide_a11y_path_samsung
-        "xiaomi", "redmi", "poco" -> R.string.guide_a11y_path_xiaomi
-        else -> R.string.guide_a11y_path_generic
+    /** Accessibility steps keyed by manufacturer. Strings need confirming on real devices. */
+    fun a11yStepsRes(manufacturer: String): Int = when (manufacturer.lowercase()) {
+        "samsung" -> R.array.guide_a11y_steps_samsung
+        "xiaomi", "redmi", "poco" -> R.array.guide_a11y_steps_xiaomi
+        else -> R.array.guide_a11y_steps_generic
     }
 
     private val handler = Handler(Looper.getMainLooper())

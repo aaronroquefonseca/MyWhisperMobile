@@ -675,18 +675,32 @@
     <string name="sync_syncing">syncing…</string>
     <string name="sync_waiting_title">Waiting for response (%1$d)</string>
     <string name="sync_waiting_sub">You sent a pairing request. Accept it on the other device; no action needed here except cancel.</string>
-    <!-- Settings guide (#125): one line before a Settings jump, and the picture-in-picture text. -->
-    <string name="guide_hint_overlay">Find MyWhisper and turn on “Allow display over other apps”. MyWhisper comes back on its own.</string>
-    <string name="guide_hint_channel">Turn off the switch at the top. MyWhisper comes back on its own.</string>
-    <string name="guide_hint_a11y">Android will show a warning: tap Allow. MyWhisper comes back on its own.</string>
-    <string name="guide_a11y_title">Turn on MyWhisper</string>
-    <!-- Accessibility paths by manufacturer: unconfirmed on real devices, check before release. -->
-    <string name="guide_a11y_path_generic">Tap MyWhisper → turn on “Use MyWhisper”</string>
-    <string name="guide_a11y_path_samsung">Installed apps → MyWhisper → On</string>
-    <string name="guide_a11y_path_xiaomi">Downloaded apps → MyWhisper → On</string>
-    <string name="guide_a11y_warning">Android will show a warning. That\'s expected: MyWhisper only uses this to type your text. Tap Allow.</string>
+    <!-- Settings guide (#125): one line before a Settings jump, and the picture-in-picture card. -->
+    <string name="guide_hint_overlay">Find MyWhisper and turn on “Allow display over other apps”.</string>
+    <string name="guide_hint_channel">Turn off the switch at the top.</string>
+    <string name="guide_hint_a11y">Android will show a warning: tap Allow.</string>
+    <string name="guide_a11y_title">Turn on dictation</string>
+    <!-- Accessibility steps by manufacturer: unconfirmed on real devices, check before release. -->
+    <string-array name="guide_a11y_steps_generic">
+        <item>Tap MyWhisper</item>
+        <item>Turn on “Use MyWhisper”</item>
+    </string-array>
+    <string-array name="guide_a11y_steps_samsung">
+        <item>Open Installed apps</item>
+        <item>Tap MyWhisper and turn it on</item>
+    </string-array>
+    <string-array name="guide_a11y_steps_xiaomi">
+        <item>Open Downloaded apps</item>
+        <item>Tap MyWhisper and turn it on</item>
+    </string-array>
+    <string name="guide_a11y_allow">Tap Allow on the warning</string>
+    <string name="guide_a11y_why">MyWhisper only uses it to type your text.</string>
     <string name="guide_restricted_link">Blocked by “Restricted setting”?</string>
     <string name="guide_restricted_title">Unblock MyWhisper</string>
-    <string name="guide_restricted_path">Tap MyWhisper → ⋮ (top right) → Allow restricted settings</string>
-    <string name="guide_restricted_then">Then come back and turn on the dictation service.</string>
+    <string-array name="guide_restricted_steps">
+        <item>Tap MyWhisper</item>
+        <item>Tap ⋮ at the top right</item>
+        <item>Allow restricted settings</item>
+    </string-array>
+    <string name="guide_restricted_then">Then come back to turn on dictation</string>
 </resources>

@@ -67,11 +67,11 @@ class SettingsGuideTest {
         assertFalse(SettingsGuide.granted(app, Step.RESTRICTED))
     }
 
-    @Test fun manufacturerPicksPathWithGenericFallback() {
-        assertEquals(R.string.guide_a11y_path_samsung, SettingsGuide.a11yPathRes("samsung"))
-        assertEquals(R.string.guide_a11y_path_samsung, SettingsGuide.a11yPathRes("Samsung"))
-        for (m in listOf("Xiaomi", "Redmi", "POCO")) assertEquals(m, R.string.guide_a11y_path_xiaomi, SettingsGuide.a11yPathRes(m))
-        for (m in listOf("Google", "OnePlus", "unknown", "")) assertEquals(m, R.string.guide_a11y_path_generic, SettingsGuide.a11yPathRes(m))
+    @Test fun manufacturerPicksStepsWithGenericFallback() {
+        assertEquals(R.array.guide_a11y_steps_samsung, SettingsGuide.a11yStepsRes("samsung"))
+        assertEquals(R.array.guide_a11y_steps_samsung, SettingsGuide.a11yStepsRes("Samsung"))
+        for (m in listOf("Xiaomi", "Redmi", "POCO")) assertEquals(m, R.array.guide_a11y_steps_xiaomi, SettingsGuide.a11yStepsRes(m))
+        for (m in listOf("Google", "OnePlus", "unknown", "")) assertEquals(m, R.array.guide_a11y_steps_generic, SettingsGuide.a11yStepsRes(m))
     }
 
     @Test fun pipNeedsFeatureAndAppOp() {
