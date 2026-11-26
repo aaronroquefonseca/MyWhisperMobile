@@ -52,6 +52,7 @@ final class KeyboardMicPreview: UIView {
     private let button = KeyboardMicTouchSurface()
     private let face = UIView()
     private let mark = UIImageView()
+    private let dots = KeyboardProcessingDots()
     private let pill = UIView()
     private let cancelButton = UIButton(type: .system)
     private let waveform = KeyboardBarsView()
@@ -128,6 +129,9 @@ final class KeyboardMicPreview: UIView {
             mark.image = UIImage(systemName: "mic.fill")
         }
         face.addSubview(mark)
+        dots.tintColor = .black
+        dots.isHidden = true
+        face.addSubview(dots)
         addSubview(button)
 
         button.isAccessibilityElement = true
@@ -157,6 +161,7 @@ final class KeyboardMicPreview: UIView {
         let iconSize = min(27, face.bounds.height * 0.65)
         mark.frame = CGRect(x: (face.bounds.width - iconSize) / 2, y: (face.bounds.height - iconSize) / 2,
                             width: iconSize, height: iconSize)
+        dots.frame = mark.frame
 
         // Button, gap, bars, gap, then the hints (held) or the cancel button (locked) at the far end.
         let phase = state.phase
@@ -344,12 +349,16 @@ final class KeyboardMicPreview: UIView {
         }
         let icon: String?
         switch phase {
-        case .processing: icon = "ellipsis"
+        case .processing: icon = nil
         case .locked: icon = "checkmark"
         case .held: icon = state.target == .lock ? "lock.fill" : nil
         case .idle: icon = nil
         }
-        let nextImage = icon.flatMap { UIImage(systemName: $0)?.withRenderingMode(.alwaysTemplate) } ?? idleImage
+        let nextImage = phase == .processing ? nil : icon.flatMap { UIImage(systemName: $0)?.withRenderingMode(.alwaysTemplate) } ?? idleImage
+        if phaseChanged {
+            dots.isHidden = phase != .processing
+            if phase == .processing { dots.start() } else { dots.stop() }
+        }
         UIView.transition(with: mark, duration: phaseChanged ? duration : 0, options: [.transitionCrossDissolve, .allowUserInteraction]) {
             self.mark.image = nextImage
         }
@@ -880,4 +889,70 @@ final class KeyboardWebMic: NSObject, WKScriptMessageHandler, WKUIDelegate, WKNa
     post({ type: 'ready' });
     </script></body></html>
     """
+}
+
+/// Android's floating-button processing dots: each lights up in turn (1.2s cycle, 200ms stagger).
+final class KeyboardProcessingDots: UIView {
+    private let dotLayers = (0..<3).map { _ in CALayer() }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = false
+        isAccessibilityElement = false
+        dotLayers.forEach { layer.addSublayer($0) }
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func tintColorDidChange() {
+        super.tintColorDidChange()
+        dotLayers.forEach { $0.backgroundColor = tintColor.cgColor }
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        // Android's 24-unit drawable: dots of radius 2 centred at x 4, 12 and 20.
+        let unit = bounds.width / 24
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for (index, dot) in dotLayers.enumerated() {
+            dot.bounds = CGRect(x: 0, y: 0, width: 4 * unit, height: 4 * unit)
+            dot.cornerRadius = 2 * unit
+            dot.position = CGPoint(x: CGFloat(4 + 8 * index) * unit, y: bounds.midY)
+        }
+        CATransaction.commit()
+    }
+
+    func start() {
+        stop()
+        // Reduce Motion: plain dots, no pulsing.
+        let still = UIAccessibility.isReduceMotionEnabled
+        let easing = CAMediaTimingFunction(controlPoints: 0.4, 0, 0.2, 1)
+        let now = layer.convertTime(CACurrentMediaTime(), from: nil)
+        for (index, dot) in dotLayers.enumerated() {
+            dot.opacity = still ? 1 : 0.2
+            dot.transform = still ? CATransform3DIdentity : CATransform3DMakeScale(0.85, 0.85, 1)
+            guard !still else { continue }
+            let opacity = CAKeyframeAnimation(keyPath: "opacity")
+            opacity.values = [0.2, 1, 0.2, 0.2]
+            let scale = CAKeyframeAnimation(keyPath: "transform.scale")
+            scale.values = [0.85, 1, 0.85, 0.85]
+            for animation in [opacity, scale] {
+                animation.keyTimes = [0, 0.35, 0.7, 1]
+                animation.timingFunctions = [easing, easing, CAMediaTimingFunction(name: .linear)]
+            }
+            let pulse = CAAnimationGroup()
+            pulse.animations = [opacity, scale]
+            pulse.duration = 1.2
+            pulse.repeatCount = .infinity
+            pulse.beginTime = now + 0.2 * Double(index)
+            pulse.isRemovedOnCompletion = false
+            dot.add(pulse, forKey: "pulse")
+        }
+    }
+
+    func stop() {
+        dotLayers.forEach { $0.removeAnimation(forKey: "pulse") }
+    }
 }
