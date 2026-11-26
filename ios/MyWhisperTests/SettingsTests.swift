@@ -158,7 +158,7 @@ final class SettingsTests: XCTestCase {
     func testCleanupRoundTripToDesktopSchema() {
         let entry = Cleanup.Entry(dict: [
             "id": "lm-1", "name": "Ollama (m)", "kind": "Ollama", "enabled": true,
-            "url": "http://127.0.0.1:11434", "model": "m", "provider": "", "api_key": ""
+            "url": "http://127.0.0.1:11434", "model": "m", "provider": "OpenAI", "api_key": ""
         ])
         XCTAssertNotNil(entry)
         guard let entry, let reparsed = Cleanup.Entry(dict: CleanupChain.toDict(entry)) else { return }

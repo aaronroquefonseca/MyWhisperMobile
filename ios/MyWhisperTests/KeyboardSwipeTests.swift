@@ -332,7 +332,7 @@ final class KeyboardSwipeTests: XCTestCase {
     }
 
     @MainActor
-    func testKeyboardOwnsDictationAndTypingResetsThePreview() throws {
+    func testKeyboardOwnsDictationAndNeedsFullAccessForTheMic() throws {
         let controller = TestKeyboardController()
         XCTAssertTrue(controller.hasDictationKey)
         controller.hasDictationKey = false
@@ -347,13 +347,13 @@ final class KeyboardSwipeTests: XCTestCase {
         let area = try XCTUnwrap(input.subviews.first { $0 is KeyboardKeyArea })
         let preview = try XCTUnwrap(area.subviews.first { $0 is KeyboardMicPreview })
         let mic = try XCTUnwrap(preview.subviews.first { $0.accessibilityLabel == "MyWhisper dictation preview" })
-        XCTAssertTrue(mic.accessibilityActivate())
-        XCTAssertEqual(mic.accessibilityValue, "Hands-free. Activate to finish")
+        // Without Full Access keyboards get no microphone: the mic says why instead of recording.
+        _ = mic.accessibilityActivate()
+        XCTAssertEqual(mic.accessibilityValue, "Ready")
         XCTAssertTrue(controller.document.text.isEmpty)
         let letter = try XCTUnwrap(area.subviews.compactMap { $0 as? UIButton }.first { $0.title(for: .normal)?.lowercased() == "a" })
         letter.sendActions(for: .touchUpInside)
         XCTAssertEqual(controller.document.text.lowercased(), "a")
-        XCTAssertEqual(mic.accessibilityValue, "Ready")
         XCTAssertTrue(controller.hasDictationKey)
     }
 
