@@ -1,4 +1,5 @@
 import UIKit
+import WebKit
 
 /// The Android floating mic's Smart mode, adapted to the keyboard toolbar.
 struct KeyboardMicPreviewState {
@@ -64,6 +65,7 @@ final class KeyboardMicPreview: UIView {
     private var dragging = false
     private var consumesRelease = false
     private var tapOpensSession = false
+    private var webMicActive = false
     private let onDock: (Bool) -> Void
     /// Nil when MyWhisper can't share levels (no Full Access); the mockup then runs without them.
     private let openSession: (() -> Void)?
@@ -205,7 +207,7 @@ final class KeyboardMicPreview: UIView {
         touchStart = (point, ProcessInfo.processInfo.systemUptime)
         guard state.phase == .idle else { return }
         // No live mic session: releasing a tap or hold opens MyWhisper to start one. Dragging still works.
-        tapOpensSession = openSession != nil && !Self.sessionIsLive
+        tapOpensSession = openSession != nil && webMic == nil && !Self.sessionIsLive
         holdTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 80_000_000)
             guard !Task.isCancelled, let self else { return }
@@ -272,12 +274,17 @@ final class KeyboardMicPreview: UIView {
         completeTransition()
     }
 
+    /// The keyboard's own mic, with Full Access, until WebKit refuses it once.
+    private var webMic: KeyboardWebMic? {
+        openSession != nil && !KeyboardWebMic.shared.failed ? .shared : nil
+    }
+
     private static var sessionIsLive: Bool {
         KeyboardDictationMailbox.shared?.standby?.isAvailable(at: Date()) == true
     }
 
     private func activate() {
-        if state.phase == .idle, let openSession, !Self.sessionIsLive {
+        if state.phase == .idle, let openSession, webMic == nil, !Self.sessionIsLive {
             openSession()
             return
         }
@@ -350,8 +357,12 @@ final class KeyboardMicPreview: UIView {
         }
         waveform.barColor = state.target == .lock ? .systemTeal : .white
         if active {
-            if meterTask == nil { startMeter() }
+            if meterTask == nil, !webMicActive { startMeter() }
         } else {
+            if webMicActive {
+                webMicActive = false
+                KeyboardWebMic.shared.stop()
+            }
             if meterTask != nil { KeyboardDictationMailbox.shared?.clearListen() }
             meterTask?.cancel()
             meterTask = nil
@@ -362,6 +373,20 @@ final class KeyboardMicPreview: UIView {
     }
 
     private func startMeter() {
+        if let webMic {
+            webMicActive = true
+            meterHint.isHidden = true
+            waveform.isHidden = false
+            webMic.onLevel = { [weak self] level in self?.waveform.push(level) }
+            webMic.onFailure = { [weak self] in
+                // WebKit refused the mic: use MyWhisper's session for this and later holds.
+                guard let self, self.webMicActive else { return }
+                self.webMicActive = false
+                self.startMeter()
+            }
+            webMic.start(in: self)
+            return
+        }
         meterHint.text = openSession == nil ? "Allow Full Access for mic levels" : "Start the mic in MyWhisper"
         meterTask = Task { @MainActor [weak self] in
             let mailbox = KeyboardDictationMailbox.shared
@@ -600,4 +625,152 @@ final class KeyboardBarsView: UIView {
         }
         CATransaction.commit()
     }
+}
+
+
+/// Captures the mic inside the keyboard through a hidden web view. WebKit's own processes may use
+/// the mic where a keyboard extension can't, so holding the key needs no app switch and the mic is
+/// on only while listening. Raycast's keyboard does the same (see stephancill/ios-keyboard-dictation).
+@MainActor
+final class KeyboardWebMic: NSObject, WKScriptMessageHandler, WKUIDelegate, WKNavigationDelegate {
+    static let shared = KeyboardWebMic()
+
+    /// Set once WebKit refuses the mic; the keyboard then uses MyWhisper's session instead.
+    private(set) var failed = false
+    var onLevel: ((Float) -> Void)?
+    var onFailure: (() -> Void)?
+    private var webView: WKWebView?
+    private var ready = false
+    private var wanted = false
+    private var heartbeat: Timer?
+
+    /// The web view must sit in the keyboard's window: WebKit throttles one outside it.
+    func start(in host: UIView) {
+        let webView = self.webView ?? makeWebView()
+        if webView.superview !== host { host.insertSubview(webView, at: 0) }
+        wanted = true
+        if ready { run("startMic()") }
+        heartbeat?.invalidate()
+        // The page stops the mic by itself if these stop, e.g. when the keyboard process is suspended.
+        heartbeat = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.run("beat()") }
+        }
+    }
+
+    func stop() {
+        wanted = false
+        heartbeat?.invalidate()
+        heartbeat = nil
+        if ready { run("stopMic()") }
+    }
+
+    private func makeWebView() -> WKWebView {
+        let configuration = WKWebViewConfiguration()
+        configuration.allowsInlineMediaPlayback = true
+        configuration.mediaTypesRequiringUserActionForPlayback = []
+        configuration.websiteDataStore = .nonPersistent()
+        configuration.userContentController.add(self, name: "mic")
+        let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 1, height: 1), configuration: configuration)
+        webView.alpha = 0.01
+        webView.isUserInteractionEnabled = false
+        webView.accessibilityElementsHidden = true
+        webView.uiDelegate = self
+        webView.navigationDelegate = self
+        // getUserMedia needs a secure context, which an https base URL gives.
+        webView.loadHTMLString(Self.page, baseURL: URL(string: "https://keyboard-mic.invalid/"))
+        self.webView = webView
+        return webView
+    }
+
+    private func run(_ script: String) {
+        webView?.evaluateJavaScript(script + "; 0", completionHandler: nil)
+    }
+
+    func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard let body = message.body as? [String: Any], let type = body["type"] as? String else { return }
+        switch type {
+        case "ready":
+            ready = true
+            if wanted { run("startMic()") }
+        case "level":
+            guard wanted, let rms = (body["rms"] as? NSNumber)?.doubleValue else { return }
+            // Speech sits around -40 to -15 dBFS; map that span onto the bars.
+            let decibels = 20 * log10(max(rms, 0.000_01))
+            onLevel?(Float(min(max((decibels + 55) / 40, 0), 1)))
+        case "failed":
+            guard wanted, body["reason"] as? String != "heartbeat" else { return }
+            failed = true
+            stop()
+            onFailure?()
+        default:
+            break
+        }
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        requestMediaCapturePermissionFor origin: WKSecurityOrigin,
+        initiatedByFrame frame: WKFrameInfo,
+        type: WKMediaCaptureType,
+        decisionHandler: @escaping (WKPermissionDecision) -> Void
+    ) {
+        decisionHandler(type == .microphone ? .grant : .deny)
+    }
+
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        ready = false
+        webView.loadHTMLString(Self.page, baseURL: URL(string: "https://keyboard-mic.invalid/"))
+    }
+
+    private static let page = """
+    <!doctype html><html><body><script>
+    let wanted = false, starting = false, stream = null, context = null, timer = null, lastBeat = 0;
+    const post = (message) => window.webkit.messageHandlers.mic.postMessage(message);
+    async function startMic() {
+      wanted = true;
+      lastBeat = Date.now();
+      if (stream || starting) return;
+      starting = true;
+      try {
+        if (navigator.audioSession) navigator.audioSession.type = 'play-and-record';
+        const opened = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        });
+        starting = false;
+        if (!wanted) { opened.getTracks().forEach((track) => track.stop()); return; }
+        stream = opened;
+        context = new AudioContext({ latencyHint: 'interactive' });
+        const analyser = context.createAnalyser();
+        analyser.fftSize = 1024;
+        context.createMediaStreamSource(stream).connect(analyser);
+        await context.resume();
+        const samples = new Float32Array(analyser.fftSize);
+        post({ type: 'started' });
+        timer = setInterval(() => {
+          if (Date.now() - lastBeat > 3000) { stopMic(); post({ type: 'failed', reason: 'heartbeat' }); return; }
+          analyser.getFloatTimeDomainData(samples);
+          let sum = 0;
+          for (const value of samples) sum += value * value;
+          post({ type: 'level', rms: Math.sqrt(sum / samples.length) });
+        }, 40);
+      } catch (error) {
+        starting = false;
+        stopMic();
+        post({ type: 'failed', reason: String((error && error.name) || error) });
+      }
+    }
+    function stopMic() {
+      wanted = false;
+      if (timer) clearInterval(timer);
+      timer = null;
+      if (stream) stream.getTracks().forEach((track) => track.stop());
+      stream = null;
+      if (context) context.close();
+      context = null;
+      if (navigator.audioSession) navigator.audioSession.type = 'auto';
+    }
+    function beat() { lastBeat = Date.now(); }
+    post({ type: 'ready' });
+    </script></body></html>
+    """
 }
