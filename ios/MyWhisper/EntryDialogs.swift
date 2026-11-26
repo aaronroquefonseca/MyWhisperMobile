@@ -66,21 +66,17 @@ struct SttEntryForm: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Entry") {
-                    TextField("Name (optional)", text: $name)
+                Section {
+                    LabeledField(label: "Name", text: $name, prompt: "Optional")
                     Toggle("Enabled", isOn: $enabled)
-                    Text(kind.rawValue).font(.caption).foregroundStyle(.secondary)
+                } header: {
+                    if kind == .selfHosted { Text("Self-hosted server") } else { Text(LocalizedStringKey(kind.rawValue)) }
                 }
                 if kind == .selfHosted {
                     Section {
-                        TextField("Server URL (http(s) or ws(s))", text: $url)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .keyboardType(.URL)
-                        TextField("Model", text: $model)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                        SecureField("API key (optional)", text: $apiKey)
+                        LabeledField(label: "URL", text: $url, prompt: "http(s) or ws(s)", isURL: true)
+                        LabeledField(label: "Model", text: $model, prompt: "Required")
+                        LabeledField(label: "API key", text: $apiKey, prompt: "Optional", isSecure: true)
                         Toggle("Streaming (ws servers)", isOn: $streaming)
                     } header: {
                         Text("Server")
@@ -93,14 +89,9 @@ struct SttEntryForm: View {
                         Picker("Provider", selection: $provider) {
                             ForEach(Self.cloudProviders, id: \.self) { Text($0) }
                         }
-                        TextField("Model", text: $model)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                        SecureField("API key", text: $apiKey)
-                        TextField("Base URL (blank = vendor default)", text: $url)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .keyboardType(.URL)
+                        LabeledField(label: "Model", text: $model, prompt: "Required")
+                        LabeledField(label: "API key", text: $apiKey, prompt: "Required", isSecure: true)
+                        LabeledField(label: "Base URL", text: $url, prompt: "Vendor default", isURL: true)
                     } header: {
                         Text("Provider")
                     } footer: {
@@ -156,6 +147,31 @@ struct SttEntryForm: View {
     }
 }
 
+/// A form row like iOS Settings: the label stays visible on the left once the field has a value.
+struct LabeledField: View {
+    let label: LocalizedStringKey
+    @Binding var text: String
+    var prompt: LocalizedStringKey = ""
+    var isURL = false
+    var isSecure = false
+
+    var body: some View {
+        LabeledContent(label) {
+            Group {
+                if isSecure {
+                    SecureField(label, text: $text, prompt: Text(prompt))
+                } else {
+                    TextField(label, text: $text, prompt: Text(prompt))
+                }
+            }
+            .multilineTextAlignment(.trailing)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .keyboardType(isURL ? .URL : .default)
+        }
+    }
+}
+
 // MARK: - LLM entry form
 
 /// Add/edit sheet for one `Cleanup.Entry`. Edit locks the kind, same as STT.
@@ -173,6 +189,8 @@ struct LlmEntryForm: View {
     @State private var provider: String
     @State private var apiKey: String
     @State private var enabled: Bool
+    @State private var keepAlive: String
+    @State private var thinking: Bool?
 
     init(entry: Cleanup.Entry, onSave: @escaping (Cleanup.Entry) -> Void) {
         self.entry = entry
@@ -184,6 +202,8 @@ struct LlmEntryForm: View {
         _provider = State(initialValue: entry.provider)
         _apiKey = State(initialValue: entry.apiKey)
         _enabled = State(initialValue: entry.enabled)
+        _keepAlive = State(initialValue: entry.keepAlive)
+        _thinking = State(initialValue: entry.thinking)
     }
 
     init(kind: Cleanup.EntryKind, onSave: @escaping (Cleanup.Entry) -> Void) {
@@ -196,6 +216,23 @@ struct LlmEntryForm: View {
         _provider = State(initialValue: kind == .cloud ? "OpenAI" : "")
         _apiKey = State(initialValue: "")
         _enabled = State(initialValue: true)
+        _keepAlive = State(initialValue: "")
+        _thinking = State(initialValue: nil)
+    }
+
+    /// Ollama keep-alive values core understands; a custom one from another device stays listed.
+    private var keepAliveChoices: [String] {
+        let standard = ["", "-1", "0", "5m", "15m", "30m", "2h", "5h", "24h"]
+        return standard.contains(keepAlive) ? standard : standard + [keepAlive]
+    }
+
+    private func keepAliveLabel(_ value: String) -> Text {
+        switch value {
+        case "": return Text("Server default")
+        case "-1": return Text("Always")
+        case "0": return Text("Unload after each use")
+        default: return Text(verbatim: value)
+        }
     }
 
     private var problem: LocalizedStringKey? {
@@ -207,21 +244,17 @@ struct LlmEntryForm: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Entry") {
-                    TextField("Name (optional)", text: $name)
+                Section {
+                    LabeledField(label: "Name", text: $name, prompt: "Optional")
                     Toggle("Enabled", isOn: $enabled)
-                    Text(CleanupChain.capitalizedKind(kind)).font(.caption).foregroundStyle(.secondary)
+                } header: {
+                    Text(LocalizedStringKey(CleanupChain.capitalizedKind(kind)))
                 }
                 if kind == .ollama {
                     Section("Server") {
-                        TextField("URL", text: $url)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .keyboardType(.URL)
-                        TextField("Model", text: $model)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                        SecureField("API key (optional)", text: $apiKey)
+                        LabeledField(label: "URL", text: $url, prompt: "Required", isURL: true)
+                        LabeledField(label: "Model", text: $model, prompt: "Required")
+                        LabeledField(label: "API key", text: $apiKey, prompt: "Optional", isSecure: true)
                     }
                 }
                 if kind == .cloud {
@@ -229,17 +262,29 @@ struct LlmEntryForm: View {
                         Picker("Provider", selection: $provider) {
                             ForEach(Self.cloudProviders, id: \.self) { Text($0) }
                         }
-                        TextField("Model", text: $model)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                        SecureField("API key", text: $apiKey)
-                        TextField("URL (blank = vendor default)", text: $url)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .keyboardType(.URL)
+                        LabeledField(label: "Model", text: $model, prompt: "Required")
+                        LabeledField(label: "API key", text: $apiKey, prompt: "Required", isSecure: true)
+                        LabeledField(label: "Base URL", text: $url, prompt: "Vendor default", isURL: true)
                     }
                 }
                 if kind != .local {
+                    Section {
+                        // Core sends it to Ollama as `think`, to Claude and Gemini as their budget; others ignore it.
+                        Picker("Thinking", selection: $thinking) {
+                            Text("Model default").tag(Bool?.none)
+                            Text("On").tag(Bool?.some(true))
+                            Text("Off").tag(Bool?.some(false))
+                        }
+                        if kind == .ollama {
+                            Picker("Keep model loaded", selection: $keepAlive) {
+                                ForEach(keepAliveChoices, id: \.self) { keepAliveLabel($0).tag($0) }
+                            }
+                        }
+                    } header: {
+                        Text("Model behavior")
+                    } footer: {
+                        Text("Thinking off is usually faster for cleanup.")
+                    }
                     Section {
                         if let problem { Text(problem).font(.caption).foregroundStyle(.secondary) }
                         let kindName = CleanupChain.capitalizedKind(kind)
@@ -282,7 +327,8 @@ struct LlmEntryForm: View {
         let result = Cleanup.Entry(
             id: entry?.id ?? "lm-\(UUID().uuidString)", name: resolvedName, kind: kind,
             enabled: enabled, url: url.trimmingCharacters(in: .whitespaces), model: model.trimmingCharacters(in: .whitespaces),
-            provider: provider, apiKey: apiKey.trimmingCharacters(in: .whitespaces)
+            provider: provider, apiKey: apiKey.trimmingCharacters(in: .whitespaces),
+            keepAlive: keepAlive, thinking: thinking
         )
         onSave(result)
         dismiss()

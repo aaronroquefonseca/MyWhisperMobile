@@ -330,3 +330,21 @@
 "Prompt · custom" = "Instrucciones · personalizadas";
 "Write a custom prompt" = "Escribir instrucciones propias";
 "Save prompt" = "Guardar instrucciones";
+
+/* Provider entry forms */
+"Name" = "Nombre";
+"Optional" = "Opcional";
+"Required" = "Obligatorio";
+"Base URL" = "URL base";
+"Vendor default" = "Predeterminada del proveedor";
+"http(s) or ws(s)" = "http(s) o ws(s)";
+"Cloud" = "Nube";
+"Thinking" = "Razonamiento";
+"Model default" = "Predeterminado del modelo";
+"On" = "Activado";
+"Keep model loaded" = "Mantener modelo cargado";
+"Server default" = "Predeterminado del servidor";
+"Always" = "Siempre";
+"Unload after each use" = "Descargar tras cada uso";
+"Model behavior" = "Comportamiento del modelo";
+"Thinking off is usually faster for cleanup." = "Sin razonamiento la limpieza suele ser más rápida.";

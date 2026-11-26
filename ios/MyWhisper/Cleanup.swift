@@ -108,11 +108,15 @@ OUTPUT: Return only the cleaned transcript. No preamble, tags, explanations, ans
         let id: String
         let name: String
         let kind: EntryKind
-        let enabled: Bool
+        var enabled: Bool
         let url: String
         let model: String
         let provider: String
         let apiKey: String
+        /// Ollama `keep_alive`: "" = server default.
+        var keepAlive = ""
+        /// nil = model default; core `thinking`.
+        var thinking: Bool?
 
         init?(dict: [String: Any]) {
             guard let kindRaw = dict["kind"] as? String, let kind = EntryKind(raw: kindRaw) else {
@@ -126,11 +130,14 @@ OUTPUT: Return only the cleaned transcript. No preamble, tags, explanations, ans
             model = dict["model"] as? String ?? ""
             provider = dict["provider"] as? String ?? ""
             apiKey = dict["api_key"] as? String ?? ""
+            keepAlive = dict["keep_alive"] as? String ?? ""
+            thinking = dict["thinking"] as? Bool
         }
 
         init(
             id: String, name: String, kind: EntryKind, enabled: Bool,
-            url: String, model: String, provider: String, apiKey: String
+            url: String, model: String, provider: String, apiKey: String,
+            keepAlive: String = "", thinking: Bool? = nil
         ) {
             self.id = id
             self.name = name
@@ -140,6 +147,8 @@ OUTPUT: Return only the cleaned transcript. No preamble, tags, explanations, ans
             self.model = model
             self.provider = provider
             self.apiKey = apiKey
+            self.keepAlive = keepAlive
+            self.thinking = thinking
         }
     }
 

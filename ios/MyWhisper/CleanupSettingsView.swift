@@ -17,7 +17,7 @@ import SwiftUI
 enum CleanupChain {
     /// Desktop schema key set written by `toDict` (golden in SettingsTests).
     static let schemaKeys: Set<String> = [
-        "id", "name", "kind", "enabled", "url", "model", "provider", "api_key"
+        "id", "name", "kind", "enabled", "url", "model", "provider", "api_key", "keep_alive", "thinking"
     ]
 
     static func capitalizedKind(_ kind: Cleanup.EntryKind) -> String {
@@ -33,7 +33,9 @@ enum CleanupChain {
             "id": entry.id, "name": entry.name, "kind": capitalizedKind(entry.kind),
             "enabled": entry.enabled, "url": entry.url, "model": entry.model,
             // Core types `provider` as a cloud vendor even on Ollama rows; Android writes OpenAI there too.
-            "provider": entry.provider.isEmpty ? "OpenAI" : entry.provider, "api_key": entry.apiKey
+            "provider": entry.provider.isEmpty ? "OpenAI" : entry.provider, "api_key": entry.apiKey,
+            // null clears a stored preference back to the model default.
+            "keep_alive": entry.keepAlive, "thinking": entry.thinking.map { $0 as Any } ?? NSNull()
         ]
     }
 
@@ -144,11 +146,7 @@ final class CleanupSettingsStore: ObservableObject {
 
     func setEntryEnabled(_ entry: Cleanup.Entry, enabled: Bool) {
         guard let index = draft.entries.firstIndex(where: { $0.id == entry.id }) else { return }
-        let current = draft.entries[index]
-        draft.entries[index] = Cleanup.Entry(
-            id: current.id, name: current.name, kind: current.kind, enabled: enabled,
-            url: current.url, model: current.model, provider: current.provider, apiKey: current.apiKey
-        )
+        draft.entries[index].enabled = enabled
         persist()
     }
 

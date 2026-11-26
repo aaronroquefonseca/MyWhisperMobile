@@ -166,7 +166,23 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(CleanupChain.toDict(entry)["kind"] as? String, "Ollama")
     }
 
-    func testCleanupCapitalizedKindsMatchSerde() {
+    func testCleanupThinkingAndKeepAliveRoundTripAndDefaultClearsStoredValue() {
+        let stored: [String: Any] = [
+            "id": "lm-1", "name": "PC", "kind": "Ollama", "enabled": true, "url": "http://pc:11434",
+            "model": "gemma", "provider": "OpenAI", "api_key": "", "keep_alive": "30m", "thinking": false, "num_ctx": 2048
+        ]
+        guard var entry = Cleanup.Entry(dict: stored) else { return XCTFail("parses") }
+        XCTAssertEqual(entry.thinking, false)
+        XCTAssertEqual(entry.keepAlive, "30m")
+        entry.thinking = nil
+        let written = preservingUnknownKeys([CleanupChain.toDict(entry)], from: [stored])[0]
+        // Model default must overwrite the stored `false`, and fields iOS doesn't edit survive.
+        XCTAssertTrue(written["thinking"] is NSNull)
+        XCTAssertEqual(written["keep_alive"] as? String, "30m")
+        XCTAssertEqual(written["num_ctx"] as? Int, 2048)
+    }
+
+        func testCleanupCapitalizedKindsMatchSerde() {
         XCTAssertEqual(CleanupChain.capitalizedKind(.ollama), "Ollama")
         XCTAssertEqual(CleanupChain.capitalizedKind(.local), "Local")
         XCTAssertEqual(CleanupChain.capitalizedKind(.cloud), "Cloud")
