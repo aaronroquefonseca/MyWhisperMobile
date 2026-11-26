@@ -219,12 +219,24 @@ final class KeyboardMicLevelSession: ObservableObject {
     @Published private(set) var error: String?
     let isAvailable = KeyboardDictationMailbox.shared != nil
 
+    /// Set once iOS refused to turn the paused mic back on from the background. From then on the
+    /// mic stays on between holds, muted, which always works but keeps the system's mic indicators up.
+    private static let staysOnKey = "keyboardMicStaysOn"
+    private var staysOn: Bool {
+        get { UserDefaults.standard.bool(forKey: Self.staysOnKey) }
+        set { UserDefaults.standard.set(newValue, forKey: Self.staysOnKey) }
+    }
+    /// Plays silence while the mic is paused: iOS keeps an app playing audio running in the background.
+    private let keepAlive = AVAudioEngine()
+    private let silence = AVAudioPlayerNode()
     private var capture: AudioCapture?
     private var timer: Timer?
     private var sessionID = UUID()
     private var nextHeartbeat = Date.distantPast
     private var lastWanted = Date.distantPast
     private var muted: Bool?
+    private var paused = false
+    private var resumedAt: Date?
     private let peak = Peak()
 
     func start() {
@@ -234,7 +246,7 @@ final class KeyboardMicLevelSession: ObservableObject {
         let capture = AudioCapture()
         let normalizer = LevelNormalizer()
         capture.onPcm = { [peak] samples, count in
-            peak.set(normalizer.push(samples: samples.prefix(count)))
+            peak.set(normalizer.push(samples: samples.prefix(count)), heard: Date())
         }
         capture.onInterruption = { [weak self] in
             DispatchQueue.main.async {
@@ -247,13 +259,23 @@ final class KeyboardMicLevelSession: ObservableObject {
             return
         }
         self.capture = capture
+        if !staysOn, (try? startSilence()) == nil {
+            staysOn = true
+        }
         mailbox.clearMeter()
         mailbox.clearListen()
         sessionID = UUID()
         nextHeartbeat = .distantPast
         lastWanted = .distantPast
         muted = nil
-        setMuted(true)
+        paused = false
+        resumedAt = nil
+        if staysOn {
+            setMuted(true)
+        } else {
+            capture.pause()
+            paused = true
+        }
         isEnabled = true
         let timer = Timer(timeInterval: 0.08, repeats: true) { [weak self] _ in self?.tick(mailbox) }
         self.timer = timer
@@ -266,6 +288,8 @@ final class KeyboardMicLevelSession: ObservableObject {
         timer = nil
         capture?.stop()
         capture = nil
+        silence.stop()
+        keepAlive.stop()
         setMuted(false)
         if let mailbox = KeyboardDictationMailbox.shared {
             mailbox.clearStandby()
@@ -288,14 +312,69 @@ final class KeyboardMicLevelSession: ObservableObject {
         if mailbox.listen?.isCurrent(at: now) == true { lastWanted = now }
         // A short hangover, so pressing again right away doesn't flap the mute.
         let wanted = now.timeIntervalSince(lastWanted) < 1.5
-        let wasMuted = muted
-        setMuted(!wanted)
+        if staysOn {
+            let wasMuted = muted
+            setMuted(!wanted)
+            publish(wanted: wanted, wasListening: wasMuted == false, mailbox: mailbox, now: now)
+            return
+        }
+        // A route or category change stops the silence; without it iOS suspends the app.
+        if !keepAlive.isRunning || !silence.isPlaying, (try? startSilence()) == nil {
+            stop()
+            error = "MyWhisper stopped waiting for the keyboard."
+            return
+        }
+        let wasListening = !paused
+        if wanted, paused {
+            paused = false
+            resumedAt = now
+            guard capture?.resume() == true else { return refusedInBackground() }
+        } else if !wanted, !paused {
+            capture?.pause()
+            paused = true
+        }
+        // iOS can also accept the restart and then deliver nothing.
+        if wanted, let resumedAt, now.timeIntervalSince(resumedAt) > 1, peak.heard() < resumedAt {
+            return refusedInBackground()
+        }
+        publish(wanted: wanted, wasListening: wasListening, mailbox: mailbox, now: now)
+    }
+
+    /// iOS wouldn't turn the mic back on from the background. Keep it on between holds from now on;
+    /// the keyboard opens MyWhisper once more to start it.
+    private func refusedInBackground() {
+        staysOn = true
+        stop()
+        error = "iOS kept the microphone off in the background. Start it again; it now stays on between holds."
+    }
+
+    private func publish(wanted: Bool, wasListening: Bool, mailbox: KeyboardDictationMailbox, now: Date) {
         if wanted {
             // A missed write (busy disk) skips one reading; it doesn't end the session.
             try? mailbox.publishMeter(.init(level: peak.get(), measured: now))
-        } else if wasMuted == false {
+        } else if wasListening {
             mailbox.clearMeter()
         }
+    }
+
+    private func startSilence() throws {
+        guard let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 1),
+              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 44_100) else { return }
+        buffer.frameLength = buffer.frameCapacity
+        if let samples = buffer.floatChannelData?[0] {
+            samples.update(repeating: 0, count: Int(buffer.frameLength))
+        }
+        if silence.engine == nil {
+            keepAlive.attach(silence)
+            keepAlive.connect(silence, to: keepAlive.mainMixerNode, format: format)
+        }
+        if !keepAlive.isRunning {
+            keepAlive.prepare()
+            try keepAlive.start()
+        }
+        silence.stop()
+        silence.scheduleBuffer(buffer, at: nil, options: .loops)
+        silence.play()
     }
 
     /// Input mute keeps the recording running (so it never has to restart from the background)
@@ -309,11 +388,20 @@ final class KeyboardMicLevelSession: ObservableObject {
     private final class Peak {
         private let lock = NSLock()
         private var value: Float = 0
+        private var heardAt = Date.distantPast
 
-        func set(_ level: Float) {
+        func set(_ level: Float, heard: Date? = nil) {
             lock.lock()
             defer { lock.unlock() }
             value = level
+            if let heard { heardAt = heard }
+        }
+
+        /// When the mic last delivered samples.
+        func heard() -> Date {
+            lock.lock()
+            defer { lock.unlock() }
+            return heardAt
         }
 
         func get() -> Float {

@@ -147,6 +147,23 @@ final class AudioCapture {
         return true
     }
 
+    /// Stops the mic hardware but keeps the tap and the active session, so `resume()` can turn
+    /// it back on without reconfiguring anything.
+    func pause() {
+        engine.pause()
+    }
+
+    /// Turns a paused capture back on. False when iOS refuses, as it can for an app in the background.
+    func resume() -> Bool {
+        guard running else { return false }
+        do {
+            try engine.start()
+            return true
+        } catch {
+            return false
+        }
+    }
+
     /// Stop capture. Idempotent; safe from any thread.
     func stop() {
         mutex.lock()
