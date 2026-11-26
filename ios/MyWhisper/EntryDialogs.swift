@@ -28,6 +28,7 @@ struct SttEntryForm: View {
     @State private var provider: String
     @State private var apiKey: String
     @State private var streaming: Bool
+    @State private var enabled: Bool
 
     init(entry: SttChainEntry, onSave: @escaping (SttChainEntry) -> Void) {
         self.entry = entry
@@ -39,6 +40,7 @@ struct SttEntryForm: View {
         _provider = State(initialValue: entry.provider)
         _apiKey = State(initialValue: entry.apiKey)
         _streaming = State(initialValue: entry.streaming)
+        _enabled = State(initialValue: entry.enabled)
     }
 
     init(kind: SttEntryKind, onSave: @escaping (SttChainEntry) -> Void) {
@@ -51,28 +53,43 @@ struct SttEntryForm: View {
         _provider = State(initialValue: kind == .cloud ? "OpenAI" : "")
         _apiKey = State(initialValue: "")
         _streaming = State(initialValue: true)
+        _enabled = State(initialValue: true)
+    }
+
+    /// Android's form rules: a model, a valid URL, and a key for cloud providers.
+    private var problem: LocalizedStringKey? {
+        if let reason = ProviderTest.blockedReason(kind: kind.rawValue, url: url, model: model) { return reason }
+        if kind == .cloud, apiKey.trimmingCharacters(in: .whitespaces).isEmpty { return "Enter the provider's API key." }
+        return nil
     }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section("Entry") {
-                    TextField("Name", text: $name)
+                    TextField("Name (optional)", text: $name)
+                    Toggle("Enabled", isOn: $enabled)
                     Text(kind.rawValue).font(.caption).foregroundStyle(.secondary)
                 }
                 if kind == .selfHosted {
-                    Section("Server") {
-                        TextField("URL", text: $url)
+                    Section {
+                        TextField("Server URL (http(s) or ws(s))", text: $url)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
+                            .keyboardType(.URL)
                         TextField("Model", text: $model)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
-                        Toggle("Streaming protocol", isOn: $streaming)
+                        SecureField("API key (optional)", text: $apiKey)
+                        Toggle("Streaming (ws servers)", isOn: $streaming)
+                    } header: {
+                        Text("Server")
+                    } footer: {
+                        Text("Self-hosted means any OpenAI-compatible speech endpoint, including the server bundled with MyWhisper desktop. http(s) URLs always use request/response; ws(s) URLs use the sherpa-onnx streaming protocol.")
                     }
                 }
                 if kind == .cloud {
-                    Section("Provider") {
+                    Section {
                         Picker("Provider", selection: $provider) {
                             ForEach(Self.cloudProviders, id: \.self) { Text($0) }
                         }
@@ -80,6 +97,22 @@ struct SttEntryForm: View {
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                         SecureField("API key", text: $apiKey)
+                        TextField("Base URL (blank = vendor default)", text: $url)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .keyboardType(.URL)
+                    } header: {
+                        Text("Provider")
+                    } footer: {
+                        if provider == "Gemini" { Text(geminiUnsupportedCopy) }
+                    }
+                }
+                if kind != .local {
+                    Section {
+                        if let problem { Text(problem).font(.caption).foregroundStyle(.secondary) }
+                        ProviderTestButton(blockedReason: ProviderTest.blockedReason(kind: kind.rawValue, url: url, model: model)) {
+                            await ProviderTest.speech(url: url, model: model, apiKey: apiKey)
+                        }
                     }
                 }
                 if kind == .local {
@@ -95,7 +128,7 @@ struct SttEntryForm: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { save() }.disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    Button("Save") { save() }.disabled(problem != nil)
                 }
             }
         }
@@ -115,8 +148,8 @@ struct SttEntryForm: View {
         }
         let result = SttChainEntry(
             id: entry?.id ?? "stt-\(UUID().uuidString)", name: resolvedName, kind: kind,
-            enabled: entry?.enabled ?? true, provider: provider, url: url,
-            model: model, apiKey: apiKey, streaming: streaming
+            enabled: enabled, provider: provider, url: url.trimmingCharacters(in: .whitespaces),
+            model: model.trimmingCharacters(in: .whitespaces), apiKey: apiKey.trimmingCharacters(in: .whitespaces), streaming: streaming
         )
         onSave(result)
         dismiss()
@@ -139,6 +172,7 @@ struct LlmEntryForm: View {
     @State private var model: String
     @State private var provider: String
     @State private var apiKey: String
+    @State private var enabled: Bool
 
     init(entry: Cleanup.Entry, onSave: @escaping (Cleanup.Entry) -> Void) {
         self.entry = entry
@@ -149,6 +183,7 @@ struct LlmEntryForm: View {
         _model = State(initialValue: entry.model)
         _provider = State(initialValue: entry.provider)
         _apiKey = State(initialValue: entry.apiKey)
+        _enabled = State(initialValue: entry.enabled)
     }
 
     init(kind: Cleanup.EntryKind, onSave: @escaping (Cleanup.Entry) -> Void) {
@@ -160,13 +195,21 @@ struct LlmEntryForm: View {
         _model = State(initialValue: "")
         _provider = State(initialValue: kind == .cloud ? "OpenAI" : "")
         _apiKey = State(initialValue: "")
+        _enabled = State(initialValue: true)
+    }
+
+    private var problem: LocalizedStringKey? {
+        if let reason = ProviderTest.blockedReason(kind: CleanupChain.capitalizedKind(kind), url: url, model: model) { return reason }
+        if kind == .cloud, apiKey.trimmingCharacters(in: .whitespaces).isEmpty { return "Enter the provider's API key." }
+        return nil
     }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section("Entry") {
-                    TextField("Name", text: $name)
+                    TextField("Name (optional)", text: $name)
+                    Toggle("Enabled", isOn: $enabled)
                     Text(CleanupChain.capitalizedKind(kind)).font(.caption).foregroundStyle(.secondary)
                 }
                 if kind == .ollama {
@@ -174,9 +217,11 @@ struct LlmEntryForm: View {
                         TextField("URL", text: $url)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
+                            .keyboardType(.URL)
                         TextField("Model", text: $model)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
+                        SecureField("API key (optional)", text: $apiKey)
                     }
                 }
                 if kind == .cloud {
@@ -188,6 +233,19 @@ struct LlmEntryForm: View {
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                         SecureField("API key", text: $apiKey)
+                        TextField("URL (blank = vendor default)", text: $url)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .keyboardType(.URL)
+                    }
+                }
+                if kind != .local {
+                    Section {
+                        if let problem { Text(problem).font(.caption).foregroundStyle(.secondary) }
+                        let kindName = CleanupChain.capitalizedKind(kind)
+                        ProviderTestButton(blockedReason: ProviderTest.blockedReason(kind: kindName, url: url, model: model)) {
+                            await ProviderTest.cleanup(kind: kindName, url: url, model: model, apiKey: apiKey)
+                        }
                     }
                 }
                 if kind == .local {
@@ -203,7 +261,7 @@ struct LlmEntryForm: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { save() }.disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    Button("Save") { save() }.disabled(problem != nil)
                 }
             }
         }
@@ -223,7 +281,8 @@ struct LlmEntryForm: View {
         }
         let result = Cleanup.Entry(
             id: entry?.id ?? "lm-\(UUID().uuidString)", name: resolvedName, kind: kind,
-            enabled: entry?.enabled ?? true, url: url, model: model, provider: provider, apiKey: apiKey
+            enabled: enabled, url: url.trimmingCharacters(in: .whitespaces), model: model.trimmingCharacters(in: .whitespaces),
+            provider: provider, apiKey: apiKey.trimmingCharacters(in: .whitespaces)
         )
         onSave(result)
         dismiss()
