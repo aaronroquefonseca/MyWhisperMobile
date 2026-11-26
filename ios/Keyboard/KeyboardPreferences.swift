@@ -169,7 +169,10 @@ struct KeyboardPreferences: Codable, Equatable {
         }
     }
 
-    static let sharedURL: URL? = {
+    static let sharedURL: URL? = sharedContainerURL?.appendingPathComponent("keyboard-preferences.json")
+
+    /// The app group container shared by MyWhisper and its keyboard.
+    static let sharedContainerURL: URL? = {
         let manager = FileManager.default
         let bundleID = Bundle.main.bundleIdentifier ?? ""
         // SideStore appends the team to the group and inserts it before the extension suffix.
@@ -177,9 +180,12 @@ struct KeyboardPreferences: Codable, Equatable {
             component.utf8.count == 10 && component.utf8.allSatisfy { (48...57).contains($0) || (65...90).contains($0) }
         }
         let identifiers = [group] + (team.map { [group + "." + String($0)] } ?? [])
-        return identifiers.lazy.compactMap { manager.containerURL(forSecurityApplicationGroupIdentifier: $0) }
-            .first?.appendingPathComponent("keyboard-preferences.json")
+        return identifiers.lazy.compactMap { manager.containerURL(forSecurityApplicationGroupIdentifier: $0) }.first
     }()
+
+    /// The speech core's files (`state.db`), shared so the keyboard dictates with the app's
+    /// providers, dictionary and history.
+    static let coreDirectoryURL: URL? = sharedContainerURL?.appendingPathComponent("MyWhisper", isDirectory: true)
 
     /// Manual transfer for sideloads whose signing profile omits the shared group.
     /// Contains typing toggles and language choices only.

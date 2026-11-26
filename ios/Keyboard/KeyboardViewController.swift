@@ -22,6 +22,8 @@ class KeyboardViewController: UIInputViewController {
     }
     private weak var stripNotice: UIButton?
     private weak var microphonePreview: KeyboardMicPreview?
+    /// Speech to text for the mic key. The extension's own subclass provides it; nil in tests.
+    var dictation: KeyboardDictating? { nil }
     private var micDockedLeading = UserDefaults.standard.bool(forKey: "mw.keyboard.micLeading") {
         didSet { UserDefaults.standard.set(micDockedLeading, forKey: "mw.keyboard.micLeading") }
     }
@@ -274,7 +276,6 @@ class KeyboardViewController: UIInputViewController {
         super.textDidChange(textInput)
         hostConfirmedCursorMove()
         guard visible, cursorDrag == nil, !replacingText else { return }
-        microphonePreview?.reset()
         refreshLayout()
         updateAutomaticShift()
         scheduleSuggestions()
@@ -682,6 +683,9 @@ class KeyboardViewController: UIInputViewController {
             if self.moveSideButton(leading: centerX > preview.bounds.midX) { self.playHaptic() }
         }
         preview.haptic = { [weak self] hold in self?.playHaptic(hold: hold) }
+        preview.dictation = hasFullAccess ? dictation : nil
+        preview.onText = { [weak self] text in self?.insertDictation(text) }
+        preview.onDictationError = { [weak self] message in self?.showNotice(message) }
         // The pill is translucent: suggestions under it would show through the bars.
         preview.onActive = { [weak self] active in
             guard let self else { return }
@@ -706,6 +710,7 @@ class KeyboardViewController: UIInputViewController {
                        options: [.allowUserInteraction, .beginFromCurrentState]) {
             button.frame.origin.x = x
         }
+        return true
     }
 
     /// The side button can be dragged too; the mic trades places live and both settle with a spring.
@@ -1432,6 +1437,14 @@ class KeyboardViewController: UIInputViewController {
             rebuild()
         }
         scheduleSuggestions()
+    }
+
+    private func insertDictation(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let before = textDocumentProxy.documentContextBeforeInput ?? ""
+        let spaced = before.last.map { !$0.isWhitespace } ?? false
+        textDocumentProxy.insertText((spaced ? " " : "") + trimmed)
     }
 
     @objc private func returnTapped() {

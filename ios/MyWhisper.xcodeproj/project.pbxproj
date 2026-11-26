@@ -7,6 +7,11 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		EE11000000000000000000E1 /* KeyboardCoreDictation.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE11000000000000000000E0 /* KeyboardCoreDictation.swift */; };
+		EE11000000000000000000E2 /* CoreBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAF7AA9058417D529285795E /* CoreBridge.swift */; };
+		EE11000000000000000000E3 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4C4A10000000000000000A1 /* KeychainStore.swift */; };
+		EE11000000000000000000E4 /* Transcription.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB11BB22CC33DD44EE55FF01 /* Transcription.swift */; };
+		EE11000000000000000000E5 /* libmywhisper_core.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = ADFAB3C47FDCEBDD8A00F72E /* libmywhisper_core.xcframework */; };
 		EE11000000000000000000D2 /* KeyboardMicPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE11000000000000000000D0; };
 		EE11000000000000000000D3 /* KeyboardMicPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE11000000000000000000D0; };
 		EE11000000000000000000D4 /* floating-mic-mark.png in Resources */ = {isa = PBXBuildFile; fileRef = EE11000000000000000000D1; };
@@ -101,6 +106,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		EE11000000000000000000E0 /* KeyboardCoreDictation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardCoreDictation.swift; sourceTree = "<group>"; };
 		EE11000000000000000000D0 /* KeyboardMicPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardMicPreview.swift; sourceTree = "<group>"; };
 		EE11000000000000000000D1 /* floating-mic-mark.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "floating-mic-mark.png"; sourceTree = "<group>"; };
 		EE11000000000000000000B0 /* KeyboardDictationMailbox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardDictationMailbox.swift; sourceTree = "<group>"; };
@@ -172,6 +178,14 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		EE11000000000000000000E6 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EE11000000000000000000E5 /* libmywhisper_core.xcframework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		0C909331FAA822E6377952A7 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -265,6 +279,7 @@
 			isa = PBXGroup;
 			children = (
 				EE11000000000000000000B0 /* KeyboardDictationMailbox.swift */,
+				EE11000000000000000000E0 /* KeyboardCoreDictation.swift */,
 				EE11000000000000000000D0 /* KeyboardMicPreview.swift */,
 				EE11000000000000000000D1 /* floating-mic-mark.png */,
 				EE11000000000000000000A0 /* KeyboardPreferences.swift */,
@@ -330,6 +345,7 @@
 			buildConfigurationList = EE1100000000000000000009 /* Build configuration list for PBXNativeTarget "MyWhisperKeyboard" */;
 			buildPhases = (
 				EE1100000000000000000006 /* Sources */,
+				EE11000000000000000000E6 /* Frameworks */,
 				EE1100000000000000000018 /* Resources */,
 			);
 			buildRules = (
@@ -483,6 +499,10 @@
 			buildActionMask = 2147483647;
 			files = (
 				EE11000000000000000000B3 /* KeyboardDictationMailbox.swift in Sources */,
+				EE11000000000000000000E1 /* KeyboardCoreDictation.swift in Sources */,
+				EE11000000000000000000E2 /* CoreBridge.swift in Sources */,
+				EE11000000000000000000E3 /* KeychainStore.swift in Sources */,
+				EE11000000000000000000E4 /* Transcription.swift in Sources */,
 				EE11000000000000000000D2 /* KeyboardMicPreview.swift in Sources */,
 				EE11000000000000000000A2 /* KeyboardPreferences.swift in Sources */,
 				EE1100000000000000000008 /* KeyboardViewController.swift in Sources */,

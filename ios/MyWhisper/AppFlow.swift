@@ -155,13 +155,28 @@ final class AppFlow: ObservableObject, Dictation.Listener {
         }
     }
 
+    /// The core's files live in the app group, where the keyboard dictates with the same database.
+    /// The first launch with a group moves the older private folder there; without a group (or if
+    /// the move fails) the app keeps the private folder and only the keyboard loses dictation.
     private static func appFilesDir() throws -> String {
-        let url = try FileManager.default.url(
+        let manager = FileManager.default
+        let legacy = try manager.url(
             for: .applicationSupportDirectory, in: .userDomainMask,
             appropriateFor: nil, create: true
         ).appendingPathComponent("MyWhisper", isDirectory: true)
-        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-        return url.path
+        if let shared = KeyboardPreferences.coreDirectoryURL {
+            do {
+                if !manager.fileExists(atPath: shared.path), manager.fileExists(atPath: legacy.path) {
+                    try manager.moveItem(at: legacy, to: shared)
+                }
+                try manager.createDirectory(at: shared, withIntermediateDirectories: true)
+                return shared.path
+            } catch {
+                // Fall through to the private folder, which still has the data.
+            }
+        }
+        try manager.createDirectory(at: legacy, withIntermediateDirectories: true)
+        return legacy.path
     }
 
     // MARK: - Record gestures (RecordView owner)

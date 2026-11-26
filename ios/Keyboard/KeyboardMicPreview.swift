@@ -1,6 +1,15 @@
 import UIKit
 import WebKit
 
+/// Turns the audio of one hold into text. Implemented in the keyboard target only, where the
+/// speech core is linked; calls arrive on the main thread, the completion too.
+protocol KeyboardDictating: AnyObject {
+    func begin(sampleRate: Double)
+    func push(_ samples: [Int16])
+    func finish(_ completion: @escaping (Result<String, Error>) -> Void)
+    func cancel()
+}
+
 /// The Android floating mic's Smart mode, adapted to the keyboard toolbar.
 struct KeyboardMicPreviewState {
     enum Phase: Equatable { case idle, held, locked, processing }
@@ -65,6 +74,14 @@ final class KeyboardMicPreview: UIView {
     var haptic: ((Bool) -> Void)?
     /// Whether the pill with the bars is showing, so the toolbar can hide what would show through it.
     var onActive: ((Bool) -> Void)?
+    /// Transcribes what the web mic hears. Nil: the key only previews levels.
+    var dictation: KeyboardDictating?
+    var onText: ((String) -> Void)?
+    var onDictationError: ((String) -> Void)?
+    /// Audio reaches `dictation` from the first sample until the web mic confirms it stopped.
+    private var capturing = false
+    /// `dictation` holds an utterance from this hold that must be finished or cancelled.
+    private var utteranceOpen = false
     private var dragging = false
     private var consumesRelease = false
     private var tapOpensSession = false
@@ -168,6 +185,12 @@ final class KeyboardMicPreview: UIView {
         lockHint.frame = CGRect(x: endX + 4, y: 3, width: Self.hintWidth, height: half - 3)
         cancelHint.frame = CGRect(x: endX + 4, y: half, width: Self.hintWidth, height: half - 3)
 
+    }
+
+    override func willMove(toSuperview newSuperview: UIView?) {
+        super.willMove(toSuperview: newSuperview)
+        // A keyboard rebuild replaces this view: stop the mic rather than leave it running unseen.
+        if newSuperview == nil { reset() }
     }
 
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
@@ -299,7 +322,8 @@ final class KeyboardMicPreview: UIView {
         haptic?(false)
         finishTask?.cancel()
         render()
-        guard state.phase == .processing else { return }
+        // A transcript ends processing itself (see finishDictation).
+        guard state.phase == .processing, !capturing, !utteranceOpen else { return }
         finishTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 850_000_000)
             guard !Task.isCancelled else { return }
@@ -366,7 +390,16 @@ final class KeyboardMicPreview: UIView {
         } else {
             if webMicActive {
                 webMicActive = false
-                KeyboardWebMic.shared.stop()
+                // Released normally: transcribe once the last audio is in. Otherwise drop it.
+                let transcribe = phase == .processing
+                KeyboardWebMic.shared.stop { [weak self] in
+                    guard let self else { return }
+                    self.capturing = false
+                    if transcribe { self.finishDictation() } else { self.cancelDictation() }
+                }
+            } else if phase == .idle {
+                capturing = false
+                cancelDictation()
             }
             if meterTask != nil { KeyboardDictationMailbox.shared?.clearListen() }
             meterTask?.cancel()
@@ -383,10 +416,21 @@ final class KeyboardMicPreview: UIView {
             meterHint.isHidden = true
             waveform.isHidden = false
             webMic.onLevel = { [weak self] level in self?.waveform.push(level) }
+            capturing = dictation != nil
+            webMic.onPcm = { [weak self] samples, rate in
+                guard let self, self.capturing, let dictation = self.dictation else { return }
+                if !self.utteranceOpen {
+                    self.utteranceOpen = true
+                    dictation.begin(sampleRate: rate)
+                }
+                dictation.push(samples)
+            }
             webMic.onFailure = { [weak self] in
                 // WebKit refused the mic: use MyWhisper's session for this and later holds.
                 guard let self, self.webMicActive else { return }
                 self.webMicActive = false
+                self.capturing = false
+                self.cancelDictation()
                 self.startMeter()
             }
             webMic.start(in: self)
@@ -418,6 +462,34 @@ final class KeyboardMicPreview: UIView {
                 }
             }
         }
+    }
+
+    private func finishDictation() {
+        guard utteranceOpen, let dictation else {
+            if state.phase == .processing { reset() }
+            return
+        }
+        utteranceOpen = false
+        dictation.finish { [weak self] result in
+            // A press while processing cancelled it: drop the late transcript.
+            guard let self, self.state.phase == .processing else { return }
+            switch result {
+            case .success(let text): self.onText?(text)
+            case .failure(let error): self.onDictationError?(KeyboardMicPreview.message(for: error))
+            }
+            self.reset()
+        }
+    }
+
+    private func cancelDictation() {
+        guard utteranceOpen else { return }
+        utteranceOpen = false
+        dictation?.cancel()
+    }
+
+    private static func message(for error: Error) -> String {
+        let text = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+        return text.count > 80 ? String(text.prefix(79)) + "…" : text
     }
 
     private lazy var idleImage = mark.image
@@ -644,7 +716,11 @@ final class KeyboardWebMic: NSObject, WKScriptMessageHandler, WKUIDelegate, WKNa
     /// Set once WebKit refuses the mic; the keyboard then uses MyWhisper's session instead.
     private(set) var failed = false
     var onLevel: ((Float) -> Void)?
+    /// 16-bit mono samples at the given rate, from start until the page confirms the stop.
+    var onPcm: (([Int16], Double) -> Void)?
     var onFailure: (() -> Void)?
+    private var stopped: (() -> Void)?
+    private var stopCount = 0
     private var webView: WKWebView?
     private var ready = false
     private var wanted = false
@@ -668,11 +744,27 @@ final class KeyboardWebMic: NSObject, WKScriptMessageHandler, WKUIDelegate, WKNa
         }
     }
 
-    func stop() {
+    /// `then` runs after the last audio arrived, or after a short wait if the page doesn't answer.
+    func stop(then: (() -> Void)? = nil) {
         wanted = false
         heartbeat?.invalidate()
         heartbeat = nil
-        if ready { run("stopMic()") }
+        stopEnded()
+        stopped = then
+        stopCount += 1
+        let count = stopCount
+        guard ready else { return stopEnded() }
+        run("stopMic()")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            guard let self, self.stopCount == count else { return }
+            self.stopEnded()
+        }
+    }
+
+    private func stopEnded() {
+        let done = stopped
+        stopped = nil
+        done?()
     }
 
     private func makeWebView() -> WKWebView {
@@ -708,6 +800,13 @@ final class KeyboardWebMic: NSObject, WKScriptMessageHandler, WKUIDelegate, WKNa
             // Speech sits around -40 to -15 dBFS; map that span onto the bars.
             let decibels = 20 * log10(max(rms, 0.000_01))
             onLevel?(Float(min(max((decibels + 55) / 40, 0), 1)))
+        case "pcm":
+            guard let encoded = body["data"] as? String, let data = Data(base64Encoded: encoded),
+                  let rate = (body["rate"] as? NSNumber)?.doubleValue, rate > 0 else { return }
+            let samples = data.withUnsafeBytes { Array($0.bindMemory(to: Int16.self)) }
+            onPcm?(samples, rate)
+        case "ended":
+            stopEnded()
         case "failed":
             guard wanted, body["reason"] as? String != "heartbeat" else { return }
             failed = true
@@ -735,7 +834,7 @@ final class KeyboardWebMic: NSObject, WKScriptMessageHandler, WKUIDelegate, WKNa
 
     private static let page = """
     <!doctype html><html><body><script>
-    let wanted = false, starting = false, stream = null, context = null, timer = null, lastBeat = 0;
+    let wanted = false, starting = false, stream = null, context = null, timer = null, lastBeat = 0, tap = null;
     const post = (message) => window.webkit.messageHandlers.mic.postMessage(message);
     async function startMic() {
       wanted = true;
@@ -753,7 +852,25 @@ final class KeyboardWebMic: NSObject, WKScriptMessageHandler, WKUIDelegate, WKNa
         context = new AudioContext({ latencyHint: 'interactive' });
         const analyser = context.createAnalyser();
         analyser.fftSize = 1024;
-        context.createMediaStreamSource(stream).connect(analyser);
+        const source = context.createMediaStreamSource(stream);
+        source.connect(analyser);
+        // Raw audio for transcription. The processor only runs while connected to the output; muted.
+        tap = context.createScriptProcessor(4096, 1, 1);
+        const mute = context.createGain();
+        mute.gain.value = 0;
+        source.connect(tap);
+        tap.connect(mute);
+        mute.connect(context.destination);
+        tap.onaudioprocess = (event) => {
+          if (!wanted) return;
+          const input = event.inputBuffer.getChannelData(0);
+          const pcm = new Int16Array(input.length);
+          for (let i = 0; i < input.length; i++) pcm[i] = Math.max(-1, Math.min(1, input[i])) * 0x7fff;
+          const bytes = new Uint8Array(pcm.buffer);
+          let binary = '';
+          for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+          post({ type: 'pcm', rate: context.sampleRate, data: btoa(binary) });
+        };
         await context.resume();
         const samples = new Float32Array(analyser.fftSize);
         post({ type: 'started' });
@@ -774,11 +891,14 @@ final class KeyboardWebMic: NSObject, WKScriptMessageHandler, WKUIDelegate, WKNa
       wanted = false;
       if (timer) clearInterval(timer);
       timer = null;
+      if (tap) tap.onaudioprocess = null;
+      tap = null;
       if (stream) stream.getTracks().forEach((track) => track.stop());
       stream = null;
       if (context) context.close();
       context = null;
       if (navigator.audioSession) navigator.audioSession.type = 'auto';
+      post({ type: 'ended' });
     }
     function beat() { lastBeat = Date.now(); }
     post({ type: 'ready' });
