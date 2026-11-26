@@ -235,6 +235,15 @@ enum StatsStore {
 
     /// Local-midnight day start (unix seconds) for a timestamp, matching
     /// the core's `… 'localtime'` grouping.
+    /// The core buckets by calendar date (days since 1970-01-01); the app keys days by local midnight.
+    static func localDayStart(epochDay: Int64, calendar: Calendar = Calendar.current) -> Int64 {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        let parts = utc.dateComponents([.year, .month, .day], from: Date(timeIntervalSince1970: TimeInterval(epochDay * 86_400)))
+        let local = calendar.date(from: parts) ?? Date(timeIntervalSince1970: TimeInterval(epochDay * 86_400))
+        return Int64(calendar.startOfDay(for: local).timeIntervalSince1970)
+    }
+
     static func dayStart(for recordedAt: Int64, calendar: Calendar = Calendar.current) -> Int64 {
         let date = Date(timeIntervalSince1970: TimeInterval(recordedAt))
         let start = calendar.startOfDay(for: date)
@@ -292,6 +301,12 @@ protocol HistoryBackend {
     /// Returns the core's removed-row count (file backend: rows deleted).
     @discardableResult
     func clear() throws -> Int
+    /// Whole-history totals and a year of daily buckets from the core; nil computes them from listed rows.
+    func coreStats() -> (UsageStats, [DailyBucket])?
+}
+
+extension HistoryBackend {
+    func coreStats() -> (UsageStats, [DailyBucket])? { nil }
 }
 
 /// Live backend: thin wrapper over the frozen `CoreBridge` history API.
@@ -309,6 +324,26 @@ struct BridgeHistoryBackend: HistoryBackend {
     @discardableResult
     func clear() throws -> Int {
         try CoreBridge.clearHistory()
+    }
+
+    func coreStats() -> (UsageStats, [DailyBucket])? {
+        guard let totals = try? CoreBridge.usageStats(),
+              let rows = try? CoreBridge.dailyActivity(days: 371) else { return nil }
+        func number(_ key: String, _ dict: [String: Any]) -> NSNumber { dict[key] as? NSNumber ?? 0 }
+        let stats = UsageStats(
+            wordsSpoken: number("wordsSpoken", totals).uint64Value,
+            dictations: number("dictations", totals).uint64Value,
+            wordsPerMinute: number("wordsPerMinute", totals).doubleValue,
+            streakDays: number("streakDays", totals).intValue
+        )
+        let buckets = rows.map { row in
+            DailyBucket(
+                dayStart: StatsStore.localDayStart(epochDay: number("dayStart", row).int64Value / 86_400),
+                words: number("words", row).intValue,
+                utterances: number("utterances", row).intValue
+            )
+        }
+        return (stats, buckets)
     }
 }
 

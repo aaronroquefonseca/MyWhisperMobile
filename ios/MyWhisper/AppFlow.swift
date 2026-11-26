@@ -260,6 +260,18 @@ final class AppFlow: ObservableObject, Dictation.Listener {
         }
     }
 
+    /// Read-modify-write of the core settings, for screens that change a few keys.
+    func updateSettings(_ change: (inout [String: Any]) -> Void) {
+        do {
+            var updated = try CoreBridge.getSettings()
+            change(&updated)
+            try CoreBridge.putSettings(updated)
+            settings = updated
+        } catch {
+            coreError = CoreError.displayMessage(for: error)
+        }
+    }
+
     /// Persist the ranked mic kinds; `AudioCapture` reads them at each start.
     func applyMicPriority(_ order: [String]) {
         do {
