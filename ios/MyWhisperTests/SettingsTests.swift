@@ -167,6 +167,19 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(CleanupChain.capitalizedKind(.cloud), "Cloud")
     }
 
+    func testCleanupApplyingKeepsFieldsThisAppDoesNotEdit() {
+        let draft = CleanupSettingsDraft(enabled: true, customPrompt: "", entries: [cleanupEntry(id: "a", kind: .ollama)])
+        let stored: [String: Any] = ["language_models": ["entries": [
+            ["id": "a", "kind": "Ollama", "keep_alive": "10m", "num_ctx": 8192, "thinking": true, "model": "old"],
+        ]]]
+        let models = CleanupChain.applying(draft, to: stored)["language_models"] as? [String: Any]
+        let row = (models?["entries"] as? [[String: Any]])?.first
+        XCTAssertEqual(row?["keep_alive"] as? String, "10m")
+        XCTAssertEqual(row?["num_ctx"] as? Int, 8192)
+        XCTAssertEqual(row?["thinking"] as? Bool, true)
+        XCTAssertEqual(row?["model"] as? String, cleanupEntry(id: "a", kind: .ollama).model)
+    }
+
     func testCleanupApplyingPreservesSections() {
         let draft = CleanupSettingsDraft(
             enabled: false, customPrompt: "Be terse.",

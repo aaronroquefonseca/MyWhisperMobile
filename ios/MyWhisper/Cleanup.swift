@@ -19,6 +19,19 @@ import Foundation
 /// `nativeDefaultCleanupPrompt` / `nativeLocalLlmPrompt`), so the default
 /// prompt is embedded here byte-for-byte and `CleanupTests` cross-checks it
 /// against `core/src/engine.rs` whenever the source tree is reachable.
+/// Entry rows written back over the stored ones, keeping fields this app doesn't edit
+/// (`keep_alive`, `num_ctx`, `thinking`, …) so saving here never drops values set on Android or desktop.
+func preservingUnknownKeys(_ entries: [[String: Any]], from stored: Any?) -> [[String: Any]] {
+    var previous: [String: [String: Any]] = [:]
+    for row in stored as? [[String: Any]] ?? [] {
+        if let id = row["id"] as? String, !id.isEmpty { previous[id] = row }
+    }
+    return entries.map { row in
+        guard let id = row["id"] as? String, let old = previous[id] else { return row }
+        return old.merging(row) { _, new in new }
+    }
+}
+
 enum Cleanup {
     // MARK: - Default prompt
 

@@ -41,7 +41,7 @@ enum CleanupChain {
         var models = settings["language_models"] as? [String: Any] ?? [:]
         models["cleanup_enabled"] = config.enabled
         models["cleanup_prompt"] = config.customPrompt
-        models["entries"] = config.entries.map { toDict($0) }
+        models["entries"] = preservingUnknownKeys(config.entries.map { toDict($0) }, from: models["entries"])
         settings["language_models"] = models
         return settings
     }

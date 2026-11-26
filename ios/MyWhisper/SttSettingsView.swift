@@ -123,7 +123,7 @@ enum SttChain {
     static func applying(_ entries: [SttChainEntry], to settings: [String: Any]) -> [String: Any] {
         var settings = settings
         var stt = settings["stt"] as? [String: Any] ?? [:]
-        stt["entries"] = entries.map { $0.toDict() }
+        stt["entries"] = preservingUnknownKeys(entries.map { $0.toDict() }, from: stt["entries"])
         settings["stt"] = stt
         return settings
     }
