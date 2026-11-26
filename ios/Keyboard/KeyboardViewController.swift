@@ -1369,13 +1369,18 @@ class KeyboardViewController: UIInputViewController {
             performDelete()
             return
         }
-        guard let before = proxy.documentContextBeforeInput, !before.isEmpty else { return }
+        // Hosts hand over only part of the text, and none right after a line break or a burst of
+        // deletes; fall back to one character so a held delete never stalls.
+        let count = KeyboardTextEditing.trailingWordDeletionCount(in: proxy.documentContextBeforeInput ?? "")
+        guard count > 0 else {
+            performDelete()
+            return
+        }
         pendingSwipe?.cancel()
         lastSwipe = nil
         pendingUndo = nil
         lastSpaceAt = nil
         lastShiftTap = nil
-        let count = KeyboardTextEditing.trailingWordDeletionCount(in: before)
         for _ in 0..<count { proxy.deleteBackward() }
         updateAutomaticShift()
         scheduleSuggestions()
