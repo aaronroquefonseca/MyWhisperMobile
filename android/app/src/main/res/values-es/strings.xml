@@ -691,6 +691,6 @@
     <string name="guide_a11y_warning">Android mostrará un aviso. Es normal: MyWhisper solo lo usa para escribir tu texto. Toca Permitir.</string>
     <string name="guide_restricted_link">¿Bloqueado por “Ajuste restringido”?</string>
     <string name="guide_restricted_title">Desbloquea MyWhisper</string>
-    <string name="guide_restricted_path">Toca ⋮ (arriba a la derecha) → Permitir ajustes restringidos</string>
+    <string name="guide_restricted_path">Toca MyWhisper → ⋮ (arriba a la derecha) → Permitir ajustes restringidos</string>
     <string name="guide_restricted_then">Después vuelve y activa el servicio de dictado.</string>
 </resources>

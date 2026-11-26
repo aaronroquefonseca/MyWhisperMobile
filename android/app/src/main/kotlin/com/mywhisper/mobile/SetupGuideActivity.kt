@@ -22,6 +22,7 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import java.lang.ref.WeakReference
 
@@ -78,7 +79,8 @@ class SetupGuideActivity : ComponentActivity() {
                     }
                     // Fills the PiP window: the system picks its size, so the text scales to it.
                     BasicText(text, Modifier.padding(8.dp),
-                        style = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+                        // Relative line height: the fixed one from the type scale would overlap auto-sized text.
+                        style = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface, lineHeight = 1.2.em),
                         autoSize = TextAutoSize.StepBased(minFontSize = 8.sp, maxFontSize = 32.sp))
                 }
             }
@@ -89,7 +91,9 @@ class SetupGuideActivity : ComponentActivity() {
         super.onResume()
         if (entered) return
         entered = true
-        val params = PictureInPictureParams.Builder().setAspectRatio(Rational(1, 1)).apply {
+        val params = PictureInPictureParams.Builder().setAspectRatio(Rational(3, 4)).apply {
+            // Portrait and narrow: the PiP lands at the side, so the centered buttons of
+            // Android's warning dialogs stay tappable. Apps cannot choose the position.
             // Text, not video: cross-fade on resize instead of stretching.
             if (Build.VERSION.SDK_INT >= 31) setSeamlessResizeEnabled(false)
         }.build()
@@ -112,7 +116,8 @@ class SetupGuideActivity : ComponentActivity() {
         settingsOpened = true
         try {
             // Settings gets its own task: launching into this pinned task would expand it.
-            startActivity(SettingsGuide.intent(this, step).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            // Cleared so a Settings task left on a deeper page opens on the page the PiP describes.
+            startActivity(SettingsGuide.intent(this, step).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK))
         } catch (_: Exception) {
             finishAndRemoveTask()
         }

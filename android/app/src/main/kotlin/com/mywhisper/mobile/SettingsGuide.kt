@@ -28,7 +28,9 @@ internal object SettingsGuide {
     fun intent(ctx: Context, step: Step): Intent = when (step) {
         Step.OVERLAY -> Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${ctx.packageName}"))
         Step.ACCESSIBILITY -> Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-        Step.RESTRICTED -> Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", ctx.packageName, null))
+        // The apps list, not App info: Android hides "Allow restricted settings" when the
+        // restricted app itself opens its App info page (checked on API 33).
+        Step.RESTRICTED -> Intent(Settings.ACTION_MANAGE_APPLICATIONS_SETTINGS)
         Step.STATUS_CHANNEL -> Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
             .putExtra(Settings.EXTRA_APP_PACKAGE, ctx.packageName)
             .putExtra(Settings.EXTRA_CHANNEL_ID, NotifPolicy.UNIFIED_CHANNEL)

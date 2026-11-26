@@ -31,10 +31,7 @@ class SettingsGuideTest {
             assertEquals("package:$pkg", it.dataString)
         }
         assertEquals(Settings.ACTION_ACCESSIBILITY_SETTINGS, SettingsGuide.intent(app, Step.ACCESSIBILITY).action)
-        SettingsGuide.intent(app, Step.RESTRICTED).let {
-            assertEquals(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, it.action)
-            assertEquals("package:$pkg", it.dataString)
-        }
+        assertEquals(Settings.ACTION_MANAGE_APPLICATIONS_SETTINGS, SettingsGuide.intent(app, Step.RESTRICTED).action)
         SettingsGuide.intent(app, Step.STATUS_CHANNEL).let {
             assertEquals(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS, it.action)
             assertEquals(pkg, it.getStringExtra(Settings.EXTRA_APP_PACKAGE))

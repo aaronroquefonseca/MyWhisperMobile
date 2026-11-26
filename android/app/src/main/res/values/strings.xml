@@ -687,6 +687,6 @@
     <string name="guide_a11y_warning">Android will show a warning. That\'s expected: MyWhisper only uses this to type your text. Tap Allow.</string>
     <string name="guide_restricted_link">Blocked by “Restricted setting”?</string>
     <string name="guide_restricted_title">Unblock MyWhisper</string>
-    <string name="guide_restricted_path">Tap ⋮ (top right) → Allow restricted settings</string>
+    <string name="guide_restricted_path">Tap MyWhisper → ⋮ (top right) → Allow restricted settings</string>
     <string name="guide_restricted_then">Then come back and turn on the dictation service.</string>
 </resources>
