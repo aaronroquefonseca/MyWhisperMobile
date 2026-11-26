@@ -31,7 +31,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -47,6 +46,7 @@ import java.lang.ref.WeakReference
  * Small picture-in-picture window that keeps the instructions visible while the
  * user navigates inside Settings (#125). Runs in its own task so MainActivity
  * never enters PiP. Static text: the current Settings screen is not observable.
+ * MainActivity opens Settings first; this window then shrinks into a corner over it.
  * [SettingsGuide.watch] closes it on success or deadline; returning by hand
  * closes it from MainActivity; dismissing or expanding it just finishes it, and
  * the auto-return poll keeps running as in the non-PiP flow.
@@ -69,16 +69,11 @@ class SetupGuideActivity : ComponentActivity() {
         }
     }
 
-    private lateinit var step: SettingsGuide.Step
     private var entered = false
-    private var settingsOpened = false
-    // The card draws only once in PiP: the state change forces a fresh frame at the PiP size
-    // (Android 16 otherwise kept the full-screen frame) and skips a full-screen flash.
-    private val inPip = mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        step = SettingsGuide.Step.valueOf(intent.getStringExtra(EXTRA_STEP) ?: SettingsGuide.Step.ACCESSIBILITY.name)
+        val step = SettingsGuide.Step.valueOf(intent.getStringExtra(EXTRA_STEP) ?: SettingsGuide.Step.ACCESSIBILITY.name)
         // Recreated after process death: the poll that owned this window is gone.
         if (savedInstanceState != null) { finishAndRemoveTask(); return }
         current = WeakReference(this)
@@ -95,7 +90,7 @@ class SetupGuideActivity : ComponentActivity() {
             val dark = when (theme) { "Light" -> false; "Dark" -> true; else -> isSystemInDarkTheme() }
             MaterialTheme(colorScheme = whisperColorScheme(dark)) {
                 Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
-                    if (inPip.value) FitToWindow { GuideCard(icon, title, steps, if (restricted) Icons.Filled.Info else Icons.Filled.CheckCircle, noteTitle, noteBody) }
+                    FitToWindow { GuideCard(icon, title, steps, if (restricted) Icons.Filled.Info else Icons.Filled.CheckCircle, noteTitle, noteBody) }
                 }
             }
         }
@@ -155,37 +150,23 @@ class SetupGuideActivity : ComponentActivity() {
         super.onResume()
         if (entered) return
         entered = true
-        val params = PictureInPictureParams.Builder().setAspectRatio(Rational(3, 4)).apply {
-            // Portrait and narrow: the PiP lands at the side, so the centered buttons of
-            // Android's warning dialogs stay tappable. Apps cannot choose the position.
-            // Text, not video: cross-fade on resize instead of stretching.
-            if (Build.VERSION.SDK_INT >= 31) setSeamlessResizeEnabled(false)
-        }.build()
-        val ok = try { enterPictureInPictureMode(params) } catch (_: Exception) { false }
-        if (!ok) {
-            // Fallback: the current flow; the step's hint line in the app already explains it.
-            openSettings()
-            finishAndRemoveTask()
-        }
+        // Enter once the first frame is committed: entering earlier left a stale, mis-scaled
+        // frame in the PiP window on a cold start (Android 16 emulator).
+        window.decorView.viewTreeObserver.registerFrameCommitCallback(::enterPip)
+        window.decorView.invalidate()
+    }
+
+    private fun enterPip() {
+        // Portrait and narrow: the PiP lands at the side, so the centered buttons of
+        // Android's warning dialogs stay tappable. Apps cannot choose the position.
+        val params = PictureInPictureParams.Builder().setAspectRatio(Rational(3, 4)).build()
+        // Fallback: Settings is already open below; the step's hint line in the app explains it.
+        if (!(try { enterPictureInPictureMode(params) } catch (_: Exception) { false })) finishAndRemoveTask()
     }
 
     override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
-        // Settings opens once the window is small, so the window never covers it full screen.
-        inPip.value = isInPictureInPictureMode
-        if (isInPictureInPictureMode) openSettings() else finishAndRemoveTask() // dismissed or expanded
-    }
-
-    private fun openSettings() {
-        if (settingsOpened) return
-        settingsOpened = true
-        try {
-            // Settings gets its own task: launching into this pinned task would expand it.
-            // Cleared so a Settings task left on a deeper page opens on the page the PiP describes.
-            startActivity(SettingsGuide.intent(this, step).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK))
-        } catch (_: Exception) {
-            finishAndRemoveTask()
-        }
+        if (!isInPictureInPictureMode) finishAndRemoveTask() // dismissed or expanded
     }
 
     override fun onDestroy() {

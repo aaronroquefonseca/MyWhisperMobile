@@ -1014,17 +1014,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Back by hand: stop the Settings poll and close the guide. Delayed because the
-        // guide entering picture-in-picture briefly resumes this activity before Settings opens.
-        returnHandler.postDelayed(endSettingsGuide, 1_000L)
+        // Back from Settings (by hand or auto-return): stop the poll and close the guide.
+        SettingsGuide.stop()
         refreshPermStates()
         reload()
         resumeTick.intValue++
-    }
-
-    override fun onPause() {
-        returnHandler.removeCallbacks(endSettingsGuide)
-        super.onPause()
     }
 
     /** Multi-window / overlays: regaining focus also refreshes Activity. */
@@ -1039,7 +1033,6 @@ class MainActivity : ComponentActivity() {
         } catch (_: Exception) {
         }
         multicastLock = null
-        returnHandler.removeCallbacksAndMessages(null)
         // Drop late job results: the generation bump makes stale
         // workers no-ops instead of touching torn-down state.
         settingsGen.incrementAndGet()
@@ -1080,20 +1073,18 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private val returnHandler = android.os.Handler(android.os.Looper.getMainLooper())
-    private val endSettingsGuide = Runnable { SettingsGuide.stop() }
-
     /**
      * Opens the system settings page for [step] and comes back on its own once
      * the change is detected ([SettingsGuide.watch]). Accessibility and restricted
      * settings get a picture-in-picture guide when the device allows it.
      */
     private fun openSettingsAndReturn(step: SettingsGuide.Step) {
-        returnHandler.removeCallbacks(endSettingsGuide)
         if (step == SettingsGuide.Step.STATUS_CHANNEL) AppNotificationChannels.ensure(this)
         SettingsGuide.watch(this) { SettingsGuide.granted(this, step) }
+        // Settings opens in this task, so Back and auto-return behave as without the guide.
+        startActivity(SettingsGuide.intent(this, step))
+        // The guide opens on top in its own task and shrinks into a corner over Settings.
         if (SettingsGuide.usesPip(step) && SettingsGuide.pipAllowed(this)) SetupGuideActivity.start(this, step)
-        else startActivity(SettingsGuide.intent(this, step))
     }
 
     private fun openAppSettings() {
@@ -2454,6 +2445,7 @@ class MainActivity : ComponentActivity() {
                             TextButton(onClick = { openSettingsAndReturn(SettingsGuide.Step.RESTRICTED) }) {
                                 Text(getString(R.string.guide_restricted_link))
                             }
+                            if (!SettingsGuide.pipAllowed(this@MainActivity)) SettingsHint(R.string.guide_hint_restricted)
                         }
                     }
                     else -> Text(getString(R.string.onb_setup_complete), color = MaterialTheme.colorScheme.primary)
