@@ -631,10 +631,17 @@ static DIALING: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
 /// listener: storing it made every later dial "connection refused".
 fn contact_addresses(advertised: &[String], remote: Option<&str>) -> Vec<String> {
     let mut addrs = advertised.to_vec();
-    let Some(ip) = remote.and_then(|r| r.parse::<SocketAddr>().ok()).map(|a| a.ip()) else {
+    let Some(ip) = remote
+        .and_then(|r| r.parse::<SocketAddr>().ok())
+        .map(|a| a.ip())
+    else {
         return addrs;
     };
-    for port in advertised.iter().filter_map(|a| a.parse::<SocketAddr>().ok()).map(|a| a.port()) {
+    for port in advertised
+        .iter()
+        .filter_map(|a| a.parse::<SocketAddr>().ok())
+        .map(|a| a.port())
+    {
         let addr = SocketAddr::new(ip, port).to_string();
         if !addrs.contains(&addr) {
             addrs.push(addr);
