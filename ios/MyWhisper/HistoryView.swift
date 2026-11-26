@@ -446,7 +446,7 @@ private struct SpeakingActivityView: View {
             calendar.date(byAdding: .day, value: week * 7 + row, to: firstDay) ?? today
         }
         let months: [(week: Int, name: String)] = {
-            var labels: [(Int, String)] = []
+            var labels: [(week: Int, name: String)] = []
             var lastMonth = -1
             var lastEnd: CGFloat = -.infinity
             for week in 0..<weeks {

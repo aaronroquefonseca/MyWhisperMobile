@@ -756,8 +756,10 @@ final class KeyboardWebMic: NSObject, WKScriptMessageHandler, WKUIDelegate, WKNa
         guard ready else { return stopEnded() }
         run("stopMic()")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-            guard let self, self.stopCount == count else { return }
-            self.stopEnded()
+            MainActor.assumeIsolated {
+                guard let self, self.stopCount == count else { return }
+                self.stopEnded()
+            }
         }
     }
 
