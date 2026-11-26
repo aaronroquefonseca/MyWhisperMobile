@@ -281,7 +281,7 @@ struct CleanupSettingsView: View {
             .whisperRowSurface()
         }
         .whisperListStyle()
-        .onAppear { if store.draft.entries.isEmpty { store.load() } }
+        .onAppear(perform: store.load)
         .sheet(item: $sheet) { kind in
             switch kind {
             case .add(let preset):
@@ -368,6 +368,12 @@ private struct CleanupRow: View {
             }
             if CleanupChain.isGeminiLike(entry) {
                 Button("Why errors?") { onWhy(geminiCleanupCopy) }
+            }
+            if entry.kind != .local {
+                let kind = CleanupChain.capitalizedKind(entry.kind)
+                ProviderTestButton(blockedReason: ProviderTest.blockedReason(kind: kind, url: entry.url, model: entry.model)) {
+                    await ProviderTest.cleanup(kind: kind, url: entry.url, model: entry.model, apiKey: entry.apiKey)
+                }
             }
         }
     }

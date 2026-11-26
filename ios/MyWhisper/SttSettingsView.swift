@@ -185,6 +185,10 @@ enum SttChain {
 final class SttSettingsStore: ObservableObject {
     @Published var entries: [SttChainEntry] = []
     @Published var error: String?
+    /// `stt.language` ("auto" or an ISO code) and the voice-activity trim (`vad_*`).
+    @Published var language = "auto"
+    @Published var vadEnabled = false
+    @Published var vadThreshold = 0.1
 
     init(entries: [SttChainEntry] = []) {
         self.entries = entries
@@ -192,7 +196,12 @@ final class SttSettingsStore: ObservableObject {
 
     func load() {
         do {
-            entries = SttChain.parseSection(try CoreBridge.getSettings())
+            let settings = try CoreBridge.getSettings()
+            entries = SttChain.parseSection(settings)
+            let stt = settings["stt"] as? [String: Any] ?? [:]
+            language = (stt["language"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "auto"
+            vadEnabled = stt["vad_enabled"] as? Bool ?? false
+            vadThreshold = (stt["vad_threshold"] as? NSNumber)?.doubleValue ?? 0.1
             error = nil
         } catch {
             self.error = error.localizedDescription
@@ -202,6 +211,22 @@ final class SttSettingsStore: ObservableObject {
     func persist() {
         do {
             let settings = SttChain.applying(entries, to: try CoreBridge.getSettings())
+            try CoreBridge.putSettings(settings)
+            error = nil
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    /// Writes the language and voice-activity options next to the chain.
+    func persistOptions() {
+        do {
+            var settings = try CoreBridge.getSettings()
+            var stt = settings["stt"] as? [String: Any] ?? [:]
+            stt["language"] = language
+            stt["vad_enabled"] = vadEnabled
+            stt["vad_threshold"] = vadThreshold
+            settings["stt"] = stt
             try CoreBridge.putSettings(settings)
             error = nil
         } catch {
@@ -263,6 +288,19 @@ struct SttSettingsView: View {
                 .whisperRowSurface()
             }
             Section {
+                Picker("Language", selection: $store.language) {
+                    ForEach(SttLanguage.all.indices, id: \.self) { index in
+                        Text(SttLanguage.all[index].name).tag(SttLanguage.all[index].code)
+                    }
+                }
+                .onChange(of: store.language) { _, _ in store.persistOptions() }
+            } header: {
+                WhisperSectionHeading("Language you speak")
+            } footer: {
+                Text("Auto-detect understands whichever language you speak, so you can switch languages from one dictation to the next. Pick a single language only if it guesses wrong.")
+            }
+            .whisperRowSurface()
+            Section {
                 Menu {
                     Button("Self-hosted server") { sheet = .add(.selfHosted) }
                     Button("Cloud provider") { sheet = .add(.cloud) }
@@ -296,9 +334,32 @@ struct SttSettingsView: View {
                 Text("Enabled providers run in order until one answers.")
             }
             .whisperRowSurface()
+            Section {
+                DisclosureGroup {
+                    Toggle(isOn: $store.vadEnabled) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Voice activity trim")
+                            Text("Cut silence at the start and end of each recording").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    .onChange(of: store.vadEnabled) { _, _ in store.persistOptions() }
+                    VStack(alignment: .leading) {
+                        Text("VAD gate: \(store.vadThreshold.formatted(.number.precision(.fractionLength(2))))")
+                        Slider(value: $store.vadThreshold, in: 0...0.5) { editing in
+                            if !editing { store.persistOptions() }
+                        }
+                    }
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Advanced")
+                        Text("Silence trimming and noise gate").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .whisperRowSurface()
         }
         .whisperListStyle()
-        .onAppear { if store.entries.isEmpty { store.load() } }
+        .onAppear(perform: store.load)
         .sheet(item: $sheet) { kind in
             switch kind {
             case .add(let preset):
@@ -345,6 +406,18 @@ struct SttSettingsView: View {
     }
 }
 
+/// Android's speech-language list: "auto" or one ISO code (`stt.language`).
+enum SttLanguage {
+    static let all: [(code: String, name: LocalizedStringKey)] = [
+        ("auto", "Auto-detect (any language)"), ("en", "English"), ("es", "Spanish"),
+        ("de", "German"), ("fr", "French"), ("it", "Italian"), ("pt", "Portuguese"), ("nl", "Dutch"),
+        ("pl", "Polish"), ("ru", "Russian"), ("uk", "Ukrainian"), ("tr", "Turkish"), ("ar", "Arabic"),
+        ("hi", "Hindi"), ("zh", "Chinese"), ("ja", "Japanese"), ("ko", "Korean"), ("ca", "Catalan"),
+        ("gl", "Galician"), ("eu", "Basque"), ("sv", "Swedish"), ("da", "Danish"), ("fi", "Finnish"),
+        ("no", "Norwegian"), ("cs", "Czech"), ("ro", "Romanian"), ("hu", "Hungarian"), ("el", "Greek"),
+    ]
+}
+
 enum SttSheetKind: Identifiable {
     case add(SttEntryKind)
     case edit(SttChainEntry)
@@ -385,6 +458,11 @@ private struct SttRow: View {
             }
             if entry.isGemini {
                 Button("Why unsupported?") { onWhy(geminiUnsupportedCopy) }
+            }
+            if !entry.isLocal {
+                ProviderTestButton(blockedReason: ProviderTest.blockedReason(kind: entry.kind.rawValue, url: entry.url, model: entry.model)) {
+                    await ProviderTest.speech(url: entry.url, model: entry.model, apiKey: entry.apiKey)
+                }
             }
         }
     }
