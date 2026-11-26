@@ -941,16 +941,15 @@ class KeyboardViewController: UIInputViewController {
         }
         keys.append((space, 4.6))
         var periodKey = false
-        if page == .letters {
-            let shortcuts = fieldShortcuts
-            keys.append(contentsOf: shortcuts.map { (characterKey($0, cased: false), 1) })
-            if settings.showsPeriodKey, shortcuts.isEmpty {
-                let period = characterKey(".", cased: false)
-                period.accessibilityIdentifier = "period-key"
-                addHold(to: period)
-                keys.append((period, 1))
-                periodKey = true
-            }
+        let shortcuts = page == .letters ? fieldShortcuts : []
+        keys.append(contentsOf: shortcuts.map { (characterKey($0, cased: false), 1) })
+        // On every page, so the bottom row keeps its shape when switching to numbers and symbols.
+        if settings.showsPeriodKey, shortcuts.isEmpty {
+            let period = characterKey(".", cased: false)
+            period.accessibilityIdentifier = "period-key"
+            addHold(to: period)
+            keys.append((period, 1))
+            periodKey = true
         }
         keys.append((returnKey(), periodKey ? 1.5 : 2.1))
         placeRow(keys, y: y, height: h, width: width, pad: pad)
