@@ -221,7 +221,7 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         /** Appearance cached in `mw_state` so a cold start paints the right theme before settings load. */
-        private const val PREF_THEME = "ui_theme"
+        internal const val PREF_THEME = "ui_theme"
         private const val PREF_BLACK = "ui_black_background"
 
         /** Next step when the mic request is denied. Pure for unit tests. */
@@ -1014,7 +1014,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        returnHandler.removeCallbacksAndMessages(null)
+        // Back from Settings (by hand or auto-return): stop the poll and close the guide.
+        SettingsGuide.stop()
         refreshPermStates()
         reload()
         resumeTick.intValue++
@@ -1032,7 +1033,6 @@ class MainActivity : ComponentActivity() {
         } catch (_: Exception) {
         }
         multicastLock = null
-        returnHandler.removeCallbacksAndMessages(null)
         // Drop late job results: the generation bump makes stale
         // workers no-ops instead of touching torn-down state.
         settingsGen.incrementAndGet()
@@ -1073,30 +1073,22 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private val returnHandler = android.os.Handler(android.os.Looper.getMainLooper())
-
     /**
-     * Opens a system settings page and brings MyWhisper back as soon as
-     * [granted] turns true, so setup continues without hunting for the app.
-     * Polls every 500 ms for up to 3 minutes; returning by hand cancels it.
-     * Starting from the background is allowed here: by then the overlay
-     * permission is granted.
+     * Opens the system settings page for [step] and comes back on its own once
+     * the change is detected ([SettingsGuide.watch]). Accessibility and restricted
+     * settings get a picture-in-picture guide when the device allows it.
      */
-    private fun openSettingsAndReturn(intent: Intent, granted: () -> Boolean) {
-        returnHandler.removeCallbacksAndMessages(null)
-        startActivity(intent)
-        val deadline = System.currentTimeMillis() + 180_000L
-        val check = object : Runnable {
-            override fun run() {
-                if (try { granted() } catch (_: Exception) { false }) {
-                    startActivity(Intent(this@MainActivity, MainActivity::class.java).addFlags(
-                        Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP))
-                } else if (System.currentTimeMillis() < deadline) {
-                    returnHandler.postDelayed(this, 500L)
-                }
-            }
+    private fun openSettingsAndReturn(step: SettingsGuide.Step) {
+        if (step == SettingsGuide.Step.STATUS_CHANNEL) AppNotificationChannels.ensure(this)
+        // Settings opens in this task, so Back and auto-return behave as without the guide.
+        try {
+            startActivity(SettingsGuide.intent(this, step))
+        } catch (_: android.content.ActivityNotFoundException) {
+            return // Locked-down or OEM Settings without this page: the step's hint line still applies.
         }
-        returnHandler.postDelayed(check, 500L)
+        SettingsGuide.watch(this) { SettingsGuide.granted(this, step) }
+        // The guide opens on top in its own task and shrinks into a corner over Settings.
+        if (SettingsGuide.usesPip(step) && SettingsGuide.pipAllowed(this)) SetupGuideActivity.start(this, step)
     }
 
     private fun openAppSettings() {
@@ -2331,12 +2323,7 @@ class MainActivity : ComponentActivity() {
     }
 
     /** True when the always-on status channel is switched off in Android settings. */
-    private fun statusChannelHidden(): Boolean = try {
-        val nm = getSystemService(android.app.NotificationManager::class.java)
-        nm?.getNotificationChannel(NotifPolicy.UNIFIED_CHANNEL)?.importance == android.app.NotificationManager.IMPORTANCE_NONE
-    } catch (_: Exception) {
-        false
-    }
+    private fun statusChannelHidden(): Boolean = SettingsGuide.granted(this, SettingsGuide.Step.STATUS_CHANNEL)
 
     /**
      * First run: welcome, button setup (required: the pager stops there until
@@ -2449,18 +2436,21 @@ class MainActivity : ComponentActivity() {
                     !setup.overlay -> {
                         Text(getString(R.string.task_overlay_reason))
                         Spacer(Modifier.height(8.dp))
-                        Button(onClick = {
-                            openSettingsAndReturn(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))) {
-                                Settings.canDrawOverlays(this@MainActivity)
-                            }
-                        }) { Text(getString(R.string.setup_float_overlay)) }
+                        Button(onClick = { openSettingsAndReturn(SettingsGuide.Step.OVERLAY) }) { Text(getString(R.string.setup_float_overlay)) }
+                        SettingsHint(R.string.guide_hint_overlay)
                     }
                     !setup.dictationService -> {
                         Text(getString(R.string.control_service_help))
                         Spacer(Modifier.height(8.dp))
-                        Button(onClick = {
-                            openSettingsAndReturn(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) { MyWhisperAccessibility.isOn(this@MainActivity) }
-                        }) { Text(getString(R.string.setup_float_a11y)) }
+                        Button(onClick = { openSettingsAndReturn(SettingsGuide.Step.ACCESSIBILITY) }) { Text(getString(R.string.setup_float_a11y)) }
+                        // Without picture-in-picture the guide's reassurance moves here.
+                        if (!SettingsGuide.pipAllowed(this@MainActivity)) SettingsHint(R.string.guide_hint_a11y)
+                        if (SettingsGuide.restrictedLikely(this@MainActivity)) {
+                            TextButton(onClick = { openSettingsAndReturn(SettingsGuide.Step.RESTRICTED) }) {
+                                Text(getString(R.string.guide_restricted_link))
+                            }
+                            SettingsHint(R.string.guide_hint_restricted)
+                        }
                     }
                     else -> Text(getString(R.string.onb_setup_complete), color = MaterialTheme.colorScheme.primary)
                 }
@@ -2555,9 +2545,10 @@ class MainActivity : ComponentActivity() {
                     if (hidden) {
                         Text("✓ " + getString(R.string.onb_notif_quiet_done), color = MaterialTheme.colorScheme.primary)
                     } else {
-                        OutlinedButton(onClick = { openNotificationChannel(NotifPolicy.UNIFIED_CHANNEL) }) {
+                        OutlinedButton(onClick = { openSettingsAndReturn(SettingsGuide.Step.STATUS_CHANNEL) }) {
                             Text(getString(R.string.onb_notif_quiet_action))
                         }
+                        SettingsHint(R.string.guide_hint_channel)
                     }
                 }
             }
@@ -2775,6 +2766,13 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** One line before a Settings jump: what to toggle, and that the app comes back by itself. */
+    @Composable
+    private fun SettingsHint(text: Int) {
+        Text(getString(text), Modifier.padding(top = 6.dp), style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+
     private fun openNotificationChannel(channel: String) {
         AppNotificationChannels.ensure(this)
         startActivity(Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
@@ -2803,7 +2801,9 @@ class MainActivity : ComponentActivity() {
                     openNotificationChannel(AppNotificationChannels.FLOAT_CONTROLS)
                 }
                 DestinationRow(getString(R.string.ux_hide_updates_title), getString(R.string.ux_hide_updates_help)) {
-                    openNotificationChannel(NotifPolicy.UNIFIED_CHANNEL)
+                    // Auto-return only toward hiding; already hidden means the user is here to undo it.
+                    if (statusChannelHidden()) openNotificationChannel(NotifPolicy.UNIFIED_CHANNEL)
+                    else openSettingsAndReturn(SettingsGuide.Step.STATUS_CHANNEL)
                 }
             }
         }

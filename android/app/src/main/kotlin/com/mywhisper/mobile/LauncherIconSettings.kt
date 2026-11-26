@@ -41,6 +41,7 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -148,13 +149,13 @@ private fun IconChoiceSurface(selected: Boolean, enabled: Boolean, onClick: () -
 }
 
 @Composable
-private fun LauncherIconPreview(style: LauncherIconStyle) {
+internal fun LauncherIconPreview(style: LauncherIconStyle, size: Dp = 48.dp) {
     // Same 108dp artwork cropped to Android's 72dp viewport; circle is an example mask.
-    Box(Modifier.size(48.dp).clip(CircleShape).background(Color(style.background)),
+    Box(Modifier.size(size).clip(CircleShape).background(Color(style.background)),
         contentAlignment = Alignment.Center) {
         Image(
             painterResource(R.mipmap.ic_launcher_foreground), contentDescription = null,
-            colorFilter = ColorFilter.tint(Color(style.foreground)), modifier = Modifier.requiredSize(72.dp),
+            colorFilter = ColorFilter.tint(Color(style.foreground)), modifier = Modifier.requiredSize(size * 1.5f),
         )
     }
 }

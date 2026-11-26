@@ -72,13 +72,20 @@ jobs:
         run: cargo install --locked cargo-ndk --version 4.1.2
       # Gradle build cache + configuration cache; no daemon issues on GH runners.
       - uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d # v4
+      - name: Cache Robolectric SDK jars
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ~/.cache/mywhisper/robolectric
+          key: robolectric-sdks-${{ hashFiles('.github/scripts/fetch-robolectric-sdks.sh') }}
+      - name: Fetch and verify Robolectric SDK jars
+        run: bash ../.github/scripts/fetch-robolectric-sdks.sh "$HOME/.cache/mywhisper/robolectric"
       - name: Lint (errors fail), unit tests, unsigned debug APK
         # One APK; the on-device AI runtime is a separate download (job
         # below). No emulator. assembleDebug is unsigned (release signing
         # needs secrets, out of scope).
         run: |
           ./gradlew :app:lintDebug
-          ./gradlew :app:testDebugUnitTest
+          JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:+$JAVA_TOOL_OPTIONS }-Drobolectric.dependency.dir=$HOME/.cache/mywhisper/robolectric" ./gradlew :app:testDebugUnitTest
           ./gradlew :app:assembleDebug
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
