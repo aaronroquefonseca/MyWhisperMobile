@@ -215,6 +215,7 @@ class KeyboardViewController: UIInputViewController {
         heightConstraint?.priority = .init(999)
         heightConstraint?.isActive = true
         heightReadout.font = .monospacedSystemFont(ofSize: 8, weight: .regular)
+        heightReadout.adjustsFontSizeToFitWidth = true
         heightReadout.textColor = .systemGray
         heightReadout.textAlignment = .center
         heightReadout.isUserInteractionEnabled = false
@@ -266,9 +267,12 @@ class KeyboardViewController: UIInputViewController {
         let top = view.frame.minY
         heightReadout.frame = CGRect(x: 0, y: 0, width: width, height: 10)
         heightReadout.text = String(
-            format: "y %.1f h %.1f req %.1f sup %.1f win %.1f/%.1f band %.1f",
+            format: "y %.1f h %.1f req %.1f sup %.1f win %.1f/%.1f wf %.1f scr %.1f band %.1f",
             top, height, heightConstraint?.constant ?? 0, view.superview?.bounds.height ?? 0,
-            view.convert(CGPoint.zero, to: nil).y, view.window?.bounds.height ?? 0, surfaceBand
+            view.convert(CGPoint.zero, to: nil).y, view.window?.bounds.height ?? 0,
+            view.window?.frame.minY ?? 0,
+            view.window.map { view.convert(CGPoint.zero, to: $0.screen.coordinateSpace).y } ?? 0,
+            surfaceBand
         )
         view.bringSubviewToFront(heightReadout)
         let band: CGFloat = top > 0 && top <= 24 ? top : 0
