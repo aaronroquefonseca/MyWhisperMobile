@@ -44,7 +44,10 @@ struct DevicesView: View {
     }
 
     private var rows: [SyncPeer] {
-        SyncDiscovery.mergedRows(storePeers: peers, discovered: store.discovery.discovered)
+        // Bonjour can resolve this phone's own service while sync restarts; never list it.
+        let own = status?.nodeId ?? store.discovery.ownNodeId
+        return SyncDiscovery.mergedRows(storePeers: peers, discovered: store.discovery.discovered)
+            .filter { own.isEmpty || $0.nodeId != own }
     }
 
     var body: some View {
@@ -445,22 +448,19 @@ struct DevicesView: View {
         if !quiet { busy = true }
         workers.async {
             var nextStatus: SyncStatus?
-            var nextPeers: [SyncPeer] = []
+            var nextPeers: [SyncPeer]?
             var deviceName = ""
             do {
                 nextStatus = try self.core.syncStatus()
             } catch {
                 nextStatus = nil
             }
-            do {
-                nextPeers = try self.core.syncPeers()
-            } catch {
-                nextPeers = []
-            }
+            // A failed read keeps the last list: an empty one would drop trusted rows into Nearby.
+            nextPeers = try? self.core.syncPeers()
             deviceName = self.core.displayName()
             DispatchQueue.main.async {
                 self.status = nextStatus
-                self.peers = nextPeers
+                if let nextPeers { self.peers = nextPeers }
                 self.applyAdvertise(status: nextStatus, name: deviceName)
                 if !quiet { self.busy = false }
             }
@@ -469,8 +469,8 @@ struct DevicesView: View {
 
     private func applyAdvertise(status: SyncStatus?, name: String) {
         guard let status = status, status.running, status.port > 0, !status.nodeId.isEmpty else {
+            // Keep ownNodeId: the id never changes, and clearing it lets this phone list itself.
             store.discovery.unpublish()
-            store.discovery.ownNodeId = ""
             return
         }
         store.discovery.ownNodeId = status.nodeId
