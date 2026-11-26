@@ -39,6 +39,11 @@ class KeyboardViewController: UIInputViewController {
     private lazy var haptic = makeHaptic()
     /// One delay for every press-and-hold (cursor, accents, symbols, delete repeat), so they all feel the same.
     private static let holdDelay: TimeInterval = 0.35
+    /// The region's currency, as the system keyboard shows it on the 123 page whatever the language.
+    private static var currency: String {
+        let symbol = Locale.current.currencySymbol ?? "$"
+        return symbol.count == 1 ? symbol : "$"
+    }
     // Portrait metrics, shared by the first height constraint and the layout.
     private static let rowHeight: CGFloat = 46
     private static let rowGap: CGFloat = 12
@@ -598,16 +603,15 @@ class KeyboardViewController: UIInputViewController {
                           left: shiftKey(), right: deleteKey())
         case .symbols:
             addLettersRow(keys: "1234567890", y: y, h: keyHeight, width: width, pad: pad)
-            let symbol = language == .spanish ? "€" : (Locale(identifier: language.rawValue).currencySymbol ?? "$")
-            let currency = symbol.count == 1 ? symbol : "$"
-            addLettersRow(keys: "-/:;()\(currency)&@\"", y: y + step, h: keyHeight, width: width, pad: pad)
+            addLettersRow(keys: "-/:;()\(Self.currency)&@\"", y: y + step, h: keyHeight, width: width, pad: pad)
             addLettersRow(keys: ".,?!'", y: y + 2 * step, h: keyHeight, width: width, pad: pad,
-                          left: pageKey("#+="), right: deleteKey())
+                          left: pageKey("#+="), right: deleteKey(), keyWeight: 1.55)
         case .more:
             addLettersRow(keys: "[]{}#%^*+=", y: y, h: keyHeight, width: width, pad: pad)
-            addLettersRow(keys: "_\\|~<>€£¥•", y: y + step, h: keyHeight, width: width, pad: pad)
+            let currencies = ["€", "£", "$", "¥"].filter { $0 != Self.currency }.prefix(3).joined()
+            addLettersRow(keys: "_\\|~<>\(currencies)•", y: y + step, h: keyHeight, width: width, pad: pad)
             addLettersRow(keys: ".,?!'", y: y + 2 * step, h: keyHeight, width: width, pad: pad,
-                          left: pageKey("123"), right: deleteKey())
+                          left: pageKey("123"), right: deleteKey(), keyWeight: 1.55)
         }
         addBottomRow(y: y + 3 * step, h: keyHeight, width: width, pad: pad)
     }
@@ -877,12 +881,14 @@ class KeyboardViewController: UIInputViewController {
         }
     }
 
+    /// `keyWeight` widens the keys, like the system's wide . , ? ! ' row on the symbol pages.
     private func addLettersRow(keys: String, y: CGFloat, h: CGFloat, width: CGFloat, pad: CGFloat,
-                               inset: CGFloat = 0, left: KeyboardKeyButton? = nil, right: KeyboardKeyButton? = nil) {
+                               inset: CGFloat = 0, left: KeyboardKeyButton? = nil, right: KeyboardKeyButton? = nil,
+                               keyWeight: CGFloat = 1) {
         var buttons: [(KeyboardKeyButton, CGFloat)] = []
         if let left { buttons.append((left, 1.35)) }
         for character in keys {
-            buttons.append((characterKey(String(character), cased: page == .letters), 1))
+            buttons.append((characterKey(String(character), cased: page == .letters), keyWeight))
         }
         if let right { buttons.append((right, 1.35)) }
         placeRow(buttons, y: y, height: h, width: width, pad: pad, inset: inset)
