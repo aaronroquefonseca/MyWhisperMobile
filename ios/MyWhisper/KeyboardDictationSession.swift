@@ -210,53 +210,51 @@ private final class KeyboardDictationInput: DictationCapture {
 }
 
 
-/// Keeps MyWhisper running in the background for the keyboard with the mic off, like
-/// Wispr Flow: the keyboard asks for the mic only while its key is held, and the mic turns
-/// off again shortly after. Stays ready until the user stops it or iOS interrupts it.
+/// Keeps MyWhisper's microphone running in the background for the keyboard, as Wispr Flow
+/// does: iOS refuses to *start* recording from the background (`cannotStartRecording`), so the
+/// capture runs from the moment the user starts it in the app, muted with iOS 17's input mute
+/// until the keyboard's mic key is held. Stays on until the user stops it or iOS interrupts it.
 final class KeyboardMicLevelSession: ObservableObject {
     @Published private(set) var isEnabled = false
     @Published private(set) var error: String?
     let isAvailable = KeyboardDictationMailbox.shared != nil
 
-    /// Plays a looping silent buffer: iOS keeps an app that is playing audio running in the
-    /// background, without the mic. An engine with nothing playing was suspended.
-    private let keepAlive = AVAudioEngine()
-    private let silence = AVAudioPlayerNode()
     private var capture: AudioCapture?
     private var timer: Timer?
-    private var interruptionObserver: NSObjectProtocol?
     private var sessionID = UUID()
     private var nextHeartbeat = Date.distantPast
     private var lastWanted = Date.distantPast
+    private var muted: Bool?
     private let peak = Peak()
 
     func start() {
         guard !isEnabled, let mailbox = KeyboardDictationMailbox.shared else { return }
         error = nil
-        do {
-            // The capture's category, so turning the mic on later doesn't reconfigure the session.
-            try AVAudioSession.sharedInstance().setCategory(
-                .playAndRecord, mode: .measurement, options: [.mixWithOthers, .defaultToSpeaker]
-            )
-            try AVAudioSession.sharedInstance().setActive(true)
-            try startSilence()
-        } catch {
-            self.error = "Couldn’t keep MyWhisper ready for the keyboard."
+        peak.set(0)
+        let capture = AudioCapture()
+        let normalizer = LevelNormalizer()
+        capture.onPcm = { [peak] samples, count in
+            peak.set(normalizer.push(samples: samples.prefix(count)))
+        }
+        capture.onInterruption = { [weak self] in
+            DispatchQueue.main.async {
+                self?.stop()
+                self?.error = "The keyboard microphone was interrupted."
+            }
+        }
+        guard capture.start(prepareUtterance: false) else {
+            error = "Couldn’t start the keyboard microphone."
             return
         }
+        self.capture = capture
         mailbox.clearMeter()
         mailbox.clearListen()
         sessionID = UUID()
         nextHeartbeat = .distantPast
         lastWanted = .distantPast
+        muted = nil
+        setMuted(true)
         isEnabled = true
-        interruptionObserver = NotificationCenter.default.addObserver(
-            forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
-        ) { [weak self] note in
-            guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
-                  AVAudioSession.InterruptionType(rawValue: raw) == .began else { return }
-            self?.stop()
-        }
         let timer = Timer(timeInterval: 0.08, repeats: true) { [weak self] _ in self?.tick(mailbox) }
         self.timer = timer
         RunLoop.main.add(timer, forMode: .common)
@@ -266,13 +264,9 @@ final class KeyboardMicLevelSession: ObservableObject {
         guard isEnabled else { return }
         timer?.invalidate()
         timer = nil
-        if let interruptionObserver { NotificationCenter.default.removeObserver(interruptionObserver) }
-        interruptionObserver = nil
         capture?.stop()
         capture = nil
-        silence.stop()
-        keepAlive.stop()
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        setMuted(false)
         if let mailbox = KeyboardDictationMailbox.shared {
             mailbox.clearStandby()
             mailbox.clearMeter()
@@ -283,73 +277,33 @@ final class KeyboardMicLevelSession: ObservableObject {
 
     private func tick(_ mailbox: KeyboardDictationMailbox) {
         let now = Date()
-        // A route or category change stops the engine; restart it rather than dropping the session.
-        if !keepAlive.isRunning || !silence.isPlaying {
-            guard (try? startSilence()) != nil else {
-                stop()
-                error = "MyWhisper stopped waiting for the keyboard."
-                return
-            }
+        guard capture?.running == true else {
+            stop()
+            return
         }
         if now >= nextHeartbeat {
             try? mailbox.publishStandby(.init(id: sessionID, heartbeat: now))
             nextHeartbeat = now.addingTimeInterval(1)
         }
         if mailbox.listen?.isCurrent(at: now) == true { lastWanted = now }
-        // A short hangover, so pressing again right away doesn't restart the mic.
+        // A short hangover, so pressing again right away doesn't flap the mute.
         let wanted = now.timeIntervalSince(lastWanted) < 1.5
-        if wanted, capture == nil {
-            guard startCapture() else {
-                // Likely iOS refusing to start recording from the background. Stop, so the next
-                // keyboard press opens MyWhisper instead of waiting on a mic that never comes.
-                stop()
-                error = "iOS didn’t let MyWhisper turn the microphone on in the background."
-                return
-            }
-        } else if !wanted, let capture {
-            capture.stop()
-            self.capture = nil
+        let wasMuted = muted
+        setMuted(!wanted)
+        if wanted {
+            // A missed write (busy disk) skips one reading; it doesn't end the session.
+            try? mailbox.publishMeter(.init(level: peak.get(), measured: now))
+        } else if wasMuted == false {
             mailbox.clearMeter()
         }
-        guard let capture, capture.running else { return }
-        // A missed write (busy disk) skips one reading; it doesn't end the session.
-        try? mailbox.publishMeter(.init(level: peak.get(), measured: now))
     }
 
-    private func startSilence() throws {
-        guard let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 1),
-              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 44_100) else { return }
-        buffer.frameLength = buffer.frameCapacity
-        if let samples = buffer.floatChannelData?[0] {
-            samples.update(repeating: 0, count: Int(buffer.frameLength))
-        }
-        if silence.engine == nil {
-            keepAlive.attach(silence)
-            keepAlive.connect(silence, to: keepAlive.mainMixerNode, format: format)
-        }
-        if !keepAlive.isRunning {
-            keepAlive.prepare()
-            try keepAlive.start()
-        }
-        silence.stop()
-        silence.scheduleBuffer(buffer, at: nil, options: .loops)
-        silence.play()
-    }
-
-    private func startCapture() -> Bool {
-        peak.set(0)
-        let capture = AudioCapture()
-        capture.keepsSessionActive = true
-        let normalizer = LevelNormalizer()
-        capture.onPcm = { [peak] samples, count in
-            peak.set(normalizer.push(samples: samples.prefix(count)))
-        }
-        capture.onInterruption = { [weak self] in
-            DispatchQueue.main.async { self?.stop() }
-        }
-        guard capture.start(prepareUtterance: false) else { return false }
-        self.capture = capture
-        return true
+    /// Input mute keeps the recording running (so it never has to restart from the background)
+    /// while the app hears silence.
+    private func setMuted(_ value: Bool) {
+        guard muted != value else { return }
+        muted = value
+        try? AVAudioApplication.shared.setInputMuted(value)
     }
 
     private final class Peak {

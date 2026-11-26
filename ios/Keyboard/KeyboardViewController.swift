@@ -44,10 +44,12 @@ class KeyboardViewController: UIInputViewController {
         let symbol = Locale.current.currencySymbol ?? "$"
         return symbol.count == 1 ? symbol : "$"
     }
-    // Portrait metrics, shared by the first height constraint and the layout.
-    private static let rowHeight: CGFloat = 46
-    private static let rowGap: CGFloat = 12
-    private static let stripHeight: CGFloat = 48
+    /// iOS's own height for third-party keyboards in portrait (Wispr Flow's too). iOS only
+    /// sometimes honors a shorter request and otherwise draws the difference as an empty band
+    /// above the toolbar, so the keyboard always asks for this and lays its keys out to fill it.
+    private static let portraitHeight: CGFloat = 304
+    private static let rowGap: CGFloat = 14
+    private static let stripHeight: CGFloat = 50
     private static let numberRowHeight: CGFloat = 38
     private var pendingUndo: (original: String, replacement: String)?
     /// Text a suggestion tap inserted, ending in its automatic space. Punctuation typed next goes before that space.
@@ -202,12 +204,7 @@ class KeyboardViewController: UIInputViewController {
             rowsView.topAnchor.constraint(equalTo: view.topAnchor),
             rowsView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
-        // Start at the height the letters will ask for: iOS can size the keyboard from this first
-        // value and keep it, drawing the difference as empty space above the toolbar.
-        let numberRow = settings.showsNumberRow ? Self.numberRowHeight + Self.rowGap : 0
-        heightConstraint = view.heightAnchor.constraint(
-            equalToConstant: Self.stripHeight + numberRow + 4 * Self.rowHeight + 3 * Self.rowGap + 10
-        )
+        heightConstraint = view.heightAnchor.constraint(equalToConstant: Self.portraitHeight)
         heightConstraint?.priority = .init(999)
         heightConstraint?.isActive = true
         registerForTraitChanges([UITraitUserInterfaceStyle.self, UITraitVerticalSizeClass.self]) {
@@ -552,7 +549,7 @@ class KeyboardViewController: UIInputViewController {
 
         let width = layout.width
         let pad: CGFloat = layout.compact ? 10 : 6
-        let rowHeight: CGFloat = layout.compact ? 31 : Self.rowHeight
+        let rowHeight: CGFloat = 31
         let gap: CGFloat = layout.compact ? 6 : Self.rowGap
         let stripHeight: CGFloat = layout.compact ? 36 : Self.stripHeight
         let numberRow = settings.showsNumberRow && !isNumberField
@@ -561,7 +558,7 @@ class KeyboardViewController: UIInputViewController {
         let extra = settings.showsNumberRow ? numberHeight + gap : 0
         // One height for letters, symbols, emoji and emoji search: each change of the requested
         // height risked iOS keeping a larger one and drawing it as an empty band above the toolbar.
-        let height = stripHeight + extra + 4 * rowHeight + 3 * gap + 10
+        let height = layout.compact ? stripHeight + extra + 4 * rowHeight + 3 * gap + 10 : Self.portraitHeight
         setKeyboardHeight(height)
         if emojiMode, let query = emojiSearch {
             addEmojiSearch(query: query, width: width, pad: pad, height: height, gap: gap)
@@ -569,14 +566,15 @@ class KeyboardViewController: UIInputViewController {
         }
 
         if emojiMode {
-            addEmojiView(width: width, pad: pad, height: height, rowHeight: rowHeight)
+            addEmojiView(width: width, pad: pad, height: height, rowHeight: layout.compact ? rowHeight : 46)
             return
         }
 
         addPredictionRow(width: width, pad: pad, height: stripHeight)
         // 2 pt under the bottom row: iOS already leaves room below the keyboard, like Apple's.
         var y = stripHeight + 8
-        var keyHeight = rowHeight
+        // Keys share what the strip and gaps leave; a number row takes its part from them below.
+        var keyHeight = (height - stripHeight - 10 - 3 * gap) / 4
         // If iOS gives a different height than asked, grow or shrink the keys instead of leaving a band.
         let given = layout.height - height
         if !emojiMode, layout.height > 0, abs(given) <= 60 { keyHeight += given / 4 }
@@ -584,9 +582,7 @@ class KeyboardViewController: UIInputViewController {
             placeRow("1234567890".map { (characterKey(String($0), cased: false), 1) },
                      y: y, height: numberHeight, width: width, pad: pad)
             y += numberHeight + gap
-        } else {
-            // Symbol pages already start with digits: stretch their keys so the height never jumps.
-            keyHeight += extra / 4
+            keyHeight -= extra / 4
         }
         let step = keyHeight + gap
         if isNumberField {
