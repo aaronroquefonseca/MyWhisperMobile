@@ -75,6 +75,7 @@ final class KeyboardMicPreview: UIView {
         self.openSession = openSession
         self.onDock = onDock
         super.init(frame: frame)
+        webMic?.prepare(in: self)
 
         pill.backgroundColor = UIColor(red: 29 / 255, green: 27 / 255, blue: 32 / 255, alpha: 0.8)
         pill.layer.cornerRadius = 16
@@ -644,10 +645,15 @@ final class KeyboardWebMic: NSObject, WKScriptMessageHandler, WKUIDelegate, WKNa
     private var wanted = false
     private var heartbeat: Timer?
 
+    /// Loads the page ahead of the first hold, so a hold waits only for the mic itself.
     /// The web view must sit in the keyboard's window: WebKit throttles one outside it.
-    func start(in host: UIView) {
+    func prepare(in host: UIView) {
         let webView = self.webView ?? makeWebView()
         if webView.superview !== host { host.insertSubview(webView, at: 0) }
+    }
+
+    func start(in host: UIView) {
+        prepare(in: host)
         wanted = true
         if ready { run("startMic()") }
         heartbeat?.invalidate()

@@ -145,10 +145,7 @@ class KeyboardViewController: UIInputViewController {
         var correction: String?
     }
     private var heightConstraint: NSLayoutConstraint?
-    /// Extra surface iOS sometimes draws above the keyboard (about 17 pt; it toggles as keyboards
-    /// are switched). When it shows as an offset of the view, the keyboard asks for that much less.
-    private var surfaceBand: CGFloat = 0
-    // shortcut: on-screen height readout to learn where iOS puts that band; remove once understood.
+    // shortcut: on-screen height readout while the iOS band is investigated; remove once settled.
     private let heightReadout = UILabel()
     private var popup: UILabel?
     private weak var pressedKey: UIButton?
@@ -187,6 +184,8 @@ class KeyboardViewController: UIInputViewController {
         // Let UIKit draw the keyboard surface and its device-specific rounded edge.
         keyboard.isOpaque = false
         keyboard.backgroundColor = .clear
+        // Size from the height constraint rather than iOS's own guess.
+        keyboard.allowsSelfSizing = true
         inputView = keyboard
     }
 
@@ -239,6 +238,23 @@ class KeyboardViewController: UIInputViewController {
         preloadSwipeWords()
     }
 
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        // shortcut: experiment. iOS sometimes draws a ~17 pt band above the keyboard depending on the
+        // keyboard shown before, and a height change after appearing seemed to bring it on. Change
+        // the height once on every appearance so the keyboard looks the same each time.
+        guard let constraint = heightConstraint, constraint.isActive else { return }
+        let height = constraint.constant
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            guard let self, self.visible, constraint.constant == height else { return }
+            constraint.constant = height + 1
+            self.view.layoutIfNeeded()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                if constraint.constant == height + 1 { constraint.constant = height }
+            }
+        }
+    }
+
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
         visible = false
@@ -264,23 +280,11 @@ class KeyboardViewController: UIInputViewController {
         super.viewDidLayoutSubviews()
         let width = view.bounds.width
         let height = view.bounds.height
-        let top = view.frame.minY
         heightReadout.frame = CGRect(x: 0, y: 0, width: width, height: 10)
         heightReadout.text = String(
-            format: "y %.1f h %.1f req %.1f sup %.1f win %.1f/%.1f wf %.1f scr %.1f band %.1f",
-            top, height, heightConstraint?.constant ?? 0, view.superview?.bounds.height ?? 0,
-            view.convert(CGPoint.zero, to: nil).y, view.window?.bounds.height ?? 0,
-            view.window?.frame.minY ?? 0,
-            view.window.map { view.convert(CGPoint.zero, to: $0.screen.coordinateSpace).y } ?? 0,
-            surfaceBand
+            format: "h %.1f req %.1f self-sizing nudge", height, heightConstraint?.constant ?? 0
         )
         view.bringSubviewToFront(heightReadout)
-        let band: CGFloat = top > 0 && top <= 24 ? top : 0
-        if layout != nil, band != surfaceBand {
-            surfaceBand = band
-            rebuild()
-            return
-        }
         if layout == nil || (width > 0 && layout?.width != width) || (height > 0 && layout?.height != height) {
             refreshLayout()
         }
@@ -589,7 +593,7 @@ class KeyboardViewController: UIInputViewController {
         // One height for letters, symbols, emoji and emoji search: each change of the requested
         // height risked iOS keeping a larger one and drawing it as an empty band above the toolbar.
         let height = (layout.compact ? stripHeight + Self.stripGap + 4 * rowHeight + 3 * gap : Self.portraitHeight)
-            + extra - surfaceBand
+            + extra
         setKeyboardHeight(height)
         if emojiMode, let query = emojiSearch {
             addEmojiSearch(query: query, width: width, pad: pad, height: height, gap: gap)
