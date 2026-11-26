@@ -79,7 +79,8 @@ object LocalSttModels {
         val languages: List<String>,
         /** Word-bias support flag (desktop capabilities parity + post-process). */
         val dictionary: Boolean,
-        val runtimeNote: String,
+        /** Free RAM the decode needs, in MB (0 = no note). Shown as localized cost guidance. */
+        val freeRamMb: Int = 0,
         /** Recommended phone tier (RAM-cost guidance, shown in reviews/tests). */
         val phoneTier: String,
         /**
@@ -206,7 +207,6 @@ object LocalSttModels {
             langMode = LangMode.AUTO,
             languages = WHISPER_LANGS,
             dictionary = true,
-            runtimeNote = "99 languages · auto-detect · speed varies by phone",
             phoneTier = "any phone",
             minTotalRamMb = 0,
             dirRel = "models/ggml-whisper-tiny",
@@ -228,7 +228,6 @@ object LocalSttModels {
             langMode = LangMode.AUTO,
             languages = WHISPER_LANGS,
             dictionary = true,
-            runtimeNote = "99 languages · auto-detect · speed varies by phone",
             phoneTier = "any phone · default",
             minTotalRamMb = 0,
             dirRel = "models/ggml-whisper-base",
@@ -250,7 +249,7 @@ object LocalSttModels {
             langMode = LangMode.AUTO,
             languages = WHISPER_LANGS,
             dictionary = true,
-            runtimeNote = "99 languages · auto-detect · needs ~600MB free RAM · speed varies by phone",
+            freeRamMb = 600,
             phoneTier = "4GB+ phones",
             minTotalRamMb = 0,
             dirRel = "models/ggml-whisper-small",
@@ -272,7 +271,7 @@ object LocalSttModels {
             langMode = LangMode.AUTO,
             languages = WHISPER_LANGS,
             dictionary = true,
-            runtimeNote = "99 languages · auto-detect · needs ~1.5GB free RAM · speed varies by phone",
+            freeRamMb = 1500,
             phoneTier = "6GB+ total RAM",
             minTotalRamMb = TURBO_MIN_TOTAL_RAM_MB,
             dirRel = "models/ggml-whisper-large-v3-turbo",
@@ -294,7 +293,7 @@ object LocalSttModels {
             langMode = LangMode.AUTO,
             languages = PARAKEET_LANGS,
             dictionary = false,
-            runtimeNote = "25 European languages incl. Spanish · auto-detect · needs ~800MB free RAM · speed varies by phone",
+            freeRamMb = 800,
             phoneTier = "3GB+ total RAM",
             minTotalRamMb = PARAKEET_MIN_TOTAL_RAM_MB,
             dirRel = "models/ggml-parakeet-tdt-0.6b-v3",

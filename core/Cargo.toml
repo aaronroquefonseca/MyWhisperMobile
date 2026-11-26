@@ -24,6 +24,7 @@ snow = "0.10"
 mdns-sd = "0.21"
 ed25519-dalek = { version = "3.0.0", features = ["rand_core"] }
 unicode-normalization = "0.1"
+caseless = "0.2"
 
 # ANDROID PORT: bundled-sqlcipher needs OpenSSL headers the NDK does not
 # ship, so Android builds use plaintext `bundled` for now (app sandbox
@@ -34,10 +35,10 @@ unicode-normalization = "0.1"
 # isolates the file; the Keychain key is reserved for the cipher
 # switch). Host (non-Android, non-iOS) keeps bundled-sqlcipher.
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled", "functions"] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
-rusqlite = { version = "0.40", features = ["bundled", "bundled-sqlcipher"] }
+rusqlite = { version = "0.40", features = ["bundled", "bundled-sqlcipher", "functions"] }
 
 # IOS PORT: keyring is host-only. It does not compile for iOS
 # (apple-native-keyring-store compile_errors without its `protected`

@@ -17,12 +17,15 @@
 
 use crate::audio::{self, MIN_SAMPLES_16K, Recorder};
 use crate::server_stt::{
-    TickOutcome, Transcript, capped_text, record_stop, server_status as chain_status,
-    stt_fingerprint, stt_primary_id, stt_watcher_tick, transcribe_chain_witnessed,
+    ChainPart, TickOutcome, Transcript, capped_text, part_entries, record_stop,
+    server_status as chain_status, stt_fingerprint, stt_primary_id, stt_watcher_tick,
+    transcribe_chain_witnessed,
 };
-use crate::settings::{AppSettings, HistoryEntry, LlmEntry};
+use crate::settings::{AppSettings, HistoryEntry, LlmEntry, SttEntryKind, SttSettings};
 use crate::store::Store;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 /// Multi-proc SQLite contention budget (App + IME are separate
@@ -558,6 +561,22 @@ pub struct Engine {
     /// transcribing). Mirrors the `ACTIVE_UTTERANCES` counter in
     /// `server_stt` so reconcile defers mid-utterance.
     utterance_active: bool,
+    /// Utterance audio kept after a failed [`ChainPart::BeforeLocal`]
+    /// pass so [`ChainPart::AfterLocal`] can retry it once the platform's
+    /// on-device decode misses. Dropped on start, cancel and local finish.
+    held: Option<HeldUtterance>,
+}
+
+/// Prepared (resampled + VAD) audio between the two chain passes.
+struct HeldUtterance {
+    pcm16: Vec<i16>,
+    duration_secs: i64,
+    /// Chain of the first pass: both passes walk one Settings order even
+    /// if it is reordered during the on-device decode.
+    stt: SttSettings,
+    /// Admission witness of the first pass: a cancel or provider switch
+    /// between the passes aborts the second one.
+    generation: u64,
 }
 
 impl Engine {
@@ -595,6 +614,7 @@ impl Engine {
             last_stt_primary,
             last_stt_auto,
             utterance_active: false,
+            held: None,
         })
     }
 
@@ -664,7 +684,10 @@ impl Engine {
         chain_status(&self.settings.stt)
     }
 
-    pub fn start_utterance(&mut self, rate: u32) {
+    /// Starts recording and returns the utterance token its finish
+    /// must present (see [`UTTERANCE_TOKEN`]).
+    pub fn start_utterance(&mut self, rate: u32) -> u64 {
+        self.held = None;
         self.recorder.start(rate);
         self.rate = rate;
         self.started_at = Some(Instant::now());
@@ -672,6 +695,7 @@ impl Engine {
             self.utterance_active = true;
             crate::server_stt::active_inc();
         }
+        UTTERANCE_TOKEN.fetch_add(1, Ordering::SeqCst) + 1
     }
 
     pub fn push_pcm(&mut self, samples: &[i16]) {
@@ -685,6 +709,7 @@ impl Engine {
             .unwrap_or(0);
         self.recorder = Recorder::default();
         self.started_at = None;
+        self.held = None;
         if self.utterance_active {
             self.utterance_active = false;
             crate::server_stt::active_dec();
@@ -703,80 +728,97 @@ impl Engine {
         secs
     }
 
+    /// Blocking finish on an exclusively owned engine (tests, single
+    /// owner). Shared engines go through [`finish_unlocked`] so the
+    /// network and cleanup never run under the engine lock.
     pub fn finish_utterance(&mut self) -> Result<FinishOutcome, String> {
-        if !self.utterance_active {
-            // Finish without start (or re-entrant): guard the transcribe
-            // window the same way so reconcile still defers across it.
-            self.utterance_active = true;
-            crate::server_stt::active_inc();
-        }
-        let out = self.finish_inner();
-        if self.utterance_active {
-            self.utterance_active = false;
-            crate::server_stt::active_dec();
-        }
-        out
+        self.finish_utterance_part(ChainPart::All)
     }
 
-    fn finish_inner(&mut self) -> Result<FinishOutcome, String> {
-        let started = self.started_at.take();
+    /// [`Engine::finish_utterance`] for one side of the `Local` entry
+    /// (see [`ChainPart`] and [`Engine::begin_finish`]).
+    pub fn finish_utterance_part(&mut self, part: ChainPart) -> Result<FinishOutcome, String> {
+        match self.begin_finish(current_utterance(), part)?.run() {
+            Ok(ready) => self.commit_finish(ready),
+            Err(failed) => Err(self.settle_failed(failed)),
+        }
+    }
+
+    /// Phase 1 of a server finish (under the lock, cheap): take the
+    /// audio of `utterance` and snapshot everything the chain needs. A
+    /// stale token (cancelled, or a newer recording started) leaves the
+    /// recorder untouched.
+    ///
+    /// Android runs the chain in parts around the `Local` entry: a
+    /// failed `BeforeLocal` pass holds the prepared audio and plan for
+    /// the `AfterLocal` pass that follows a local miss; an `AfterLocal`
+    /// call with nothing held walks every server.
+    pub fn begin_finish(&mut self, utterance: u64, part: ChainPart) -> Result<FinishJob, String> {
+        let witness = admit(utterance)?;
+        let active = ActiveGuard::claim(self);
         // Fresh settings every utterance (mirrors desktop deliver):
         // picks up UI edits and sync merges without a restart.
         self.settings = self.store.load_settings();
-        self.recorder.settle_release(Instant::now());
-        let (samples, rate) = self.recorder.finish();
-        let duration_secs = started
-            .map(|t| t.elapsed().as_secs() as i64)
-            .unwrap_or(0)
-            .max(1);
-
-        let resampled = audio::Resampler::resample_all(rate.max(1), &samples);
-        if resampled.len() < MIN_SAMPLES_16K {
-            return Err("too short (under 0.3s of audio)".to_string());
-        }
-        let selected: Vec<f32> = if self.settings.stt.vad_enabled {
-            match audio::apply_vad(&resampled, self.settings.stt.vad_threshold) {
-                audio::VadResult::Speech(s) => s,
-                audio::VadResult::Silence => {
-                    return Err("silence (VAD dropped everything)".to_string());
+        let (input, part, stt, duration_secs, witness) = match self.held.take() {
+            Some(held) if part == ChainPart::AfterLocal => {
+                // Held order and set, current config: a server edited,
+                // disabled or removed during the decode never gets audio under
+                // its old setup; one enabled meanwhile waits for the next
+                // utterance.
+                let mut stt = held.stt;
+                let live = &self.settings.stt.entries;
+                for e in stt
+                    .entries
+                    .iter_mut()
+                    .filter(|e| e.enabled && e.kind != SttEntryKind::Local)
+                {
+                    match live.iter().find(|l| l.id == e.id && l.kind == e.kind) {
+                        Some(current) => *e = current.clone(),
+                        None => e.enabled = false,
+                    }
                 }
+                // The first pass's witness: a cancel or provider switch
+                // between the passes aborts this one.
+                let input = FinishInput::Prepared(held.pcm16);
+                (input, part, stt, held.duration_secs, held.generation)
             }
-        } else {
-            resampled
+            _ => {
+                // No pass ran above Local (or it held nothing): walk every
+                // server, so one moved above Local during the decode still runs.
+                let part = if part == ChainPart::AfterLocal {
+                    ChainPart::All
+                } else {
+                    part
+                };
+                let started = self.started_at.take();
+                self.recorder.settle_release(Instant::now());
+                let (samples, rate) = self.recorder.finish();
+                let duration_secs = started
+                    .map(|t| t.elapsed().as_secs() as i64)
+                    .unwrap_or(0)
+                    .max(1);
+                let input = FinishInput::Audio { samples, rate };
+                (
+                    input,
+                    part,
+                    self.settings.stt.clone(),
+                    duration_secs,
+                    witness,
+                )
+            }
         };
-        let pcm16 = audio::f32_to_i16(&selected);
+        Ok(self.job(input, part, stt, duration_secs, witness, utterance, active))
+    }
 
-        let words = self.store.load_words().unwrap_or_default();
-        // On-device inference lives in Kotlin `LocalStt` (whisper.cpp
-        // runtime pack), never in Rust: the server chain below skips `Local`
-        // entries, so there is deliberately no pack hashing on this hot
-        // path (a full SHA256 over ~44MB per utterance would burn
-        // disk+CPU on every server-fallback dictate). Pack verification
-        // stays in `local_stt::verify_pack` for tests/meter only.
-        // Witness before the blocking chain: a provider switch or Stop
-        // applied mid-transcribe bumps the generation; stale results
-        // then settle instead of delivering for a dead chain.
-        let generation_at_entry = crate::server_stt::server_generation();
-        let Transcript { text: raw, engine } =
-            transcribe_chain_witnessed(&self.settings.stt, &pcm16, &words, generation_at_entry)?;
-        // Test seam (cfg(test) only): park after a successful
-        // transcribe, before the guard, so a test can land a
-        // switch/Stop inside the window. Production builds contain no
-        // hook.
-        #[cfg(test)]
-        crate::server_stt::finish_guard_pause_point();
-        if crate::server_stt::server_generation() != generation_at_entry {
-            return Err("superseded (provider switched mid-utterance)".to_string());
+    /// Phase 3 for a failed job: keeps its audio for the pass below
+    /// Local, but only while its utterance is still the current one.
+    fn settle_failed(&mut self, failed: FinishFailed) -> String {
+        if let Some(held) = failed.held
+            && current_utterance() == failed.utterance
+        {
+            self.held = Some(*held);
         }
-
-        self.cleanup_and_deliver(
-            &raw,
-            &raw,
-            &engine,
-            duration_secs,
-            &words,
-            generation_at_entry,
-        )
+        failed.error
     }
 
     /// Finish an utterance the platform already transcribed on-device
@@ -793,65 +835,86 @@ impl Engine {
         engine: &str,
         duration_secs: i64,
     ) -> Result<FinishOutcome, String> {
-        self.started_at = None;
-        self.recorder = Recorder::default();
-        self.settings = self.store.load_settings();
-        let words = self.store.load_words().unwrap_or_default();
-        let generation_at_entry = crate::server_stt::server_generation();
-        let out = self.cleanup_and_deliver(
-            raw,
-            text,
-            engine,
-            duration_secs.max(1),
-            &words,
-            generation_at_entry,
-        );
-        if self.utterance_active {
-            self.utterance_active = false;
-            crate::server_stt::active_dec();
+        match self
+            .begin_finish_with_text(current_utterance(), raw, text, engine, duration_secs)?
+            .run()
+        {
+            Ok(ready) => self.commit_finish(ready),
+            Err(failed) => Err(self.settle_failed(failed)),
         }
-        out
     }
 
-    /// Shared tail: snippets + LLM cleanup → witness recheck → history.
-    /// `text` is the transcript before snippet expansion (`raw` on the
-    /// server path, the platform's word-boosted decode on the local one).
-    fn cleanup_and_deliver(
+    /// Phase 1 of a local-hit finish (see [`Engine::finish_with_text`]).
+    pub fn begin_finish_with_text(
         &mut self,
+        utterance: u64,
         raw: &str,
         text: &str,
         engine: &str,
         duration_secs: i64,
-        words: &[String],
-        generation_at_entry: u64,
-    ) -> Result<FinishOutcome, String> {
-        // Snippets keyed per trigger (comma-separated aliases flatten to
-        // one entry each), recognized before cleanup and restored after.
-        let snips: Vec<(String, String)> = self
-            .settings
-            .dictionary
-            .snippets
-            .iter()
-            .flat_map(|s| s.triggers().into_iter().map(|t| (t, s.replacement.clone())))
-            .collect();
-        let (text, cleanup) = finalize_transcript(
-            text,
-            &self.settings.language_models,
-            words,
-            &snips,
-            generation_at_entry,
-            &self._dir,
+    ) -> Result<FinishJob, String> {
+        let witness = admit(utterance)?;
+        let active = ActiveGuard::claim(self);
+        self.started_at = None;
+        self.recorder = Recorder::default();
+        self.held = None;
+        self.settings = self.store.load_settings();
+        let input = FinishInput::Text {
+            raw: raw.to_string(),
+            text: text.to_string(),
+            engine: engine.to_string(),
+        };
+        let plan = self.settings.stt.clone();
+        let job = self.job(
+            input,
+            ChainPart::All,
+            plan,
+            duration_secs.max(1),
+            witness,
+            utterance,
+            active,
         );
-        // Cleanup fetches are blocking: recheck the witness before the
-        // history write so a cancel that landed mid-cleanup settles
-        // instead of storing a phantom row.
-        #[cfg(test)]
-        crate::server_stt::finish_cleanup_pause_point();
-        if crate::server_stt::server_generation() != generation_at_entry {
+        Ok(job)
+    }
+
+    /// One settings snapshot per job, with `plan` as its STT chain.
+    #[allow(clippy::too_many_arguments)]
+    fn job(
+        &self,
+        input: FinishInput,
+        part: ChainPart,
+        plan: SttSettings,
+        duration_secs: i64,
+        witness: u64,
+        utterance: u64,
+        active: ActiveGuard,
+    ) -> FinishJob {
+        FinishJob {
+            input,
+            part,
+            settings: AppSettings {
+                stt: plan,
+                ..self.settings.clone()
+            },
+            words: self.store.load_words().unwrap_or_default(),
+            duration_secs,
+            witness,
+            utterance,
+            dir: self._dir.clone(),
+            active,
+        }
+    }
+
+    /// Phase 3 (under the lock): the witness check and the history
+    /// write are atomic with respect to the engine, so a cancel that
+    /// reached the lock first always wins.
+    pub fn commit_finish(&mut self, ready: FinishReady) -> Result<FinishOutcome, String> {
+        if crate::server_stt::server_generation() != ready.witness {
             return Err("superseded (provider switched mid-utterance)".to_string());
         }
-        let mut out = self.finalize_delivery(raw, &text, engine, duration_secs);
-        out.cleanup = cleanup;
+        let mut out =
+            self.finalize_delivery(&ready.raw, &ready.text, &ready.engine, ready.duration_secs);
+        out.cleanup = ready.cleanup;
         Ok(out)
     }
 
@@ -907,7 +970,27 @@ impl Engine {
     }
 
     pub fn history_json(&self, limit: usize) -> String {
-        let items: Vec<HistoryEntry> = self.store.load_history(limit, false).unwrap_or_default();
+        Self::history_rows_json(&self.store.load_history(limit, false).unwrap_or_default())
+    }
+
+    /// Keyset page for long histories: rows older than `before`
+    /// (`(recorded_at, uuid)` of the last shown row; `None` = newest),
+    /// optionally filtered by `query`. Same row shape as [`Self::history_json`].
+    pub fn history_page_json(
+        &self,
+        limit: usize,
+        before: Option<(i64, &str)>,
+        query: &str,
+    ) -> String {
+        Self::history_rows_json(
+            &self
+                .store
+                .load_history_page(limit, false, before, query.trim())
+                .unwrap_or_default(),
+        )
+    }
+
+    fn history_rows_json(items: &[HistoryEntry]) -> String {
         // Manual mapping: desktop HistoryEntry has no Serialize impl.
         let mapped: Vec<serde_json::Value> = items
             .iter()
@@ -984,6 +1067,266 @@ impl Engine {
         with_busy_retry(|| self.store.delete_snippet(trigger, &self.node_id))
             .map_err(|e| format!("delete snippet: {e}"))
     }
+}
+
+/// Utterance token: bumped by every start and, lock-free, by every
+/// cancel. A finish names the recording it owns, so a stale caller can
+/// neither finish a cancelled utterance nor take a newer recording.
+static UTTERANCE_TOKEN: AtomicU64 = AtomicU64::new(0);
+
+/// The current utterance token (for single-owner callers).
+pub fn current_utterance() -> u64 {
+    UTTERANCE_TOKEN.load(Ordering::SeqCst)
+}
+
+/// Admits a finish for `utterance` and returns its generation witness.
+/// The witness is read before the token: [`cancel_unlocked`] bumps the
+/// token before the generation, so a cancel either fails this check or
+/// moves the generation past the witness.
+fn admit(utterance: u64) -> Result<u64, String> {
+    let witness = crate::server_stt::server_generation();
+    if UTTERANCE_TOKEN.load(Ordering::SeqCst) != utterance {
+        return Err("cancelled (utterance superseded)".to_string());
+    }
+    Ok(witness)
+}
+
+/// Keeps one finish counted in `ACTIVE_UTTERANCES` until it settles.
+/// Owned by the job, not the engine, so a new recording can start
+/// (and claim the engine's flag) while a stale finish is in flight.
+pub struct ActiveGuard(());
+
+impl ActiveGuard {
+    fn claim(engine: &mut Engine) -> Self {
+        if engine.utterance_active {
+            engine.utterance_active = false;
+        } else {
+            crate::server_stt::active_inc();
+        }
+        ActiveGuard(())
+    }
+}
+
+impl Drop for ActiveGuard {
+    fn drop(&mut self) {
+        crate::server_stt::active_dec();
+    }
+}
+
+enum FinishInput {
+    /// Raw recorder output (resampled + VAD in phase 2).
+    Audio { samples: Vec<i16>, rate: u32 },
+    /// Audio a failed `BeforeLocal` pass already prepared.
+    Prepared(Vec<i16>),
+    Text {
+        raw: String,
+        text: String,
+        engine: String,
+    },
+}
+
+/// Phase 2 input: what a finish needs, snapshotted under the engine
+/// lock so the blocking chain and cleanup can run without it.
+pub struct FinishJob {
+    input: FinishInput,
+    /// Chain part to transcribe (see [`Engine::begin_finish`]); the plan
+    /// is `settings.stt`.
+    part: ChainPart,
+    settings: AppSettings,
+    words: Vec<String>,
+    duration_secs: i64,
+    witness: u64,
+    /// Token of the utterance this job finishes (gates holding its audio).
+    utterance: u64,
+    dir: PathBuf,
+    active: ActiveGuard,
+}
+
+/// Phase 2 failure: the error, plus the prepared audio to hold for the
+/// pass below Local when a `BeforeLocal` pass failed and one remains.
+pub struct FinishFailed {
+    error: String,
+    utterance: u64,
+    held: Option<Box<HeldUtterance>>,
+}
+
+impl From<String> for FinishFailed {
+    fn from(error: String) -> Self {
+        FinishFailed {
+            error,
+            utterance: 0,
+            held: None,
+        }
+    }
+}
+
+/// Phase 2 output, committed by [`Engine::commit_finish`].
+pub struct FinishReady {
+    raw: String,
+    text: String,
+    engine: String,
+    duration_secs: i64,
+    cleanup: Vec<String>,
+    witness: u64,
+    _active: ActiveGuard,
+}
+
+impl FinishJob {
+    /// Phase 2 (no engine lock): VAD, the STT chain and LLM cleanup.
+    /// Every blocking step rechecks the witness, so a cancel stops the
+    /// job before its next provider request.
+    pub fn run(self) -> Result<FinishReady, FinishFailed> {
+        let witness = self.witness;
+        let superseded = || crate::server_stt::server_generation() != witness;
+        let (raw, text, engine) = match self.input {
+            FinishInput::Text { raw, text, engine } => (raw, text, engine),
+            input => {
+                let pcm16 = match input {
+                    FinishInput::Audio { samples, rate } => {
+                        prepare_audio(&samples, rate, &self.settings.stt)?
+                    }
+                    FinishInput::Prepared(pcm16) => pcm16,
+                    FinishInput::Text { .. } => unreachable!("handled above"),
+                };
+                // On-device inference lives in Kotlin `LocalStt`, never
+                // in Rust: the server chain skips `Local` entries, so
+                // there is deliberately no pack hashing on this path.
+                let chain = transcribe_chain_witnessed(
+                    &self.settings.stt,
+                    self.part,
+                    &pcm16,
+                    &self.words,
+                    witness,
+                );
+                let Transcript { text: raw, engine } = match chain {
+                    Ok(t) => t,
+                    Err(error) => {
+                        // Keep the audio only when a server below Local can still use it.
+                        let below = part_entries(&self.settings.stt, ChainPart::AfterLocal)
+                            .any(|e| e.kind != SttEntryKind::Local);
+                        let held = (self.part == ChainPart::BeforeLocal && below).then_some(
+                            Box::new(HeldUtterance {
+                                pcm16,
+                                duration_secs: self.duration_secs,
+                                stt: self.settings.stt,
+                                generation: witness,
+                            }),
+                        );
+                        return Err(FinishFailed {
+                            error,
+                            utterance: self.utterance,
+                            held,
+                        });
+                    }
+                };
+                // Test seam (cfg(test) only): park after a successful
+                // transcribe, before the guard.
+                #[cfg(test)]
+                crate::server_stt::finish_guard_pause_point();
+                if superseded() {
+                    return Err("superseded (provider switched mid-utterance)"
+                        .to_string()
+                        .into());
+                }
+                (raw.clone(), raw, engine)
+            }
+        };
+        // Snippets keyed per trigger (comma-separated aliases flatten to
+        // one entry each), recognized before cleanup and restored after.
+        let snips: Vec<(String, String)> = self
+            .settings
+            .dictionary
+            .snippets
+            .iter()
+            .flat_map(|s| s.triggers().into_iter().map(|t| (t, s.replacement.clone())))
+            .collect();
+        let (text, cleanup) = finalize_transcript(
+            &text,
+            &self.settings.language_models,
+            &self.words,
+            &snips,
+            witness,
+            &self.dir,
+        );
+        // Cleanup fetches are blocking: a cancel that landed mid-cleanup
+        // settles here instead of reaching the history write.
+        #[cfg(test)]
+        crate::server_stt::finish_cleanup_pause_point();
+        if superseded() {
+            return Err("superseded (provider switched mid-utterance)"
+                .to_string()
+                .into());
+        }
+        Ok(FinishReady {
+            raw,
+            text,
+            engine,
+            duration_secs: self.duration_secs,
+            cleanup,
+            witness,
+            _active: self.active,
+        })
+    }
+}
+
+fn lock_engine(engine: &Mutex<Engine>) -> Result<MutexGuard<'_, Engine>, String> {
+    engine.lock().map_err(|_| "engine not open".to_string())
+}
+
+/// Finish on a shared engine: the lock is held only to snapshot
+/// (`begin`) and to commit, never across the network or cleanup, so
+/// cancel, the next recording and the UI never wait on a provider.
+pub fn finish_unlocked(
+    engine: &Mutex<Engine>,
+    begin: impl FnOnce(&mut Engine) -> Result<FinishJob, String>,
+) -> Result<FinishOutcome, String> {
+    let job = begin(&mut *lock_engine(engine)?)?;
+    match job.run() {
+        Ok(ready) => lock_engine(engine)?.commit_finish(ready),
+        Err(failed) => Err(lock_engine(engine)?.settle_failed(failed)),
+    }
+}
+
+/// Recorder output → 16 kHz → VAD: the chain input.
+fn prepare_audio(samples: &[i16], rate: u32, stt: &SttSettings) -> Result<Vec<i16>, String> {
+    let resampled = audio::Resampler::resample_all(rate.max(1), samples);
+    if resampled.len() < MIN_SAMPLES_16K {
+        return Err("too short (under 0.3s of audio)".to_string());
+    }
+    let selected: Vec<f32> = if stt.vad_enabled {
+        match audio::apply_vad(&resampled, stt.vad_threshold) {
+            audio::VadResult::Speech(s) => s,
+            audio::VadResult::Silence => {
+                return Err("silence (VAD dropped everything)".to_string());
+            }
+        }
+    } else {
+        resampled
+    };
+    Ok(audio::f32_to_i16(&selected))
+}
+
+/// Cancel on a shared engine. Invalidation comes first and is
+/// lock-free: the token stops a finish not yet admitted, the generation
+/// stops one in flight, all before this waits for the (briefly held)
+/// lock to reset the recorder. Order matters, see [`admit`].
+pub fn cancel_unlocked(engine: &Mutex<Engine>) -> Result<i64, String> {
+    UTTERANCE_TOKEN.fetch_add(1, Ordering::SeqCst);
+    crate::server_stt::revoke_in_flight();
+    Ok(lock_engine(engine)?.cancel_utterance())
+}
+
+/// Cancels `utterance` only if it still owns the recorder, so a stale
+/// caller can never cancel a newer recording. Checked under the lock,
+/// where every start takes its token.
+pub fn discard_unlocked(engine: &Mutex<Engine>, utterance: u64) -> Result<(), String> {
+    let mut e = lock_engine(engine)?;
+    if current_utterance() == utterance {
+        UTTERANCE_TOKEN.fetch_add(1, Ordering::SeqCst);
+        crate::server_stt::revoke_in_flight();
+        e.cancel_utterance();
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1213,11 +1556,17 @@ mod tests {
         assert_eq!(eng.poll_stt(), TickOutcome::Unchanged);
     }
 
-    /// Single-shot stub answering OpenAI-style `{text}` transcriptions.
-    fn stub_transcription_server() -> (u16, std::thread::JoinHandle<()>) {
+    /// Single-shot HTTP stub: signals `entered` once the request is
+    /// read, waits `delay`, then answers `status` with a JSON `body`.
+    fn stub_http(
+        delay: Duration,
+        status: &'static str,
+        body: &'static str,
+    ) -> (u16, mpsc::Receiver<()>, std::thread::JoinHandle<()>) {
         use std::io::{Read, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
+        let (entered_tx, entered) = mpsc::channel();
         let handle = std::thread::spawn(move || {
             let (mut sock, _) = listener.accept().unwrap();
             let mut buf = Vec::new();
@@ -1249,13 +1598,21 @@ mod tests {
                 }
                 buf.extend_from_slice(&tmp[..n]);
             }
-            let body = r#"{"text":"hello world"}"#;
+            let _ = entered_tx.send(());
+            std::thread::sleep(delay);
             let resp = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
             );
-            sock.write_all(resp.as_bytes()).unwrap();
+            // The client may have given up already; that is fine.
+            let _ = sock.write_all(resp.as_bytes());
         });
+        (port, entered, handle)
+    }
+
+    /// Single-shot stub answering OpenAI-style `{text}` transcriptions.
+    fn stub_transcription_server() -> (u16, std::thread::JoinHandle<()>) {
+        let (port, _, handle) = stub_http(Duration::ZERO, "200 OK", r#"{"text":"hello world"}"#);
         (port, handle)
     }
 
@@ -1316,6 +1673,224 @@ mod tests {
         assert_eq!(eng.history_json(10), "[]");
     }
 
+    /// Self-hosted (closed port, fails fast) → Local → `below`.
+    fn split_chain_settings(below_url: &str) -> String {
+        let closed = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let mut settings: AppSettings = serde_json::from_str(&settings_with(self_hosted_entry(
+            "Above",
+            &format!("http://127.0.0.1:{closed}"),
+        )))
+        .unwrap();
+        let mut local = self_hosted_entry("Local", "");
+        local.kind = SttEntryKind::Local;
+        settings.stt.entries.push(local);
+        settings
+            .stt
+            .entries
+            .push(self_hosted_entry("Below", below_url));
+        settings.language_models.cleanup_enabled = false;
+        serde_json::to_string(&settings).unwrap()
+    }
+
+    #[test]
+    fn after_local_pass_reuses_audio_held_by_failed_before_pass() {
+        let _guard = status_test_lock();
+        reset_status_state();
+        let (port, stub) = stub_transcription_server();
+        let mut eng = open_engine();
+        eng.put_settings(&split_chain_settings(&format!("http://127.0.0.1:{port}")))
+            .unwrap();
+        assert_eq!(eng.poll_stt(), TickOutcome::Unchanged);
+        eng.start_utterance(16000);
+        eng.push_pcm(&vec![1000i16; 8000]);
+        let err = eng
+            .finish_utterance_part(ChainPart::BeforeLocal)
+            .err()
+            .unwrap();
+        assert!(
+            err.starts_with("Above: "),
+            "only the entry above Local runs, got: {err}"
+        );
+        // The platform's local decode missed: the entry below Local gets the same audio.
+        let out = eng.finish_utterance_part(ChainPart::AfterLocal).unwrap();
+        assert_eq!(out.text, "hello world");
+        stub.join().unwrap();
+    }
+
+    #[test]
+    fn reorder_during_local_decode_keeps_first_pass_plan() {
+        let _guard = status_test_lock();
+        reset_status_state();
+        let (port, stub) = stub_transcription_server();
+        let mut eng = open_engine();
+        let plan = split_chain_settings(&format!("http://127.0.0.1:{port}"));
+        eng.put_settings(&plan).unwrap();
+        assert_eq!(eng.poll_stt(), TickOutcome::Unchanged);
+        eng.start_utterance(16000);
+        eng.push_pcm(&vec![1000i16; 8000]);
+        assert!(eng.finish_utterance_part(ChainPart::BeforeLocal).is_err());
+        // Above → Below → Local saved mid-decode: same primary, so no generation bump.
+        let mut reordered: AppSettings = serde_json::from_str(&plan).unwrap();
+        reordered.stt.entries.swap(1, 2);
+        eng.put_settings(&serde_json::to_string(&reordered).unwrap())
+            .unwrap();
+        let out = eng.finish_utterance_part(ChainPart::AfterLocal).unwrap();
+        assert_eq!(out.text, "hello world");
+        stub.join().unwrap();
+    }
+
+    #[test]
+    fn local_first_pass_below_sees_server_moved_above_local() {
+        let _guard = status_test_lock();
+        reset_status_state();
+        let (port, stub) = stub_transcription_server();
+        let mut eng = open_engine();
+        // Kotlin saw Local → Below and skipped the first pass; Below was
+        // moved above Local during the decode.
+        let mut settings: AppSettings =
+            serde_json::from_str(&split_chain_settings(&format!("http://127.0.0.1:{port}")))
+                .unwrap();
+        settings.stt.entries.remove(0);
+        settings.stt.entries.swap(0, 1);
+        eng.put_settings(&serde_json::to_string(&settings).unwrap())
+            .unwrap();
+        eng.start_utterance(16000);
+        eng.push_pcm(&vec![1000i16; 8000]);
+        let out = eng.finish_utterance_part(ChainPart::AfterLocal).unwrap();
+        assert_eq!(out.text, "hello world");
+        stub.join().unwrap();
+    }
+
+    #[test]
+    fn server_disabled_during_local_decode_gets_no_audio() {
+        let _guard = status_test_lock();
+        reset_status_state();
+        let mut eng = open_engine();
+        // No stub: an upload to Below would fail with "Below: ...".
+        let plan = split_chain_settings("http://127.0.0.1:9");
+        eng.put_settings(&plan).unwrap();
+        eng.start_utterance(16000);
+        eng.push_pcm(&vec![1000i16; 8000]);
+        assert!(eng.finish_utterance_part(ChainPart::BeforeLocal).is_err());
+        let mut disabled: AppSettings = serde_json::from_str(&plan).unwrap();
+        disabled.stt.entries[2].enabled = false;
+        eng.put_settings(&serde_json::to_string(&disabled).unwrap())
+            .unwrap();
+        let err = eng
+            .finish_utterance_part(ChainPart::AfterLocal)
+            .err()
+            .unwrap();
+        assert!(
+            !err.contains("Below"),
+            "disabled server must not upload, got: {err}"
+        );
+        assert!(err.contains("no server STT configured"), "got: {err}");
+    }
+
+    #[test]
+    fn server_edited_during_local_decode_uses_current_endpoint() {
+        let _guard = status_test_lock();
+        reset_status_state();
+        let (port, stub) = stub_transcription_server();
+        let mut eng = open_engine();
+        // Old Below endpoint is a closed port: the pass succeeds only via the new one.
+        let plan = split_chain_settings("http://127.0.0.1:9");
+        eng.put_settings(&plan).unwrap();
+        eng.start_utterance(16000);
+        eng.push_pcm(&vec![1000i16; 8000]);
+        assert!(eng.finish_utterance_part(ChainPart::BeforeLocal).is_err());
+        let mut edited: AppSettings = serde_json::from_str(&plan).unwrap();
+        edited.stt.entries[2].url = format!("http://127.0.0.1:{port}");
+        eng.put_settings(&serde_json::to_string(&edited).unwrap())
+            .unwrap();
+        let out = eng.finish_utterance_part(ChainPart::AfterLocal).unwrap();
+        assert_eq!(out.text, "hello world");
+        stub.join().unwrap();
+    }
+
+    #[test]
+    fn server_enabled_during_local_decode_waits_for_next_utterance() {
+        let _guard = status_test_lock();
+        reset_status_state();
+        let mut eng = open_engine();
+        // Above → Local → Below (off) → Last; closed ports, so any upload
+        // shows up by name in the error.
+        let mut plan: AppSettings =
+            serde_json::from_str(&split_chain_settings("http://127.0.0.1:9")).unwrap();
+        plan.stt.entries[2].enabled = false;
+        plan.stt
+            .entries
+            .push(self_hosted_entry("Last", "http://127.0.0.1:9"));
+        let plan = serde_json::to_string(&plan).unwrap();
+        eng.put_settings(&plan).unwrap();
+        eng.start_utterance(16000);
+        eng.push_pcm(&vec![1000i16; 8000]);
+        assert!(eng.finish_utterance_part(ChainPart::BeforeLocal).is_err());
+        let mut enabled: AppSettings = serde_json::from_str(&plan).unwrap();
+        enabled.stt.entries[2].enabled = true;
+        eng.put_settings(&serde_json::to_string(&enabled).unwrap())
+            .unwrap();
+        let err = eng
+            .finish_utterance_part(ChainPart::AfterLocal)
+            .err()
+            .unwrap();
+        assert!(
+            !err.contains("Below"),
+            "server off at the first pass must not upload, got: {err}"
+        );
+        assert!(err.contains("Last"), "got: {err}");
+    }
+
+    #[test]
+    fn no_server_below_local_holds_no_audio() {
+        let _guard = status_test_lock();
+        reset_status_state();
+        let mut eng = open_engine();
+        let mut settings: AppSettings =
+            serde_json::from_str(&split_chain_settings("http://127.0.0.1:9")).unwrap();
+        settings.stt.entries.pop();
+        eng.put_settings(&serde_json::to_string(&settings).unwrap())
+            .unwrap();
+        eng.start_utterance(16000);
+        eng.push_pcm(&vec![1000i16; 8000]);
+        assert!(eng.finish_utterance_part(ChainPart::BeforeLocal).is_err());
+        let err = eng
+            .finish_utterance_part(ChainPart::AfterLocal)
+            .err()
+            .unwrap();
+        assert!(
+            err.contains("too short"),
+            "nothing below Local keeps audio, got: {err}"
+        );
+    }
+
+    #[test]
+    fn cancel_between_passes_drops_held_audio() {
+        let _guard = status_test_lock();
+        reset_status_state();
+        let mut eng = open_engine();
+        // No stub: an upload to Below would fail with a connection error, not "too short".
+        eng.put_settings(&split_chain_settings("http://127.0.0.1:9"))
+            .unwrap();
+        assert_eq!(eng.poll_stt(), TickOutcome::Unchanged);
+        eng.start_utterance(16000);
+        eng.push_pcm(&vec![1000i16; 8000]);
+        assert!(eng.finish_utterance_part(ChainPart::BeforeLocal).is_err());
+        eng.cancel_utterance();
+        let err = eng
+            .finish_utterance_part(ChainPart::AfterLocal)
+            .err()
+            .unwrap();
+        assert!(
+            err.contains("too short"),
+            "cancelled audio must not upload, got: {err}"
+        );
+    }
+
     #[test]
     fn finish_stores_history_before_returning() {
         // Join-before-finalize at utterance scope: when finish returns
@@ -1348,49 +1923,12 @@ mod tests {
         );
     }
 
+    const OLLAMA_REPLY: &str =
+        r#"{"done":true,"done_reason":"stop","message":{"content":"Hello world."}}"#;
+
     /// Single-shot stub answering Ollama `/api/chat` cleanups.
     fn stub_ollama_server() -> (u16, std::thread::JoinHandle<()>) {
-        use std::io::{Read, Write};
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let handle = std::thread::spawn(move || {
-            let (mut sock, _) = listener.accept().unwrap();
-            let mut buf = Vec::new();
-            let mut tmp = [0u8; 4096];
-            loop {
-                let n = sock.read(&mut tmp).unwrap();
-                buf.extend_from_slice(&tmp[..n]);
-                if buf.windows(4).any(|w| w == b"\r\n\r\n") {
-                    break;
-                }
-            }
-            let head_end = buf.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
-            let headers = String::from_utf8_lossy(&buf[..head_end]);
-            let len: usize = headers
-                .lines()
-                .find_map(|l| {
-                    let (k, v) = l.split_once(':')?;
-                    if k.trim().eq_ignore_ascii_case("content-length") {
-                        v.trim().parse().ok()
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or(0);
-            while buf.len() - head_end < len {
-                let n = sock.read(&mut tmp).unwrap();
-                if n == 0 {
-                    break;
-                }
-                buf.extend_from_slice(&tmp[..n]);
-            }
-            let body = r#"{"done":true,"done_reason":"stop","message":{"content":"Hello world."}}"#;
-            let resp = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-            sock.write_all(resp.as_bytes()).unwrap();
-        });
+        let (port, _, handle) = stub_http(Duration::ZERO, "200 OK", OLLAMA_REPLY);
         (port, handle)
     }
 
@@ -1560,7 +2098,6 @@ mod tests {
         assert_eq!(out.text, "Hello world.");
         assert_eq!(out.raw, "hello world");
         assert_eq!(out.engine, "local test");
-        assert!(!crate::server_stt::inference_active());
         let history: serde_json::Value = serde_json::from_str(&eng.history_json(10)).unwrap();
         assert_eq!(history.as_array().unwrap().len(), 1);
         llm_stub.join().unwrap();
@@ -1681,5 +2218,234 @@ mod tests {
         }
         assert_eq!(history_before, "[]");
         assert_eq!(eng.history_json(10), "[]");
+    }
+
+    // -- cancel during a delayed provider (shared engine, as on Android) --
+
+    const SLOW: Duration = Duration::from_millis(1500);
+
+    fn url(port: u16) -> String {
+        format!("http://127.0.0.1:{port}")
+    }
+
+    /// A port that records whether anything ever connected to it.
+    fn must_not_be_contacted() -> std::net::TcpListener {
+        std::net::TcpListener::bind("127.0.0.1:0").unwrap()
+    }
+
+    fn assert_never_contacted(listener: &std::net::TcpListener, what: &str) {
+        listener.set_nonblocking(true).unwrap();
+        assert!(
+            listener.accept().is_err(),
+            "cancelled utterance contacted {what}"
+        );
+    }
+
+    fn put(eng: &Mutex<Engine>, settings: &AppSettings) {
+        eng.lock()
+            .unwrap()
+            .put_settings(&serde_json::to_string(settings).unwrap())
+            .unwrap();
+    }
+
+    fn record(eng: &Mutex<Engine>) -> u64 {
+        let mut e = eng.lock().unwrap();
+        let token = e.start_utterance(16000);
+        e.push_pcm(&vec![1000i16; 8000]);
+        token
+    }
+
+    /// Starts a finish on a worker, waits until `entered` (the slow
+    /// provider got its request), cancels, and checks the cancel did
+    /// not wait for the provider. Returns the stale worker.
+    fn cancel_while_blocked(
+        eng: &std::sync::Arc<Mutex<Engine>>,
+        entered: mpsc::Receiver<()>,
+    ) -> std::thread::JoinHandle<Result<FinishOutcome, String>> {
+        let token = record(eng);
+        let worker = {
+            let eng = eng.clone();
+            std::thread::spawn(move || {
+                finish_unlocked(&eng, |e| e.begin_finish(token, ChainPart::All))
+            })
+        };
+        entered.recv_timeout(Duration::from_secs(10)).unwrap();
+        let began = Instant::now();
+        cancel_unlocked(eng).unwrap();
+        assert!(
+            began.elapsed() < Duration::from_millis(300),
+            "cancel waited {:?} on the in-flight provider",
+            began.elapsed()
+        );
+        worker
+    }
+
+    /// Next dictation through a responsive provider, while the stale
+    /// finish may still be blocked: must not wait for it.
+    fn next_dictation_succeeds(eng: &Mutex<Engine>, settings: &mut AppSettings) {
+        let (port, stub) = stub_transcription_server();
+        settings.stt.entries = vec![self_hosted_entry("Fast", &url(port))];
+        settings.language_models.cleanup_enabled = false;
+        put(eng, settings);
+        let token = record(eng);
+        let began = Instant::now();
+        let out = finish_unlocked(eng, |e| e.begin_finish(token, ChainPart::All))
+            .expect("next dictation");
+        assert!(
+            began.elapsed() < SLOW,
+            "next dictation waited on the stale finish"
+        );
+        assert_eq!(out.text, "hello world");
+        stub.join().unwrap();
+    }
+
+    fn history_texts(eng: &Mutex<Engine>) -> Vec<String> {
+        let rows: Vec<serde_json::Value> =
+            serde_json::from_str(&eng.lock().unwrap().history_json(10)).unwrap();
+        rows.iter()
+            .map(|r| r["text"].as_str().unwrap_or_default().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn cancel_during_delayed_transcription_is_prompt_and_saves_nothing() {
+        let _guard = status_test_lock();
+        reset_status_state();
+        // Slow primary that fails after the delay; the fallback must
+        // never be asked for a cancelled utterance.
+        let (slow_port, entered, slow) = stub_http(SLOW, "500 Internal Server Error", "{}");
+        let fallback = must_not_be_contacted();
+        let eng = std::sync::Arc::new(Mutex::new(open_engine()));
+        let mut settings: AppSettings =
+            serde_json::from_str(&settings_with(self_hosted_entry("Slow", &url(slow_port))))
+                .unwrap();
+        settings.stt.entries.push(self_hosted_entry(
+            "Fallback",
+            &url(fallback.local_addr().unwrap().port()),
+        ));
+        settings.language_models.cleanup_enabled = false;
+        assert!(settings.privacy.history_enabled);
+        put(&eng, &settings);
+
+        let stale = cancel_while_blocked(&eng, entered);
+        next_dictation_succeeds(&eng, &mut settings);
+
+        assert!(
+            stale.join().unwrap().is_err(),
+            "cancelled finish must not deliver"
+        );
+        slow.join().unwrap();
+        assert_never_contacted(&fallback, "the fallback STT provider");
+        assert_eq!(history_texts(&eng), vec!["hello world".to_string()]);
+        assert!(
+            !crate::server_stt::inference_active(),
+            "active count leaked"
+        );
+    }
+
+    #[test]
+    fn cancel_during_delayed_cleanup_is_prompt_and_saves_nothing() {
+        let _guard = status_test_lock();
+        reset_status_state();
+        let (stt_port, stt) = stub_transcription_server();
+        let (slow_port, entered, slow) = stub_http(SLOW, "500 Internal Server Error", "{}");
+        let fallback = must_not_be_contacted();
+        let eng = std::sync::Arc::new(Mutex::new(open_engine()));
+        let mut settings: AppSettings =
+            serde_json::from_str(&settings_with(self_hosted_entry("Stub", &url(stt_port))))
+                .unwrap();
+        settings.language_models.cleanup_enabled = true;
+        settings.language_models.entries = vec![
+            ollama_entry(&url(slow_port)),
+            ollama_entry(&url(fallback.local_addr().unwrap().port())),
+        ];
+        put(&eng, &settings);
+
+        let stale = cancel_while_blocked(&eng, entered);
+        next_dictation_succeeds(&eng, &mut settings);
+
+        assert!(
+            stale.join().unwrap().is_err(),
+            "cancelled finish must not deliver"
+        );
+        stt.join().unwrap();
+        slow.join().unwrap();
+        assert_never_contacted(&fallback, "the fallback cleanup provider");
+        assert_eq!(history_texts(&eng), vec!["hello world".to_string()]);
+        assert!(
+            !crate::server_stt::inference_active(),
+            "active count leaked"
+        );
+    }
+
+    #[test]
+    fn stale_token_never_finishes_nor_takes_the_next_recording() {
+        let _guard = status_test_lock();
+        reset_status_state();
+        // Never answers: a stale finish must not even connect.
+        let provider = must_not_be_contacted();
+        let eng = std::sync::Arc::new(Mutex::new(open_engine()));
+        let mut settings: AppSettings = serde_json::from_str(&settings_with(self_hosted_entry(
+            "Never",
+            &url(provider.local_addr().unwrap().port()),
+        )))
+        .unwrap();
+        settings.language_models.cleanup_enabled = false;
+        put(&eng, &settings);
+
+        // Cancel lands after the platform checked its session but
+        // before its finish reached the engine.
+        let cancelled = record(&eng);
+        cancel_unlocked(&eng).unwrap();
+        assert!(finish_unlocked(&eng, |e| e.begin_finish(cancelled, ChainPart::All)).is_err());
+        assert_never_contacted(&provider, "the STT provider");
+
+        // A newer recording started: stale finishes and discards must leave it alone.
+        let next = record(&eng);
+        assert!(finish_unlocked(&eng, |e| e.begin_finish(cancelled, ChainPart::All)).is_err());
+        discard_unlocked(&eng, cancelled).unwrap();
+        assert_eq!(
+            current_utterance(),
+            next,
+            "stale discard revoked the newer recording"
+        );
+        let left = eng.lock().unwrap().recorder.finish().0.len();
+        assert_eq!(left, 8000, "stale finish consumed the newer recording");
+        assert_eq!(history_texts(&eng), Vec::<String>::new());
+    }
+
+    #[test]
+    fn stale_failed_pass_never_holds_audio_for_a_newer_recording() {
+        let _guard = status_test_lock();
+        reset_status_state();
+        let below = must_not_be_contacted();
+        let eng = std::sync::Arc::new(Mutex::new(open_engine()));
+        eng.lock()
+            .unwrap()
+            .put_settings(&split_chain_settings(&url(below
+                .local_addr()
+                .unwrap()
+                .port())))
+            .unwrap();
+        let stale = record(&eng);
+        let job = eng
+            .lock()
+            .unwrap()
+            .begin_finish(stale, ChainPart::BeforeLocal)
+            .unwrap();
+        let _next = record(&eng); // a newer recording supersedes the pass's token
+        let failed = job.run().err().expect("the pass above Local fails");
+        assert!(
+            failed.held.is_some(),
+            "a current failed pass would hold its audio"
+        );
+        let mut e = eng.lock().unwrap();
+        e.settle_failed(failed);
+        assert!(
+            e.held.is_none(),
+            "stale pass held its audio for the newer recording"
+        );
+        drop(e);
+        assert_never_contacted(&below, "the server below Local");
     }
 }

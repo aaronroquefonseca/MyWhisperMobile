@@ -103,6 +103,7 @@ class OverlayService : Service(), Dictation.Listener {
      * leave an orphan ongoing notification STOP cannot remove.
      */
     @Volatile private var foregrounded = false
+    @Volatile private var boundEditor: android.view.accessibility.AccessibilityNodeInfo? = null
     private var wm: WindowManager? = null
     private var holder: ViewGroup? = null
     private var haloView: View? = null
@@ -149,9 +150,18 @@ class OverlayService : Service(), Dictation.Listener {
         return shift * (if (dockedLeft) -1 else 1)
     }
 
-    private fun extraSmall() = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean("float_extra_small", false)
+    /** Per-screen settings (#113) read through the shared resolver for the screen in use. */
+    private fun screenKey(base: String) = FoldScreens.key(base, buildScreen ?: FoldScreens.active(this), true)
 
-    private fun appearanceSize() = BubbleAppearance.buttonSize(getSharedPreferences(PREFS, MODE_PRIVATE).getInt("float_size", 2), extraSmall())
+    /** Split on and this screen's position was reset in Settings: rebuild at the default spot. */
+    private fun positionReset(): Boolean {
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        return FoldScreens.split(prefs) && !prefs.contains(screenKey(KEY_X))
+    }
+
+    private fun extraSmall() = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(screenKey("float_extra_small"), false)
+
+    private fun appearanceSize() = BubbleAppearance.buttonSize(getSharedPreferences(PREFS, MODE_PRIVATE).getInt(screenKey("float_size"), 2), extraSmall())
 
     private fun updateIdleSurface(state: Dictation.State) {
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
@@ -161,12 +171,12 @@ class OverlayService : Service(), Dictation.Listener {
             shrinkScheduled = false
             idleElapsed = false
         } else if (!idleElapsed && !shrinkScheduled &&
-            BubbleAppearance.effective(BubbleAppearance.idleBehavior(prefs.getString("float_idle_style", "full")), builtGrab, extraSmall()).usesDelay) {
+            BubbleAppearance.effective(BubbleAppearance.idleBehavior(prefs.getString(screenKey("float_idle_style"), "full")), builtGrab, extraSmall()).usesDelay) {
             shrinkScheduled = true
-            mainHandler.postDelayed(shrinkIdle, BubbleAppearance.idleDelayMs(prefs.getInt("float_idle_delay", BubbleAppearance.IDLE_DELAY_DEFAULT_MS)).toLong())
+            mainHandler.postDelayed(shrinkIdle, BubbleAppearance.idleDelayMs(prefs.getInt(screenKey("float_idle_delay"), BubbleAppearance.IDLE_DELAY_DEFAULT_MS)).toLong())
         }
-        val shape = BubbleAppearance.shape(BubbleAppearance.idleBehavior(prefs.getString("float_idle_style", "full")),
-            idleElapsed, FloatState.searchField, prefs.getBoolean("float_shrink_search", false), builtGrab, extraSmall(), busy)
+        val shape = BubbleAppearance.shape(BubbleAppearance.idleBehavior(prefs.getString(screenKey("float_idle_style"), "full")),
+            idleElapsed, FloatState.searchField, prefs.getBoolean(screenKey("float_shrink_search"), false), builtGrab, extraSmall(), busy)
         val diameter = resources.displayMetrics.density * BubbleAppearance.diameter(if (busy) 50 else builtSize, shape)
         val drawable = surface ?: return
         drawable.fill = if (state == Dictation.State.RECORDING) 0xFFE8E8E8.toInt() else Color.WHITE
@@ -233,6 +243,10 @@ class OverlayService : Service(), Dictation.Listener {
     private var gripCancelled = false
     /** Layout built with the optional grip (rebuild when the pref flips). */
     private var builtGrab = false
+    /** Screen whose settings the bubble was built with (foldables, #113); null = rebuild once idle. */
+    private var builtScreen: FoldScreens.Screen? = null
+    /** Pinned while [buildBubble] runs so one build reads one screen's settings. */
+    private var buildScreen: FoldScreens.Screen? = null
     /** Pending delayed hold start (no grip: wait out finger jitter). */
     private var pressStart: Runnable? = null
     /** Recording already opened by this touch (hold or deferred tap). */
@@ -636,10 +650,34 @@ class OverlayService : Service(), Dictation.Listener {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    /**
+     * Fold/unfold with separate screen settings (#113): rebuild for the new screen when idle.
+     * Mid-dictation only keep the button on-screen (a rebuild would cancel the recording);
+     * the rebuild follows once dictation is idle (see [onState]).
+     */
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        FoldScreens.observe(this)
+        mainHandler.post {
+            if (holder == null || builtScreen == FoldScreens.active(this)) return@post
+            if (FloatState.displayState(dictation.current, pendingDelivery.get()) == Dictation.State.IDLE) applyVisibility()
+            else params?.let { lp ->
+                val b = safeBubbleBounds(lp.width, lp.height)
+                val (cx, cy) = FloatState.clampBubble(lp.x, lp.y, b.minX, b.minY, b.maxX, b.maxY)
+                lp.x = cx
+                lp.y = cy
+                try { wm?.updateViewLayout(holder, lp) } catch (_: Exception) { }
+                // Clamped for this screen only: restore the saved spot once idle, even if unfolded again first.
+                builtScreen = null
+            }
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         android.util.Log.i("MwFloat", "service onCreate")
         AppNotificationChannels.ensure(this)
+        FoldScreens.observe(this)
         // Drop the retired solo channels (pre-unification installs).
         try {
             val nm = getSystemService(NotificationManager::class.java)
@@ -657,12 +695,15 @@ class OverlayService : Service(), Dictation.Listener {
                     showToast(getString(R.string.err_mic_revoked), Toast.LENGTH_LONG)
                     return@Dictation null
                 }
+                // Bind the utterance to the field it was started in; delivery refuses any other.
+                boundEditor = MyWhisperAccessibility.focusedEditor()
                 try {
                     // Promote synchronously from the user's visible bubble gesture,
                     // before AudioRecord starts. Idle boot readiness needs no mic type.
                     startForegroundWithType(microphone = true)
                     val cap = AudioCapture(this, onPcm = onPcm, onError = onError, onLevel = onLevel)
                     if (cap.start()) object : Dictation.Capture {
+                        override val utterance = cap.utterance
                         override fun stop() {
                             cap.stop()
                             if (foregrounded) try { startForegroundWithType(microphone = false) } catch (_: Exception) { }
@@ -676,11 +717,14 @@ class OverlayService : Service(), Dictation.Listener {
                     null
                 }
             },
-            // On-device first (selected local model); miss or
-            // throw → server chain. Pack-gated: null without the pack.
+            // On-device decode (selected local model) in its Settings
+            // chain slot; miss or throw → next entry. Pack-gated: null
+            // without the pack.
             localTranscribe = { pcm -> if (practiceMode) null else LocalStt.transcribeIfEnabled(this, pcm) },
-            localFirst = { !practiceMode && LocalStt.isLocalFirst() },
-            finishTranscription = { if (practiceMode) practiceResult() else CoreBridge.finishUtterance() },
+            remotesAroundLocal = { if (practiceMode) true to false else LocalStt.remotesAroundLocal() },
+            finishTranscription = { utterance, afterLocal ->
+                if (practiceMode) practiceResult(utterance) else CoreBridge.finishUtterance(utterance, afterLocal)
+            },
             // Shutdown releases the native recognizer (no resident ORT
             // session across service restarts in one process).
             releaseLocal = {
@@ -712,7 +756,7 @@ class OverlayService : Service(), Dictation.Listener {
 
     /** Optional grip (default off) and the no-grip hold delay. */
     private fun grabEnabled(): Boolean = try {
-        getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_GRAB, false)
+        getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(screenKey(KEY_GRAB), false)
     } catch (_: Exception) {
         false
     }
@@ -1046,7 +1090,9 @@ class OverlayService : Service(), Dictation.Listener {
         android.util.Log.i("MwFloat", "apply show=$show holder=${holder != null}")
         // Grip pref flipped while the bubble is up: rebuild the chrome so
         // the layout matches (no grip row <=> free drag).
-        if (holder != null && (builtGrab != grabEnabled() || builtSize != appearanceSize()) && dictation.current == Dictation.State.IDLE) {
+        // Same for a fold/unfold or a Reset position: rebuild at that screen's saved spot.
+        if (holder != null && (builtGrab != grabEnabled() || builtSize != appearanceSize() || builtScreen != FoldScreens.active(this) ||
+                positionReset()) && FloatState.displayState(dictation.current, pendingDelivery.get()) == Dictation.State.IDLE) {
             removeBubble()
         }
         if (show) {
@@ -1079,12 +1125,21 @@ class OverlayService : Service(), Dictation.Listener {
     }
 
     /** Compact monochrome squircle with an optional full-width grip. */
-    @SuppressLint("ClickableViewAccessibility")
     private fun showBubble() {
         if (holder != null) {
             refreshChrome(Dictation.State.IDLE)
             return
         }
+        buildScreen = FoldScreens.active(this)
+        try {
+            buildBubble()
+        } finally {
+            buildScreen = null
+        }
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun buildBubble() {
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
 
         builtSize = appearanceSize()
@@ -1109,12 +1164,17 @@ class OverlayService : Service(), Dictation.Listener {
             it.gravity = Gravity.TOP or Gravity.START
             it.alpha = FloatState.overlayWindowOpacity(prefs.getInt("float_opacity", 65))
             val b = safeBubbleBounds(rootW, rootH)
+            builtScreen = buildScreen
+            val keyX = screenKey(KEY_X)
+            val keyY = screenKey(KEY_Y)
             val (cx, cy) = FloatState.clampBubble(
-                prefs.getInt(KEY_X, 60), prefs.getInt(KEY_Y, 400),
+                prefs.getInt(keyX, 60), prefs.getInt(keyY, 400),
                 b.minX, b.minY, b.maxX, b.maxY,
             )
             it.x = cx
             it.y = cy
+            // A reset position is stored once placed, so the rebuild check in applyVisibility settles.
+            if (positionReset()) prefs.edit { putInt(keyX, cx).putInt(keyY, cy) }
         }
         params = lp
 
@@ -1172,9 +1232,9 @@ class OverlayService : Service(), Dictation.Listener {
         }
         micBtn = mic
         val initialShape = BubbleAppearance.shape(
-            BubbleAppearance.idleBehavior(prefs.getString("float_idle_style", "full")),
+            BubbleAppearance.idleBehavior(prefs.getString(screenKey("float_idle_style"), "full")),
             elapsed = false, search = FloatState.searchField,
-            shrinkSearch = prefs.getBoolean("float_shrink_search", false), grip = grab, extraSmall = extraSmall(), busy = false,
+            shrinkSearch = prefs.getBoolean(screenKey("float_shrink_search"), false), grip = grab, extraSmall = extraSmall(), busy = false,
         )
         surface = BubbleSurface().apply {
             density = resources.displayMetrics.density
@@ -1320,8 +1380,9 @@ class OverlayService : Service(), Dictation.Listener {
             } catch (_: Exception) {
             }
             try {
+                // Only the screen in use: the other screen keeps its own spot.
                 getSharedPreferences(PREFS, MODE_PRIVATE).edit()
-                    .putInt(KEY_X, lp.x).putInt(KEY_Y, lp.y).apply()
+                    .putInt(screenKey(KEY_X), lp.x).putInt(screenKey(KEY_Y), lp.y).apply()
             } catch (_: Exception) {
             }
         }
@@ -2097,12 +2158,16 @@ class OverlayService : Service(), Dictation.Listener {
                 ensureVizPill()
             } else if (!toggleCollapsing) hideVizPill()
             if (s != Dictation.State.RECORDING || toggleRecording || holdDelay == null) hideLockTarget()
+            // Folded or unfolded mid-dictation: apply the new screen's settings now that it is idle.
+            if (s == Dictation.State.IDLE && builtScreen != FoldScreens.active(this)) mainHandler.post { applyVisibility() }
         }
         refreshNotif(s)
     }
 
     override fun onResult(text: String) {
         android.util.Log.i("MwFloat", "onResult len=${text.length}")
+        // Snapshot before Dictation goes IDLE: a new recording may rebind while delivery is queued.
+        val bound = boundEditor
         if (!practiceMode) {
             // The core saved history before returning the text.
             historyChanged.value++
@@ -2118,12 +2183,13 @@ class OverlayService : Service(), Dictation.Listener {
                 }
             }
         }
-        deliver(text)
+        deliver(text, bound)
     }
 
     /** Practice dictation: drop the audio, pretend to work, return the next example. */
-    private fun practiceResult(): Pair<String, String> {
-        try { CoreBridge.cancelUtterance() } catch (_: Exception) { }
+    private fun practiceResult(utterance: Long): Pair<String, String> {
+        // Scoped to this recording: a late practice worker never cancels a real dictation.
+        try { CoreBridge.discardUtterance(utterance) } catch (_: Exception) { }
         Thread.sleep(TUTORIAL_WORKING_MS)
         val samples = resources.getStringArray(R.array.tutorial_samples)
         return samples[practiceIndex++ % samples.size] to "practice"
@@ -2193,7 +2259,7 @@ class OverlayService : Service(), Dictation.Listener {
     }
 
     /** Commit runs here (not in onResult) to keep the result text. */
-    fun deliver(text: String) {
+    fun deliver(text: String, bound: android.view.accessibility.AccessibilityNodeInfo?) {
         pendingDelivery.incrementAndGet()
         bgWorkers.execute {
             try {
@@ -2206,9 +2272,11 @@ class OverlayService : Service(), Dictation.Listener {
                     android.util.Log.i("MwFloat", "deliver drop-empty")
                     return@execute
                 }
-                val ok = MyWhisperAccessibility.commit(t)
-                android.util.Log.i("MwFloat", "deliver commit ok=$ok")
-                if (!ok) {
+                val result = MyWhisperAccessibility.commit(t, bound)
+                android.util.Log.i("MwFloat", "deliver commit result=$result")
+                if (result == MyWhisperAccessibility.Commit.MOVED) {
+                    showToast(getString(R.string.float_field_changed), Toast.LENGTH_LONG)
+                } else if (result == MyWhisperAccessibility.Commit.FAILED) {
                     // Toast must run on the main thread (this is a worker).
                     // a11y off is a configuration failure, not a missing
                     // field: say which one so the fix is obvious.

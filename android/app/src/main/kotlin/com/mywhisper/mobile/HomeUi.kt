@@ -11,6 +11,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -54,6 +55,63 @@ internal fun useNavigationRail(widthDp: Int, heightDp: Int): Boolean = widthDp >
 internal fun Centered(modifier: Modifier = Modifier, max: androidx.compose.ui.unit.Dp = PAGE_MAX_WIDTH, content: @Composable () -> Unit) {
     Box(modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
         Box(Modifier.widthIn(max = max).fillMaxWidth()) { content() }
+    }
+}
+
+/** Activity list keys above and including the history header: none visible = scrolled into history. */
+internal val ACTIVITY_TOP_KEYS = setOf("float", "issue", "activityHeader", "stats", "heatmap", "historyHeader")
+
+/** History rows per page: the first load and each load-more. */
+internal const val HISTORY_PAGE = 100
+
+/** Daily-activity window wide enough for all history: the fast scroller needs every day's count; the heatmap draws its own trailing weeks. */
+internal const val HISTORY_ALL_DAYS = 36_500
+
+/** Rows to reload on refresh: everything already loaded, rounded up to whole pages, at least one. Pure for unit tests. */
+internal fun historyReloadCount(loaded: Int): Int = ((loaded + HISTORY_PAGE - 1) / HISTORY_PAGE).coerceAtLeast(1) * HISTORY_PAGE
+
+/** Back-to-top always takes this long, however far down the list is. */
+internal const val SCROLL_TOP_MS = 450
+
+/** Beyond this many items, jump closer first so the timed ride stays short and smooth. */
+private const val SCROLL_TOP_NEAR = 12
+
+/**
+ * Scrolls to the top in exactly [SCROLL_TOP_MS]: a far list first jumps to
+ * [SCROLL_TOP_NEAR] items from the top, then eases over the remaining
+ * distance and lands exactly on item 0.
+ */
+internal suspend fun androidx.compose.foundation.lazy.LazyListState.scrollToTopTimed() {
+    if (firstVisibleItemIndex == 0 && firstVisibleItemScrollOffset == 0) return
+    if (firstVisibleItemIndex > SCROLL_TOP_NEAR) scrollToItem(SCROLL_TOP_NEAR, firstVisibleItemScrollOffset)
+    fun remaining(): Float {
+        val visible = layoutInfo.visibleItemsInfo
+        val step = if (visible.isEmpty()) 0f else visible.sumOf { it.size }.toFloat() / visible.size + layoutInfo.mainAxisItemSpacing
+        return firstVisibleItemIndex * step + firstVisibleItemScrollOffset
+    }
+    scroll {
+        var previous = 0f
+        androidx.compose.animation.core.animate(0f, 1f,
+            animationSpec = androidx.compose.animation.core.tween(SCROLL_TOP_MS, easing = androidx.compose.animation.core.FastOutSlowInEasing)) { fraction, _ ->
+            // Items above the viewport are unmeasured (tall overview cards vs short history rows), so a one-off
+            // estimate falls short; re-estimate each frame and spread only what remains over the time that remains.
+            scrollBy(-remaining() * (fraction - previous) / (1f - previous))
+            previous = fraction
+        }
+    }
+    scrollToItem(0)
+}
+
+/** Shown once the list has scrolled past the history header. */
+@Composable
+internal fun BackToTopButton(visible: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    androidx.compose.animation.AnimatedVisibility(visible, modifier,
+        enter = androidx.compose.animation.scaleIn() + androidx.compose.animation.fadeIn(),
+        exit = androidx.compose.animation.scaleOut() + androidx.compose.animation.fadeOut()) {
+        SmallFloatingActionButton(onClick = onClick, containerColor = MaterialTheme.colorScheme.primaryContainer,
+            contentColor = MaterialTheme.colorScheme.onPrimaryContainer) {
+            Icon(Icons.Filled.KeyboardArrowUp, stringResource(R.string.home_back_to_top))
+        }
     }
 }
 
@@ -128,8 +186,9 @@ internal fun historyDayLabel(
     zone: ZoneId,
     todayWord: String,
     yesterdayWord: String,
-): String {
-    val day = Instant.ofEpochSecond(recordedAtSecs).atZone(zone).toLocalDate()
+): String = historyDayLabel(Instant.ofEpochSecond(recordedAtSecs).atZone(zone).toLocalDate(), today, todayWord, yesterdayWord)
+
+internal fun historyDayLabel(day: LocalDate, today: LocalDate, todayWord: String, yesterdayWord: String): String {
     return when (day) {
         today -> todayWord
         today.minusDays(1) -> yesterdayWord

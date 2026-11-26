@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="Theme.MyWhisper" parent="android:Theme.Material.NoActionBar">
-        <item name="android:windowBackground">#121212</item>
+        <!-- Day/night so the launch window matches the system theme; MainActivity then applies the cached app theme. -->
+        <item name="android:windowBackground">@color/mw_window_bg</item>
     </style>
 </resources>

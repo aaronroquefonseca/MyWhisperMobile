@@ -39,6 +39,17 @@
             android:launchMode="singleTop">
         </activity>
 
+        <!-- Settings guide (#125): its own task so only this small window enters
+             picture-in-picture, never MainActivity. -->
+        <activity
+            android:name=".SetupGuideActivity"
+            android:exported="false"
+            android:taskAffinity="${applicationId}.guide"
+            android:excludeFromRecents="true"
+            android:supportsPictureInPicture="true"
+            android:resizeableActivity="true"
+            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation" />
+
         <!-- A separate, no-affinity launcher trampoline keeps alias changes from
              removing the active settings task. Legacy MainActivity shortcuts still work. -->
         <activity android:name=".LauncherActivity" android:exported="false"

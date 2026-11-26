@@ -55,6 +55,29 @@ class PackVerificationUiTest {
     }
 
     @Test
+    fun whilePendingIsReturnedOnlyUntilTheCheckFinishes() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val cache = LocalModelDownload.PackVerifyCache()
+        try {
+            compose.setContent {
+                val verified = rememberVerifiedPack("model", "fp", 0, cache, { "fp" }, { true }, { it }, whilePending = true) {
+                    entered.countDown()
+                    check(release.await(5, TimeUnit.SECONDS))
+                    false
+                }
+                Text(if (verified) "READY" else "BROKEN")
+            }
+            assertTrue(entered.await(5, TimeUnit.SECONDS))
+            compose.onNodeWithText("READY").assertExists()
+            release.countDown()
+            compose.waitUntil(5000) { compose.onAllNodesWithText("BROKEN").fetchSemanticsNodes().isNotEmpty() }
+        } finally {
+            release.countDown()
+        }
+    }
+
+    @Test
     fun recreatedDirectoryIsWatchedAgain() {
         val root = java.nio.file.Files.createTempDirectory("watch").toFile()
         val directory = java.io.File(root, "model").apply { mkdir() }

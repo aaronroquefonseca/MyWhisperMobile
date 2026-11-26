@@ -46,6 +46,7 @@ import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.animateContentSize
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -113,6 +114,7 @@ import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.heading
 import kotlin.math.roundToInt
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -197,6 +199,8 @@ class MainActivity : ComponentActivity() {
      * (onCreate) and warm tap (onNewIntent, singleTop) alike.
      */
     private val deepLinkTab = mutableStateOf<Int?>(null)
+    /** Activity nav item tapped while Activity is open: scroll back to the top. */
+    private val activityScrollTop = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     /** Bumped on resume and focus regain; Activity reloads stats and history on change. */
     private val resumeTick = mutableIntStateOf(0)
 
@@ -216,6 +220,10 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
+        /** Appearance cached in `mw_state` so a cold start paints the right theme before settings load. */
+        internal const val PREF_THEME = "ui_theme"
+        private const val PREF_BLACK = "ui_black_background"
+
         /** Next step when the mic request is denied. Pure for unit tests. */
         internal enum class MicDenyOutcome { RATIONALE, SETTINGS, TRANSIENT }
 
@@ -916,19 +924,18 @@ class MainActivity : ComponentActivity() {
 }"""
     }
 
-    /** Speech language codes (stored code, shown label). */
-    private val langs = listOf(
-        "auto" to "Auto-detect (any language)", "en" to "English", "es" to "Spanish",
-        "de" to "German", "fr" to "French", "it" to "Italian",
-        "pt" to "Portuguese", "nl" to "Dutch", "pl" to "Polish",
-        "ru" to "Russian", "uk" to "Ukrainian", "tr" to "Turkish",
-        "ar" to "Arabic", "hi" to "Hindi", "zh" to "Chinese",
-        "ja" to "Japanese", "ko" to "Korean", "ca" to "Catalan",
-        "gl" to "Galician", "eu" to "Basque", "sv" to "Swedish",
-        "da" to "Danish", "fi" to "Finnish", "no" to "Norwegian",
-        "cs" to "Czech", "ro" to "Romanian", "hu" to "Hungarian",
-        "el" to "Greek",
-    )
+    /** Speech language codes (stored code, shown label in the app's language). */
+    private val langs: List<Pair<String, String>>
+        get() {
+            val appLocale = java.util.Locale.forLanguageTag(getString(R.string.lang_names_locale))
+            return listOf("auto" to getString(R.string.lang_auto)) + listOf(
+                "en", "es", "de", "fr", "it", "pt", "nl", "pl", "ru", "uk", "tr", "ar", "hi", "zh",
+                "ja", "ko", "ca", "gl", "eu", "sv", "da", "fi", "no", "cs", "ro", "hu", "el",
+            ).map { code ->
+                code to java.util.Locale.forLanguageTag(code).getDisplayLanguage(appLocale)
+                    .replaceFirstChar { it.titlecase(appLocale) }
+            }
+        }
 
     private val micPerm = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -963,6 +970,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // A fold recreates this activity: record the panel so foldables get separate screen settings.
+        FoldScreens.observe(this)
         micDeniedBefore = getSharedPreferences("mw_state", MODE_PRIVATE)
             .getBoolean("mic_denied_before", false)
         // One-shot: recreations restore the saved tab (seed null),
@@ -973,7 +982,25 @@ class MainActivity : ComponentActivity() {
         )
         refreshPermStates()
         reload()
+        paintCachedWindowBackground()
         setContent { Root() }
+    }
+
+    /** The window shows before Compose draws: give it the cached theme's background, not the manifest default. */
+    private fun paintCachedWindowBackground() {
+        val prefs = getSharedPreferences("mw_state", MODE_PRIVATE)
+        val dark = when (prefs.getString(PREF_THEME, "System")) {
+            "Light" -> false
+            "Dark" -> true
+            else -> (resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+                android.content.res.Configuration.UI_MODE_NIGHT_YES
+        }
+        val color = when {
+            dark && prefs.getBoolean(PREF_BLACK, false) -> Color.Black
+            dark -> Color(0xFF121416)
+            else -> WhisperLightColors.background
+        }
+        window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(color.toArgb()))
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -987,7 +1014,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        returnHandler.removeCallbacksAndMessages(null)
+        // Back from Settings (by hand or auto-return): stop the poll and close the guide.
+        SettingsGuide.stop()
         refreshPermStates()
         reload()
         resumeTick.intValue++
@@ -1005,7 +1033,6 @@ class MainActivity : ComponentActivity() {
         } catch (_: Exception) {
         }
         multicastLock = null
-        returnHandler.removeCallbacksAndMessages(null)
         // Drop late job results: the generation bump makes stale
         // workers no-ops instead of touching torn-down state.
         settingsGen.incrementAndGet()
@@ -1046,30 +1073,22 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private val returnHandler = android.os.Handler(android.os.Looper.getMainLooper())
-
     /**
-     * Opens a system settings page and brings MyWhisper back as soon as
-     * [granted] turns true, so setup continues without hunting for the app.
-     * Polls every 500 ms for up to 3 minutes; returning by hand cancels it.
-     * Starting from the background is allowed here: by then the overlay
-     * permission is granted.
+     * Opens the system settings page for [step] and comes back on its own once
+     * the change is detected ([SettingsGuide.watch]). Accessibility and restricted
+     * settings get a picture-in-picture guide when the device allows it.
      */
-    private fun openSettingsAndReturn(intent: Intent, granted: () -> Boolean) {
-        returnHandler.removeCallbacksAndMessages(null)
-        startActivity(intent)
-        val deadline = System.currentTimeMillis() + 180_000L
-        val check = object : Runnable {
-            override fun run() {
-                if (try { granted() } catch (_: Exception) { false }) {
-                    startActivity(Intent(this@MainActivity, MainActivity::class.java).addFlags(
-                        Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP))
-                } else if (System.currentTimeMillis() < deadline) {
-                    returnHandler.postDelayed(this, 500L)
-                }
-            }
+    private fun openSettingsAndReturn(step: SettingsGuide.Step) {
+        if (step == SettingsGuide.Step.STATUS_CHANNEL) AppNotificationChannels.ensure(this)
+        // Settings opens in this task, so Back and auto-return behave as without the guide.
+        try {
+            startActivity(SettingsGuide.intent(this, step))
+        } catch (_: android.content.ActivityNotFoundException) {
+            return // Locked-down or OEM Settings without this page: the step's hint line still applies.
         }
-        returnHandler.postDelayed(check, 500L)
+        SettingsGuide.watch(this) { SettingsGuide.granted(this, step) }
+        // The guide opens on top in its own task and shrinks into a corner over Settings.
+        if (SettingsGuide.usesPip(step) && SettingsGuide.pipAllowed(this)) SetupGuideActivity.start(this, step)
     }
 
     private fun openAppSettings() {
@@ -1296,7 +1315,7 @@ class MainActivity : ComponentActivity() {
             600L -> getString(R.string.keep_10min)
             1800L -> getString(R.string.keep_30min)
             LocalKeepWarm.INDEFINITE -> getString(R.string.keep_indefinite)
-            else -> getString(R.string.keep_custom, secs)
+            else -> resources.getQuantityString(R.plurals.keep_custom, secs.toInt(), secs)
         }
 
     private fun thinkLabel(budget: Int): String =
@@ -1492,13 +1511,18 @@ class MainActivity : ComponentActivity() {
             },
         )
         val s = settingsState.value
-        val theme = s?.optJSONObject("preferences")?.optString("theme", "System") ?: "System"
+        // Until settings load, use the appearance cached from the last run: no wrong-theme first frame.
+        val themePrefs = getSharedPreferences("mw_state", MODE_PRIVATE)
+        val prefs = s?.optJSONObject("preferences")
+        val theme = if (s != null) prefs?.optString("theme", "System") ?: "System" else themePrefs.getString(PREF_THEME, "System")!!
+        val black = if (s != null) prefs?.optBoolean("black_background", false) == true else themePrefs.getBoolean(PREF_BLACK, false)
+        if (s != null) LaunchedEffect(theme, black) { themePrefs.edit { putString(PREF_THEME, theme); putBoolean(PREF_BLACK, black) } }
         val dark = when (theme) {
             "Light" -> false
             "Dark" -> true
             else -> androidx.compose.foundation.isSystemInDarkTheme()
         }
-        val colors = animatedColorScheme(whisperColorScheme(dark, black = s?.optJSONObject("preferences")?.optBoolean("black_background", false) == true))
+        val colors = animatedColorScheme(whisperColorScheme(dark, black = black))
         SideEffect {
             WindowCompat.getInsetsController(window, window.decorView).apply {
                 isAppearanceLightStatusBars = !dark
@@ -1572,7 +1596,10 @@ class MainActivity : ComponentActivity() {
                 getString(R.string.tab_dict), getString(R.string.nav_settings))
             val navTargets = listOf(0, 1, 3, 17)
             val navIcons = listOf(R.drawable.ic_nav_activity, R.drawable.ic_voice, R.drawable.ic_library, R.drawable.ic_nav_settings)
-            fun openRoot(index: Int) { tab = if (navTargets[index] == 1) providersTab else navTargets[index] }
+            fun openRoot(index: Int) {
+                if (navTargets[index] == 0 && tab == 0) activityScrollTop.tryEmit(Unit)
+                tab = if (navTargets[index] == 1) providersTab else navTargets[index]
+            }
             // The rail runs the full height beside the Scaffold (header included);
             // the Scaffold skips the start insets the rail already covers.
             Row(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
@@ -1662,7 +1689,9 @@ class MainActivity : ComponentActivity() {
                         })
                         .fillMaxSize(),
                 ) {
-                    if (s == null) {
+                    if (s == null && settingsError.value.isEmpty()) {
+                        LoadingBox()
+                    } else if (s == null) {
                         // Explicit recovery UI: boot/load failures keep
                         // the committed error visible with a retry that
                         // re-runs the generation-aware reload job.
@@ -2254,7 +2283,7 @@ class MainActivity : ComponentActivity() {
         try { LocalModelDownload.packFingerprint(files()) } catch (_: Exception) { null }
 
     @Composable
-    private fun bubbleSetupState(s: JSONObject): BubbleSetupState {
+    private fun bubbleSetupState(s: JSONObject, assumeWhileVerifying: Boolean = false): BubbleSetupState {
         val prefs = getSharedPreferences("mw_state", MODE_PRIVATE)
         val entries = s.optJSONObject("stt")?.optJSONArray("entries")
         val localEnabled = entries?.let {
@@ -2280,6 +2309,7 @@ class MainActivity : ComponentActivity() {
             stillSelected = { LocalStt.selectedEntry(prefs).id == selected.id },
             isVerified = { it.state == LocalModelDownload.RowState.PRESENT },
             verify = { LocalSttModels.inspect(filesDir, selected) },
+            whilePending = assumeWhileVerifying,
         )
 
         return BubbleSetupState(micGranted.value, overlayGranted.value, a11yOn.value,
@@ -2293,12 +2323,7 @@ class MainActivity : ComponentActivity() {
     }
 
     /** True when the always-on status channel is switched off in Android settings. */
-    private fun statusChannelHidden(): Boolean = try {
-        val nm = getSystemService(android.app.NotificationManager::class.java)
-        nm?.getNotificationChannel(NotifPolicy.UNIFIED_CHANNEL)?.importance == android.app.NotificationManager.IMPORTANCE_NONE
-    } catch (_: Exception) {
-        false
-    }
+    private fun statusChannelHidden(): Boolean = SettingsGuide.granted(this, SettingsGuide.Step.STATUS_CHANNEL)
 
     /**
      * First run: welcome, button setup (required: the pager stops there until
@@ -2411,18 +2436,21 @@ class MainActivity : ComponentActivity() {
                     !setup.overlay -> {
                         Text(getString(R.string.task_overlay_reason))
                         Spacer(Modifier.height(8.dp))
-                        Button(onClick = {
-                            openSettingsAndReturn(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))) {
-                                Settings.canDrawOverlays(this@MainActivity)
-                            }
-                        }) { Text(getString(R.string.setup_float_overlay)) }
+                        Button(onClick = { openSettingsAndReturn(SettingsGuide.Step.OVERLAY) }) { Text(getString(R.string.setup_float_overlay)) }
+                        SettingsHint(R.string.guide_hint_overlay)
                     }
                     !setup.dictationService -> {
                         Text(getString(R.string.control_service_help))
                         Spacer(Modifier.height(8.dp))
-                        Button(onClick = {
-                            openSettingsAndReturn(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) { MyWhisperAccessibility.isOn(this@MainActivity) }
-                        }) { Text(getString(R.string.setup_float_a11y)) }
+                        Button(onClick = { openSettingsAndReturn(SettingsGuide.Step.ACCESSIBILITY) }) { Text(getString(R.string.setup_float_a11y)) }
+                        // Without picture-in-picture the guide's reassurance moves here.
+                        if (!SettingsGuide.pipAllowed(this@MainActivity)) SettingsHint(R.string.guide_hint_a11y)
+                        if (SettingsGuide.restrictedLikely(this@MainActivity)) {
+                            TextButton(onClick = { openSettingsAndReturn(SettingsGuide.Step.RESTRICTED) }) {
+                                Text(getString(R.string.guide_restricted_link))
+                            }
+                            SettingsHint(R.string.guide_hint_restricted)
+                        }
                     }
                     else -> Text(getString(R.string.onb_setup_complete), color = MaterialTheme.colorScheme.primary)
                 }
@@ -2517,9 +2545,10 @@ class MainActivity : ComponentActivity() {
                     if (hidden) {
                         Text("✓ " + getString(R.string.onb_notif_quiet_done), color = MaterialTheme.colorScheme.primary)
                     } else {
-                        OutlinedButton(onClick = { openNotificationChannel(NotifPolicy.UNIFIED_CHANNEL) }) {
+                        OutlinedButton(onClick = { openSettingsAndReturn(SettingsGuide.Step.STATUS_CHANNEL) }) {
                             Text(getString(R.string.onb_notif_quiet_action))
                         }
+                        SettingsHint(R.string.guide_hint_channel)
                     }
                 }
             }
@@ -2545,9 +2574,35 @@ class MainActivity : ComponentActivity() {
                     })
                 }
                 TextButton(onClick = onBehavior) { Text(getString(R.string.setup_mic_button)) }
+                // Foldables (#113): optional separate settings per screen. Off = one shared set, as before.
+                val foldable = remember { FoldScreens.supported(setupPrefs) }
+                var split by remember { mutableStateOf(foldable && FoldScreens.split(setupPrefs)) }
+                // Per-screen settings edit the screen in use, so the preview matches the real button.
+                // The activity is recreated on fold/unfold, so this stays current.
+                val screen = remember { FoldScreens.current(this@MainActivity) }
+                val screenKey: (String) -> String = { FoldScreens.key(it, screen, split) }
+                if (foldable) {
+                    SplitScreensSetting(split) {
+                        split = it
+                        FoldScreens.setSplit(setupPrefs, it)
+                        OverlayService.start(this@MainActivity)
+                    }
+                }
+                if (split) {
+                    val inner = screen == FoldScreens.Screen.INNER
+                    Text(stringResource(if (inner) R.string.fold_inner else R.string.fold_cover), style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(top = 8.dp).semantics { heading() })
+                    Text(stringResource(if (inner) R.string.fold_to_cover else R.string.fold_to_inner), style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
                 // Optional grip (default off): the mic drags itself.
-                var grab by remember {
-                    mutableStateOf(setupPrefs.getBoolean("float_grab", false))
+                val grabKey = screenKey("float_grab")
+                var grab by remember(grabKey) {
+                    mutableStateOf(setupPrefs.getBoolean(grabKey, false))
+                }
+                // Grab point on the other screen, for the hold-delay hint below.
+                val otherGrab = remember(grab, screen, split) {
+                    setupPrefs.getBoolean(FoldScreens.key("float_grab", FoldScreens.other(screen), split), false)
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
@@ -2557,7 +2612,7 @@ class MainActivity : ComponentActivity() {
                     FeedbackSwitch(modifier = Modifier.semantics { contentDescription = getString(R.string.setup_float_grab) }, checked = grab, onCheckedChange = {
                         grab = it
                         // Keep the stored idle choice; dot choices pause while the grip is on and return after.
-                        setupPrefs.edit { putBoolean("float_grab", it) }
+                        setupPrefs.edit { putBoolean(grabKey, it) }
                         // Rebuild the bubble chrome for the new mode.
                         OverlayService.start(this@MainActivity)
                     })
@@ -2567,7 +2622,17 @@ class MainActivity : ComponentActivity() {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                BubbleAppearanceSettings(setupPrefs, grab) { OverlayService.start(this@MainActivity) }
+                BubbleAppearanceSettings(setupPrefs, grab, screenKey) { OverlayService.start(this@MainActivity) }
+                if (split) {
+                    // Idle delay is per screen, so it leaves Advanced while the screens are separate.
+                    Spacer(Modifier.height(8.dp))
+                    IdleDelaySetting(setupPrefs, grab, screenKey) { OverlayService.start(this@MainActivity) }
+                    Spacer(Modifier.height(8.dp))
+                    PositionSetting(setupPrefs, screenKey) { OverlayService.start(this@MainActivity) }
+                    HorizontalDivider(Modifier.padding(top = 16.dp, bottom = 8.dp))
+                    Text(stringResource(R.string.fold_both), style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(bottom = 8.dp).semantics { heading() })
+                }
                 var upperLock by remember { mutableStateOf(setupPrefs.getBoolean("float_lock_enabled", true)) }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(stringResource(R.string.float_lock_enabled), modifier = Modifier.weight(1f))
@@ -2641,13 +2706,22 @@ class MainActivity : ComponentActivity() {
                         setupPrefs.edit { putInt("float_snooze_minutes", snoozeMinutes) }
                     }
                     ButtonShapeSetting(setupPrefs) { OverlayService.start(this@MainActivity) }
-                    Spacer(Modifier.height(8.dp))
-                    IdleDelaySetting(setupPrefs, grab) { OverlayService.start(this@MainActivity) }
+                    if (!split) {
+                        Spacer(Modifier.height(8.dp))
+                        IdleDelaySetting(setupPrefs, grab) { OverlayService.start(this@MainActivity) }
+                    }
                     run {
                         // No grip: a finger that stays put this long records;
                         // moving sooner means a drag (never a dictation).
                         // With the grip it does not apply: greyed out (value kept) instead of hidden, so nothing jumps.
-                        val delayAlpha = if (grab) 0.38f else 1f
+                        // Separate screens with Grab point on only one: the delay applies on the other one.
+                        val grabEverywhere = grab && (!split || otherGrab)
+                        val delayHint = when {
+                            !split || grab == otherGrab -> null
+                            (if (grab) FoldScreens.other(screen) else screen) == FoldScreens.Screen.COVER -> R.string.setup_float_delay_cover_only
+                            else -> R.string.setup_float_delay_inner_only
+                        }
+                        val delayAlpha = if (grabEverywhere) 0.38f else 1f
                         var delayMs by remember {
                             mutableIntStateOf(
                                 FloatState.pressDelayMs(
@@ -2668,7 +2742,7 @@ class MainActivity : ComponentActivity() {
                             value = delayOptions.indexOf(delayMs).coerceAtLeast(0).toFloat(),
                             valueRange = 0f..delayOptions.lastIndex.toFloat(),
                             steps = delayOptions.size - 2,
-                            enabled = !grab,
+                            enabled = !grabEverywhere,
                             onValueChange = {
                                 val next = delayOptions[it.roundToInt().coerceIn(delayOptions.indices)]
                                 if (next != delayMs) {
@@ -2682,13 +2756,21 @@ class MainActivity : ComponentActivity() {
                                 OverlayService.start(this@MainActivity)
                             },
                         )
-                        StableText(listOf(stringResource(R.string.setup_float_delay_sub), stringResource(R.string.setup_float_delay_off)),
-                            if (grab) 1 else 0, style = MaterialTheme.typography.bodySmall,
+                        StableText(listOf(stringResource(R.string.setup_float_delay_sub), stringResource(R.string.setup_float_delay_off)) +
+                            listOfNotNull(delayHint?.let { stringResource(it) }),
+                            if (delayHint != null) 2 else if (grabEverywhere) 1 else 0, style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
         }
+    }
+
+    /** One line before a Settings jump: what to toggle, and that the app comes back by itself. */
+    @Composable
+    private fun SettingsHint(text: Int) {
+        Text(getString(text), Modifier.padding(top = 6.dp), style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 
     private fun openNotificationChannel(channel: String) {
@@ -2719,7 +2801,9 @@ class MainActivity : ComponentActivity() {
                     openNotificationChannel(AppNotificationChannels.FLOAT_CONTROLS)
                 }
                 DestinationRow(getString(R.string.ux_hide_updates_title), getString(R.string.ux_hide_updates_help)) {
-                    openNotificationChannel(NotifPolicy.UNIFIED_CHANNEL)
+                    // Auto-return only toward hiding; already hidden means the user is here to undo it.
+                    if (statusChannelHidden()) openNotificationChannel(NotifPolicy.UNIFIED_CHANNEL)
+                    else openSettingsAndReturn(SettingsGuide.Step.STATUS_CHANNEL)
                 }
             }
         }
@@ -3448,11 +3532,16 @@ class MainActivity : ComponentActivity() {
                                     )
                                 }
                             }
-                            Text(
-                                m.runtimeNote,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                            if (m.freeRamMb > 0) {
+                                Text(
+                                    stringResource(
+                                        R.string.stt_needs_free_ram,
+                                        android.text.format.Formatter.formatShortFileSize(this@MainActivity, m.freeRamMb * 1_000_000L),
+                                    ),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                             // Measured speed: last-decode ×realtime on
                             // THIS phone (per-model float in mw_state),
                             // else the neutral pre-first-run copy. No
@@ -4355,15 +4444,14 @@ class MainActivity : ComponentActivity() {
                 var expanded by remember { mutableStateOf(false) }
                 var editor by remember { mutableStateOf(false) }
                 Text(
-                    if (isDefault) "Using the built-in default prompt."
-                    else "Using your customized prompt.",
+                    stringResource(if (isDefault) R.string.cleanup_default_state else R.string.cleanup_custom_state),
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 if (promptFailed) {
                     // Explicit recovery UI for the async prompt job.
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            "Couldn't load the built-in prompt.",
+                            stringResource(R.string.cleanup_prompt_load_failed),
                             color = MaterialTheme.colorScheme.error,
                             style = MaterialTheme.typography.bodySmall,
                             modifier = Modifier.weight(1f),
@@ -4421,7 +4509,7 @@ class MainActivity : ComponentActivity() {
                                     .verticalScroll(rememberScrollState()),
                             ) {
                                 Text(
-                                    "Saved as your custom prompt. Reset returns to the built-in default.",
+                                    stringResource(R.string.cleanup_dialog_note),
                                     style = MaterialTheme.typography.bodySmall,
                                 )
                                 Spacer(Modifier.height(4.dp))
@@ -5493,13 +5581,36 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun StatCard(label: String, value: String, caption: String, modifier: Modifier = Modifier) {
+    private fun StatCard(label: String, value: String?, caption: String, modifier: Modifier = Modifier) {
         Surface(modifier = modifier, shape = MaterialTheme.shapes.extraLarge, color = MaterialTheme.colorScheme.surfaceContainerLow) {
             Column(modifier = Modifier.padding(14.dp)) {
                 Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(value, style = MaterialTheme.typography.headlineSmall)
+                // null: still loading. A pulsing bar at the number's height, not a misleading 0.
+                if (value == null) LoadingBar(Modifier.padding(vertical = 6.dp).width(56.dp).height(20.dp))
+                else Text(value, style = MaterialTheme.typography.headlineSmall)
                 Text(caption, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+        }
+    }
+
+    /** Skeleton placeholder: a softly pulsing block where content is still loading. */
+    @Composable
+    private fun LoadingBar(modifier: Modifier = Modifier) {
+        val pulse by androidx.compose.animation.core.rememberInfiniteTransition(label = "loading").animateFloat(
+            0.35f, 0.8f,
+            androidx.compose.animation.core.infiniteRepeatable(
+                androidx.compose.animation.core.tween(700), androidx.compose.animation.core.RepeatMode.Reverse),
+            label = "pulse",
+        )
+        Box(modifier.graphicsLayer { alpha = pulse }
+            .background(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.shapes.small))
+    }
+
+    /** Centered spinner for a section whose data has not arrived yet. */
+    @Composable
+    private fun LoadingBox(modifier: Modifier = Modifier) {
+        Box(modifier.fillMaxWidth().padding(vertical = 24.dp), contentAlignment = Alignment.Center) {
+            androidx.compose.material3.CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 3.dp)
         }
     }
 
@@ -5668,6 +5779,12 @@ class MainActivity : ComponentActivity() {
         var statsErr by remember { mutableStateOf("") }
         var statsVersion by remember { mutableIntStateOf(0) }
         var items by remember { mutableStateOf(emptyList<Hist>()) }
+        // False until the first history load lands: an empty list means "loading", not "no history".
+        var histLoaded by remember { mutableStateOf(false) }
+        var hasMore by remember { mutableStateOf(false) }
+        var loadingMore by remember { mutableStateOf(false) }
+        // Advances whenever a page load or reload ends, success or not (the fast scroller waits on it).
+        var pagingDone by remember { mutableIntStateOf(0) }
         var confirmClear by remember { mutableStateOf(false) }
         var privOpen by rememberSaveable { mutableStateOf(false) }
         var expanded by rememberSaveable { mutableStateOf<String?>(null) }
@@ -5680,7 +5797,7 @@ class MainActivity : ComponentActivity() {
             workers.execute {
                 try {
                     val st = CoreBridge.usageStats().getOrThrow()
-                    val arr = CoreBridge.dailyActivity(371).getOrThrow()
+                    val arr = CoreBridge.dailyActivity(HISTORY_ALL_DAYS).getOrThrow()
                     val d = List(arr.length()) { i ->
                         val o = arr.getJSONObject(i)
                         Day(o.getLong("dayStart"), o.getInt("words"), o.getInt("utterances"))
@@ -5702,16 +5819,22 @@ class MainActivity : ComponentActivity() {
         // Generation-aware history jobs (desktop reset parity): each op
         // runs off-thread, then reflects the committed store state; stale
         // generations drop, failures keep an explicit retryable error.
-        fun histJob(work: () -> Unit, onOk: () -> Unit = {}, onFail: (String) -> Unit = {}) {
+        fun histJob(work: () -> Unit, reset: Boolean = false, onOk: () -> Unit = {}, onFail: (String) -> Unit = {}) {
             val gen = CoreBridge.SettingsJobs.nextJobGen(histGen.get()).also { histGen.set(it) }
             histBusy.value = true
+            // Reload what is already loaded (scroll position survives); a new search starts over.
+            val want = if (reset) HISTORY_PAGE else historyReloadCount(items.size)
+            val query = histQuery.trim()
             workers.execute {
                 try {
                     work()
-                    val committed = loadHistThrowing()
+                    val committed = loadHistPage(want, null, query)
                     runOnUiThread {
                         if (!jobApplies(histGen.get(), gen)) return@runOnUiThread
+                        pagingDone++
                         items = committed
+                        histLoaded = true
+                        hasMore = committed.size == want
                         histError.value = ""
                         histBusy.value = false
                         onOk()
@@ -5719,27 +5842,68 @@ class MainActivity : ComponentActivity() {
                 } catch (e: Exception) {
                     runOnUiThread {
                         if (!jobApplies(histGen.get(), gen)) return@runOnUiThread
+                        pagingDone++
                         histError.value = e.message ?: "failed"
+                        histLoaded = true
                         histBusy.value = false
                         onFail(e.message ?: "failed")
                     }
                 }
             }
         }
-        fun refreshHist() = histJob({})
+        /** False when refused: nothing loaded, no more rows, or paging busy. */
+        fun loadMore(count: Int = HISTORY_PAGE): Boolean {
+            val last = items.lastOrNull() ?: return false
+            if (!hasMore || loadingMore || histBusy.value) return false
+            loadingMore = true
+            val gen = histGen.get()
+            val query = histQuery.trim()
+            workers.execute {
+                val page = try { loadHistPage(count, last, query) } catch (_: Exception) { null }
+                runOnUiThread {
+                    loadingMore = false
+                    pagingDone++
+                    // A refresh or new search since then owns the list.
+                    if (page == null || histGen.get() != gen) return@runOnUiThread
+                    val known = items.mapTo(HashSet()) { it.uuid }
+                    items = items + page.filter { it.uuid !in known }
+                    hasMore = page.size == count
+                }
+            }
+            return true
+        }
         fun purgeHist(n: Int) {
             var purged = 0
             histJob({ purged = CoreBridge.purgeHistory(n).getOrThrow(); kickSync() },
-                onOk = { statsVersion++; bgToast(getString(R.string.hist_purged, purged)) },
+                onOk = { statsVersion++; bgToast(resources.getQuantityString(R.plurals.hist_purged, purged, purged)) },
                 onFail = { bgToast(getString(R.string.hist_purge_failed, it)) })
         }
+        // The engine purges only on open and after a dictation, so History applies the
+        // committed auto-delete setting itself (0 = keep). Read on the worker: after any queued save.
+        fun applyRetention() = histJob({
+            val days = CoreBridge.getSettings().getOrNull()?.optJSONObject("privacy")
+                ?.optInt("transcript_auto_delete_days", 0) ?: 0
+            if (days > 0 && CoreBridge.purgeHistory(days).getOrThrow() > 0) {
+                kickSync()
+                // Not onOk: a newer history job (search) would drop it, leaving stats stale.
+                runOnUiThread { statsVersion++ }
+            }
+        })
         fun clearHist() = histJob({ CoreBridge.dataOf(CoreBridge.nativeClearHistory()); kickSync() },
             onOk = { statsVersion++; toast(getString(R.string.hist_cleared)) },
             onFail = { toast(getString(R.string.hist_clear_failed, it)) })
         fun deleteHist(uuid: String) = histJob({ CoreBridge.dataOf(CoreBridge.nativeDeleteHistory(uuid)); kickSync() },
             onOk = { statsVersion++; if (expanded == uuid) expanded = null },
             onFail = { toast(getString(R.string.hist_delete_failed, it)) })
-        LaunchedEffect(tick) { refreshHist() }
+        LaunchedEffect(tick) { applyRetention() }
+        // Search runs in the database (all history, not just loaded pages), debounced.
+        var searched by remember { mutableStateOf(histQuery) }
+        LaunchedEffect(histQuery) {
+            if (histQuery == searched) return@LaunchedEffect
+            delay(250)
+            searched = histQuery
+            histJob({}, reset = true)
+        }
 
         val statePrefs = getSharedPreferences("mw_state", MODE_PRIVATE)
         var issueKind by remember { mutableStateOf(statePrefs.getString(DictationIssue.PREF_KIND, null)) }
@@ -5757,22 +5921,21 @@ class MainActivity : ComponentActivity() {
 
         // Hoisted out of the list: computed in a lazy item, the async pack check
         // restarts each time the card scrolls back in and its height jumps.
-        val setup = bubbleSetupState(s)
+        // The cold-start hash check takes seconds: don't flash "no speech" meanwhile.
+        val setup = bubbleSetupState(s, assumeWhileVerifying = true)
         val zone = remember { java.time.ZoneId.systemDefault() }
         val today = java.time.LocalDate.now(zone)
         val todayWord = getString(R.string.home_today)
         val yesterdayWord = getString(R.string.home_yesterday)
-        val shown = remember(items, histQuery) {
-            items.filter { h -> histQuery.isBlank() || h.text.contains(histQuery, ignoreCase = true) || h.rawText.contains(histQuery, ignoreCase = true) }
-        }
-        val grouped = remember(shown, today) {
-            shown.groupBy { historyDayLabel(it.recordedAt, today, zone, todayWord, yesterdayWord) }
+        val grouped = remember(items, today) {
+            items.groupBy { historyDayLabel(it.recordedAt, today, zone, todayWord, yesterdayWord) }
         }
         val priv = s.optJSONObject("privacy") ?: JSONObject().also { s.put("privacy", it) }
         // Toggles write into [priv] before the committed reload lands; this re-reads them now.
         var privVersion by remember { mutableIntStateOf(0) }
         // Overview (button, problems, stats) and history: one list on narrow
         // windows, two independently scrolling panes on wide ones.
+        val statsLoading = stats == null && statsErr.isEmpty()
         val overview: androidx.compose.foundation.lazy.LazyListScope.() -> Unit = {
             item(key = "float") { FloatingButtonQuick(s, setup, onNavigate, onOpenProviders) }
             val kind = issueKind
@@ -5812,13 +5975,14 @@ class MainActivity : ComponentActivity() {
                 val w = stats?.optLong("wordsSpoken", 0L) ?: 0L
                 val wpm = stats?.optDouble("wordsPerMinute", 0.0) ?: 0.0
                 val streak = stats?.optInt("streakDays", 0) ?: 0
+                fun <T> shown(v: T): T? = if (statsLoading) null else v
                 val cards: List<@Composable (Modifier) -> Unit> = listOf(
-                    { m -> StatCard(stringResource(R.string.act_words), compactWords(w), stringResource(R.string.act_saved), m) },
-                    { m -> StatCard(stringResource(R.string.act_wpm), if (wpm > 0) "${wpm.toInt()}" else stringResource(R.string.act_wpm_none),
+                    { m -> StatCard(stringResource(R.string.act_words), shown(compactWords(w)), stringResource(R.string.act_saved), m) },
+                    { m -> StatCard(stringResource(R.string.act_wpm), shown(if (wpm > 0) "${wpm.toInt()}" else stringResource(R.string.act_wpm_none)),
                         stringResource(R.string.act_wpm_cap), m) },
-                    { m -> StatCard(stringResource(R.string.act_dictations), "$u", stringResource(R.string.act_saved), m) },
+                    { m -> StatCard(stringResource(R.string.act_dictations), shown("$u"), stringResource(R.string.act_saved), m) },
                     { m -> StatCard(stringResource(R.string.act_streak),
-                        if (streak == 1) stringResource(R.string.act_streak_one) else stringResource(R.string.act_streak_n, streak),
+                        shown(if (streak == 1) stringResource(R.string.act_streak_one) else stringResource(R.string.act_streak_n, streak)),
                         stringResource(R.string.act_streak_cap), m) },
                 )
                 androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth()) {
@@ -5846,7 +6010,9 @@ class MainActivity : ComponentActivity() {
                         if (statsErr.isNotEmpty()) {
                             Text(statsErr, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                         }
-                        if (days.isEmpty()) {
+                        if (statsLoading) {
+                            LoadingBar(Modifier.fillMaxWidth().height(96.dp))
+                        } else if (days.isEmpty()) {
                             Text(stringResource(R.string.act_empty), style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant)
                         } else {
@@ -5888,7 +6054,10 @@ class MainActivity : ComponentActivity() {
                         Text(stringResource(R.string.home_history_hint), style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    Text(stringResource(R.string.hist_count, items.size), style = MaterialTheme.typography.labelMedium,
+                    // Total from stats: the list only holds the pages loaded so far.
+                    val total = stats?.optLong("dictations", -1L)?.takeIf { it >= 0 && histQuery.isBlank() }?.toInt()
+                        ?: items.size.takeIf { histLoaded }
+                    if (total != null) Text(resources.getQuantityString(R.plurals.hist_count, total, total), style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
@@ -5916,6 +6085,8 @@ class MainActivity : ComponentActivity() {
                             TextButton(onClick = {
                                 priv.put("transcript_auto_delete_days", daysStr.toIntOrNull() ?: 0)
                                 save()
+                                // Queued behind the save on the same worker; applies whatever committed.
+                                applyRetention()
                             }) { Text(stringResource(R.string.action_save)) }
                             TextButton(onClick = {
                                 val n = daysStr.toIntOrNull() ?: 0
@@ -5949,9 +6120,12 @@ class MainActivity : ComponentActivity() {
                 // The next resume / focus regain retries the load.
                 Text(histError.value, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             }
-            if (shown.isEmpty()) item(key = "histEmpty") {
-                Text(
-                    stringResource(if (items.isEmpty()) R.string.home_history_empty else R.string.dict_no_match),
+            if (items.isEmpty()) item(key = "histEmpty") {
+                // Skeleton rows shaped like history entries, pulsing like the stat cards.
+                if (!histLoaded) Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    repeat(3) { LoadingBar(Modifier.fillMaxWidth().height(64.dp)) }
+                } else Text(
+                    stringResource(if (histQuery.isBlank()) R.string.home_history_empty else R.string.dict_no_match),
                     Modifier.fillMaxWidth().padding(vertical = 24.dp),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -5964,7 +6138,7 @@ class MainActivity : ComponentActivity() {
                     HistoryEntryCard(
                         text = h.text,
                         original = h.rawText,
-                        meta = historyTimeLabel(h.recordedAt, zone) + " · " + getString(R.string.hist_words, h.words),
+                        meta = historyTimeLabel(h.recordedAt, zone) + " · " + resources.getQuantityString(R.plurals.hist_words, h.words, h.words),
                         expanded = expanded == h.uuid,
                         busy = histBusy.value,
                         onCopy = { copyText(h.text, getString(R.string.home_copied)) },
@@ -5974,22 +6148,98 @@ class MainActivity : ComponentActivity() {
                     )
                 }
             }
+            if (loadingMore) item(key = "loadingMore") {
+                Box(Modifier.fillMaxWidth().padding(vertical = 12.dp), contentAlignment = Alignment.Center) {
+                    androidx.compose.material3.CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+                }
+            }
         }
+        // Fast scroller rows: each day header plus its entries, in list order. The
+        // history section starts after the overview items (single list only), then
+        // historyHeader, privacy, search and the optional error / empty rows.
+        val rowLabels = remember(grouped) { grouped.flatMap { (label, group) -> List(group.size + 1) { label } } }
+        // Plus the unloaded rest from per-day counts, so the thumb holds still as pages
+        // load. Search results have no per-day counts: those map loaded rows only.
+        val scrollerRows = remember(rowLabels, days, hasMore, histQuery.isBlank(), today) {
+            if (!hasMore || histQuery.isNotBlank()) rowLabels
+            else historyScrollerRows(
+                rowLabels,
+                items.lastOrNull()?.let { java.time.Instant.ofEpochSecond(it.recordedAt).atZone(zone).toLocalDate() },
+                grouped.values.lastOrNull()?.size ?: 0,
+                days.map { java.time.LocalDate.ofEpochDay(it.dayStart / 86400) to it.utterances },
+            ) { historyDayLabel(it, today, todayWord, yesterdayWord) }
+        }
+        // Whole pages through the entry at [row] (day headers are not entries).
+        val loadThrough: (Int) -> Int? = { row ->
+            // Live counter, not the composed one: a page may have ended since this frame.
+            if (loadMore((historyReloadCount(historyEntriesThrough(scrollerRows, row)) - items.size).coerceAtLeast(HISTORY_PAGE))) pagingDone else null
+        }
+        val historyLead = 3 + (if (histError.value.isNotEmpty()) 1 else 0) + (if (items.isEmpty()) 1 else 0)
+        val overviewCount = 4 + (if (issueKind != null) 1 else 0)
+        val scrollerPadding = Modifier.padding(top = 8.dp, bottom = 72.dp)
         val listPadding = androidx.compose.foundation.layout.PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 24.dp)
+        val singleState = androidx.compose.foundation.lazy.rememberLazyListState()
+        val overviewState = androidx.compose.foundation.lazy.rememberLazyListState()
+        val historyState = androidx.compose.foundation.lazy.rememberLazyListState()
+        val scope = androidx.compose.runtime.rememberCoroutineScope()
+        // Wires one list that holds history: loads the next page near the end, and
+        // reports when the history header has scrolled off the top (back-to-top button).
+        @Composable
+        fun historyList(state: androidx.compose.foundation.lazy.LazyListState): Boolean {
+            LaunchedEffect(state) {
+                // Emits the item count while near the end, so each grown list asks again.
+                androidx.compose.runtime.snapshotFlow {
+                    val info = state.layoutInfo
+                    val nearEnd = (info.visibleItemsInfo.lastOrNull()?.index ?: 0) >= info.totalItemsCount - 15
+                    if (nearEnd) info.totalItemsCount else -1
+                }.collect { if (it >= 0) loadMore() }
+            }
+            val pastHeader by remember(state) {
+                androidx.compose.runtime.derivedStateOf {
+                    val visible = state.layoutInfo.visibleItemsInfo
+                    visible.isNotEmpty() && visible.none { it.key in ACTIVITY_TOP_KEYS }
+                }
+            }
+            return pastHeader
+        }
         androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize()) {
             if (maxWidth >= TWO_PANE_MIN_WIDTH) {
+                val showTop = historyList(historyState)
+                LaunchedEffect(Unit) {
+                    activityScrollTop.collect {
+                        launch { overviewState.scrollToTopTimed() }
+                        launch { historyState.scrollToTopTimed() }
+                    }
+                }
                 Row(Modifier.fillMaxSize()) {
-                    LazyColumn(Modifier.weight(0.42f).fillMaxHeight(), contentPadding = listPadding,
+                    LazyColumn(Modifier.weight(0.42f).fillMaxHeight(), state = overviewState, contentPadding = listPadding,
                         verticalArrangement = Arrangement.spacedBy(8.dp)) { overview() }
-                    LazyColumn(Modifier.weight(0.58f).fillMaxHeight(), contentPadding = listPadding,
-                        verticalArrangement = Arrangement.spacedBy(8.dp)) { history(true) }
+                    Box(Modifier.weight(0.58f).fillMaxHeight()) {
+                        LazyColumn(Modifier.fillMaxSize(), state = historyState, contentPadding = listPadding,
+                            verticalArrangement = Arrangement.spacedBy(8.dp)) { history(true) }
+                        // Keyed by query: a new search resets a pending drop and the drag handler with it.
+                        androidx.compose.runtime.key(histQuery.trim()) {
+                            HistoryFastScroller(historyState, historyLead, scrollerRows, rowLabels.size, hasMore, loadThrough, pagingDone, showTop,
+                                Modifier.align(Alignment.TopEnd).then(scrollerPadding))
+                        }
+                        BackToTopButton(showTop, { scope.launch { historyState.scrollToTopTimed() } },
+                            Modifier.align(Alignment.BottomEnd).padding(16.dp))
+                    }
                 }
             } else {
-                LazyColumn(Modifier.fillMaxSize(), contentPadding = listPadding,
+                val showTop = historyList(singleState)
+                LaunchedEffect(Unit) { activityScrollTop.collect { launch { singleState.scrollToTopTimed() } } }
+                LazyColumn(Modifier.fillMaxSize(), state = singleState, contentPadding = listPadding,
                     verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     overview()
                     history(false)
                 }
+                androidx.compose.runtime.key(histQuery.trim()) {
+                    HistoryFastScroller(singleState, overviewCount + historyLead, scrollerRows, rowLabels.size, hasMore, loadThrough, pagingDone, showTop,
+                        Modifier.align(Alignment.TopEnd).then(scrollerPadding))
+                }
+                BackToTopButton(showTop, { scope.launch { singleState.scrollToTopTimed() } },
+                    Modifier.align(Alignment.BottomEnd).padding(16.dp))
             }
         }
         if (confirmClear) {
@@ -6007,9 +6257,9 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** Throwing history load so jobs can keep a retryable error state. */
-    private fun loadHistThrowing(): List<Hist> {
-        val raw = CoreBridge.nativeGetHistory(200)
+    /** One history page (throws, so jobs keep a retryable error); [before] = last row already shown. */
+    private fun loadHistPage(limit: Int, before: Hist?, query: String): List<Hist> {
+        val raw = CoreBridge.nativeGetHistoryPage(limit, before?.recordedAt ?: 0L, before?.uuid.orEmpty(), query)
         val arr = JSONArray(raw)
         return List(arr.length()) { i ->
             val o = arr.getJSONObject(i)
@@ -6046,13 +6296,13 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun agoText(epochSecs: Long): String {
-        if (epochSecs <= 0) return "never"
+        if (epochSecs <= 0) return getString(R.string.sync_ago_never)
         val dt = System.currentTimeMillis() / 1000 - epochSecs
         return when {
-            dt < 60 -> "just now"
-            dt < 3600 -> "${dt / 60} min ago"
-            dt < 86400 -> "${dt / 3600} h ago"
-            else -> "${dt / 86400} d ago"
+            dt < 60 -> getString(R.string.sync_ago_now)
+            dt < 3600 -> getString(R.string.sync_ago_min, dt / 60)
+            dt < 86400 -> getString(R.string.sync_ago_h, dt / 3600)
+            else -> getString(R.string.sync_ago_d, dt / 86400)
         }
     }
 
@@ -6166,7 +6416,7 @@ class MainActivity : ComponentActivity() {
                         val shown = displayName.ifEmpty { status?.optString("nodeId", "")?.take(12) + "…" }
 getString(R.string.sync_running, shown)
                     } else {
-                        pendingCopy ?: "Sync stopped."
+                        pendingCopy ?: stringResource(R.string.sync_stopped)
                     },
                     style = MaterialTheme.typography.bodyMedium,
                 )
@@ -6194,7 +6444,7 @@ getString(R.string.sync_running, shown)
                     Column(modifier = Modifier.weight(1f)) {
                         Text(stringResource(R.string.sync_advertise))
                         Text(
-                            "Off = invisible, still sees others.",
+                            stringResource(R.string.sync_advertise_sub),
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
@@ -6222,7 +6472,7 @@ getString(R.string.sync_running, shown)
                     Column(modifier = Modifier.weight(1f)) {
                         Text(stringResource(R.string.sync_boot))
                         Text(
-                            "Relaunch sync after reboot when enabled.",
+                            stringResource(R.string.sync_boot_sub),
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
@@ -6274,7 +6524,7 @@ getString(R.string.sync_running, shown)
                     OutlinedButton(
                         enabled = running && busy.isEmpty(),
                         onClick = {
-                            busy = "syncing…"
+                            busy = getString(R.string.sync_syncing)
                             workers.execute {
                                 try {
                                     val lines = CoreBridge.syncAllNow().getOrThrow()
@@ -6286,7 +6536,7 @@ getString(R.string.sync_running, shown)
                                 runOnUiThread { refresh() }
                             }
                         },
-                    ) { Text(if (busy.isEmpty()) "Sync now" else busy) }
+                    ) { Text(busy.ifEmpty { stringResource(R.string.action_sync_now) }) }
                 }
                 val reports = status?.optJSONArray("reports")
                 if (reports != null && reports.length() > 0) {
@@ -6311,15 +6561,15 @@ getString(R.string.sync_running, shown)
                     PeerRow(
                         p,
                         note = notes[id],
-                        lastSync = "last sync ${agoText(p.optLong("lastSync", 0))}",
+                        lastSync = getString(R.string.sync_lastsync, agoText(p.optLong("lastSync", 0))),
                         onSync = {
-                            busy = "syncing…"
+                            busy = getString(R.string.sync_syncing)
                             workers.execute {
                                 try {
                                     val msg = CoreBridge.syncNow(id).getOrThrow()
                                     runOnUiThread { note(id, msg) }
                                 } catch (e: Exception) {
-                                    runOnUiThread { note(id, "sync failed: ${e.message}") }
+                                    runOnUiThread { note(id, getString(R.string.sync_failed, e.message)) }
                                 }
                                 busy = ""
                                 runOnUiThread { refresh() }
@@ -6359,10 +6609,9 @@ getString(R.string.sync_running, shown)
                     )
                 }
             }
-            Section("Waiting for response (${waiting.size})") {
+            Section(stringResource(R.string.sync_waiting_title, waiting.size)) {
                 if (waiting.isNotEmpty()) Text(
-                    "You sent a pairing request. Accept it on the other device; " +
-                        "no action needed here except cancel.",
+                    stringResource(R.string.sync_waiting_sub),
                     style = MaterialTheme.typography.bodySmall,
                 )
                 if (waiting.isEmpty()) Text(stringResource(R.string.sync_requests_none), style = MaterialTheme.typography.bodySmall)
@@ -6389,8 +6638,7 @@ getString(R.string.sync_running, shown)
             }
             Section(stringResource(R.string.sync_nearby, nearby.size)) {
                 Text(
-                    "Discovered on the LAN. Accept to trust and sync " +
-                        "(works with desktops and other phones).",
+                    stringResource(R.string.sync_nearby_sub),
                     style = MaterialTheme.typography.bodySmall,
                 )
                 if (nearby.isEmpty()) Text(stringResource(R.string.sync_nobody), style = MaterialTheme.typography.bodySmall)
@@ -6427,11 +6675,9 @@ getString(R.string.sync_running, shown)
                 Spacer(Modifier.height(4.dp))
                 OutlinedButton(onClick = { refresh() }) { Text(stringResource(R.string.action_refresh)) }
             }
-            Section("Add device manually") {
+            Section(stringResource(R.string.sync_add_title)) {
                 Text(
-                    "Copy the Device ID from MyWhisper on your other device. " +
-                        "Send a pairing request, then accept it there. " +
-                        "Both devices must be reachable.",
+                    stringResource(R.string.sync_add_sub),
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Spacer(Modifier.height(4.dp))
@@ -6484,7 +6730,7 @@ getString(R.string.sync_running, shown)
                                     }
                                 }
                             } catch (e: Exception) {
-                                runOnUiThread { notes = notes + ("__add" to "failed: ${e.message}") }
+                                runOnUiThread { notes = notes + ("__add" to getString(R.string.sync_add_failed, e.message)) }
                             }
                             runOnUiThread { refresh(); addOpen = false }
                         }
@@ -6579,7 +6825,7 @@ getString(R.string.sync_running, shown)
                             List(a.length()) { a.optString(it) }
                         } ?: emptyList()
                         Text(
-                            (addrs + disc).distinct().take(2).joinToString(" · ").ifEmpty { "no address yet" },
+                            (addrs + disc).distinct().take(2).joinToString(" · ").ifEmpty { getString(R.string.sync_noaddr) },
                             style = MaterialTheme.typography.bodySmall,
                         )
                         if (lastSync != null) {

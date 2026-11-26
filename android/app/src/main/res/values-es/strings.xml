@@ -90,6 +90,21 @@
     <string name="setup_float_delay">Retardo de pulsación</string>
     <string name="setup_float_delay_sub">Cuánto debe quedarse quieta el botón flotante antes de grabar; un movimiento pequeño cuenta como arrastre.</string>
     <string name="setup_float_delay_off">Solo se aplica cuando el punto de agarre está desactivado.</string>
+    <string name="setup_float_delay_cover_only">Solo se aplica en la pantalla exterior, donde el punto de agarre está desactivado.</string>
+    <string name="setup_float_delay_inner_only">Solo se aplica en la pantalla interior, donde el punto de agarre está desactivado.</string>
+    <string name="fold_split">Ajustes distintos para la pantalla exterior e interior</string>
+    <string name="fold_split_sub">Usa un tamaño, una posición y un aspecto distintos en cada pantalla</string>
+    <string name="fold_split_off_title">¿Usar los mismos ajustes en ambas pantallas?</string>
+    <string name="fold_split_off_body">Ambas pantallas volverán a usar los ajustes de la pantalla exterior. Los ajustes de la pantalla interior se guardan para más adelante.</string>
+    <string name="fold_split_off_confirm">Desactivar</string>
+    <string name="fold_cover">Pantalla exterior</string>
+    <string name="fold_inner">Pantalla interior</string>
+    <string name="fold_to_cover">Pliega el teléfono para configurar la pantalla exterior.</string>
+    <string name="fold_to_inner">Despliega el teléfono para configurar la pantalla interior.</string>
+    <string name="fold_both">Ambas pantallas</string>
+    <string name="fold_position">Posición</string>
+    <string name="fold_position_here">Arrastra el botón flotante en esta pantalla para moverlo.</string>
+    <string name="fold_position_reset">Restablecer posición</string>
     <string name="unified_notif_channel">Estado del dictado y la sincronización</string>
     <string name="float_notif_title">Botón flotante MyWhisper</string>
     <string name="float_notif_text">Dictado flotante activo</string>
@@ -100,6 +115,7 @@
     <string name="float_stop">Cancelar — descartar el dictado</string>
     <string name="float_processing">Transcribiendo…</string>
     <string name="float_no_field">Ningún campo editable activo — abre uno y dicta de nuevo</string>
+    <string name="float_field_changed">El campo cambió durante el procesamiento — dictado no insertado</string>
     <string name="float_need_a11y">Activa el servicio de dictado de MyWhisper — Ajustes → Botón flotante</string>
     <string name="a11y_desc">Inserta los dictados de el botón flotante en el campo de texto activo.</string>
     <string name="setup_theme">Tema</string>
@@ -158,7 +174,11 @@
     <string name="keep_10min">10 minutos</string>
     <string name="keep_30min">30 minutos</string>
     <string name="keep_indefinite">Indefinidamente</string>
-    <string name="keep_custom">%1$d segundos</string>
+    <plurals name="keep_custom">
+        <item quantity="one">%1$d segundo</item>
+        <item quantity="many">%1$d segundos</item>
+        <item quantity="other">%1$d segundos</item>
+    </plurals>
     <string name="think_label">Razonamiento:</string>
     <string name="think_off">No</string>
     <string name="think_budget">%1$d tokens</string>
@@ -277,14 +297,26 @@
     <string name="hist_days">Borrar transcripciones tras N días (0 = guardar)</string>
     <string name="hist_delete_older">Borrar antiguas ahora</string>
     <string name="hist_set_days">indica N días primero</string>
-    <string name="hist_purged">%1$d entradas antiguas borradas</string>
+    <plurals name="hist_purged">
+        <item quantity="one">%1$d entrada antigua borrada</item>
+        <item quantity="many">%1$d entradas antiguas borradas</item>
+        <item quantity="other">%1$d entradas antiguas borradas</item>
+    </plurals>
     <string name="hist_purge_failed">falló el borrado: %1$s</string>
-    <string name="hist_count">%1$d entradas</string>
+    <plurals name="hist_count">
+        <item quantity="one">%1$d entrada</item>
+        <item quantity="many">%1$d entradas</item>
+        <item quantity="other">%1$d entradas</item>
+    </plurals>
     <string name="hist_cleared">historial borrado</string>
     <string name="hist_clear_failed">falló el borrado: %1$s</string>
     <string name="hist_delete_failed">falló al eliminar: %1$s</string>
     <string name="hist_search">Buscar transcripciones</string>
-    <string name="hist_words">%1$d palabras</string>
+    <plurals name="hist_words">
+        <item quantity="one">%1$d palabra</item>
+        <item quantity="many">%1$d palabras</item>
+        <item quantity="other">%1$d palabras</item>
+    </plurals>
 
     <!-- Devices (sync) -->
     <string name="sync_this">Este dispositivo</string>
@@ -320,7 +352,7 @@
     <string name="sync_nearby_sub">Descubiertos en la LAN. Acepta para confiar y sincronizar (vale con escritorios y otros teléfonos).</string>
     <string name="sync_nobody">Nadie por aquí.</string>
     <string name="sync_add_title">Añadir dispositivo manualmente</string>
-    <string name="sync_add_sub">Copia el ID de MyWhisper en tu otro dispositivo. Envía una solicitud y acéptala allí. Ambos deben ser accesibles.</string>
+    <string name="sync_add_sub">Copia el ID del dispositivo desde MyWhisper en tu otro dispositivo. Envía una solicitud y acéptala allí. Ambos deben ser accesibles.</string>
     <string name="sync_add_button">Añadir por ID</string>
     <string name="sync_add_dialog">Añadir dispositivo</string>
     <string name="sync_add_id">ID del otro dispositivo (64 hex)</string>
@@ -639,4 +671,41 @@
     <string name="settings_guide">Guía de configuración</string>
     <string name="settings_guide_sub">Vuelve a recorrer la configuración y practica con el botón</string>
     <string name="providers_language_help">La detección automática entiende el idioma que hables, así que puedes cambiar de idioma de un dictado a otro. Elige un solo idioma solo si se equivoca.</string>
+    <string name="home_back_to_top">Volver arriba</string>
+    <string name="lang_names_locale">es</string>
+    <string name="lang_auto">Detección automática (cualquier idioma)</string>
+    <string name="stt_needs_free_ram">Necesita ~%1$s de RAM libre</string>
+    <string name="cleanup_prompt_load_failed">No se pudo cargar el prompt integrado.</string>
+    <string name="sync_syncing">sincronizando…</string>
+    <string name="sync_waiting_title">Esperando respuesta (%1$d)</string>
+    <string name="sync_waiting_sub">Enviaste una solicitud de emparejamiento. Acéptala en el otro dispositivo; aquí solo puedes cancelarla.</string>
+    <!-- Guía de Ajustes (#125): una línea antes de abrir Ajustes y la tarjeta de imagen en imagen. -->
+    <string name="guide_hint_overlay">Busca MyWhisper y activa “Permitir mostrar sobre otras aplicaciones”.</string>
+    <string name="guide_hint_channel">Desactiva el interruptor de arriba.</string>
+    <string name="guide_hint_a11y">Android mostrará un aviso: toca Permitir.</string>
+    <string name="guide_a11y_title">Activa el dictado</string>
+    <!-- Pasos de Accesibilidad por fabricante: sin confirmar en dispositivos reales. -->
+    <string-array name="guide_a11y_steps_generic">
+        <item>Toca MyWhisper</item>
+        <item>Activa “Usar MyWhisper”</item>
+    </string-array>
+    <string-array name="guide_a11y_steps_samsung">
+        <item>Abre Aplicaciones instaladas</item>
+        <item>Toca MyWhisper y actívalo</item>
+    </string-array>
+    <string-array name="guide_a11y_steps_xiaomi">
+        <item>Abre Aplicaciones descargadas</item>
+        <item>Toca MyWhisper y actívalo</item>
+    </string-array>
+    <string name="guide_a11y_allow">Toca Permitir en el aviso</string>
+    <string name="guide_a11y_why">MyWhisper solo lo usa para mostrar el botón flotante y escribir tu texto.</string>
+    <string name="guide_restricted_link">¿Bloqueado por “Ajuste restringido”?</string>
+    <string name="guide_hint_restricted">Toca MyWhisper → ⋮ arriba a la derecha → Permitir ajustes restringidos.</string>
+    <string name="guide_restricted_title">Desbloquea MyWhisper</string>
+    <string-array name="guide_restricted_steps">
+        <item>Toca MyWhisper</item>
+        <item>Toca ⋮ arriba a la derecha</item>
+        <item>Permitir ajustes restringidos</item>
+    </string-array>
+    <string name="guide_restricted_then">Después vuelve para activar el dictado</string>
 </resources>

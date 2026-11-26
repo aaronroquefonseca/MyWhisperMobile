@@ -172,6 +172,22 @@ pub(crate) fn open_test_db(path: &std::path::Path) -> rusqlite::Result<Store> {
     Store::open(path)
 }
 
+/// `search_match(text, needle_key)`: History search (`textnorm::search_contains`).
+fn register_search_match(conn: &Connection) -> rusqlite::Result<()> {
+    use rusqlite::functions::FunctionFlags;
+    conn.create_scalar_function(
+        "search_match",
+        2,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        |ctx| {
+            Ok(crate::textnorm::search_contains(
+                &ctx.get::<String>(0)?,
+                &ctx.get::<String>(1)?,
+            ))
+        },
+    )
+}
+
 pub struct Store {
     conn: Connection,
     file_identity: Option<(u64, u64)>,
@@ -567,6 +583,7 @@ impl Store {
         // when the file was replaced under us (desktop #18
         // file-identity check).
         let file_identity = file_identity_of(path);
+        register_search_match(&conn)?;
         Ok(Self {
             conn,
             file_identity,
@@ -925,13 +942,41 @@ impl Store {
         limit: usize,
         include_discarded: bool,
     ) -> rusqlite::Result<Vec<HistoryEntry>> {
+        self.load_history_page(limit, include_discarded, None, "")
+    }
+
+    /// One page of history, newest first. Keyset paging: `before` is the
+    /// `(recorded_at, uuid)` of the last row already shown, so rows added
+    /// meanwhile never shift or duplicate later pages (an OFFSET would).
+    /// `query` filters text or original text as a literal substring
+    /// after `textnorm::search_key` on both sides (Unicode case- and
+    /// normalization-insensitive, accent-sensitive; `%`, `_`, `\` are
+    /// plain characters); empty means no filter.
+    pub fn load_history_page(
+        &self,
+        limit: usize,
+        include_discarded: bool,
+        before: Option<(i64, &str)>,
+        query: &str,
+    ) -> rusqlite::Result<Vec<HistoryEntry>> {
+        let needle = crate::textnorm::search_key(query.trim());
+        let (before_ts, before_uuid) = before.unwrap_or((i64::MAX, ""));
         let mut stmt = self.conn.prepare(
             "SELECT uuid, text, raw_text, datetime(recorded_at, 'unixepoch'), words,
                     duration_secs, recorded_at, discarded
              FROM history WHERE deleted = 0 AND (discarded = 0 OR ?1)
-             ORDER BY recorded_at DESC LIMIT ?2",
+               AND (?3 = '' OR recorded_at < ?2 OR (recorded_at = ?2 AND uuid < ?3))
+               AND (?4 = '' OR search_match(text, ?4) OR search_match(raw_text, ?4))
+             ORDER BY recorded_at DESC, uuid DESC LIMIT ?5",
         )?;
-        stmt.query_map([include_discarded as i64, limit as i64], |row| {
+        let params = rusqlite::params![
+            include_discarded,
+            before_ts,
+            before_uuid,
+            needle,
+            limit as i64
+        ];
+        stmt.query_map(params, |row| {
             Ok(HistoryEntry {
                 uuid: row.get(0)?,
                 text: row.get(1)?,
@@ -1643,6 +1688,7 @@ impl Store {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch(PRAGMAS)?;
         migrate_schema(&conn)?;
+        register_search_match(&conn)?;
         Ok(Self {
             conn,
             file_identity: None,
@@ -2404,12 +2450,17 @@ mod tests {
                 [],
             )
             .unwrap();
+        let recent = a.add_history("raw2", "recent", 10, 5, "node").unwrap();
         b.apply_history(&a.export_history().unwrap()).unwrap();
-        assert_eq!(a.purge_old_history(30).unwrap(), 1);
+        // Expired goes, recent stays; the tombstone wins both sync directions.
+        assert_eq!(a.purge_old_history(1).unwrap(), 1);
         a.apply_history(&b.export_history().unwrap()).unwrap();
         b.apply_history(&a.export_history().unwrap()).unwrap();
-        assert!(a.load_history(10, true).unwrap().is_empty());
-        assert!(b.load_history(10, true).unwrap().is_empty());
+        for store in [&a, &b] {
+            let left = store.load_history(10, true).unwrap();
+            assert_eq!(left.len(), 1);
+            assert_eq!(left[0].uuid, recent);
+        }
     }
 
     #[test]
@@ -2447,6 +2498,141 @@ mod tests {
         assert_eq!(reloaded.stt.local_provider, LocalSttProvider::Nvidia);
         assert!(!reloaded.stt.entries.is_empty());
         assert_eq!(reloaded.stt.chain().len(), 1);
+    }
+
+    #[test]
+    fn history_pages_by_keyset_and_filters_by_query() {
+        let store = Store::open_memory().unwrap();
+        // Two rows share a timestamp: the uuid tie-break keeps pages exact.
+        let rows: Vec<HistoryRecord> = [
+            (100, "a", "buy milk"),
+            (200, "b", "50% off_sale"),
+            (200, "c", "call Sam"),
+            (300, "d", "Buy bread"),
+        ]
+        .iter()
+        .map(|(ts, id, text)| HistoryRecord {
+            uuid: id.to_string(),
+            text: text.to_string(),
+            raw_text: text.to_string(),
+            words: 2,
+            duration_secs: 1,
+            deleted: false,
+            discarded: false,
+            recorded_at: *ts,
+        })
+        .collect();
+        store.apply_history(&rows).unwrap();
+        let ids = |v: Vec<HistoryEntry>| v.into_iter().map(|h| h.uuid).collect::<Vec<_>>();
+        let first = store.load_history_page(2, false, None, "").unwrap();
+        assert_eq!(ids(first.clone()), ["d", "c"]);
+        let last = first.last().unwrap();
+        let second = store
+            .load_history_page(2, false, Some((last.recorded_at, &last.uuid)), "")
+            .unwrap();
+        assert_eq!(ids(second), ["b", "a"]);
+        // A row added at the top never shifts the next page.
+        let more = store
+            .load_history_page(10, false, Some((200, "c")), "")
+            .unwrap();
+        assert_eq!(ids(more), ["b", "a"]);
+        // Query: case-insensitive, and % / _ match literally.
+        assert_eq!(
+            ids(store.load_history_page(10, false, None, "BUY").unwrap()),
+            ["d", "a"]
+        );
+        assert_eq!(
+            ids(store.load_history_page(10, false, None, "%").unwrap()),
+            ["b"]
+        );
+        assert_eq!(
+            ids(store.load_history_page(10, false, None, "f_s").unwrap()),
+            ["b"]
+        );
+        assert!(
+            store
+                .load_history_page(10, false, None, "zzz")
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// History search folds Unicode case and canonical form on the
+    /// query, cleaned text, and original text, keeps accents distinct,
+    /// treats `%`, `_`, `\` literally, and pages newest-first across
+    /// the whole history, including rows saved before the reopen.
+    #[test]
+    fn history_search_folds_unicode_and_pages_full_history() {
+        let path =
+            std::env::temp_dir().join(format!("mywhisper-search-test-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let row = |ts: i64, id: &str, text: &str, raw: &str| HistoryRecord {
+            uuid: id.to_string(),
+            text: text.to_string(),
+            raw_text: raw.to_string(),
+            words: 2,
+            duration_secs: 1,
+            deleted: false,
+            discarded: false,
+            recorded_at: ts,
+        };
+        // Oldest row matches only through its decomposed, uppercase
+        // original text, behind 40 newer non-matching rows.
+        let mut rows = vec![row(10, "old", "cleaned", "A\u{301}RBOL viejo")];
+        rows.extend((0..40).map(|i| row(20 + i, &format!("fill{i:02}"), "filler", "filler")));
+        rows.extend([
+            row(60, "acc", "Árbol grande", "texto original"),
+            row(61, "plain", "arbol sin tilde", ""),
+            row(62, "pct", "50% off_sale C:\\tmp", ""),
+            row(63, "under", "50 percent offXsale C:tmp", ""),
+            row(64, "sharp", "Große Straße", ""),
+            row(65, "sigma", "ΟΔΟΣ", ""),
+            row(66, "harakat", "قلبْ", ""),
+            row(67, "idot", "I\u{307}\u{301}", ""),
+        ]);
+        open_test_db(&path).unwrap().apply_history(&rows).unwrap();
+
+        let store = open_test_db(&path).unwrap();
+        let ids = |q: &str| {
+            store
+                .load_history_page(10, false, None, q)
+                .unwrap()
+                .into_iter()
+                .map(|h| h.uuid)
+                .collect::<Vec<_>>()
+        };
+        for q in ["árbol", "a\u{301}rbol", "ÁRBOL", "A\u{301}rBoL"] {
+            assert_eq!(ids(q), ["acc", "old"], "query {q:?}");
+        }
+        assert_eq!(ids("arbol"), ["plain"]);
+        // Full case folding, not just lowercase.
+        assert_eq!(ids("strasse"), ["sharp"]);
+        assert_eq!(ids("οδοσ"), ["sigma"]);
+        // A match never ends inside a character (dropped final mark).
+        assert!(ids("قلب").is_empty());
+        assert_eq!(ids("قلبْ"), ["harakat"]);
+        // Dotted-I fold composes with a following accent.
+        assert_eq!(ids("í"), ["idot"]);
+        assert_eq!(ids("%"), ["pct"]);
+        assert_eq!(ids("50%"), ["pct"]);
+        assert_eq!(ids("off_sale"), ["pct"]);
+        assert_eq!(ids("\\tmp"), ["pct"]);
+        assert!(ids("%off").is_empty());
+
+        // Paging a filtered query reaches the match past the filler.
+        let first = store.load_history_page(1, false, None, "Árbol").unwrap();
+        assert_eq!(first[0].uuid, "acc");
+        let next = store
+            .load_history_page(
+                1,
+                false,
+                Some((first[0].recorded_at, &first[0].uuid)),
+                "Árbol",
+            )
+            .unwrap();
+        assert_eq!(next[0].uuid, "old");
+        drop(store);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

@@ -35,18 +35,18 @@ class LocalDictionaryParityTest {
                         override fun stop() = Unit
                     }
                 },
-                finishTranscription = {
+                finishTranscription = { _, _ ->
                     localServerHit.set(true)
                     "server" to "test-engine"
                 },
                 cancelTranscription = {},
-                finishLocal = { _, text, engine, _ ->
+                finishLocal = { _, text, engine, _, _ ->
                     toCore.add(text)
                     text to engine
                 },
                 localTranscribe = { "the investor ask now" to "local moonshine-v2-tiny.en" },
                 localPostProcess = { LocalStt.postProcessLocal(it, emptyList()) },
-                pushPcm = { _, _ -> },
+                pushPcm = { _, _, _ -> },
                 log = {},
                 workers = localExecutor,
             )
@@ -73,12 +73,12 @@ class LocalDictionaryParityTest {
                         override fun stop() = Unit
                     }
                 },
-                finishTranscription = { "server text" to "test-engine" },
+                finishTranscription = { _, _ -> "server text" to "test-engine" },
                 cancelTranscription = {},
-                finishLocal = { _, text, engine, _ -> text to engine },
+                finishLocal = { _, text, engine, _, _ -> text to engine },
                 localTranscribe = { "local text" to "local moonshine-v2-tiny.en" },
                 localPostProcess = { throw RuntimeException("nope") },
-                pushPcm = { _, _ -> },
+                pushPcm = { _, _, _ -> },
                 log = {},
                 workers = executor,
             ).also {

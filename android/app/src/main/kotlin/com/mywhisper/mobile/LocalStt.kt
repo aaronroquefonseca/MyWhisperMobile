@@ -389,28 +389,33 @@ object LocalStt {
     }
 
     /**
-     * True when the Local STT entry is the FIRST enabled chain entry,
-     * so [Dictation] decodes on-device before the server chain. A
-     * Local entry further down is only a fallback after the servers
-     * above it fail. Never throws.
+     * Server entries around the first enabled Local entry, in Settings
+     * order: (any enabled above it, any enabled below it). Without an
+     * enabled Local entry every server counts as above. [Dictation]
+     * runs the servers above, then the on-device decode, then the
+     * servers below. Never throws; unreadable settings → servers first.
      */
-    fun isLocalFirst(): Boolean =
+    fun remotesAroundLocal(): Pair<Boolean, Boolean> =
         try {
-            localSttFirst(CoreBridge.getSettings().getOrThrow().optJSONObject("stt")?.optJSONArray("entries"))
+            remotesAroundLocal(CoreBridge.getSettings().getOrThrow().optJSONObject("stt")?.optJSONArray("entries"))
         } catch (_: Exception) {
-            false
+            true to false
         }
 
-    /** Pure order rule behind [isLocalFirst] (unit-tested). */
+    /** Pure order rule behind [remotesAroundLocal]; mirrors core `ChainPart` (unit-tested). */
     @JvmStatic
-    internal fun localSttFirst(entries: org.json.JSONArray?): Boolean {
-        if (entries == null) return false
-        for (i in 0 until entries.length()) {
-            val e = entries.optJSONObject(i) ?: continue
+    internal fun remotesAroundLocal(entries: org.json.JSONArray?): Pair<Boolean, Boolean> {
+        var above = false
+        var below = false
+        var localSeen = false
+        for (i in 0 until (entries?.length() ?: 0)) {
+            val e = entries?.optJSONObject(i) ?: continue
             if (!e.optBoolean("enabled", true)) continue
-            return e.optString("kind") == "Local"
+            if (e.optString("kind") == "Local") localSeen = true
+            else if (localSeen) below = true
+            else above = true
         }
-        return false
+        return above to below
     }
 
     private fun isLocalEntryEnabled(): Boolean {

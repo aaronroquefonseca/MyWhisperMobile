@@ -90,6 +90,21 @@
     <string name="setup_float_delay">Hold delay</string>
     <string name="setup_float_delay_sub">How long the floating button must stay still before recording; a small move counts as a drag.</string>
     <string name="setup_float_delay_off">Only applies when Grab point is off.</string>
+    <string name="setup_float_delay_cover_only">Only applies on the cover screen, where Grab point is off.</string>
+    <string name="setup_float_delay_inner_only">Only applies on the inner screen, where Grab point is off.</string>
+    <string name="fold_split">Different settings for cover and inner screen</string>
+    <string name="fold_split_sub">Use a different size, position and look on each screen</string>
+    <string name="fold_split_off_title">Use the same settings on both screens?</string>
+    <string name="fold_split_off_body">Both screens will use the cover screen\'s settings again. Your inner screen settings are kept for later.</string>
+    <string name="fold_split_off_confirm">Turn off</string>
+    <string name="fold_cover">Cover screen</string>
+    <string name="fold_inner">Inner screen</string>
+    <string name="fold_to_cover">Fold the phone to set up the cover screen.</string>
+    <string name="fold_to_inner">Unfold the phone to set up the inner screen.</string>
+    <string name="fold_both">Both screens</string>
+    <string name="fold_position">Position</string>
+    <string name="fold_position_here">Drag the floating button on this screen to move it.</string>
+    <string name="fold_position_reset">Reset position</string>
     <string name="unified_notif_channel">Dictation and sync status</string>
     <string name="float_notif_title">MyWhisper floating button</string>
     <string name="float_notif_text">Floating dictation active</string>
@@ -100,6 +115,7 @@
     <string name="float_stop">Cancel — discard dictation</string>
     <string name="float_processing">Transcribing…</string>
     <string name="float_no_field">No editable field focused — open one and dictate again</string>
+    <string name="float_field_changed">Field changed while processing — dictation not inserted</string>
     <string name="float_need_a11y">Turn on the MyWhisper dictation service — Setup → Floating button</string>
     <string name="a11y_desc">Commits floating button dictations into the focused text field.</string>
     <string name="setup_theme">Theme</string>
@@ -157,7 +173,10 @@
     <string name="keep_10min">10 minutes</string>
     <string name="keep_30min">30 minutes</string>
     <string name="keep_indefinite">Indefinitely</string>
-    <string name="keep_custom">%1$d seconds</string>
+    <plurals name="keep_custom">
+        <item quantity="one">%1$d second</item>
+        <item quantity="other">%1$d seconds</item>
+    </plurals>
     <string name="think_label">Thinking:</string>
     <string name="think_off">Off</string>
     <string name="think_budget">%1$d tokens</string>
@@ -276,14 +295,23 @@
     <string name="hist_days">Auto-delete transcripts after N days (0 = keep)</string>
     <string name="hist_delete_older">Delete older now</string>
     <string name="hist_set_days">set N days first</string>
-    <string name="hist_purged">deleted %1$d old entries</string>
+    <plurals name="hist_purged">
+        <item quantity="one">deleted %1$d old entry</item>
+        <item quantity="other">deleted %1$d old entries</item>
+    </plurals>
     <string name="hist_purge_failed">purge failed: %1$s</string>
-    <string name="hist_count">%1$d entries</string>
+    <plurals name="hist_count">
+        <item quantity="one">%1$d entry</item>
+        <item quantity="other">%1$d entries</item>
+    </plurals>
     <string name="hist_cleared">history cleared</string>
     <string name="hist_clear_failed">clear failed: %1$s</string>
     <string name="hist_delete_failed">delete failed: %1$s</string>
     <string name="hist_search">Search transcripts</string>
-    <string name="hist_words">%1$d words</string>
+    <plurals name="hist_words">
+        <item quantity="one">%1$d word</item>
+        <item quantity="other">%1$d words</item>
+    </plurals>
 
     <!-- Devices (sync) -->
     <string name="sync_this">This device</string>
@@ -638,4 +666,42 @@
     <string name="settings_guide">Setup guide</string>
     <string name="settings_guide_sub">Walk through setup and practice with the button again</string>
     <string name="providers_language_help">Auto-detect understands whichever language you speak, so you can switch languages from one dictation to the next. Pick a single language only if it guesses wrong.</string>
+    <string name="home_back_to_top">Back to top</string>
+    <!-- Locale the speech-language names are shown in; resolves with the same fallback as the UI strings. -->
+    <string name="lang_names_locale">en</string>
+    <string name="lang_auto">Auto-detect (any language)</string>
+    <string name="stt_needs_free_ram">Needs ~%1$s free RAM</string>
+    <string name="cleanup_prompt_load_failed">Couldn\u2019t load the built-in prompt.</string>
+    <string name="sync_syncing">syncing…</string>
+    <string name="sync_waiting_title">Waiting for response (%1$d)</string>
+    <string name="sync_waiting_sub">You sent a pairing request. Accept it on the other device; no action needed here except cancel.</string>
+    <!-- Settings guide (#125): one line before a Settings jump, and the picture-in-picture card. -->
+    <string name="guide_hint_overlay">Find MyWhisper and turn on “Allow display over other apps”.</string>
+    <string name="guide_hint_channel">Turn off the switch at the top.</string>
+    <string name="guide_hint_a11y">Android will show a warning: tap Allow.</string>
+    <string name="guide_a11y_title">Turn on dictation</string>
+    <!-- Accessibility steps by manufacturer: unconfirmed on real devices, check before release. -->
+    <string-array name="guide_a11y_steps_generic">
+        <item>Tap MyWhisper</item>
+        <item>Turn on “Use MyWhisper”</item>
+    </string-array>
+    <string-array name="guide_a11y_steps_samsung">
+        <item>Open Installed apps</item>
+        <item>Tap MyWhisper and turn it on</item>
+    </string-array>
+    <string-array name="guide_a11y_steps_xiaomi">
+        <item>Open Downloaded apps</item>
+        <item>Tap MyWhisper and turn it on</item>
+    </string-array>
+    <string name="guide_a11y_allow">Tap Allow on the warning</string>
+    <string name="guide_a11y_why">MyWhisper only uses it to show the floating button and type your text.</string>
+    <string name="guide_restricted_link">Blocked by “Restricted setting”?</string>
+    <string name="guide_hint_restricted">Tap MyWhisper → ⋮ at the top right → Allow restricted settings.</string>
+    <string name="guide_restricted_title">Unblock MyWhisper</string>
+    <string-array name="guide_restricted_steps">
+        <item>Tap MyWhisper</item>
+        <item>Tap ⋮ at the top right</item>
+        <item>Allow restricted settings</item>
+    </string-array>
+    <string name="guide_restricted_then">Then come back to turn on dictation</string>
 </resources>

@@ -18,7 +18,8 @@ class AudioCapture(
     /** Routes per `preferences.mic_priority`; null = system default input. */
     private val context: Context? = null,
     private val sampleRate: Int = 16_000,
-    var onPcm: ((ShortArray, Int) -> Unit)? = null,
+    /** PCM chunk plus the core utterance token this recording started with. */
+    var onPcm: ((ShortArray, Int, Long) -> Unit)? = null,
     var onError: ((String) -> Unit)? = null,
     /** 0..1 normalized voice level per 32 ms read (see [LevelNormalizer]). */
     var onLevel: ((Float) -> Unit)? = null,
@@ -27,6 +28,10 @@ class AudioCapture(
     private var thread: Thread? = null
     private var audioManager: AudioManager? = null
     @Volatile var running = false
+        private set
+
+    /** Core utterance token for this recording (set by [start]). */
+    var utterance = 0L
         private set
 
     val actualRate: Int get() = sampleRate
@@ -60,6 +65,9 @@ class AudioCapture(
             routeInput(rec)
             running = true
             rec.startRecording()
+            // Core recorder first, so every chunk carries this recording's token.
+            val token = CoreBridge.startUtterance(sampleRate)
+            utterance = token
             thread = Thread({
                 // 512 samples = 32 ms → ~31 level updates/s for the bars.
                 val buf = ShortArray(512)
@@ -72,7 +80,7 @@ class AudioCapture(
                     }
                     if (n > 0) {
                         try {
-                            onPcm?.invoke(buf, n)
+                            onPcm?.invoke(buf, n, token)
                         } catch (_: Exception) {
                         }
                         try {
@@ -89,7 +97,6 @@ class AudioCapture(
                     }
                 }
             }, "mw-capture").also { it.start() }
-            CoreBridge.startUtterance(sampleRate)
             true
         } catch (e: SecurityException) {
             stop()

@@ -19,9 +19,12 @@ internal fun <T : Any> rememberVerifiedPack(
     currentFingerprint: () -> String?,
     stillSelected: () -> Boolean,
     isVerified: (T) -> Boolean,
+    // Returned until the first check of [fingerprint] finishes.
+    whilePending: Boolean = false,
     verify: () -> T,
 ): Boolean {
     var verifiedFingerprint by remember(id, changes) { mutableStateOf<String?>(null) }
+    var checkedFingerprint by remember(id, changes) { mutableStateOf<String?>(null) }
     LaunchedEffect(id, fingerprint, changes) {
         verifiedFingerprint = null
         if (fingerprint == null) return@LaunchedEffect
@@ -35,6 +38,8 @@ internal fun <T : Any> rememberVerifiedPack(
         if (verified && currentFingerprint() == fingerprint && stillSelected()) {
             verifiedFingerprint = fingerprint
         }
+        checkedFingerprint = fingerprint
     }
+    if (fingerprint != null && checkedFingerprint != fingerprint) return whilePending
     return fingerprint != null && verifiedFingerprint == fingerprint
 }

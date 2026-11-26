@@ -9,6 +9,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Cancel-wins tests for [Dictation]: a cancel issued while the finish
@@ -44,7 +45,7 @@ class DictationCancelTest {
             mode = { "Push" },
             releaseDelayMs = { tailMs },
             startCapture = { _, _, _ -> FakeCapture() },
-            finishTranscription = {
+            finishTranscription = { _, _ ->
                 transcribed.set(true)
                 enteredTranscribe.countDown()
                 transcribeBlock?.let {
@@ -243,6 +244,307 @@ class DictationCancelTest {
             assertEquals(Dictation.State.IDLE, h.dictation.current)
         } finally {
             h.shutdown()
+        }
+    }
+
+    /**
+     * Delayed provider, production executor: the first finish blocks in
+     * the provider. Cancel must return at once, the stale finish must
+     * neither paste nor save, and the next dictation must complete
+     * while the stale request is still in flight.
+     *
+     * The fake core models the native witness: [cancelTranscription]
+     * bumps a generation and a finish saves History only if the
+     * generation it started under is still current.
+     */
+    @Test
+    fun cancelDuringDelayedProvider_isPrompt_savesNothing_nextDictationWorks() {
+        val generation = AtomicInteger(0)
+        val calls = AtomicInteger(0)
+        val providerEntered = CountDownLatch(1)
+        val providerRelease = CountDownLatch(1)
+        val staleDropped = CountDownLatch(1)
+        val history: MutableList<String> = Collections.synchronizedList(mutableListOf())
+        val pastes: MutableList<String> = Collections.synchronizedList(mutableListOf())
+        val errors: MutableList<String> = Collections.synchronizedList(mutableListOf())
+        val nextPasted = CountDownLatch(1)
+        val order: MutableList<String> = Collections.synchronizedList(mutableListOf())
+        val dictation = Dictation(
+            mode = { "Push" },
+            startCapture = { _, _, _ -> FakeCapture() },
+            finishTranscription = { _, _ ->
+                val witness = generation.get()
+                val text = if (calls.incrementAndGet() == 1) "stale" else "next"
+                if (text == "stale") {
+                    providerEntered.countDown()
+                    assertTrue("provider release timeout", providerRelease.await(10, TimeUnit.SECONDS))
+                }
+                if (generation.get() != witness) throw IllegalStateException("superseded")
+                history.add(text)
+                text to "slow-provider"
+            },
+            cancelTranscription = {
+                order.add("core-cancel")
+                generation.incrementAndGet()
+            },
+            log = { if (it.startsWith("finish drop stale-error")) staleDropped.countDown() },
+        )
+        dictation.listener = object : Dictation.Listener {
+            override fun onState(s: Dictation.State, toggled: Boolean) {
+                order.add("state-$s")
+            }
+            override fun onResult(text: String) {
+                pastes.add(text)
+                nextPasted.countDown()
+            }
+            override fun onError(msg: String) {
+                errors.add(msg)
+            }
+        }
+        try {
+            dictation.pressDown()
+            dictation.pressUp()
+            assertTrue(providerEntered.await(10, TimeUnit.SECONDS))
+            assertEquals(Dictation.State.WORKING, dictation.current)
+
+            order.clear()
+            val began = System.nanoTime()
+            dictation.cancel()
+            val cancelMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - began)
+            assertTrue("cancel took ${cancelMs}ms", cancelMs < 200)
+            assertEquals(Dictation.State.IDLE, dictation.current)
+            assertEquals("core revoked before the UI shows IDLE", listOf("core-cancel", "state-IDLE"), order)
+
+            // Next dictation while the cancelled request is still blocked.
+            dictation.pressDown()
+            dictation.pressUp()
+            assertTrue("next dictation queued behind the stale one", nextPasted.await(5, TimeUnit.SECONDS))
+            assertEquals(listOf("next"), pastes)
+
+            providerRelease.countDown()
+            assertTrue("stale finish never settled", staleDropped.await(10, TimeUnit.SECONDS))
+
+            assertEquals("cancelled utterance must not paste", listOf("next"), pastes)
+            assertEquals("cancelled utterance must not reach History", listOf("next"), history)
+            assertTrue("stale finish must stay silent (saw $errors)", errors.isEmpty())
+            assertEquals(Dictation.State.IDLE, dictation.current)
+        } finally {
+            providerRelease.countDown()
+            dictation.shutdown()
+        }
+    }
+
+    /**
+     * A cancel racing the finish worker's mic stop must wait for that
+     * stop, so the old capture is fully torn down before a new
+     * recording can start.
+     */
+    @Test
+    fun cancelDuringWorkerStop_waitsForTheOldMic() {
+        val stopEntered = CountDownLatch(1)
+        val stopRelease = CountDownLatch(1)
+        val stopped = AtomicBoolean(false)
+        val stops = AtomicInteger(0)
+        val slowCapture = object : Dictation.Capture {
+            override fun stop() {
+                stops.incrementAndGet()
+                stopEntered.countDown()
+                assertTrue(stopRelease.await(10, TimeUnit.SECONDS))
+                stopped.set(true)
+            }
+        }
+        val captures = mutableListOf<Dictation.Capture>(slowCapture, FakeCapture())
+        val dictation = Dictation(
+            mode = { "Push" },
+            startCapture = { _, _, _ -> captures.removeAt(0) },
+            finishTranscription = { _, _ -> "text" to "engine" },
+            cancelTranscription = {},
+            log = {},
+        )
+        try {
+            dictation.pressDown()
+            dictation.pressUp() // worker starts stopping the mic
+            assertTrue(stopEntered.await(10, TimeUnit.SECONDS))
+
+            val cancelled = CountDownLatch(1)
+            Thread { dictation.cancel(); cancelled.countDown() }.start()
+            assertFalse("cancel returned while the old mic was still stopping", cancelled.await(200, TimeUnit.MILLISECONDS))
+
+            stopRelease.countDown()
+            assertTrue(cancelled.await(10, TimeUnit.SECONDS))
+            assertTrue("old mic fully stopped before cancel returned", stopped.get())
+            assertEquals("old mic torn down exactly once", 1, stops.get())
+            dictation.pressDown()
+            assertEquals(Dictation.State.RECORDING, dictation.current)
+        } finally {
+            stopRelease.countDown()
+            dictation.shutdown()
+        }
+    }
+
+    /**
+     * Cancel paused after the core revoke (e.g. writing its discarded
+     * row): a server finish that fails because of that revoke must not
+     * start the Local fallback for the cancelled utterance.
+     */
+    @Test
+    fun cancelPausedAfterCoreRevoke_neverStartsLocalFallback() {
+        val providerEntered = CountDownLatch(1)
+        val providerRelease = CountDownLatch(1)
+        val revoked = CountDownLatch(1)
+        val bookkeepingRelease = CountDownLatch(1)
+        val localStarted = CountDownLatch(1)
+        val dictation = Dictation(
+            mode = { "Push" },
+            startCapture = { onPcm, _, _ ->
+                onPcm(ShortArray(8_000), 8_000, 0L) // enough audio for the fallback path
+                FakeCapture()
+            },
+            pushPcm = { _, _, _ -> },
+            remotesAroundLocal = { true to false }, // server above Local, then the Local fallback
+            localTranscribe = {
+                localStarted.countDown()
+                "stale local" to "local"
+            },
+            localPostProcess = { it },
+            finishLocal = { _, text, engine, _, _ -> text to engine },
+            finishTranscription = { _, _ ->
+                providerEntered.countDown()
+                assertTrue(providerRelease.await(10, TimeUnit.SECONDS))
+                throw IllegalStateException("cancelled (chain superseded)")
+            },
+            cancelTranscription = {
+                revoked.countDown()
+                assertTrue(bookkeepingRelease.await(10, TimeUnit.SECONDS))
+            },
+            log = {},
+        )
+        val pastes: MutableList<String> = Collections.synchronizedList(mutableListOf())
+        dictation.listener = object : Dictation.Listener {
+            override fun onState(s: Dictation.State, toggled: Boolean) {}
+            override fun onResult(text: String) {
+                pastes.add(text)
+            }
+            override fun onError(msg: String) {}
+        }
+        try {
+            dictation.pressDown()
+            dictation.pressUp()
+            assertTrue(providerEntered.await(10, TimeUnit.SECONDS))
+
+            val cancelled = CountDownLatch(1)
+            Thread { dictation.cancel(); cancelled.countDown() }.start()
+            assertTrue(revoked.await(10, TimeUnit.SECONDS))
+            providerRelease.countDown() // provider fails because of the revoke
+            assertFalse("fallback started for a cancelled utterance", localStarted.await(300, TimeUnit.MILLISECONDS))
+
+            bookkeepingRelease.countDown()
+            assertTrue(cancelled.await(10, TimeUnit.SECONDS))
+            assertFalse("fallback started after cancel", localStarted.await(300, TimeUnit.MILLISECONDS))
+            assertTrue(pastes.isEmpty())
+        } finally {
+            providerRelease.countDown()
+            bookkeepingRelease.countDown()
+            dictation.shutdown()
+        }
+    }
+
+    /** Cancel while the worker reads the local-first setting: no on-device decode may start. */
+    @Test
+    fun cancelDuringLocalFirstRead_neverStartsLocalDecode() {
+        val inLocalFirst = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val decoded = AtomicBoolean(false)
+        val serverCalled = AtomicBoolean(false)
+        val executor = Executors.newSingleThreadExecutor()
+        val dictation = Dictation(
+            mode = { "Push" },
+            startCapture = { _, _, _ -> FakeCapture() },
+            pushPcm = { _, _, _ -> },
+            remotesAroundLocal = {
+                inLocalFirst.countDown()
+                assertTrue(release.await(10, TimeUnit.SECONDS))
+                false to true // Local first
+            },
+            localTranscribe = {
+                decoded.set(true)
+                null
+            },
+            finishTranscription = { _, _ ->
+                serverCalled.set(true)
+                "x" to "y"
+            },
+            cancelTranscription = {},
+            log = {},
+            workers = executor,
+        )
+        try {
+            dictation.pressDown()
+            dictation.pressUp()
+            assertTrue(inLocalFirst.await(10, TimeUnit.SECONDS))
+            dictation.cancel()
+            release.countDown()
+            executor.submit {}.get(10, TimeUnit.SECONDS)
+
+            assertFalse("local decode started after cancel", decoded.get())
+            assertFalse("server request started after cancel", serverCalled.get())
+        } finally {
+            release.countDown()
+            dictation.shutdown()
+        }
+    }
+
+    /**
+     * A local decode queued behind a cancelled one must not run once its
+     * own utterance is cancelled too, so the next dictation is not delayed.
+     */
+    @Test
+    fun queuedLocalDecode_cancelledWhileWaiting_neverRuns() {
+        val decodes = AtomicInteger(0)
+        val firstDecoding = CountDownLatch(1)
+        val releaseFirst = CountDownLatch(1)
+        val secondAtLocalFirst = CountDownLatch(1)
+        val localFirstCalls = AtomicInteger(0)
+        val executor = Executors.newCachedThreadPool()
+        val dictation = Dictation(
+            mode = { "Push" },
+            startCapture = { _, _, _ -> FakeCapture() },
+            pushPcm = { _, _, _ -> },
+            remotesAroundLocal = {
+                if (localFirstCalls.incrementAndGet() == 2) secondAtLocalFirst.countDown()
+                false to true // Local first
+            },
+            localTranscribe = {
+                if (decodes.incrementAndGet() == 1) {
+                    firstDecoding.countDown()
+                    assertTrue(releaseFirst.await(10, TimeUnit.SECONDS))
+                }
+                null
+            },
+            finishTranscription = { _, _ -> "x" to "y" },
+            cancelTranscription = {},
+            log = {},
+            workers = executor,
+        )
+        try {
+            dictation.pressDown()
+            dictation.pressUp()
+            assertTrue(firstDecoding.await(10, TimeUnit.SECONDS))
+            dictation.cancel() // first decode keeps running natively
+
+            dictation.pressDown()
+            dictation.pressUp()
+            assertTrue(secondAtLocalFirst.await(10, TimeUnit.SECONDS))
+            Thread.sleep(200) // let the second finish queue behind the first decode
+            dictation.cancel()
+            releaseFirst.countDown()
+
+            executor.shutdown() // both finishes drain
+            assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS))
+            assertEquals("queued decode ran for a cancelled utterance", 1, decodes.get())
+        } finally {
+            releaseFirst.countDown()
+            dictation.shutdown()
         }
     }
 }
