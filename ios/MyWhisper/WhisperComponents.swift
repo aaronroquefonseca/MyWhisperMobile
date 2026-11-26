@@ -2,6 +2,7 @@ import SwiftUI
 
 private struct WhisperListStyle: ViewModifier {
     @Environment(\.colorScheme) private var colorScheme
+    @AppStorage(WhisperColors.pureBlackKey) private var pureBlack = false
 
     func body(content: Content) -> some View {
         content
@@ -9,7 +10,7 @@ private struct WhisperListStyle: ViewModifier {
             .listSectionSpacing(16)
             .contentMargins(.top, 12, for: .scrollContent)
             .scrollContentBackground(.hidden)
-            .background(WhisperColors.background(colorScheme).ignoresSafeArea())
+            .background(WhisperColors.background(colorScheme, pureBlack: pureBlack).ignoresSafeArea())
             .scrollDismissesKeyboard(.interactively)
     }
 }

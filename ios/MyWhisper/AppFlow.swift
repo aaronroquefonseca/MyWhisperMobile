@@ -96,7 +96,12 @@ final class AppFlow: ObservableObject, Dictation.Listener {
     // Core + settings state (Setup screen inputs).
     @Published private(set) var coreVersion = "…"
     @Published private(set) var coreError: String?
-    @Published private(set) var settings: [String: Any]?
+    @Published private(set) var settings: [String: Any]? {
+        didSet {
+            let prefs = settings?["preferences"] as? [String: Any]
+            UserDefaults.standard.set(prefs?["black_background"] as? Bool ?? false, forKey: WhisperColors.pureBlackKey)
+        }
+    }
     @Published private(set) var theme: AppTheme = .system
 
     // Mic + setup-test state.
@@ -118,7 +123,20 @@ final class AppFlow: ObservableObject, Dictation.Listener {
 
     private let dictation: Dictation
 
-    init(dictation: Dictation = Dictation()) {
+    /// Android's mic controls: `preferences.mic_mode`, `hotkeys.smart_tap_ms`, `stt.release_delay_ms`,
+    /// read at each press so changes apply without a restart.
+    static func liveDictation() -> Dictation {
+        func value(_ section: String, _ key: String) -> Any? {
+            ((try? CoreBridge.getSettings())?[section] as? [String: Any])?[key]
+        }
+        return Dictation(
+            smartTapMs: { (value("hotkeys", "smart_tap_ms") as? NSNumber)?.int64Value ?? 150 },
+            mode: { value("preferences", "mic_mode") as? String ?? "Smart" },
+            releaseDelayMs: { (value("stt", "release_delay_ms") as? NSNumber)?.int64Value ?? 0 }
+        )
+    }
+
+    init(dictation: Dictation = AppFlow.liveDictation()) {
         self.dictation = dictation
         self.dictation.listener = self
         self.dictation.onLevel = { [weak self] peak in
@@ -266,7 +284,7 @@ final class AppFlow: ObservableObject, Dictation.Listener {
             var updated = try CoreBridge.getSettings()
             change(&updated)
             try CoreBridge.putSettings(updated)
-            settings = updated
+            reloadSettings()
         } catch {
             coreError = CoreError.displayMessage(for: error)
         }

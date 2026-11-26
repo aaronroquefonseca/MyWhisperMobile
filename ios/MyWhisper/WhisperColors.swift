@@ -11,8 +11,13 @@ enum WhisperColors {
             : Color(red: 0x17 / 255, green: 0x66 / 255, blue: 0x57 / 255)
     }
 
-    static func background(_ scheme: ColorScheme) -> Color {
-        scheme == .dark ? Color(red: 0x12 / 255, green: 0x14 / 255, blue: 0x16 / 255)
+    /// Mirrors `preferences.black_background` so every screen can read it without the settings.
+    static let pureBlackKey = "pureBlackBackground"
+    static var pureBlack: Bool { UserDefaults.standard.bool(forKey: pureBlackKey) }
+
+    static func background(_ scheme: ColorScheme, pureBlack: Bool = WhisperColors.pureBlack) -> Color {
+        if scheme == .dark, pureBlack { return .black }
+        return scheme == .dark ? Color(red: 0x12 / 255, green: 0x14 / 255, blue: 0x16 / 255)
             : Color(red: 0xF6 / 255, green: 0xF7 / 255, blue: 0xF8 / 255)
     }
 

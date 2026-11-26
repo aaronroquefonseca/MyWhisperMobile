@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		EE11000000000000000000F3 /* SettingsScreens.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE11000000000000000000F2 /* SettingsScreens.swift */; };
 		EE11000000000000000000F1 /* ProviderTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE11000000000000000000F0 /* ProviderTest.swift */; };
 		EE11000000000000000000E1 /* KeyboardCoreDictation.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE11000000000000000000E0 /* KeyboardCoreDictation.swift */; };
 		EE11000000000000000000E2 /* CoreBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAF7AA9058417D529285795E /* CoreBridge.swift */; };
@@ -107,6 +108,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		EE11000000000000000000F2 /* SettingsScreens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsScreens.swift; sourceTree = "<group>"; };
 		EE11000000000000000000F0 /* ProviderTest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderTest.swift; sourceTree = "<group>"; };
 		EE11000000000000000000E0 /* KeyboardCoreDictation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardCoreDictation.swift; sourceTree = "<group>"; };
 		EE11000000000000000000D0 /* KeyboardMicPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardMicPreview.swift; sourceTree = "<group>"; };
@@ -226,6 +228,7 @@
 				DD0100DD0100DD01000001 /* AppFlow.swift */,
 				FAF7AA9058417D529285795E /* CoreBridge.swift */,
 				EE11000000000000000000F0 /* ProviderTest.swift */,
+				EE11000000000000000000F2 /* SettingsScreens.swift */,
 				C1EAAC110000000000000001 /* Cleanup.swift */,
 				D1C710A90000000000000001 /* DictionaryStore.swift */,
 				AA0100AA0100AA01000001 /* AudioCapture.swift */,
@@ -468,6 +471,7 @@
 				E52CBAC9A1DF1CFF99131633 /* ContentView.swift in Sources */,
 				480131A0731D72ABA1949877 /* CoreBridge.swift in Sources */,
 				EE11000000000000000000F1 /* ProviderTest.swift in Sources */,
+				EE11000000000000000000F3 /* SettingsScreens.swift in Sources */,
 				C1EAAC110000000000000002 /* Cleanup.swift in Sources */,
 				D1C710A90000000000000002 /* DictionaryStore.swift in Sources */,
 				AA0100AA0100AA01000002 /* AudioCapture.swift in Sources */,

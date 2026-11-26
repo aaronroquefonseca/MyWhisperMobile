@@ -148,6 +148,15 @@ struct ContentView: View {
                         symbol: "mic"
                     )
                 }
+                NavigationLink {
+                    MicrophoneSettingsView(flow: flow)
+                } label: {
+                    WhisperDestinationLabel(
+                        title: String(localized: "Microphone"),
+                        summary: String(localized: "Button press and listening delay"),
+                        symbol: "mic.badge.plus"
+                    )
+                }
             } header: {
                 WhisperSectionHeading(keyboardStrings.input)
             }
@@ -176,6 +185,15 @@ struct ContentView: View {
                         symbol: "circle.lefthalf.filled"
                     )
                 }
+                NavigationLink {
+                    DiagnosticsView(flow: flow)
+                } label: {
+                    WhisperDestinationLabel(
+                        title: String(localized: "Diagnostics"),
+                        summary: String(localized: "Details to share when you report a problem"),
+                        symbol: "stethoscope"
+                    )
+                }
             } header: {
                 WhisperSectionHeading(keyboardStrings.appGroup)
             }
@@ -189,10 +207,25 @@ struct ContentView: View {
             Section {
                 Picker(setupStrings.setupTheme, selection: Binding(get: { flow.theme }, set: flow.applyTheme)) {
                     ForEach(AppTheme.allCases, id: \.self) { option in
-                        Text(option.rawValue).tag(option)
+                        Text(LocalizedStringKey(option.rawValue)).tag(option)
                     }
                 }
                 .pickerStyle(.inline)
+                Toggle(isOn: Binding {
+                    (flow.settings?["preferences"] as? [String: Any])?["black_background"] as? Bool ?? false
+                } set: { value in
+                    flow.updateSettings { settings in
+                        var prefs = settings["preferences"] as? [String: Any] ?? [:]
+                        prefs["black_background"] = value
+                        settings["preferences"] = prefs
+                    }
+                }) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Pure black background")
+                        Text("Use black instead of grey in dark mode. Also works with System theme.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
             }
             .whisperRowSurface()
         }
