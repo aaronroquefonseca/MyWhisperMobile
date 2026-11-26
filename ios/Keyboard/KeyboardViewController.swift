@@ -44,12 +44,14 @@ class KeyboardViewController: UIInputViewController {
         let symbol = Locale.current.currencySymbol ?? "$"
         return symbol.count == 1 ? symbol : "$"
     }
-    /// iOS's own height for third-party keyboards in portrait (Wispr Flow's too). iOS only
-    /// sometimes honors a shorter request and otherwise draws the difference as an empty band
-    /// above the toolbar, so the keyboard always asks for this and lays its keys out to fill it.
-    private static let portraitHeight: CGFloat = 304
-    private static let rowGap: CGFloat = 14
-    private static let stripHeight: CGFloat = 50
+    // Portrait metrics measured from the system keyboard on a 402 pt iPhone: 43 pt keys, 12 pt gaps.
+    private static let rowHeight: CGFloat = 43
+    private static let rowGap: CGFloat = 12
+    private static let stripHeight: CGFloat = 44
+    /// Space between the strip and the first row; the bottom row sits on the keyboard's edge, as
+    /// iOS already leaves room under it (the system keyboard's own row reaches lower, into the dock).
+    private static let stripGap: CGFloat = 8
+    private static let portraitHeight = stripHeight + stripGap + 4 * rowHeight + 3 * rowGap
     private static let numberRowHeight: CGFloat = 38
     private var pendingUndo: (original: String, replacement: String)?
     /// Text a suggestion tap inserted, ending in its automatic space. Punctuation typed next goes before that space.
@@ -143,6 +145,11 @@ class KeyboardViewController: UIInputViewController {
         var correction: String?
     }
     private var heightConstraint: NSLayoutConstraint?
+    /// Extra surface iOS sometimes draws above the keyboard (about 17 pt; it toggles as keyboards
+    /// are switched). When it shows as an offset of the view, the keyboard asks for that much less.
+    private var surfaceBand: CGFloat = 0
+    // shortcut: on-screen height readout to learn where iOS puts that band; remove once understood.
+    private let heightReadout = UILabel()
     private var popup: UILabel?
     private weak var pressedKey: UIButton?
     private var pressTint: UIView?
@@ -207,6 +214,11 @@ class KeyboardViewController: UIInputViewController {
         heightConstraint = view.heightAnchor.constraint(equalToConstant: Self.portraitHeight)
         heightConstraint?.priority = .init(999)
         heightConstraint?.isActive = true
+        heightReadout.font = .monospacedSystemFont(ofSize: 8, weight: .regular)
+        heightReadout.textColor = .systemGray
+        heightReadout.textAlignment = .center
+        heightReadout.isUserInteractionEnabled = false
+        view.addSubview(heightReadout)
         registerForTraitChanges([UITraitUserInterfaceStyle.self, UITraitVerticalSizeClass.self]) {
             (controller: KeyboardViewController, _) in controller.refreshLayout()
         }
@@ -251,6 +263,20 @@ class KeyboardViewController: UIInputViewController {
         super.viewDidLayoutSubviews()
         let width = view.bounds.width
         let height = view.bounds.height
+        let top = view.frame.minY
+        heightReadout.frame = CGRect(x: 0, y: 0, width: width, height: 10)
+        heightReadout.text = String(
+            format: "y %.1f h %.1f req %.1f sup %.1f win %.1f/%.1f band %.1f",
+            top, height, heightConstraint?.constant ?? 0, view.superview?.bounds.height ?? 0,
+            view.convert(CGPoint.zero, to: nil).y, view.window?.bounds.height ?? 0, surfaceBand
+        )
+        view.bringSubviewToFront(heightReadout)
+        let band: CGFloat = top > 0 && top <= 24 ? top : 0
+        if layout != nil, band != surfaceBand {
+            surfaceBand = band
+            rebuild()
+            return
+        }
         if layout == nil || (width > 0 && layout?.width != width) || (height > 0 && layout?.height != height) {
             refreshLayout()
         }
@@ -549,7 +575,7 @@ class KeyboardViewController: UIInputViewController {
 
         let width = layout.width
         let pad: CGFloat = layout.compact ? 10 : 6
-        let rowHeight: CGFloat = 31
+        let rowHeight: CGFloat = layout.compact ? 31 : Self.rowHeight
         let gap: CGFloat = layout.compact ? 6 : Self.rowGap
         let stripHeight: CGFloat = layout.compact ? 36 : Self.stripHeight
         let numberRow = settings.showsNumberRow && !isNumberField
@@ -558,7 +584,8 @@ class KeyboardViewController: UIInputViewController {
         let extra = settings.showsNumberRow ? numberHeight + gap : 0
         // One height for letters, symbols, emoji and emoji search: each change of the requested
         // height risked iOS keeping a larger one and drawing it as an empty band above the toolbar.
-        let height = layout.compact ? stripHeight + extra + 4 * rowHeight + 3 * gap + 10 : Self.portraitHeight
+        let height = (layout.compact ? stripHeight + Self.stripGap + 4 * rowHeight + 3 * gap : Self.portraitHeight)
+            + extra - surfaceBand
         setKeyboardHeight(height)
         if emojiMode, let query = emojiSearch {
             addEmojiSearch(query: query, width: width, pad: pad, height: height, gap: gap)
@@ -566,15 +593,14 @@ class KeyboardViewController: UIInputViewController {
         }
 
         if emojiMode {
-            addEmojiView(width: width, pad: pad, height: height, rowHeight: layout.compact ? rowHeight : 46)
+            addEmojiView(width: width, pad: pad, height: height, rowHeight: rowHeight)
             return
         }
 
         addPredictionRow(width: width, pad: pad, height: stripHeight)
-        // 2 pt under the bottom row: iOS already leaves room below the keyboard, like Apple's.
-        var y = stripHeight + 8
+        var y = stripHeight + Self.stripGap
         // Keys share what the strip and gaps leave; a number row takes its part from them below.
-        var keyHeight = (height - stripHeight - 10 - 3 * gap) / 4
+        var keyHeight = (height - y - 3 * gap) / 4
         // If iOS gives a different height than asked, grow or shrink the keys instead of leaving a band.
         let given = layout.height - height
         if !emojiMode, layout.height > 0, abs(given) <= 60 { keyHeight += given / 4 }
