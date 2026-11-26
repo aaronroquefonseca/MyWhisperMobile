@@ -15,22 +15,9 @@ private struct WhisperListStyle: ViewModifier {
     }
 }
 
-private struct WhisperRowSurface: ViewModifier {
-    @Environment(\.colorScheme) private var colorScheme
-
-    func body(content: Content) -> some View {
-        content
-            .listRowBackground(WhisperColors.surface(colorScheme))
-    }
-}
-
 extension View {
     func whisperListStyle() -> some View {
         modifier(WhisperListStyle())
-    }
-
-    func whisperRowSurface() -> some View {
-        modifier(WhisperRowSurface())
     }
 }
 
@@ -41,8 +28,6 @@ struct WhisperSectionHeading: View {
 
     var body: some View {
         Text(title)
-            .font(.subheadline.weight(.semibold))
-            .textCase(nil)
             .accessibilityAddTraits(.isHeader)
     }
 }
@@ -66,58 +51,6 @@ struct WhisperDestinationLabel: View {
         .padding(.vertical, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
-    }
-}
-
-struct WhisperPager<First: View, Second: View>: View {
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Binding var showSecond: Bool
-    let firstTitle: String
-    let secondTitle: String
-    @ViewBuilder let first: () -> First
-    @ViewBuilder let second: () -> Second
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 0) {
-                tab(firstTitle, second: false)
-                tab(secondTitle, second: true)
-            }
-            .padding(.horizontal, 16)
-            Divider()
-            TabView(selection: $showSecond) {
-                first().tag(false)
-                second().tag(true)
-            }
-            .tabViewStyle(.page(indexDisplayMode: .never))
-        }
-        .background(WhisperColors.background(colorScheme).ignoresSafeArea())
-    }
-
-    private func tab(_ title: String, second: Bool) -> some View {
-        let selected = second == showSecond
-        return Button {
-            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
-                showSecond = second
-            }
-        } label: {
-            Text(title)
-                .font(.subheadline.weight(selected ? .semibold : .medium))
-                .foregroundStyle(selected ? WhisperColors.primary(colorScheme) : WhisperColors.onSurfaceVariant(colorScheme))
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: .infinity, minHeight: 48)
-                .padding(.horizontal, 4)
-                .contentShape(Rectangle())
-                .overlay(alignment: .bottom) {
-                    if selected {
-                        Capsule().fill(WhisperColors.primary(colorScheme))
-                            .frame(width: 32, height: 3)
-                    }
-                }
-        }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 
@@ -159,6 +92,8 @@ struct WhisperSearchField: View {
     }
 }
 
+/// One chain entry: tap to edit, switch to enable, and a menu for Test, order and Delete.
+/// A test's result shows under the row, not inside the menu.
 struct WhisperProviderRow<ExtraActions: View>: View {
     let name: String
     let summary: String
@@ -169,39 +104,88 @@ struct WhisperProviderRow<ExtraActions: View>: View {
     let onMoveDown: () -> Void
     let onEdit: () -> Void
     let onDelete: () -> Void
+    /// Nil hides Test (Local rows); a blocked reason disables it.
+    var testBlockedReason: LocalizedStringKey?
+    var test: (() async -> ProviderTest.Outcome)?
     @ViewBuilder let extraActions: () -> ExtraActions
+    @State private var testing = false
+    @State private var outcome: ProviderTest.Outcome?
 
     var body: some View {
-        HStack(spacing: 8) {
-            Button(action: onEdit) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(name).font(.body.weight(.medium)).foregroundStyle(.primary)
-                    Text(summary).font(.subheadline).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 12) {
+                Button(action: onEdit) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(name).foregroundStyle(.primary)
+                        Text(summary)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
                 }
-                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                .contentShape(Rectangle())
+                .buttonStyle(.borderless)
+                .accessibilityHint("Edit provider")
+
+                Toggle(name, isOn: $enabled)
+                    .labelsHidden()
+                    .accessibilityLabel("Enable \(name)")
+
+                Menu {
+                    if test != nil {
+                        Button("Test", systemImage: "checkmark.seal", action: runTest)
+                            .disabled(testing || testBlockedReason != nil)
+                    }
+                    Button("Edit", systemImage: "pencil", action: onEdit)
+                    Button("Move up", systemImage: "arrow.up", action: onMoveUp).disabled(!canMoveUp)
+                    Button("Move down", systemImage: "arrow.down", action: onMoveDown).disabled(!canMoveDown)
+                    extraActions()
+                    Button("Delete", systemImage: "trash", role: .destructive, action: onDelete)
+                } label: {
+                    Label("Actions for \(name)", systemImage: "ellipsis.circle")
+                        .labelStyle(.iconOnly)
+                        .imageScale(.large)
+                        .frame(minWidth: 44, minHeight: 44)
+                }
+                .buttonStyle(.borderless)
             }
-            .buttonStyle(.borderless)
-            .accessibilityHint("Edit provider")
-
-            Toggle(name, isOn: $enabled)
-                .labelsHidden()
-                .accessibilityLabel("Enable \(name)")
-
-            Menu {
-                Button("Edit", systemImage: "pencil", action: onEdit)
-                Button("Move up", systemImage: "arrow.up", action: onMoveUp).disabled(!canMoveUp)
-                Button("Move down", systemImage: "arrow.down", action: onMoveDown).disabled(!canMoveDown)
-                extraActions()
-                Button("Delete", systemImage: "trash", role: .destructive, action: onDelete)
-            } label: {
-                Label("Actions for \(name)", systemImage: "ellipsis")
-                    .labelStyle(.iconOnly)
+            if testing {
+                Label { Text("Testing…") } icon: { ProgressView().controlSize(.small) }
+                    .font(.caption)
                     .foregroundStyle(.secondary)
-                    .frame(minWidth: 44, minHeight: 44)
+            } else if let outcome {
+                Group {
+                    if outcome.passed {
+                        Label("Works · \(outcome.latencyMs) ms · \(outcome.excerpt)", systemImage: "checkmark.circle.fill")
+                    } else {
+                        Label("Failed · \(outcome.latencyMs) ms · \(outcome.excerpt)", systemImage: "xmark.octagon.fill")
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(outcome.passed ? Color.green : WhisperColors.error)
+                .textSelection(.enabled)
+            } else if let testBlockedReason, test != nil {
+                Text(testBlockedReason).font(.caption).foregroundStyle(.secondary)
             }
-            .buttonStyle(.borderless)
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 2)
+        .sensoryFeedback(.success, trigger: outcome?.passed == true ? outcome : nil)
+        .sensoryFeedback(.error, trigger: outcome?.passed == false ? outcome : nil)
+        .swipeActions {
+            Button("Delete", systemImage: "trash", role: .destructive, action: onDelete)
+        }
+    }
+
+    private func runTest() {
+        guard let test else { return }
+        testing = true
+        outcome = nil
+        Task {
+            let result = await test()
+            outcome = result
+            testing = false
+        }
     }
 }

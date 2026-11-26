@@ -1,3 +1,4 @@
+import AVFoundation
 import UIKit
 
 /// MyWhisper keyboard with local predictions, autocorrect, and emoji.
@@ -222,6 +223,7 @@ class KeyboardViewController: UIInputViewController {
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        if hasFullAccess { KeyboardPreferences.markFullAccess() }
         super.hasDictationKey = true
         visible = true
         // Re-add the height once the view is in the window; iOS can skip a constraint set before that.
@@ -669,7 +671,11 @@ class KeyboardViewController: UIInputViewController {
         let preview = KeyboardMicPreview(
             frame: CGRect(x: pad, y: 0, width: toolbarWidth, height: height),
             dockedLeading: micDockedLeading,
-            openSession: hasFullAccess ? { [weak self] in self?.openMyWhisper("keyboard-mic", otherwise: "Open MyWhisper to start the mic") } : nil
+            fullAccess: hasFullAccess,
+            onUnavailable: { [weak self] in
+                guard let self else { return }
+                self.showNotice(self.hasFullAccess ? Self.micBlockedHint : Self.fullAccessHint)
+            }
         ) { [weak self] leading in
             guard let self else { return }
             self.micDockedLeading = leading
@@ -786,9 +792,9 @@ class KeyboardViewController: UIInputViewController {
     // Said when iOS still refuses to open the app.
     private static let settingsHint = "Keyboard settings are in the MyWhisper app"
     private static let fullAccessHint = "Turn on Allow Full Access in Settings › Keyboards"
+    private static let micBlockedHint = "Allow the microphone for MyWhisper in Settings"
 
-    /// Keyboards can't record or show app screens. Like Wispr Flow, open MyWhisper
-    /// (mic session, settings); iOS shows a back link to the previous app.
+    /// Keyboards can't show app screens: open MyWhisper's settings; iOS shows a back link to the previous app.
     private func openMyWhisper(_ destination: String, otherwise hint: String) {
         guard let url = NSURL(string: "mywhisper://" + destination) else { return }
         // iOS 26 refuses this from keyboards without Full Access (Wispr Flow needs it too).
@@ -1174,6 +1180,9 @@ class KeyboardViewController: UIInputViewController {
             generator = UIImpactFeedbackGenerator(style: .rigid)
         }
         generator.prepare()
+        // iOS mutes haptics and key clicks while the audio session can record, and the mic's web view
+        // leaves it that way after dictating: typing then went silent until the keyboard reloaded.
+        try? AVAudioSession.sharedInstance().setAllowHapticsAndSystemSoundsDuringRecording(true)
         return generator
     }
 

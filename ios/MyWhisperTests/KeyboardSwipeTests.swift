@@ -265,33 +265,6 @@ final class KeyboardSwipeTests: XCTestCase {
         XCTAssertNil(key("/"))
     }
 
-    func testKeyboardDictationMailboxExpiresAndMatchesTheSession() throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
-        defer { try? FileManager.default.removeItem(at: directory) }
-
-        let mailbox = KeyboardDictationMailbox(directory: directory)
-        let now = Date(timeIntervalSinceReferenceDate: 100)
-        let session = KeyboardDictationMailbox.Session(id: UUID(), heartbeat: now)
-        try mailbox.publish(session)
-        let recovered = try XCTUnwrap(mailbox.session)
-        XCTAssertTrue(recovered.isAvailable(at: now))
-        XCTAssertFalse(recovered.isAvailable(at: now.addingTimeInterval(5)))
-
-        let command = KeyboardDictationMailbox.Request(id: UUID(), session: session.id, action: .start, created: now)
-        try mailbox.send(command)
-        let request = try XCTUnwrap(mailbox.request)
-        XCTAssertTrue(request.belongs(to: session.id, at: now))
-        XCTAssertFalse(request.belongs(to: UUID(), at: now))
-        XCTAssertFalse(request.belongs(to: session.id, at: now.addingTimeInterval(5)))
-
-        try mailbox.respond(.init(id: request.id, phase: .result, text: "Hello"))
-        XCTAssertEqual(mailbox.reply?.id, request.id)
-        XCTAssertEqual(mailbox.reply?.text, "Hello")
-        mailbox.clearReply()
-        XCTAssertNil(mailbox.reply)
-    }
-
     @MainActor
     func testSpaceReturnsToLettersFromBothSymbolPages() throws {
         let controller = TestKeyboardController()
@@ -322,14 +295,6 @@ final class KeyboardSwipeTests: XCTestCase {
         try tap("Space")
         try tap("q")
         XCTAssertEqual(controller.document.text, "4 ~ q")
-    }
-
-    func testKeyboardMicLevelsExpireAndRejectInvalidReadings() {
-        let now = Date(timeIntervalSince1970: 1_000)
-        let reading = KeyboardDictationMailbox.MeterReading(level: 0.5, measured: now)
-        XCTAssertTrue(reading.isCurrent(at: now.addingTimeInterval(0.1)))
-        XCTAssertFalse(reading.isCurrent(at: now.addingTimeInterval(1)))
-        XCTAssertFalse(KeyboardDictationMailbox.MeterReading(level: 2, measured: now).isCurrent(at: now))
     }
 
     @MainActor

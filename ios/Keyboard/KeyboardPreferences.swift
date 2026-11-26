@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 
 enum KeyboardLanguage: String, CaseIterable, Codable, Identifiable {
@@ -187,6 +188,19 @@ struct KeyboardPreferences: Codable, Equatable {
     /// providers, dictionary and history.
     static let coreDirectoryURL: URL? = sharedContainerURL?.appendingPathComponent("MyWhisper", isDirectory: true)
 
+    private static let fullAccessURL = sharedContainerURL?.appendingPathComponent("keyboard-full-access")
+
+    /// The keyboard reaches the shared container only with Full Access, so it leaves this mark
+    /// there for the app's setup checklist. It stays if Full Access is later turned off.
+    static var fullAccessSeen: Bool {
+        fullAccessURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
+    }
+
+    static func markFullAccess() {
+        guard let url = fullAccessURL, !FileManager.default.fileExists(atPath: url.path) else { return }
+        try? Data().write(to: url)
+    }
+
     /// Manual transfer for sideloads whose signing profile omits the shared group.
     /// Contains typing toggles and language choices only.
     var transferText: String {
@@ -243,5 +257,84 @@ struct DictationIssue: Codable, Equatable {
         } else {
             try? FileManager.default.removeItem(at: url)
         }
+    }
+}
+
+/// Ranked input kinds (`preferences.mic_priority`, core `MicKind`), like Android's `MicRoute`.
+/// The app mirrors the order into the shared container for the keyboard, which records.
+enum MicRoute {
+    static let wired = "Wired"
+    static let builtIn = "BuiltIn"
+    static let bluetooth = "Bluetooth"
+    static let carPlay = "CarPlay"
+    static let defaults = [wired, builtIn, bluetooth, carPlay]
+
+    static func kind(of port: AVAudioSession.Port) -> String? {
+        switch port {
+        case .builtInMic: return builtIn
+        case .headsetMic, .usbAudio, .lineIn: return wired
+        case .bluetoothHFP, .bluetoothLE: return bluetooth
+        case .carAudio: return carPlay
+        default: return nil
+        }
+    }
+
+    /// Saved order with unknown kinds dropped and missing ones appended.
+    static func priority(from settings: [String: Any]?) -> [String] {
+        let prefs = settings?["preferences"] as? [String: Any]
+        return normalized(prefs?["mic_priority"] as? [String] ?? [])
+    }
+
+    static func normalized(_ saved: [String]) -> [String] {
+        var seen = Set<String>()
+        return (saved.filter(defaults.contains) + defaults).filter { seen.insert($0).inserted }
+    }
+
+    /// First item whose kind ranks highest; nil when none is ranked.
+    static func pick<T>(priority: [String], items: [T], kind: (T) -> String?) -> T? {
+        for wanted in priority {
+            if let hit = items.first(where: { kind($0) == wanted }) { return hit }
+        }
+        return nil
+    }
+
+    /// Pure `preferences.mic_priority` write transform.
+    static func applying(_ order: [String], to settings: [String: Any]) -> [String: Any] {
+        var settings = settings
+        var prefs = settings["preferences"] as? [String: Any] ?? [:]
+        prefs["mic_priority"] = order
+        settings["preferences"] = prefs
+        return settings
+    }
+
+    /// What the keyboard needs from the app's microphone settings.
+    struct Shared: Codable, Equatable {
+        var priority: [String]
+        var releaseDelayMs: Int
+    }
+
+    private static let sharedURL = KeyboardPreferences.sharedContainerURL?.appendingPathComponent("microphone.json")
+
+    static func share(from settings: [String: Any]?) {
+        let delay = ((settings?["stt"] as? [String: Any])?["release_delay_ms"] as? NSNumber)?.intValue ?? 0
+        let value = Shared(priority: priority(from: settings), releaseDelayMs: delay)
+        guard value != shared, let url = sharedURL, let data = try? JSONEncoder().encode(value) else { return }
+        try? data.write(to: url, options: .atomic)
+    }
+
+    static var shared: Shared {
+        let saved = sharedURL.flatMap { try? Data(contentsOf: $0) }.flatMap { try? JSONDecoder().decode(Shared.self, from: $0) }
+        return Shared(priority: normalized(saved?.priority ?? []), releaseDelayMs: saved?.releaseDelayMs ?? 0)
+    }
+
+    /// Point the keyboard's audio session at the first connected microphone in the shared order.
+    /// shortcut: the web view records through this session, but whether WebKit keeps the preferred
+    /// input is unverified on device; if it doesn't, record natively in the keyboard instead.
+    static func preferSharedInput() {
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.playAndRecord, options: [.allowBluetooth, .mixWithOthers])
+        guard let input = pick(priority: shared.priority, items: session.availableInputs ?? [], kind: { kind(of: $0.portType) })
+        else { return }
+        try? session.setPreferredInput(input)
     }
 }

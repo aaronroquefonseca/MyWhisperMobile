@@ -202,7 +202,6 @@ struct CleanupSettingsView: View {
                 Section {
                     Text(error).foregroundStyle(.red).font(.caption)
                 }
-                .whisperRowSurface()
             }
             Section {
                 Toggle("Enable cleanup", isOn: Binding(get: { store.draft.enabled }, set: { store.setEnabled($0) }))
@@ -214,62 +213,40 @@ struct CleanupSettingsView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .whisperRowSurface()
             Section {
                 if promptEditing {
                     TextEditor(text: $promptDraft)
-                        .frame(minHeight: 120)
-                        .font(.body)
-                    HStack {
-                        Button("Save") {
-                            store.setCustomPrompt(promptDraft)
-                            promptEditing = false
-                        }
-                        Button("Cancel", role: .cancel) { promptEditing = false }
-                        Spacer()
-                        Button("Reset to default") { store.resetPrompt() }
+                        .frame(minHeight: 160)
+                    Button("Save prompt") {
+                        store.setCustomPrompt(promptDraft)
+                        promptEditing = false
                     }
-                    .buttonStyle(.borderless)
+                    Button("Cancel", role: .cancel) { promptEditing = false }
                 } else {
                     let usesDefault = store.draft.customPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    if usesDefault {
-                        Text("Using the built-in prompt:").font(.caption.weight(.semibold))
-                    }
                     Text(usesDefault ? Self.builtInPrompt : store.draft.customPrompt)
-                        .font(.caption)
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
-                        .lineLimit(promptExpanded ? nil : 6)
+                        .lineLimit(promptExpanded ? nil : 4)
                         .textSelection(.enabled)
-                    HStack {
-                        Button(promptExpanded ? "Show less" : "Read prompt") { promptExpanded.toggle() }
-                        Button("Edit custom prompt") {
-                            // Start from the prompt in use, like Android, rather than an empty box.
-                            promptDraft = usesDefault ? Self.builtInPrompt : store.draft.customPrompt
-                            promptEditing = true
-                        }
-                        if store.draft.customPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
-                            Button("Reset to default") { store.resetPrompt() }
-                        }
+                    Button(promptExpanded ? "Show less" : "Read prompt") { promptExpanded.toggle() }
+                    Button(usesDefault ? "Write a custom prompt" : "Edit custom prompt") {
+                        // Start from the prompt in use, like Android, rather than an empty box.
+                        promptDraft = usesDefault ? Self.builtInPrompt : store.draft.customPrompt
+                        promptEditing = true
                     }
-                    .buttonStyle(.borderless)
+                    if !usesDefault {
+                        Button("Reset to default", role: .destructive) { store.resetPrompt() }
+                    }
+                }
+            } header: {
+                if store.draft.customPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text("Prompt · built-in")
+                } else {
+                    Text("Prompt · custom")
                 }
             }
-            .whisperRowSurface()
             Section {
-                Menu {
-                    Button("Ollama") { sheet = .add(.ollama) }
-                    Button("Cloud provider") { sheet = .add(.cloud) }
-                } label: {
-                    WhisperAddLabel(title: "Add provider")
-                }
-                .listRowInsets(EdgeInsets())
-                .listRowBackground(Color.clear)
-            }
-            Section {
-                if store.draft.entries.isEmpty {
-                    Text("Add a provider to clean up transcripts.")
-                        .foregroundStyle(.secondary)
-                }
                 ForEach(store.draft.entries, id: \.id) { entry in
                     CleanupRow(
                         entry: entry,
@@ -283,12 +260,21 @@ struct CleanupSettingsView: View {
                         onWhy: { whyText = $0 }
                     )
                 }
+                Menu {
+                    Button("Ollama") { sheet = .add(.ollama) }
+                    Button("Cloud provider") { sheet = .add(.cloud) }
+                } label: {
+                    Label("Add provider", systemImage: "plus.circle.fill")
+                }
             } header: {
                 WhisperSectionHeading("Cleanup providers")
             } footer: {
-                Text("Enabled providers run in order until one answers.")
+                if store.draft.entries.isEmpty {
+                    Text("Add a provider to clean up transcripts.")
+                } else {
+                    Text("Enabled providers run in order until one answers.")
+                }
             }
-            .whisperRowSurface()
         }
         .whisperListStyle()
         .onAppear(perform: store.load)
@@ -371,19 +357,17 @@ private struct CleanupRow: View {
             onMoveUp: onMoveUp,
             onMoveDown: onMoveDown,
             onEdit: onEdit,
-            onDelete: onDelete
+            onDelete: onDelete,
+            testBlockedReason: ProviderTest.blockedReason(kind: CleanupChain.capitalizedKind(entry.kind), url: entry.url, model: entry.model),
+            test: entry.kind == .local ? nil : {
+                await ProviderTest.cleanup(kind: CleanupChain.capitalizedKind(entry.kind), url: entry.url, model: entry.model, apiKey: entry.apiKey)
+            }
         ) {
             if CleanupChain.isSkippedLocal(entry) {
                 Button("Why skipped?") { onWhy(localSkippedCleanupCopy) }
             }
             if CleanupChain.isGeminiLike(entry) {
                 Button("Why errors?") { onWhy(geminiCleanupCopy) }
-            }
-            if entry.kind != .local {
-                let kind = CleanupChain.capitalizedKind(entry.kind)
-                ProviderTestButton(blockedReason: ProviderTest.blockedReason(kind: kind, url: entry.url, model: entry.model)) {
-                    await ProviderTest.cleanup(kind: kind, url: entry.url, model: entry.model, apiKey: entry.apiKey)
-                }
             }
         }
     }

@@ -124,9 +124,16 @@ jobs:
           shot providers -mwSkipOnboarding -mwTab providers
           shot dictionary -mwSkipOnboarding -mwTab dictionary
           shot settings -mwSkipOnboarding -mwTab settings
-          # The keyboard's side button opens this link; the settings sheet must appear.
+          shot cleanup -mwSkipOnboarding -mwTab cleanup
+          # The keyboard's side button opens this link; keyboard settings must open in the Settings tab.
           # (simctl openurl stops at an "Open in MyWhisper?" prompt, so call the handler directly.)
           shot keyboard-settings-link -mwSkipOnboarding -mwOpenURL mywhisper://keyboard-settings
+          for route in keyboardLanguages microphone appearance finishSetup; do
+            shot "route-$route" -mwSkipOnboarding -mwRoute "$route"
+          done
+          for page in 0 1 2; do
+            shot "onboarding-$page" -mwOnboardingPage "$page"
+          done
           ls -l build/sim-*.png
 
       - name: Upload screenshots

@@ -104,67 +104,41 @@ private struct BrandMark: View {
     }
 }
 
+/// Android's first run, for the keyboard: welcome, the setup steps (the pager stops there until
+/// the keyboard is added and the microphone allowed), then practice. No skipping, like Android.
 struct OnboardingView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var practicing: Bool
     @State private var page: Int
     @State private var practiceText = ""
+    @State private var setup = SetupState(keyboardAdded: false, fullAccess: false, micGranted: false, speechReady: false)
     let strings: OnboardingStrings
+    @ObservedObject var flow: AppFlow
     let onDone: () -> Void
 
-    init(strings: OnboardingStrings, initialPage: Int = 0, onDone: @escaping () -> Void) {
+    private static let pages = 3
+
+    init(strings: OnboardingStrings, flow: AppFlow, initialPage: Int = 0, onDone: @escaping () -> Void) {
         self.strings = strings
+        self.flow = flow
         self.onDone = onDone
-        _page = State(initialValue: min(max(initialPage, 0), 3))
+        _page = State(initialValue: min(max(initialPage, 0), Self.pages - 1))
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Spacer()
-                if page < 3 {
-                    Button(strings.skip, action: onDone)
+            Group {
+                switch page {
+                case 0: welcome
+                case 1: setupPage
+                default: practicePage
                 }
             }
-            .padding(.horizontal, 24)
-            .frame(height: 44)
-
-            TabView(selection: $page) {
-                step(strings.welcomeTitle) {
-                    BrandMark()
-                } details: {
-                    Text(strings.welcomeBody)
-                }
-                .tag(0)
-                step(strings.installTitle) {
-                    stepIcon("keyboard")
-                } details: {
-                    KeyboardInstallInstructions(strings: strings)
-                }
-                .tag(1)
-                step(strings.practiceTitle) {
-                    stepIcon("globe")
-                } details: {
-                    Text(strings.practiceHint)
-                    TextField(strings.practicePlaceholder, text: $practiceText)
-                        .textFieldStyle(.roundedBorder)
-                        .focused($practicing)
-                }
-                .tag(2)
-                step(strings.dictate) {
-                    stepIcon("waveform")
-                } details: {
-                    Text(strings.dictationHint)
-                }
-                .tag(3)
-            }
-            .tabViewStyle(.page(indexDisplayMode: .never))
-            .onChange(of: page) { _, page in
-                if page != 2 { practicing = false }
-            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .transition(.opacity)
 
             HStack(spacing: 8) {
-                ForEach(0..<4, id: \.self) { index in
+                ForEach(0..<Self.pages, id: \.self) { index in
                     Capsule()
                         .fill(index == page ? WhisperColors.brandCyan : .white.opacity(0.25))
                         .frame(width: index == page ? 18 : 6, height: 6)
@@ -178,20 +152,77 @@ struct OnboardingView: View {
                     Button(strings.back) { movePage(to: page - 1) }
                         .buttonStyle(.bordered)
                 }
-                Button(page == 3 ? strings.done : strings.next) {
-                    if page == 3 { onDone() } else { movePage(to: page + 1) }
+                Button(primaryTitle) {
+                    if page == Self.pages - 1 { onDone() } else { movePage(to: page + 1) }
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(WhisperColors.brandCyan)
                 .foregroundStyle(.black)
+                .disabled(page == 1 && !setup.requiredDone)
             }
+            .controlSize(.large)
             .buttonBorderShape(.capsule)
             .padding(.horizontal, 24)
             .padding(.bottom, 16)
         }
-        .tint(.white)
+        .tint(WhisperColors.brandCyan)
         .background(WhisperColors.brandInk.ignoresSafeArea())
         .preferredColorScheme(.dark)
+    }
+
+    private var primaryTitle: String {
+        switch page {
+        case 0: return String(localized: "Get started")
+        case Self.pages - 1: return String(localized: "Start using MyWhisper")
+        default: return strings.next
+        }
+    }
+
+    private var welcome: some View {
+        step(String(localized: "Dictate wherever you type")) {
+            BrandMark()
+        } details: {
+            Text("The MyWhisper keyboard types with suggestions and autocorrect, and turns your voice into text in any app.")
+            VStack(alignment: .leading, spacing: 10) {
+                bullet("Works in any app: messages, notes, email, search.")
+                bullet("Fixes punctuation and filler words for you, if you want.")
+                bullet("You choose where your voice is turned into text.")
+            }
+            .padding(.top, 4)
+        }
+    }
+
+    private var setupPage: some View {
+        step(String(localized: "Set up the keyboard")) {
+            stepIcon("keyboard")
+        } details: {
+            Text("Add the keyboard and allow the microphone. MyWhisper only listens while you hold its mic button.")
+            SetupChecklistView(flow: flow, includesSpeech: false, state: $setup)
+                .foregroundStyle(.primary)
+        }
+    }
+
+    private var practicePage: some View {
+        step(strings.practiceTitle) {
+            stepIcon("globe")
+        } details: {
+            Text("Tap the box, hold the globe key and choose MyWhisper Keyboard. Type, or hold the mic button above the keys and speak.")
+            if !isServerConfigured(settings: flow.settings) {
+                Text("To turn speech into text, add a speech provider in Providers after this.")
+                    .font(.footnote)
+            }
+            TextField(strings.practicePlaceholder, text: $practiceText, axis: .vertical)
+                .lineLimit(3...6)
+                .textFieldStyle(.roundedBorder)
+                .focused($practicing)
+        }
+    }
+
+    private func bullet(_ text: LocalizedStringKey) -> some View {
+        Label {
+            Text(text)
+        } icon: {
+            Image(systemName: "checkmark").foregroundStyle(WhisperColors.brandCyan)
+        }
     }
 
     private func step<Hero: View, Details: View>(
@@ -229,18 +260,8 @@ struct OnboardingView: View {
     }
 }
 
-private struct KeyboardInstallInstructions: View {
-    let strings: OnboardingStrings
-
-    var body: some View {
-        Text(strings.installPath).font(.body.weight(.semibold))
-        Text(strings.installHint)
-    }
-}
-
 struct KeyboardSetupView: View {
     let strings: OnboardingStrings
-    @ObservedObject var flow: AppFlow
     @State private var practiceText = ""
     @State private var preferences = KeyboardPreferences.load()
     @State private var needsTransfer = KeyboardPreferences.sharedURL == nil
@@ -249,31 +270,17 @@ struct KeyboardSetupView: View {
 
     var body: some View {
         List {
-            KeyboardMicPreviewSetup(session: flow.keyboardMicPreview, isSpanish: strings.isSpanish)
-
             Section {
-                ForEach(KeyboardLanguage.allCases) { language in
-                    Toggle(language.title, isOn: Binding(
-                        get: { preferences.languages.contains(language) },
-                        set: { preferences.setLanguage(language, enabled: $0) }
-                    ))
-                    .disabled(preferences.languages == [language])
-                }
-                Picker(label("Default language", "Idioma predeterminado"), selection: $preferences.defaultLanguage) {
-                    ForEach(preferences.languages) { language in
-                        Text(language.title).tag(language)
-                    }
+                NavigationLink(value: SettingsRoute.keyboardLanguages) {
+                    LabeledContent(label("Languages", "Idiomas"), value: preferences.languages.map(\.title).joined(separator: ", "))
                 }
                 Toggle(label("Swipe spacebar to switch languages", "Deslizar en la barra espaciadora para cambiar de idioma"), isOn: $preferences.switchesLanguageBySwipe)
                     .disabled(preferences.languages.count < 2)
                 Toggle(label("Keep the last language used", "Mantener el último idioma usado"), isOn: $preferences.remembersLanguage)
                     .disabled(preferences.languages.count < 2)
-            } header: {
-                WhisperSectionHeading(label("Languages", "Idiomas"))
             } footer: {
                 Text(label("Hold the spacebar to move the cursor. Swipe up or down to move by line, or sideways to switch languages.", "Mantén pulsada la barra espaciadora para mover el cursor. Desliza hacia arriba o abajo para cambiar de línea, o hacia un lado para cambiar de idioma."))
             }
-            .whisperRowSurface()
 
             Section {
                 Toggle(label("Swipe to type", "Deslizar para escribir"), isOn: $preferences.usesSwipeTyping)
@@ -282,6 +289,11 @@ struct KeyboardSetupView: View {
                 Toggle(label("Auto-capitalization", "Mayúsculas automáticas"), isOn: $preferences.autoCapitalization)
                 Toggle(label("Double-space for a period", "Doble espacio para insertar un punto"), isOn: $preferences.periodShortcut)
                 Toggle(label("Enable Caps Lock", "Activar bloqueo de mayúsculas"), isOn: $preferences.enableCapsLock)
+            } header: {
+                Text(label("Typing", "Escritura"))
+            }
+
+            Section {
                 Toggle(label("Character preview", "Vista previa de teclas"), isOn: $preferences.characterPreview)
                 Toggle(label("Key clicks", "Sonido de teclas"), isOn: $preferences.keyClicks)
                 Toggle(label("Haptic feedback", "Respuesta háptica"), isOn: $preferences.usesHaptics)
@@ -289,9 +301,8 @@ struct KeyboardSetupView: View {
                 Toggle(label("Period key beside Space", "Tecla de punto junto al espacio"), isOn: $preferences.showsPeriodKey)
                 Toggle(label("Button beside suggestions", "Botón junto a las sugerencias"), isOn: $preferences.showsSideButton)
             } header: {
-                WhisperSectionHeading(label("Typing", "Escritura"))
+                Text(label("Keys", "Teclas"))
             }
-            .whisperRowSurface()
 
             if needsTransfer {
                 Section {
@@ -309,27 +320,17 @@ struct KeyboardSetupView: View {
                 } footer: {
                     Text(label("If prompted, switch to MyWhisper Keyboard and tap Apply preferences above the keys.", "Si se solicita, cambia al teclado de MyWhisper y toca Aplicar preferencias encima de las teclas."))
                 }
-                .whisperRowSurface()
             }
 
             Section {
-                VStack(alignment: .leading, spacing: 8) {
-                    KeyboardInstallInstructions(strings: strings)
-                }
+                TextField(strings.practicePlaceholder, text: $practiceText, axis: .vertical)
             } header: {
-                WhisperSectionHeading(strings.installTitle)
+                Text(label("Try it", "Pruébalo"))
             }
-            .whisperRowSurface()
-            Section {
-                TextField(strings.practicePlaceholder, text: $practiceText)
-            } header: {
-                WhisperSectionHeading(strings.practiceTitle)
-            } footer: {
-                Text(strings.practiceHint)
-            }
-            .whisperRowSurface()
         }
         .whisperListStyle()
+        // The languages page saves on its own; pick up its changes when coming back.
+        .onAppear { preferences = KeyboardPreferences.load() }
         .onChange(of: preferences) { _, updated in
             needsTransfer = !updated.saveFromApp()
             if transferring { transferText = updated.transferText }
@@ -346,30 +347,51 @@ struct KeyboardSetupView: View {
     }
 }
 
-
-private struct KeyboardMicPreviewSetup: View {
-    @ObservedObject var session: KeyboardMicLevelSession
-    let isSpanish: Bool
+/// Like iOS's own Settings › Keyboards: the enabled languages (tap one for the default, swipe to
+/// remove), then the ones left to add.
+struct KeyboardLanguagesView: View {
+    @State private var preferences = KeyboardPreferences.load()
 
     var body: some View {
-        Section {
-            if !session.isAvailable {
-                Text(label("Live levels require the shared App Group.", "El nivel en directo requiere un grupo de apps compartido."))
-            } else if session.isEnabled {
-                Button(label("Stop keyboard microphone", "Detener micrófono del teclado"), action: session.stop)
-            } else {
-                Text(label("Keyboard microphone is off", "Micrófono del teclado apagado"))
-                    .foregroundStyle(.secondary)
+        List {
+            Section {
+                ForEach(preferences.languages) { language in
+                    Button {
+                        preferences.defaultLanguage = language
+                    } label: {
+                        LabeledContent(language.title) {
+                            if language == preferences.defaultLanguage { Text("Default") }
+                        }
+                    }
+                    .foregroundStyle(.primary)
+                    .deleteDisabled(preferences.languages.count == 1)
+                }
+                .onDelete { offsets in
+                    for language in offsets.map({ preferences.languages[$0] }) {
+                        preferences.setLanguage(language, enabled: false)
+                    }
+                }
+            } header: {
+                Text("Enabled languages")
+            } footer: {
+                Text("Tap a language to type in it by default. Swipe left to remove one.")
             }
-            if let error = session.error { Text(error).foregroundStyle(.secondary) }
-        } footer: {
-            Text(label("Tapping the MyWhisper key starts this for you. MyWhisper waits in the background, turns the microphone on only while you hold the key, and shares only volume levels with the keyboard.",
-                       "Al tocar la tecla de MyWhisper se inicia solo. MyWhisper espera en segundo plano, enciende el micrófono solo mientras mantienes pulsada la tecla y solo comparte el nivel de volumen con el teclado."))
+            let available = KeyboardLanguage.allCases.filter { !preferences.languages.contains($0) }
+            if !available.isEmpty {
+                Section("Add a language") {
+                    ForEach(available) { language in
+                        Button {
+                            preferences.setLanguage(language, enabled: true)
+                        } label: {
+                            Label(language.title, systemImage: "plus.circle.fill")
+                        }
+                    }
+                }
+            }
         }
-        .whisperRowSurface()
-    }
-
-    private func label(_ english: String, _ spanish: String) -> String {
-        isSpanish ? spanish : english
+        .whisperListStyle()
+        .onChange(of: preferences) { _, updated in _ = updated.saveFromApp() }
+        .navigationTitle("Languages")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }

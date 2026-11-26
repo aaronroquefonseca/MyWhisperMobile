@@ -268,3 +268,65 @@
 "Something went wrong while turning your voice into text." = "Algo falló al convertir tu voz en texto.";
 "Check speech providers" = "Revisar proveedores de voz";
 "Dismiss" = "Descartar";
+
+/* Setup checklist and onboarding */
+"Add the MyWhisper keyboard" = "Añade el teclado MyWhisper";
+"Allow Full Access" = "Permite el acceso total";
+"Microphone access" = "Acceso al micrófono";
+"Speech provider" = "Proveedor de voz";
+"In Settings, tap Keyboards and turn on MyWhisper Keyboard." = "En Ajustes, toca Teclados y activa MyWhisper Keyboard.";
+"Open Settings" = "Abrir Ajustes";
+"Microphone access lets the keyboard record your voice while you hold its mic button." = "El acceso al micrófono permite al teclado grabar tu voz mientras mantienes pulsado su botón de micrófono.";
+"Allow microphone" = "Permitir micrófono";
+"Turn on Allow Full Access in Settings › Keyboards so the keyboard can use the microphone and your speech provider. Then open the MyWhisper keyboard once." = "Activa Permitir acceso total en Ajustes › Teclados para que el teclado pueda usar el micrófono y tu proveedor de voz. Después abre el teclado MyWhisper una vez.";
+"Choose a speech provider: your own server or a cloud service." = "Elige un proveedor de voz: tu propio servidor o un servicio en la nube.";
+"Setup complete" = "Configuración completa";
+"Done" = "Hecho";
+"Not done" = "Pendiente";
+"Finish setup" = "Terminar la configuración";
+"%lld of 4 steps done" = "%lld de 4 pasos hechos";
+"Get started" = "Empezar";
+"Start using MyWhisper" = "Empezar a usar MyWhisper";
+"Dictate wherever you type" = "Dicta donde escribas";
+"The MyWhisper keyboard types with suggestions and autocorrect, and turns your voice into text in any app." = "El teclado MyWhisper escribe con sugerencias y autocorrección, y convierte tu voz en texto en cualquier app.";
+"Works in any app: messages, notes, email, search." = "Funciona en cualquier app: mensajes, notas, correo, búsquedas.";
+"Fixes punctuation and filler words for you, if you want." = "Corrige la puntuación y las muletillas por ti, si quieres.";
+"You choose where your voice is turned into text." = "Tú eliges dónde se convierte tu voz en texto.";
+"Set up the keyboard" = "Configura el teclado";
+"Add the keyboard and allow the microphone. MyWhisper only listens while you hold its mic button." = "Añade el teclado y permite el micrófono. MyWhisper solo escucha mientras mantienes pulsado su botón de micrófono.";
+"Tap the box, hold the globe key and choose MyWhisper Keyboard. Type, or hold the mic button above the keys and speak." = "Toca el cuadro, mantén pulsada la tecla del globo y elige MyWhisper Keyboard. Escribe, o mantén pulsado el botón de micrófono encima de las teclas y habla.";
+"To turn speech into text, add a speech provider in Providers after this." = "Para convertir la voz en texto, añade después un proveedor de voz en Proveedores.";
+
+/* Settings */
+"Theme" = "Tema";
+"Appearance" = "Aspecto";
+"Languages" = "Idiomas";
+"Default" = "Predeterminado";
+"Enabled languages" = "Idiomas activados";
+"Tap a language to type in it by default. Swipe left to remove one." = "Toca un idioma para escribir en él por defecto. Desliza a la izquierda para quitar uno.";
+"Add a language" = "Añadir un idioma";
+"Listening delay and preferred microphone" = "Retraso de escucha y micrófono preferido";
+"Preferred order" = "Orden preferido";
+"Dictation uses the first connected microphone in this list. The built-in microphone is always available, so anything below it is never used. Bluetooth switches earbuds to call mode while you dictate." = "El dictado usa el primer micrófono conectado de esta lista. El micrófono integrado siempre está disponible, así que lo que esté debajo nunca se usa. Con Bluetooth, los auriculares pasan a modo llamada mientras dictas.";
+"Wired" = "Con cable";
+"Bluetooth" = "Bluetooth";
+"CarPlay" = "CarPlay";
+"Built-in microphone" = "Micrófono integrado";
+"Headsets and USB microphones" = "Auriculares con cable y micrófonos USB";
+"AirPods, headsets, and cars" = "AirPods, auriculares y coches";
+"The car's microphone" = "El micrófono del coche";
+"The microphone on this iPhone" = "El micrófono de este iPhone";
+
+/* Activity */
+"Delete dictations after" = "Borrar dictados tras";
+"Never" = "Nunca";
+"1 year" = "1 año";
+"Auto-deletes transcripts older than %lld days." = "Borra automáticamente las transcripciones de más de %lld días.";
+
+/* Providers */
+"Works · %lld ms · %@" = "Funciona · %lld ms · %@";
+"Failed · %lld ms · %@" = "Falló · %lld ms · %@";
+"Prompt · built-in" = "Instrucciones · integradas";
+"Prompt · custom" = "Instrucciones · personalizadas";
+"Write a custom prompt" = "Escribir instrucciones propias";
+"Save prompt" = "Guardar instrucciones";

@@ -17,31 +17,6 @@ final class IntegrationTests: XCTestCase {
 
     // MARK: - Record→Result: silence never renders red
 
-    func testSilenceFailureDisplaysEmptyNeverError() {
-        let failure = mapSttError("utterance too short: silence")
-        XCTAssertEqual(failure.category, .routineDrop)
-        XCTAssertEqual(
-            ResultView.displayContent(for: .failure(failure)),
-            .empty
-        )
-    }
-
-    func testRealFailureStillDisplaysError() {
-        let failure = mapSttError("ws connect: connection refused")
-        XCTAssertEqual(failure.category, .network)
-        let shown = ResultView.displayContent(for: .failure(failure))
-        XCTAssertEqual(shown, .failure(failure))
-    }
-
-    func testResultContentRoundTripsText() {
-        let content = ResultView.Content.result(text: "hello", engine: "")
-        if case .result(let text, _) = content {
-            XCTAssertEqual(text, "hello")
-        } else {
-            XCTFail("expected result content")
-        }
-    }
-
     // MARK: - Delivery guards: blank input copies/shares nothing
 
     func testBlankTranscriptSharesNothing() {
@@ -71,23 +46,11 @@ final class IntegrationTests: XCTestCase {
         XCTAssertTrue(isServerConfigured(settings: settings))
     }
 
-    func testSetupChecklistUnblocksInMicServerTestOrder() {
-        let cloud = ["stt": ["entries": [["kind": "Cloud", "model": "whisper-1"]]]]
-        var checklist = setupChecklist(micGranted: false, settings: cloud, testPassed: true)
-        XCTAssertEqual(checklist.nextStep, .mic)
-        checklist = setupChecklist(micGranted: true, settings: cloud, testPassed: false)
-        XCTAssertEqual(checklist.nextStep, .test)
-        checklist = setupChecklist(micGranted: true, settings: cloud, testPassed: true)
-        XCTAssertTrue(checklist.isReady)
-    }
-
     // MARK: - Strings + theme resolve without .lproj infrastructure
 
     func testStringTwinsResolveByLanguageCode() {
         XCTAssertEqual(SttStrings.current(languageCode: nil), .english)
         XCTAssertEqual(SttStrings.current(languageCode: "es"), .spanish)
-        XCTAssertEqual(SetupStrings.current(languageCode: nil), .english)
-        XCTAssertEqual(SetupStrings.current(languageCode: "es"), .spanish)
     }
 
     func testThemeParsesCoreSpellingAndFailsOpen() {

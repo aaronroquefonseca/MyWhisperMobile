@@ -1,86 +1,93 @@
 import SwiftUI
 import UIKit
 
-/// Android's Microphone settings: press behavior, the Smart quick-tap limit and the extra
-/// listening delay after release.
+/// Android's Microphone settings, for the keyboard's mic: the extra listening delay after release
+/// and which microphone to record from. (Android's press modes belong to its floating button; the
+/// keyboard's mic is hold to talk, slide up to lock.)
 struct MicrophoneSettingsView: View {
     @ObservedObject var flow: AppFlow
 
-    private static let modes: [(value: String, label: LocalizedStringKey, help: LocalizedStringKey)] = [
-        ("Smart", "Smart", "A quick tap starts and stops recording. Press and hold to talk, release to stop."),
-        ("Push", "Hold", "Records while you hold the button. Release to stop."),
-        ("Tap", "Tap", "Tap to start recording, tap again to stop."),
-    ]
-    private static let tapLimits: [Int] = [100, 150, 200, 250, 300, 400, 500]
     private static let delays: [Int] = [0, 100, 250, 500, 1000]
 
     var body: some View {
         List {
             Section {
-                Picker("Behavior", selection: binding("preferences", "mic_mode", fallback: "Smart")) {
-                    ForEach(Self.modes.indices, id: \.self) { index in
-                        Text(Self.modes[index].label).tag(Self.modes[index].value)
-                    }
-                }
-                Picker("Quick tap limit", selection: nearest("hotkeys", "smart_tap_ms", in: Self.tapLimits, fallback: 150)) {
-                    ForEach(Self.tapLimits, id: \.self) { Text("\($0) ms").tag($0) }
-                }
-                .disabled(mode != "Smart")
-            } header: {
-                WhisperSectionHeading("Button press")
-            } footer: {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(Self.modes.first { $0.value == mode }?.help ?? Self.modes[0].help)
-                    Text(mode == "Smart"
-                         ? "Shorter presses start hands-free recording. Longer presses record only while held."
-                         : "The quick tap limit is only used in Smart mode.")
-                }
-            }
-            .whisperRowSurface()
-            Section {
-                Picker("Extra listening delay", selection: nearest("stt", "release_delay_ms", in: Self.delays, fallback: 0)) {
+                Picker("Extra listening delay", selection: delayBinding) {
                     ForEach(Self.delays, id: \.self) { delay in
                         if delay == 0 { Text("Off").tag(delay) } else { Text("\(delay) ms").tag(delay) }
                     }
                 }
-            } header: {
-                WhisperSectionHeading("Recording")
             } footer: {
                 Text("Keeps recording briefly after release so final sounds aren't cut.")
             }
-            .whisperRowSurface()
+            Section {
+                ForEach(MicRoute.priority(from: flow.settings), id: \.self) { kind in
+                    Label {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(Self.title(kind))
+                            Text(Self.detail(kind)).font(.subheadline).foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Image(systemName: Self.symbol(kind))
+                    }
+                }
+                .onMove { source, destination in
+                    var order = MicRoute.priority(from: flow.settings)
+                    order.move(fromOffsets: source, toOffset: destination)
+                    flow.applyMicPriority(order)
+                }
+            } header: {
+                Text("Preferred order")
+            } footer: {
+                Text("Dictation uses the first connected microphone in this list. The built-in microphone is always available, so anything below it is never used. Bluetooth switches earbuds to call mode while you dictate.")
+            }
         }
+        // Drag handles stay visible, like iOS's own ordered lists.
+        .environment(\.editMode, .constant(.active))
         .whisperListStyle()
         .navigationTitle("Microphone")
         .navigationBarTitleDisplayMode(.inline)
     }
 
-    private var mode: String {
-        (flow.settings?["preferences"] as? [String: Any])?["mic_mode"] as? String ?? "Smart"
-    }
-
-    private func binding(_ section: String, _ key: String, fallback: String) -> Binding<String> {
-        Binding {
-            (flow.settings?[section] as? [String: Any])?[key] as? String ?? fallback
-        } set: { value in
-            flow.updateSettings { Self.put(value, section, key, into: &$0) }
-        }
-    }
-
     /// Stored values snap to the nearest offered option, like Android's option sliders.
-    private func nearest(_ section: String, _ key: String, in options: [Int], fallback: Int) -> Binding<Int> {
+    private var delayBinding: Binding<Int> {
         Binding {
-            let stored = ((flow.settings?[section] as? [String: Any])?[key] as? NSNumber)?.intValue ?? fallback
-            return options.min { abs($0 - stored) < abs($1 - stored) } ?? fallback
+            let stored = ((flow.settings?["stt"] as? [String: Any])?["release_delay_ms"] as? NSNumber)?.intValue ?? 0
+            return Self.delays.min { abs($0 - stored) < abs($1 - stored) } ?? 0
         } set: { value in
-            flow.updateSettings { Self.put(value, section, key, into: &$0) }
+            flow.updateSettings { settings in
+                var stt = settings["stt"] as? [String: Any] ?? [:]
+                stt["release_delay_ms"] = value
+                settings["stt"] = stt
+            }
         }
     }
 
-    private static func put(_ value: Any, _ section: String, _ key: String, into settings: inout [String: Any]) {
-        var group = settings[section] as? [String: Any] ?? [:]
-        group[key] = value
-        settings[section] = group
+    private static func title(_ kind: String) -> LocalizedStringKey {
+        switch kind {
+        case MicRoute.wired: return "Wired"
+        case MicRoute.bluetooth: return "Bluetooth"
+        case MicRoute.carPlay: return "CarPlay"
+        default: return "Built-in microphone"
+        }
+    }
+
+    private static func detail(_ kind: String) -> LocalizedStringKey {
+        switch kind {
+        case MicRoute.wired: return "Headsets and USB microphones"
+        case MicRoute.bluetooth: return "AirPods, headsets, and cars"
+        case MicRoute.carPlay: return "The car's microphone"
+        default: return "The microphone on this iPhone"
+        }
+    }
+
+    private static func symbol(_ kind: String) -> String {
+        switch kind {
+        case MicRoute.wired: return "cable.connector"
+        case MicRoute.bluetooth: return "headphones"
+        case MicRoute.carPlay: return "car"
+        default: return "iphone"
+        }
     }
 }
 
@@ -104,11 +111,9 @@ struct DiagnosticsView: View {
                 }
                 .buttonStyle(.borderless)
             }
-            .whisperRowSurface()
             Section {
                 Text(report).font(.footnote.monospaced()).textSelection(.enabled)
             }
-            .whisperRowSurface()
         }
         .whisperListStyle()
         .navigationTitle("Diagnostics")
@@ -127,6 +132,7 @@ struct DiagnosticsView: View {
             "\(device.systemName) \(device.systemVersion) · \(device.model)",
             "microphone \(flow.micGranted ? "granted" : "not granted")",
             "shared container \(KeyboardPreferences.coreDirectoryURL == nil ? "missing" : "available")",
+            "keyboard full access \(KeyboardPreferences.fullAccessSeen ? "seen" : "not seen")",
         ]
         if let free = try? URL(fileURLWithPath: NSHomeDirectory())
             .resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage {
@@ -138,7 +144,7 @@ struct DiagnosticsView: View {
         }
         lines.append("speech chain: " + (entries.isEmpty ? "empty" : entries.joined(separator: " → ")))
         if let error = flow.coreError { lines.append("core error: \(error)") }
-        if let error = flow.testError { lines.append("last test error: \(error)") }
+        if let issue = DictationIssue.load() { lines.append("last dictation issue: \(issue.cause.rawValue) \(issue.detail)") }
         return lines.joined(separator: "\n")
     }
 }

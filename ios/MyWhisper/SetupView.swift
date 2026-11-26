@@ -1,44 +1,11 @@
 import AVFoundation
 import SwiftUI
-
-/// Fresh-install checklist state. Pure logic (no mic, no core) so XCTest
-/// covers the state machine without hardware.
-struct SetupChecklist: Equatable {
-    var micGranted: Bool
-    var serverConfigured: Bool
-    var testPassed: Bool
-
-    enum NextStep: Equatable {
-        case mic
-        case server
-        case test
-        case done
-    }
-
-    var doneCount: Int {
-        [micGranted, serverConfigured, testPassed].filter { $0 }.count
-    }
-
-    var isReady: Bool {
-        micGranted && serverConfigured && testPassed
-    }
-
-    var nextStep: NextStep {
-        if !micGranted { return .mic }
-        if !serverConfigured { return .server }
-        if !testPassed { return .test }
-        return .done
-    }
-}
+import UIKit
 
 /// True when at least one enabled, non-Local STT entry has a model
 /// (SelfHosted additionally needs a URL; Cloud allows blank URL = vendor
-/// default). Exact port of Android `MainActivity.isServerConfigured` over
-/// the decoded settings dict (`CoreBridge.getSettings()` shape).
-/// Divergence note (PR #54): Android's setup row now gates on
-/// `isSpeechConfigured(...)`, which additionally counts a verified Local
-/// pack. On-device Local is deferred on iOS, so this port intentionally
-/// keeps the `isServerConfigured` semantics (Local skipped).
+/// default). Port of Android `MainActivity.isServerConfigured` over the
+/// decoded settings dict; on-device Local is not offered on iOS.
 func isServerConfigured(settings: [String: Any]?) -> Bool {
     guard let entries = (settings?["stt"] as? [String: Any])?["entries"] as? [[String: Any]] else {
         return false
@@ -58,143 +25,114 @@ func isServerConfigured(settings: [String: Any]?) -> Bool {
     return false
 }
 
-func setupChecklist(micGranted: Bool, settings: [String: Any]?, testPassed: Bool) -> SetupChecklist {
-    SetupChecklist(micGranted: micGranted, serverConfigured: isServerConfigured(settings: settings), testPassed: testPassed)
+/// Android's setup checklist, for the keyboard: what the app can check from outside it.
+struct SetupState: Equatable {
+    var keyboardAdded: Bool
+    var fullAccess: Bool
+    var micGranted: Bool
+    var speechReady: Bool
+
+    /// Onboarding stops at the setup page until these are done, like Android's permissions.
+    var requiredDone: Bool { keyboardAdded && micGranted }
+    var doneCount: Int { [keyboardAdded, fullAccess, micGranted, speechReady].filter { $0 }.count }
+    var isComplete: Bool { doneCount == 4 }
+
+    static func current(settings: [String: Any]?) -> SetupState {
+        SetupState(
+            keyboardAdded: keyboardAdded(),
+            fullAccess: KeyboardPreferences.fullAccessSeen,
+            micGranted: MicPermission.current(),
+            speechReady: isServerConfigured(settings: settings)
+        )
+    }
+
+    /// iOS lists enabled keyboards but has no public field for their bundle; `identifier` is what
+    /// every keyboard app checks. If a future iOS drops it, count the step as done rather than
+    /// trap onboarding, which waits for it.
+    private static func keyboardAdded() -> Bool {
+        guard let app = Bundle.main.bundleIdentifier else { return true }
+        let identifiers = UITextInputMode.activeInputModes.compactMap { mode -> String? in
+            guard mode.responds(to: NSSelectorFromString("identifier")) else { return nil }
+            return mode.value(forKey: "identifier") as? String
+        }
+        return identifiers.isEmpty || identifiers.contains { $0.hasPrefix(app + ".") }
+    }
 }
 
-/// Microphone, provider readiness, and the foreground dictation test.
-struct SetupView: View {
-    var settings: [String: Any]?
-    var micGranted: Bool
-    var testPassed: Bool
-    var testError: String?
-    var strings: SetupStrings
-    var onRequestMic: () -> Void = {}
-    var onOpenSettings: () -> Void = {}
+/// The setup steps, one at a time, shared by onboarding and Activity's "Finish setup".
+struct SetupChecklistView: View {
+    @Environment(\.scenePhase) private var scenePhase
+    @ObservedObject var flow: AppFlow
+    /// Speech providers live in Providers, outside onboarding (like Android).
+    var includesSpeech = true
     var onOpenProviders: () -> Void = {}
-    var onRunTest: () -> Void = {}
-    var onMicPriorityChange: ([String]) -> Void = { _ in }
-
-    @State private var showRationale = false
-    @State private var showDenied = false
-
-    private var checklist: SetupChecklist {
-        setupChecklist(micGranted: micGranted, settings: settings, testPassed: testPassed)
-    }
-
-    private func micName(_ kind: String) -> String {
-        switch kind {
-        case MicRoute.wired: return strings.micWired
-        case MicRoute.bluetooth: return strings.micBluetooth
-        default: return strings.micBuiltIn
-        }
-    }
-
-    private func moving(_ order: [String], from: Int, to: Int) -> [String] {
-        var order = order
-        order.insert(order.remove(at: from), at: to)
-        return order
-    }
+    @Binding var state: SetupState
 
     var body: some View {
-        List {
-            Section(strings.progressTitle(done: checklist.doneCount, total: 3)) {
-                if checklist.isReady {
-                    Text(strings.ready)
-                }
-                checklistRow(done: checklist.micGranted, label: strings.doneMic)
-                checklistRow(done: checklist.serverConfigured, label: strings.doneServer)
-                checklistRow(done: checklist.testPassed, label: strings.doneTest)
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 10) {
+                row(state.keyboardAdded, "Add the MyWhisper keyboard")
+                row(state.fullAccess, "Allow Full Access")
+                row(state.micGranted, "Microphone access")
+                if includesSpeech { row(state.speechReady, "Speech provider") }
             }
-            .whisperRowSurface()
-            Section(strings.stepMic) {
-                Text(micGranted ? strings.setupMicYes : strings.setupMicNo)
-                Button(strings.setupMicGrant) {
-                    if micGranted { return }
-                    if AVAudioSession.sharedInstance().recordPermission == .denied {
-                        showDenied = true
-                    } else {
-                        showRationale = true
-                    }
-                }
-                .disabled(micGranted)
-            }
-            .whisperRowSurface()
-            Section(strings.stepServer) {
-                if checklist.serverConfigured {
-                    Text(strings.doneServer)
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.fill.quaternary, in: RoundedRectangle(cornerRadius: 16))
+
+            VStack(alignment: .leading, spacing: 12) {
+                if !state.keyboardAdded {
+                    Text("In Settings, tap Keyboards and turn on MyWhisper Keyboard.")
+                    Button("Open Settings", action: flow.openSystemSettings).buttonStyle(.borderedProminent)
+                } else if !state.micGranted {
+                    Text("Microphone access lets the keyboard record your voice while you hold its mic button.")
+                    Button("Allow microphone", action: flow.requestMic).buttonStyle(.borderedProminent)
+                } else if !state.fullAccess {
+                    Text("Turn on Allow Full Access in Settings › Keyboards so the keyboard can use the microphone and your speech provider. Then open the MyWhisper keyboard once.")
+                    Button("Open Settings", action: flow.openSystemSettings).buttonStyle(.borderedProminent)
+                } else if includesSpeech && !state.speechReady {
+                    Text("Choose a speech provider: your own server or a cloud service.")
+                    Button("Set up speech provider", action: onOpenProviders).buttonStyle(.borderedProminent)
                 } else {
-                    Button(TabStrings.current(languageCode: Locale.current.language.languageCode?.identifier).providers,
-                           action: onOpenProviders)
+                    Label("Setup complete", systemImage: "checkmark.circle.fill").foregroundStyle(.tint)
                 }
             }
-            .whisperRowSurface()
-            Section(strings.stepTest) {
-                Text(strings.testHint)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                Button(strings.testRun) { onRunTest() }
-                    .disabled(!checklist.micGranted || !checklist.serverConfigured)
-                if testPassed {
-                    Text(strings.testPassed)
-                } else if let error = testError {
-                    Text(strings.testFailed + " " + error)
-                        .font(.subheadline)
-                        .foregroundStyle(.red)
-                }
-            }
-            .whisperRowSurface()
-            Section {
-                let order = MicRoute.priority(from: settings)
-                ForEach(Array(order.enumerated()), id: \.element) { index, kind in
-                    let name = micName(kind)
-                    Text("\(index + 1). \(name)")
-                        .accessibilityAction(named: String(format: strings.micMoveUp, name)) {
-                            if index > 0 { onMicPriorityChange(moving(order, from: index, to: index - 1)) }
-                        }
-                        .accessibilityAction(named: String(format: strings.micMoveDown, name)) {
-                            if index < order.count - 1 { onMicPriorityChange(moving(order, from: index, to: index + 1)) }
-                        }
-                }
-                .onMove { source, destination in
-                    var next = order
-                    next.move(fromOffsets: source, toOffset: destination)
-                    onMicPriorityChange(next)
-                }
-                // Always show reorder handles, like Android's drag handles.
-                .environment(\.editMode, .constant(.active))
-            } header: {
-                WhisperSectionHeading(strings.micPriority)
-            } footer: {
-                Text(strings.micPrioritySub)
-            }
-            .whisperRowSurface()
+            .buttonBorderShape(.capsule)
         }
-        .whisperListStyle()
-        .navigationTitle(OnboardingStrings.current(languageCode: Locale.current.language.languageCode?.identifier).dictationSetup)
-        .navigationBarTitleDisplayMode(.inline)
-        .alert(strings.stepMic, isPresented: $showRationale) {
-            Button(strings.setupMicGrant) {
-                showRationale = false
-                onRequestMic()
-            }
-            Button(strings.actionCancel, role: .cancel) {}
-        } message: {
-            Text(strings.setupMicNo)
-        }
-        .alert(strings.stepMic, isPresented: $showDenied) {
-            Button(strings.actionChange) {
-                showDenied = false
-                onOpenSettings()
-            }
-            Button(strings.actionCancel, role: .cancel) {}
-        } message: {
-            Text(strings.setupMicDenied)
-        }
+        .onAppear(perform: refresh)
+        .onChange(of: scenePhase) { _, phase in if phase == .active { refresh() } }
+        .onChange(of: flow.micGranted) { _, _ in refresh() }
     }
 
-    private func checklistRow(done: Bool, label: String) -> some View {
-        Text((done ? "✓ " : "○ ") + label)
+    private func refresh() {
+        flow.refreshMicPermission()
+        state = .current(settings: flow.settings)
+    }
+
+    private func row(_ done: Bool, _ title: LocalizedStringKey) -> some View {
+        Label {
+            Text(title).foregroundStyle(done ? .secondary : .primary)
+        } icon: {
+            Image(systemName: done ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(done ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+        }
+        .accessibilityValue(done ? Text("Done") : Text("Not done"))
+    }
+}
+
+/// Activity's "Finish setup": the same steps outside onboarding.
+struct SetupScreen: View {
+    @ObservedObject var flow: AppFlow
+    let onOpenProviders: () -> Void
+    @State private var state = SetupState(keyboardAdded: false, fullAccess: false, micGranted: false, speechReady: false)
+
+    var body: some View {
+        ScrollView {
+            SetupChecklistView(flow: flow, onOpenProviders: onOpenProviders, state: $state)
+                .padding()
+        }
+        .navigationTitle("Finish setup")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 
@@ -202,37 +140,16 @@ struct SetupView: View {
 /// and requests it when undetermined. Calls back on the main queue.
 enum MicPermission {
     static var isDenied: Bool {
-        AVAudioSession.sharedInstance().recordPermission == .denied
+        AVAudioApplication.shared.recordPermission == .denied
     }
 
     static func current() -> Bool {
-        AVAudioSession.sharedInstance().recordPermission == .granted
+        AVAudioApplication.shared.recordPermission == .granted
     }
 
     static func request(completion: @escaping (Bool) -> Void) {
-        switch AVAudioSession.sharedInstance().recordPermission {
-        case .granted:
-            completion(true)
-        case .denied:
-            completion(false)
-        case .undetermined:
-            AVAudioSession.sharedInstance().requestRecordPermission { granted in
-                DispatchQueue.main.async { completion(granted) }
-            }
-        @unknown default:
-            completion(false)
+        AVAudioApplication.requestRecordPermission { granted in
+            DispatchQueue.main.async { completion(granted) }
         }
-    }
-}
-
-#Preview {
-    NavigationStack {
-        SetupView(
-            settings: ["stt": ["entries": [["kind": "Cloud", "model": "whisper-1"]]]],
-            micGranted: false,
-            testPassed: false,
-            testError: nil,
-            strings: .english
-        )
     }
 }

@@ -10,11 +10,11 @@ struct ActivityView: View {
     @State private var lastCopied: String?
     @State private var issue: DictationIssue?
     @State private var privacyOpen = false
-    @State private var autoDeleteDays = "0"
-    @State private var privacyMessage: String?
+    @State private var setup = SetupState(keyboardAdded: true, fullAccess: true, micGranted: true, speechReady: true)
     @ObservedObject var flow: AppFlow
     let keyboardStrings: OnboardingStrings
     let onOpenProviders: () -> Void
+    let onOpenSettings: (SettingsRoute) -> Void
 
     var body: some View {
         List {
@@ -30,7 +30,6 @@ struct ActivityView: View {
                 } header: {
                     WhisperSectionHeading("History unavailable")
                 }
-                .whisperRowSurface()
             }
             historySections
         }
@@ -38,54 +37,50 @@ struct ActivityView: View {
         .confirmationDialog("Delete all saved dictations?", isPresented: $confirmingClear, titleVisibility: .visible) {
             Button("Delete everything", role: .destructive, action: model.clearAll)
         }
-        .onAppear {
-            model.refresh()
-            issue = DictationIssue.load()
-        }
+        .onAppear(perform: reload)
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active {
-                model.refresh()
-                issue = DictationIssue.load()
-            }
-        }
-        .onChange(of: flow.showRecorder) { _, showing in
-            if !showing { model.refresh() }
+            if phase == .active { reload() }
         }
         .sensoryFeedback(.success, trigger: lastCopied)
     }
 
+    private func reload() {
+        model.applyRetention()
+        issue = DictationIssue.load()
+        flow.refreshMicPermission()
+        setup = .current(settings: flow.settings)
+    }
+
+    /// Android's setup card until everything is in place; then a shortcut to the keyboard's settings.
+    @ViewBuilder
     private var inputSection: some View {
         Section {
-            NavigationLink {
-                KeyboardSetupView(strings: keyboardStrings, flow: flow)
-            } label: {
-                WhisperDestinationLabel(
-                    title: keyboardStrings.keyboardTitle,
-                    summary: keyboardStrings.keyboardSummary,
-                    symbol: "keyboard"
-                )
-            }
             if let error = flow.coreError {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Couldn't start the speech engine.")
                     Text(error).font(.footnote).foregroundStyle(.secondary).textSelection(.enabled)
-                    Button("Retry", action: flow.openCore)
+                    Button("Retry", action: flow.openCore).buttonStyle(.borderless)
                 }
-            } else if !isServerConfigured(settings: flow.settings) {
-                Button(action: onOpenProviders) {
-                    Label("Set up speech provider", systemImage: "waveform")
+            } else if !setup.isComplete {
+                Button { onOpenSettings(.finishSetup) } label: {
+                    WhisperDestinationLabel(
+                        title: String(localized: "Finish setup"),
+                        summary: String(localized: "\(setup.doneCount) of 4 steps done"),
+                        symbol: "checklist"
+                    )
                 }
-            } else if !flow.micGranted {
-                Button(action: flow.requestMic) {
-                    Label("Enable microphone", systemImage: "mic")
-                }
+                .foregroundStyle(.primary)
             } else {
-                Button { flow.showRecorder = true } label: {
-                    Label(keyboardStrings.dictate, systemImage: "mic")
+                Button { onOpenSettings(.keyboard) } label: {
+                    WhisperDestinationLabel(
+                        title: keyboardStrings.keyboardTitle,
+                        summary: keyboardStrings.keyboardSummary,
+                        symbol: "keyboard"
+                    )
                 }
+                .foregroundStyle(.primary)
             }
         }
-        .whisperRowSurface()
     }
 
     /// Android's last-dictation problem card: the likely cause, the raw detail, a fix and a dismiss.
@@ -110,7 +105,6 @@ struct ActivityView: View {
                 .buttonStyle(.borderless)
             }
         }
-        .whisperRowSurface()
     }
 
     private static func issueBody(_ cause: DictationIssue.Cause) -> LocalizedStringKey {
@@ -188,30 +182,13 @@ struct ActivityView: View {
                         Text("Store rows for cancelled recordings.").font(.caption).foregroundStyle(.secondary)
                     }
                 }
-                LabeledContent("Auto-delete after days (0 = keep)") {
-                    TextField("0", text: $autoDeleteDays)
-                        .keyboardType(.numberPad)
-                        .multilineTextAlignment(.trailing)
-                        .frame(maxWidth: 72)
-                        .onSubmit(saveAutoDelete)
-                }
-                Button("Save", action: saveAutoDelete)
-                Button("Delete older now") {
-                    let days = Int(autoDeleteDays) ?? 0
-                    guard days > 0 else {
-                        privacyMessage = String(localized: "Set the number of days first.")
-                        return
-                    }
-                    model.purge(olderThanDays: days) { removed in
-                        privacyMessage = String(localized: "Deleted \(removed) old entries.")
+                Picker("Delete dictations after", selection: autoDeleteBinding) {
+                    ForEach(Self.autoDeleteChoices(including: model.policy.autoDeleteDays), id: \.self) { days in
+                        Text(Self.autoDeleteLabel(days)).tag(days)
                     }
                 }
-                .disabled(model.isBusy)
                 Button("Clear all history", role: .destructive) { confirmingClear = true }
                     .disabled(model.items.isEmpty || model.isBusy)
-                if let privacyMessage {
-                    Text(privacyMessage).font(.footnote).foregroundStyle(.secondary)
-                }
             } label: {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Privacy & retention")
@@ -220,9 +197,20 @@ struct ActivityView: View {
                 }
             }
         }
-        .whisperRowSurface()
-        .onAppear { autoDeleteDays = String(model.policy.autoDeleteDays) }
-        .onChange(of: model.policy) { _, policy in autoDeleteDays = String(policy.autoDeleteDays) }
+    }
+
+    /// Android takes any number of days; offer the usual ones plus whatever is already set.
+    static func autoDeleteChoices(including current: Int) -> [Int] {
+        Array(Set([0, 1, 7, 30, 90, 365, current])).sorted { ($0 == 0 ? Int.max : $0) < ($1 == 0 ? Int.max : $1) }
+    }
+
+    static func autoDeleteLabel(_ days: Int) -> String {
+        switch days {
+        case 0: return String(localized: "Never")
+        case 1: return String(localized: "1 day")
+        case 365: return String(localized: "1 year")
+        default: return String(localized: "\(days) days")
+        }
     }
 
     private func privacyBinding(_ key: String, default fallback: Bool) -> Binding<Bool> {
@@ -238,15 +226,18 @@ struct ActivityView: View {
         }
     }
 
-    private func saveAutoDelete() {
-        let days = Int(autoDeleteDays.filter(\.isNumber).prefix(4)) ?? 0
-        flow.updateSettings { settings in
-            var privacy = settings["privacy"] as? [String: Any] ?? [:]
-            privacy["transcript_auto_delete_days"] = days
-            settings["privacy"] = privacy
+    /// Applied on change, like Android after #139: shorter retention deletes older rows right away.
+    private var autoDeleteBinding: Binding<Int> {
+        Binding {
+            model.policy.autoDeleteDays
+        } set: { days in
+            flow.updateSettings { settings in
+                var privacy = settings["privacy"] as? [String: Any] ?? [:]
+                privacy["transcript_auto_delete_days"] = days
+                settings["privacy"] = privacy
+            }
+            model.applyRetention()
         }
-        privacyMessage = String(localized: "Saved.")
-        model.refresh()
     }
 
     private var historyHeader: some View {
@@ -266,7 +257,8 @@ struct ActivityView: View {
                         .font(.caption).foregroundStyle(.secondary).textCase(nil)
                 }
                 Spacer()
-                Text("\(model.items.count) entries").font(.caption).foregroundStyle(.secondary).textCase(nil)
+                // The list holds only loaded pages; the total comes from the stats (Android #129).
+                Text("\(Int(model.stats?.dictations ?? UInt64(model.items.count))) entries").font(.caption).foregroundStyle(.secondary).textCase(nil)
                 if !model.items.isEmpty {
                     Menu {
                         Button("Clear history", systemImage: "trash", role: .destructive) { confirmingClear = true }
@@ -280,7 +272,6 @@ struct ActivityView: View {
                 }
             }
         }
-        .whisperRowSurface()
     }
 
     @ViewBuilder
@@ -289,17 +280,16 @@ struct ActivityView: View {
             Section {
                 Text("No matches.").foregroundStyle(.secondary)
             }
-            .whisperRowSurface()
         }
         ForEach(model.days) { day in
             Section {
                 ForEach(day.items) { item in
                     historyRow(item)
+                        .onAppear { if item.id == model.items.last?.id { model.loadMore() } }
                 }
             } header: {
                 WhisperSectionHeading(day.title)
             }
-            .whisperRowSurface()
         }
         if model.searchText.isEmpty && !model.retentionFooter.isEmpty {
             Section {
@@ -538,15 +528,27 @@ final class HistoryViewModel: ObservableObject {
     @Published private(set) var errorMessage: String?
     @Published private(set) var retentionFooter = ""
     @Published private(set) var policy = RetentionPolicy.defaults
+    /// Searches the whole history in the database, a moment after typing stops (Android #129).
     @Published var searchText = "" {
         didSet {
-            applyFilter()
+            searchTask?.cancel()
+            searchTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                guard !Task.isCancelled else { return }
+                self?.refresh()
+            }
         }
     }
+    /// True once a page came back short: everything is loaded.
+    @Published private(set) var reachedEnd = false
 
+    /// Android loads history 100 rows at a time and the next 100 near the end of the list.
+    static let pageSize = 100
     private let backend: HistoryBackend
     private let workers = DispatchQueue(label: "com.mywhisper.history", qos: .userInitiated)
     private var screenGen: Int64 = 0
+    private var searchTask: Task<Void, Never>?
+    private var loadingMore = false
 
     init(backend: HistoryBackend = BridgeHistoryBackend()) {
         self.backend = backend
@@ -560,12 +562,15 @@ final class HistoryViewModel: ObservableObject {
         screenGen = gen
         isBusy = true
         errorMessage = nil
+        // Reload as many rows as are showing, so a refresh keeps the scroll position.
+        let limit = max(items.count, Self.pageSize)
+        let query = searchText
         workers.async { [weak self] in
             guard let strongSelf = self else {
                 return
             }
             do {
-                let committed = try strongSelf.backend.list(limit: 200)
+                let committed = try strongSelf.backend.page(limit: limit, before: nil, query: query)
                 let policy = HistoryViewModel.loadPolicy()
                 let core = strongSelf.backend.coreStats()
                 DispatchQueue.main.async { [weak self] in
@@ -573,7 +578,7 @@ final class HistoryViewModel: ObservableObject {
                           CoreBridge.SettingsJobs.jobApplies(currentGen: inner.screenGen, jobGen: gen) else {
                         return
                     }
-                    inner.commit(committed, policy: policy, core: core)
+                    inner.commit(committed, limit: limit, policy: policy, core: core)
                 }
             } catch {
                 DispatchQueue.main.async { [weak self] in
@@ -588,10 +593,34 @@ final class HistoryViewModel: ObservableObject {
         }
     }
 
-    /// Deletes rows older than `days` (Android "Delete older now"); reports the count.
-    func purge(olderThanDays days: Int, done: @escaping (Int) -> Void) {
-        var removed = 0
-        runMutation({ removed = try CoreBridge.purgeHistory(olderThanDays: Int32(days)) }, done: { done(removed) })
+    /// The core purges only on open and after a dictation, so History applies the committed
+    /// auto-delete setting itself, then reloads (Android #139). 0 keeps everything.
+    func applyRetention() {
+        runMutation {
+            let days = HistoryViewModel.loadPolicy().autoDeleteDays
+            if days > 0 { _ = try CoreBridge.purgeHistory(olderThanDays: Int32(days)) }
+        }
+    }
+
+    /// The next page, when the list nears its end.
+    func loadMore() {
+        guard !reachedEnd, !loadingMore, !isBusy, let last = items.last else { return }
+        loadingMore = true
+        let gen = screenGen
+        let query = searchText
+        let backend = backend
+        workers.async { [weak self] in
+            let more = (try? backend.page(limit: HistoryViewModel.pageSize, before: last, query: query)) ?? []
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.loadingMore = false
+                // A refresh or search since then replaced the list.
+                guard CoreBridge.SettingsJobs.jobApplies(currentGen: self.screenGen, jobGen: gen) else { return }
+                self.items += more
+                self.reachedEnd = more.count < Self.pageSize
+                self.applyFilter()
+            }
+        }
     }
 
     func deleteItem(_ item: HistoryItem) {
@@ -612,13 +641,15 @@ final class HistoryViewModel: ObservableObject {
         screenGen = gen
         isBusy = true
         errorMessage = nil
+        let limit = max(items.count, Self.pageSize)
+        let query = searchText
         workers.async { [weak self] in
             guard let strongSelf = self else {
                 return
             }
             do {
                 try work()
-                let committed = try strongSelf.backend.list(limit: 200)
+                let committed = try strongSelf.backend.page(limit: limit, before: nil, query: query)
                 let policy = HistoryViewModel.loadPolicy()
                 let core = strongSelf.backend.coreStats()
                 DispatchQueue.main.async { [weak self] in
@@ -626,7 +657,7 @@ final class HistoryViewModel: ObservableObject {
                           CoreBridge.SettingsJobs.jobApplies(currentGen: inner.screenGen, jobGen: gen) else {
                         return
                     }
-                    inner.commit(committed, policy: policy, core: core)
+                    inner.commit(committed, limit: limit, policy: policy, core: core)
                     done?()
                 }
             } catch {
@@ -642,8 +673,9 @@ final class HistoryViewModel: ObservableObject {
         }
     }
 
-    private func commit(_ committed: [HistoryItem], policy: RetentionPolicy, core: (UsageStats, [DailyBucket])?) {
+    private func commit(_ committed: [HistoryItem], limit: Int, policy: RetentionPolicy, core: (UsageStats, [DailyBucket])?) {
         items = committed
+        reachedEnd = committed.count < limit
         stats = core?.0 ?? StatsStore.usageStats(committed)
         activity = core?.1 ?? StatsStore.recentActivity(committed, days: 371)
         self.policy = policy
@@ -654,7 +686,7 @@ final class HistoryViewModel: ObservableObject {
     }
 
     private func applyFilter() {
-        visibleItems = StatsStore.filterItems(items, query: searchText)
+        visibleItems = items
         days = HistoryDay.group(visibleItems)
     }
 
@@ -671,7 +703,7 @@ final class HistoryViewModel: ObservableObject {
             parts.append("History is off — new dictations are not stored.")
         }
         if policy.autoDeleteDays > 0 {
-            parts.append("Auto-deletes transcripts older than \(policy.autoDeleteDays) days (purged on open + after each dictation).")
+            parts.append("Auto-deletes transcripts older than \(policy.autoDeleteDays) days.")
         }
         if policy.saveDiscarded {
             parts.append("Cancelled recordings are kept as discarded rows.")

@@ -6,35 +6,17 @@ import XCTest
 /// Setup checklist state machine, server-configured probe, theme parsing,
 /// and the en/es string resolver. Pure XCTest: no mic, no core, no network.
 final class SetupTests: XCTestCase {
-    // MARK: - Checklist state machine
+    // MARK: - Setup checklist
 
-    func testFreshInstallStartsEmpty() {
-        let checklist = setupChecklist(micGranted: false, settings: nil, testPassed: false)
-        XCTAssertEqual(checklist.doneCount, 0)
-        XCTAssertFalse(checklist.isReady)
-        XCTAssertEqual(checklist.nextStep, .mic)
-    }
-
-    func testChecklistOrderIsMicThenServerThenTest() {
-        var checklist = setupChecklist(micGranted: false, settings: serverSettings(), testPassed: true)
-        XCTAssertEqual(checklist.nextStep, .mic)
-        XCTAssertFalse(checklist.isReady)
-
-        checklist = setupChecklist(micGranted: true, settings: nil, testPassed: true)
-        XCTAssertEqual(checklist.nextStep, .server)
-        XCTAssertFalse(checklist.isReady)
-
-        checklist = setupChecklist(micGranted: true, settings: serverSettings(), testPassed: false)
-        XCTAssertEqual(checklist.nextStep, .test)
-        XCTAssertEqual(checklist.doneCount, 2)
-        XCTAssertFalse(checklist.isReady)
-    }
-
-    func testChecklistReadyWhenAllDone() {
-        let checklist = setupChecklist(micGranted: true, settings: serverSettings(), testPassed: true)
-        XCTAssertEqual(checklist.doneCount, 3)
-        XCTAssertTrue(checklist.isReady)
-        XCTAssertEqual(checklist.nextStep, .done)
+    func testSetupNeedsKeyboardAndMicrophoneToContinue() {
+        var state = SetupState(keyboardAdded: true, fullAccess: false, micGranted: false, speechReady: true)
+        XCTAssertFalse(state.requiredDone)
+        state.micGranted = true
+        XCTAssertTrue(state.requiredDone)
+        XCTAssertFalse(state.isComplete)
+        XCTAssertEqual(state.doneCount, 3)
+        state.fullAccess = true
+        XCTAssertTrue(state.isComplete)
     }
 
     // MARK: - isServerConfigured (Android MainActivity parity)
@@ -116,43 +98,9 @@ final class SetupTests: XCTestCase {
 
     // MARK: - Locale resolver (Android values/values-es parity)
 
-    func testSetupStringsDefaultToEnglish() {
-        XCTAssertEqual(SetupStrings.current(languageCode: nil), .english)
-        XCTAssertEqual(SetupStrings.current(languageCode: "en"), .english)
-        XCTAssertEqual(SetupStrings.current(languageCode: "fr"), .english)
-    }
-
-    func testSetupStringsSpanish() {
-        let strings = SetupStrings.current(languageCode: "es")
-        XCTAssertEqual(strings, .spanish)
-        XCTAssertEqual(strings.setupMicGrant, "Conceder micrófono")
-        XCTAssertEqual(strings.setupTheme, "Tema")
-    }
-
-    func testSetupStringsMirrorAndroidKeys() {
-        // Spot-check the shared keys against values/strings.xml copy.
-        XCTAssertEqual(SetupStrings.english.setupMicYes, "Microphone granted.")
-        XCTAssertEqual(SetupStrings.english.setupMicNo, "Microphone is required for dictation.")
-        XCTAssertEqual(SetupStrings.english.setupMicDenied, "Mic permission is required for dictation")
-        XCTAssertEqual(SetupStrings.spanish.setupMicYes, "Micrófono concedido.")
-        XCTAssertEqual(SetupStrings.spanish.setupMicNo, "El micrófono es necesario para dictar.")
-        XCTAssertEqual(SetupStrings.spanish.setupMicDenied, "El permiso del micrófono es necesario para dictar")
-        XCTAssertEqual(SetupStrings.english.setupTheme, "Theme")
-        XCTAssertEqual(SetupStrings.spanish.setupTheme, "Tema")
-        // Checklist server row pins setup_speech_configured (PR #54 renamed
-        // the hardcoded "Speech server configured" copy).
-        XCTAssertEqual(SetupStrings.english.doneServer, "Speech configured")
-        XCTAssertEqual(SetupStrings.spanish.doneServer, "Voz configurada")
-    }
-
     func testKeyboardInstallPathInBothLanguages() {
         XCTAssertTrue(OnboardingStrings.english.installPath.contains("Keyboards → Add New Keyboard"))
         XCTAssertTrue(OnboardingStrings.spanish.installPath.contains("Teclados → Añadir nuevo teclado"))
-    }
-
-    func testProgressTitleLocalizesCount() {
-        XCTAssertEqual(SetupStrings.english.progressTitle(done: 2, total: 3), "Setup progress: 2 of 3")
-        XCTAssertEqual(SetupStrings.spanish.progressTitle(done: 2, total: 3), "Progreso de configuración: 2 de 3")
     }
 
     // MARK: - Helpers
@@ -166,10 +114,11 @@ final class SetupTests: XCTestCase {
     // MARK: - Mic priority
 
     func testMicPriorityNormalizesAndPicksFirstConnectedKind() {
-        XCTAssertEqual(MicRoute.priority(from: nil), ["Wired", "BuiltIn", "Bluetooth"])
+        XCTAssertEqual(MicRoute.priority(from: nil), ["Wired", "BuiltIn", "Bluetooth", "CarPlay"])
         let saved = MicRoute.applying(["Bluetooth", "Mystery", "Bluetooth"], to: [:])
         let order = MicRoute.priority(from: saved)
-        XCTAssertEqual(order, ["Bluetooth", "Wired", "BuiltIn"])
+        XCTAssertEqual(order, ["Bluetooth", "Wired", "BuiltIn", "CarPlay"])
+        XCTAssertEqual(MicRoute.kind(of: .carAudio), "CarPlay")
         let ports: [AVAudioSession.Port] = [.builtInMic, .bluetoothHFP, .usbAudio]
         XCTAssertEqual(MicRoute.pick(priority: order, items: ports) { MicRoute.kind(of: $0) }, .bluetoothHFP)
         XCTAssertEqual(MicRoute.pick(priority: MicRoute.defaults, items: ports) { MicRoute.kind(of: $0) }, .usbAudio)

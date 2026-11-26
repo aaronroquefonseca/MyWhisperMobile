@@ -293,6 +293,17 @@ final class HistoryTests: XCTestCase {
         XCTAssertEqual(Set(try backend.list(limit: 200).map { $0.uuid }), ["boundary", "fresh"])
     }
 
+    func testPagesContinueAfterTheLastRowAndFilter() throws {
+        let backend = FileHistoryBackend(directory: try tmpDir())
+        for index in 1...5 { try backend.insert(item(uuid: "u\(index)", recordedAt: Int64(index * 10))) }
+        let first = try backend.page(limit: 2, before: nil, query: "")
+        XCTAssertEqual(first.map(\.uuid), ["u5", "u4"])
+        let second = try backend.page(limit: 2, before: first.last, query: "")
+        XCTAssertEqual(second.map(\.uuid), ["u3", "u2"])
+        XCTAssertEqual(try backend.page(limit: 2, before: second.last, query: "").map(\.uuid), ["u1"])
+        XCTAssertTrue(try backend.page(limit: 2, before: nil, query: "no such words").isEmpty)
+    }
+
     func testFileBackendPurgeKeepForever() throws {
         let backend = FileHistoryBackend(directory: try tmpDir())
         try backend.insert(item(uuid: "a", recordedAt: 100))

@@ -35,6 +35,9 @@ enum CoreBridge {
         -> UnsafeMutablePointer<CChar>?
     @_silgen_name("mywhisper_get_history") private static func ffiGetHistory(_ limit: Int32)
         -> UnsafeMutablePointer<CChar>?
+    @_silgen_name("mywhisper_get_history_page") private static func ffiGetHistoryPage(
+        _ limit: Int32, _ beforeTs: Int64, _ beforeUuid: UnsafePointer<CChar>?, _ query: UnsafePointer<CChar>?
+    ) -> UnsafeMutablePointer<CChar>?
     @_silgen_name("mywhisper_clear_history") private static func ffiClearHistory()
         -> UnsafeMutablePointer<CChar>?
     @_silgen_name("mywhisper_delete_history") private static func ffiDeleteHistory(
@@ -185,6 +188,15 @@ enum CoreBridge {
 
     static func history(limit: Int32 = 50) throws -> [[String: Any]] {
         let raw = try call(ffiGetHistory(max(limit, 1)))
+        guard let arr = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [[String: Any]] else {
+            throw CoreError.badReply("history not an array")
+        }
+        return arr
+    }
+
+    /// Newest first, `limit` rows before the `before` row (nil = first page), filtered in the database.
+    static func historyPage(limit: Int32, before: (recordedAt: Int64, uuid: String)?, query: String) throws -> [[String: Any]] {
+        let raw = try call(ffiGetHistoryPage(max(limit, 1), before?.recordedAt ?? 0, before?.uuid ?? "", query))
         guard let arr = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [[String: Any]] else {
             throw CoreError.badReply("history not an array")
         }

@@ -66,14 +66,13 @@ struct DevicesView: View {
                     Text(advertiseError).font(.footnote)
                 }
             }
-            .whisperRowSurface()
-            settingsSection.whisperRowSurface()
-            trustedSection.whisperRowSurface()
-            requestsSection.whisperRowSurface()
-            nearbySection.whisperRowSurface()
-            addSection.whisperRowSurface()
+            settingsSection
+            trustedSection
+            requestsSection
+            nearbySection
+            addSection
             if let banner = banner {
-                Section { Text(banner).font(.footnote) }.whisperRowSurface()
+                Section { Text(banner).font(.footnote) }
             }
         }
         .whisperListStyle()

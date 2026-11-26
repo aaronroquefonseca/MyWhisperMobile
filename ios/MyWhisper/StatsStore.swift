@@ -307,11 +307,28 @@ protocol HistoryBackend {
 
 extension HistoryBackend {
     func coreStats() -> (UsageStats, [DailyBucket])? { nil }
+
+    /// Newest first: `limit` rows older than `before` (nil = from the newest) that match `query`.
+    /// The live backend pages in the database; this default pages the listed rows.
+    func page(limit: Int, before: HistoryItem?, query: String) throws -> [HistoryItem] {
+        let rows = try list(limit: Int32.max).filter { row in
+            guard let before else { return true }
+            return row.recordedAt < before.recordedAt || (row.recordedAt == before.recordedAt && row.uuid < before.uuid)
+        }
+        return Array(StatsStore.filterItems(rows, query: query).prefix(limit))
+    }
 }
 
 /// Live backend: thin wrapper over the frozen `CoreBridge` history API.
 /// Purge needs no method — the core auto-redacts on open + after finish.
 struct BridgeHistoryBackend: HistoryBackend {
+    func page(limit: Int, before: HistoryItem?, query: String) throws -> [HistoryItem] {
+        let rows = try CoreBridge.historyPage(
+            limit: Int32(clamping: limit), before: before.map { ($0.recordedAt, $0.uuid) }, query: query
+        )
+        return rows.compactMap { HistoryItem(dict: $0) }
+    }
+
     func list(limit: Int32 = 200) throws -> [HistoryItem] {
         let rows = try CoreBridge.history(limit: limit)
         return rows.compactMap { HistoryItem(dict: $0) }

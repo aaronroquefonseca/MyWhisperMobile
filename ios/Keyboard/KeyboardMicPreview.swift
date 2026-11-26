@@ -60,8 +60,6 @@ final class KeyboardMicPreview: UIView {
     private let lockHint = KeyboardMicPreview.hintRow(arrow: "chevron.up", symbol: "lock.fill")
     private let cancelHint = KeyboardMicPreview.hintRow(arrow: "chevron.down", symbol: "xmark")
     private static let hintWidth: CGFloat = 28
-    private let meterHint = UILabel()
-    private var meterTask: Task<Void, Never>?
     private var renderedPhase = KeyboardMicPreviewState.Phase.idle
     private var state = KeyboardMicPreviewState()
     private var touchStart: (point: CGPoint, time: TimeInterval)?
@@ -84,15 +82,18 @@ final class KeyboardMicPreview: UIView {
     private var utteranceOpen = false
     private var dragging = false
     private var consumesRelease = false
-    private var tapOpensSession = false
+    private var micUnavailable = false
     private var webMicActive = false
     private let onDock: (Bool) -> Void
-    /// Nil when MyWhisper can't share levels (no Full Access); the mockup then runs without them.
-    private let openSession: (() -> Void)?
+    /// False without Full Access: keyboards then can't use the microphone at all.
+    private let fullAccess: Bool
+    /// Says why there's no mic, on a tap or hold that can't record.
+    private let onUnavailable: () -> Void
 
-    init(frame: CGRect, dockedLeading: Bool, openSession: (() -> Void)?, onDock: @escaping (Bool) -> Void) {
+    init(frame: CGRect, dockedLeading: Bool, fullAccess: Bool, onUnavailable: @escaping () -> Void, onDock: @escaping (Bool) -> Void) {
         self.dockedLeading = dockedLeading
-        self.openSession = openSession
+        self.fullAccess = fullAccess
+        self.onUnavailable = onUnavailable
         self.onDock = onDock
         super.init(frame: frame)
         webMic?.prepare(in: self)
@@ -105,14 +106,6 @@ final class KeyboardMicPreview: UIView {
         pill.addSubview(waveform)
         pill.addSubview(lockHint)
         pill.addSubview(cancelHint)
-        meterHint.text = "Enable mic preview in MyWhisper"
-        meterHint.textColor = .white
-        meterHint.font = .systemFont(ofSize: 10, weight: .medium)
-        meterHint.textAlignment = .center
-        meterHint.numberOfLines = 2
-        meterHint.isUserInteractionEnabled = false
-        meterHint.isHidden = true
-        pill.addSubview(meterHint)
 
         cancelButton.setImage(UIImage(systemName: "xmark", withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold)), for: .normal)
         cancelButton.tintColor = .white
@@ -177,7 +170,6 @@ final class KeyboardMicPreview: UIView {
         let endX = dockedLeading ? pillWidth - endWidth : 0
         let waveX = dockedLeading ? side + gap : endWidth + gap
         waveform.frame = CGRect(x: waveX, y: (pill.bounds.height - 24) / 2, width: waveWidth, height: 24)
-        meterHint.frame = CGRect(x: waveform.frame.midX - 40, y: 0, width: 80, height: pill.bounds.height)
         // While sliding to cancel, the cross sits over the bars rather than on top of the hints.
         let cancelX = phase == .held ? waveform.frame.midX - cancelWidth / 2 : endX
         cancelButton.frame = CGRect(x: cancelX, y: 0, width: cancelWidth, height: pill.bounds.height)
@@ -217,7 +209,7 @@ final class KeyboardMicPreview: UIView {
         finishTask?.cancel()
         touchStart = nil
         dragging = false
-        tapOpensSession = false
+        micUnavailable = false
         state.reset()
         render()
     }
@@ -232,17 +224,16 @@ final class KeyboardMicPreview: UIView {
         guard state.phase == .idle || state.phase == .locked else { return }
         touchStart = (point, ProcessInfo.processInfo.systemUptime)
         guard state.phase == .idle else { return }
-        // No live mic session: releasing a tap or hold opens MyWhisper to start one. Dragging still works.
-        tapOpensSession = openSession != nil && webMic == nil && !Self.sessionIsLive
+        // No mic: a tap or hold says why. Dragging still works.
+        micUnavailable = webMic == nil
         holdTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 80_000_000)
             guard !Task.isCancelled, let self else { return }
-            // No live session: a hold can't record yet, so open MyWhisper now instead of waiting for the release.
-            if self.tapOpensSession {
-                self.tapOpensSession = false
+            if self.micUnavailable {
+                self.micUnavailable = false
                 self.consumesRelease = true
                 self.haptic?(true)
-                self.openSession?()
+                self.onUnavailable()
                 return
             }
             self.state.hold()
@@ -287,31 +278,26 @@ final class KeyboardMicPreview: UIView {
             return
         }
         let duration = ProcessInfo.processInfo.systemUptime - touchStart.time
-        // No live session: a tap or a hold (unless slid to cancel) opens MyWhisper to start one.
-        if tapOpensSession, state.phase == .idle || (state.phase == .held && state.target != .cancel) {
-            tapOpensSession = false
+        if micUnavailable, state.phase == .idle || (state.phase == .held && state.target != .cancel) {
+            micUnavailable = false
             state.reset()
             render()
-            openSession?()
+            onUnavailable()
             return
         }
-        tapOpensSession = false
+        micUnavailable = false
         state.release(after: duration)
         completeTransition()
     }
 
     /// The keyboard's own mic, with Full Access, until WebKit refuses it once.
     private var webMic: KeyboardWebMic? {
-        openSession != nil && !KeyboardWebMic.shared.failed ? .shared : nil
-    }
-
-    private static var sessionIsLive: Bool {
-        KeyboardDictationMailbox.shared?.standby?.isAvailable(at: Date()) == true
+        fullAccess && !KeyboardWebMic.shared.failed ? .shared : nil
     }
 
     private func activate() {
-        if state.phase == .idle, let openSession, webMic == nil, !Self.sessionIsLive {
-            openSession()
+        if state.phase == .idle, webMic == nil {
+            onUnavailable()
             return
         }
         state.release(after: 0)
@@ -386,82 +372,69 @@ final class KeyboardMicPreview: UIView {
         }
         waveform.barColor = state.target == .lock ? .systemTeal : .white
         if active {
-            if meterTask == nil, !webMicActive { startMeter() }
+            if !webMicActive { startMeter() }
         } else {
             if webMicActive {
                 webMicActive = false
                 // Released normally: transcribe once the last audio is in. Otherwise drop it.
                 let transcribe = phase == .processing
-                KeyboardWebMic.shared.stop { [weak self] in
-                    guard let self else { return }
-                    self.capturing = false
-                    if transcribe { self.finishDictation() } else { self.cancelDictation() }
+                let stop = {
+                    KeyboardWebMic.shared.stop { [weak self] in
+                        guard let self else { return }
+                        self.capturing = false
+                        if transcribe { self.finishDictation() } else { self.cancelDictation() }
+                    }
+                }
+                // Android's extra listening delay: keep recording briefly so final sounds aren't cut.
+                let delay = transcribe ? Double(MicRoute.shared.releaseDelayMs) / 1000 : 0
+                if delay > 0 {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                        MainActor.assumeIsolated {
+                            // A new hold already took the mic over.
+                            guard self?.webMicActive == false else { return }
+                            stop()
+                        }
+                    }
+                } else {
+                    stop()
                 }
             } else if phase == .idle {
                 capturing = false
                 cancelDictation()
             }
-            if meterTask != nil { KeyboardDictationMailbox.shared?.clearListen() }
-            meterTask?.cancel()
-            meterTask = nil
-            meterHint.isHidden = true
             waveform.isHidden = false
             waveform.clear()
         }
     }
 
     private func startMeter() {
-        if let webMic {
-            webMicActive = true
-            meterHint.isHidden = true
-            waveform.isHidden = false
-            webMic.onLevel = { [weak self] level in self?.waveform.push(level) }
-            capturing = dictation != nil
-            webMic.onPcm = { [weak self] samples, rate in
-                guard let self, self.capturing, let dictation = self.dictation else { return }
-                if !self.utteranceOpen {
-                    self.utteranceOpen = true
-                    dictation.begin(sampleRate: rate)
-                }
-                dictation.push(samples)
-            }
-            webMic.onFailure = { [weak self] in
-                // WebKit refused the mic: use MyWhisper's session for this and later holds.
-                guard let self, self.webMicActive else { return }
-                self.webMicActive = false
-                self.capturing = false
-                self.cancelDictation()
-                self.startMeter()
-            }
-            webMic.start(in: self)
+        guard let webMic else {
+            reset()
+            onUnavailable()
             return
         }
-        meterHint.text = openSession == nil ? "Allow Full Access for mic levels" : "Start the mic in MyWhisper"
-        meterTask = Task { @MainActor [weak self] in
-            let mailbox = KeyboardDictationMailbox.shared
-            var lastRequest = Date.distantPast
-            while !Task.isCancelled {
-                guard let self else { return }
-                let now = Date()
-                // MyWhisper turns the mic on only while these keep coming.
-                if now.timeIntervalSince(lastRequest) > 0.2 {
-                    try? mailbox?.requestListening(at: now)
-                    lastRequest = now
-                }
-                let reading = mailbox?.meter
-                let measured = reading?.isCurrent(at: now) == true
-                // While the mic warms up, show the resting bars rather than the setup hint.
-                let ready = measured || mailbox?.standby?.isAvailable(at: now) == true
-                self.meterHint.isHidden = ready
-                self.waveform.isHidden = !ready
-                self.waveform.push(measured ? reading?.level ?? 0 : 0)
-                do {
-                    try await Task.sleep(nanoseconds: 40_000_000)
-                } catch {
-                    return
-                }
+        webMicActive = true
+        waveform.isHidden = false
+        webMic.onLevel = { [weak self] level in self?.waveform.push(level) }
+        capturing = dictation != nil
+        webMic.onPcm = { [weak self] samples, rate in
+            guard let self, self.capturing, let dictation = self.dictation else { return }
+            if !self.utteranceOpen {
+                self.utteranceOpen = true
+                dictation.begin(sampleRate: rate)
             }
+            dictation.push(samples)
         }
+        webMic.onFailure = { [weak self] in
+            // WebKit refused the mic: say so, and later holds say it straight away.
+            guard let self, self.webMicActive else { return }
+            self.webMicActive = false
+            self.capturing = false
+            self.cancelDictation()
+            self.reset()
+            self.onUnavailable()
+        }
+        webMic.start(in: self)
     }
 
     private func finishDictation() {
@@ -736,6 +709,7 @@ final class KeyboardWebMic: NSObject, WKScriptMessageHandler, WKUIDelegate, WKNa
     func start(in host: UIView) {
         prepare(in: host)
         wanted = true
+        MicRoute.preferSharedInput()
         if ready { run("startMic()") }
         heartbeat?.invalidate()
         // The page stops the mic by itself if these stop, e.g. when the keyboard process is suspended.

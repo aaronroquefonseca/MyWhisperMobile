@@ -96,14 +96,23 @@ struct DictionaryView: View {
     }
 
     var body: some View {
-        WhisperPager(
-            showSecond: $showingSnippets,
-            firstTitle: "\(strings.words) · \(model.words.count)",
-            secondTitle: "\(strings.snippets) · \(model.snippets.count)"
-        ) {
-            dictionaryList { wordSections }
-        } second: {
-            dictionaryList { snippetSections }
+        Group {
+            if showingSnippets {
+                dictionaryList { snippetSections }
+            } else {
+                dictionaryList { wordSections }
+            }
+        }
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Picker(strings.words, selection: $showingSnippets) {
+                    Text("\(strings.words) · \(model.words.count)").tag(false)
+                    Text("\(strings.snippets) · \(model.snippets.count)").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 280)
+            }
         }
         .onAppear { model.load() }
         .sheet(isPresented: $showingSnippetForm) {
@@ -144,12 +153,10 @@ struct DictionaryView: View {
                     )
                 }
             }
-            .whisperRowSurface()
             if let error = model.error {
                 Section {
                     Text(error).font(.subheadline).foregroundStyle(.secondary)
                 }
-                .whisperRowSurface()
             }
             rows()
         }
@@ -176,13 +183,11 @@ struct DictionaryView: View {
         } header: {
             Text("Names and terms you say often, spelled the way you want them written.").textCase(nil)
         }
-        .whisperRowSurface()
 
         if model.words.count > 8 || !wordQuery.isEmpty {
             Section {
                 WhisperSearchField(text: $wordQuery, prompt: "Search words")
             }
-            .whisperRowSurface()
         }
         Section {
             let words = model.words.filter { wordQuery.isEmpty || $0.localizedCaseInsensitiveContains(wordQuery) }
@@ -203,7 +208,6 @@ struct DictionaryView: View {
                 }
             }
         }
-        .whisperRowSurface()
     }
 
     @ViewBuilder
@@ -226,7 +230,6 @@ struct DictionaryView: View {
             Section {
                 WhisperSearchField(text: $snippetQuery, prompt: "Search snippets")
             }
-            .whisperRowSurface()
         }
         Section {
             let snippets = model.snippets.filter { snippet in
@@ -259,7 +262,6 @@ struct DictionaryView: View {
                 .buttonStyle(.borderless)
             }
         }
-        .whisperRowSurface()
     }
 
     private func addWord() {

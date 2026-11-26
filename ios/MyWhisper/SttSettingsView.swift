@@ -285,7 +285,6 @@ struct SttSettingsView: View {
                 Section {
                     Text(error).foregroundStyle(.red).font(.caption)
                 }
-                .whisperRowSurface()
             }
             Section {
                 Picker("Language", selection: $store.language) {
@@ -293,28 +292,14 @@ struct SttSettingsView: View {
                         Text(SttLanguage.all[index].name).tag(SttLanguage.all[index].code)
                     }
                 }
+                .pickerStyle(.navigationLink)
                 .onChange(of: store.language) { _, _ in store.persistOptions() }
             } header: {
                 WhisperSectionHeading("Language you speak")
             } footer: {
                 Text("Auto-detect understands whichever language you speak, so you can switch languages from one dictation to the next. Pick a single language only if it guesses wrong.")
             }
-            .whisperRowSurface()
             Section {
-                Menu {
-                    Button("Self-hosted server") { sheet = .add(.selfHosted) }
-                    Button("Cloud provider") { sheet = .add(.cloud) }
-                } label: {
-                    WhisperAddLabel(title: "Add provider")
-                }
-                .listRowInsets(EdgeInsets())
-                .listRowBackground(Color.clear)
-            }
-            Section {
-                if store.entries.isEmpty {
-                    Text("Add a provider to start transcribing.")
-                        .foregroundStyle(.secondary)
-                }
                 ForEach(store.entries) { entry in
                     SttRow(
                         entry: entry,
@@ -328,12 +313,21 @@ struct SttSettingsView: View {
                         onWhy: { whyText = $0 }
                     )
                 }
+                Menu {
+                    Button("Self-hosted server") { sheet = .add(.selfHosted) }
+                    Button("Cloud provider") { sheet = .add(.cloud) }
+                } label: {
+                    Label("Add provider", systemImage: "plus.circle.fill")
+                }
             } header: {
                 WhisperSectionHeading("Speech providers")
             } footer: {
-                Text("Enabled providers run in order until one answers.")
+                if store.entries.isEmpty {
+                    Text("Add a provider to start transcribing.")
+                } else {
+                    Text("Enabled providers run in order until one answers.")
+                }
             }
-            .whisperRowSurface()
             Section {
                 DisclosureGroup {
                     Toggle(isOn: $store.vadEnabled) {
@@ -356,7 +350,6 @@ struct SttSettingsView: View {
                     }
                 }
             }
-            .whisperRowSurface()
         }
         .whisperListStyle()
         .onAppear(perform: store.load)
@@ -451,18 +444,15 @@ private struct SttRow: View {
             onMoveUp: onMoveUp,
             onMoveDown: onMoveDown,
             onEdit: onEdit,
-            onDelete: onDelete
+            onDelete: onDelete,
+            testBlockedReason: ProviderTest.blockedReason(kind: entry.kind.rawValue, url: entry.url, model: entry.model),
+            test: entry.isLocal ? nil : { await ProviderTest.speech(url: entry.url, model: entry.model, apiKey: entry.apiKey) }
         ) {
             if entry.isLocal {
                 Button("Why skipped?") { onWhy(localSkippedCopy) }
             }
             if entry.isGemini {
                 Button("Why unsupported?") { onWhy(geminiUnsupportedCopy) }
-            }
-            if !entry.isLocal {
-                ProviderTestButton(blockedReason: ProviderTest.blockedReason(kind: entry.kind.rawValue, url: entry.url, model: entry.model)) {
-                    await ProviderTest.speech(url: entry.url, model: entry.model, apiKey: entry.apiKey)
-                }
             }
         }
     }

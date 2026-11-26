@@ -149,6 +149,16 @@ pub fn history_get_rs(limit: usize) -> String {
     with_engine(|e| e.history_json(limit.max(1)), || "[]".to_string())
 }
 
+/// Keyset page of history, newest first: rows before `(before_ts, before_uuid)` (empty uuid =
+/// first page), filtered by `query` in the database (Android #129).
+pub fn history_page_rs(limit: usize, before_ts: i64, before_uuid: &str, query: &str) -> String {
+    let before = (!before_uuid.is_empty()).then_some((before_ts, before_uuid));
+    with_engine(
+        |e| e.history_page_json(limit.max(1), before, query),
+        || "[]".to_string(),
+    )
+}
+
 pub fn words_get_rs() -> String {
     with_engine(|e| e.words_json(), || "[]".to_string())
 }
@@ -297,6 +307,33 @@ pub unsafe extern "C" fn mywhisper_cancel_utterance() -> *mut c_char {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mywhisper_get_history(limit: c_int) -> *mut c_char {
     string_to_c(&history_get_rs(limit.max(1) as usize))
+}
+
+/// Raw JSON array, like `mywhisper_get_history`.
+/// # Safety
+/// `before_uuid` and `query` must be NUL-terminated UTF-8 or NULL (read as empty). The returned
+/// C string is owned — release it with `mywhisper_free_string`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mywhisper_get_history_page(
+    limit: c_int,
+    before_ts: i64,
+    before_uuid: *const c_char,
+    query: *const c_char,
+) -> *mut c_char {
+    let text = |p: *const c_char| {
+        if p.is_null() {
+            String::new()
+        } else {
+            unsafe { cstr_to_string(p) }.unwrap_or_default()
+        }
+    };
+    let (before_uuid, query) = (text(before_uuid), text(query));
+    string_to_c(&history_page_rs(
+        limit.max(1) as usize,
+        before_ts,
+        &before_uuid,
+        &query,
+    ))
 }
 
 /// Envelope (`data: {removed}`).
@@ -761,6 +798,8 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(data_of(&purge_history_rs(30))["removed"], 0);
+        assert_eq!(history_page_rs(100, 0, "", ""), "[]");
+        assert_eq!(history_page_rs(100, 0, "", "anything"), "[]");
         assert!(!data_of(&display_name_rs()).as_str().unwrap().is_empty());
         // Sync stays off until the user enables it in settings.
         let refused: serde_json::Value = serde_json::from_str(
