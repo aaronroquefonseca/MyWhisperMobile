@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		EE11000000000000000000F6 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = EE11000000000000000000F4 /* Localizable.strings */; };
 		EE11000000000000000000F3 /* SettingsScreens.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE11000000000000000000F2 /* SettingsScreens.swift */; };
 		EE11000000000000000000F1 /* ProviderTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE11000000000000000000F0 /* ProviderTest.swift */; };
 		EE11000000000000000000E1 /* KeyboardCoreDictation.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE11000000000000000000E0 /* KeyboardCoreDictation.swift */; };
@@ -108,6 +109,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		EE11000000000000000000F5 /* es */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = es; path = es.lproj/Localizable.strings; sourceTree = "<group>"; };
 		EE11000000000000000000F2 /* SettingsScreens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsScreens.swift; sourceTree = "<group>"; };
 		EE11000000000000000000F0 /* ProviderTest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderTest.swift; sourceTree = "<group>"; };
 		EE11000000000000000000E0 /* KeyboardCoreDictation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardCoreDictation.swift; sourceTree = "<group>"; };
@@ -229,6 +231,7 @@
 				FAF7AA9058417D529285795E /* CoreBridge.swift */,
 				EE11000000000000000000F0 /* ProviderTest.swift */,
 				EE11000000000000000000F2 /* SettingsScreens.swift */,
+				EE11000000000000000000F4 /* Localizable.strings */,
 				C1EAAC110000000000000001 /* Cleanup.swift */,
 				D1C710A90000000000000001 /* DictionaryStore.swift */,
 				AA0100AA0100AA01000001 /* AudioCapture.swift */,
@@ -405,6 +408,8 @@
 			hasScannedForEncodings = 0;
 			knownRegions = (
 				en,
+				es,
+				Base,
 			);
 			mainGroup = 1BE13767E67D70533CA84B12;
 			productRefGroup = 33F9C1A9DA6731C8C06E8090 /* Products */;
@@ -425,6 +430,7 @@
 			files = (
 				4D2DCE83303D7ED85DCD61B5 /* PrivacyInfo.xcprivacy in Resources */,
 				A55055AA55055055005502 /* Assets.xcassets in Resources */,
+				EE11000000000000000000F6 /* Localizable.strings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -575,6 +581,17 @@
 			targetProxy = 8DCCA0E2D1DC0FE1F5BA8369 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
+
+/* Begin PBXVariantGroup section */
+		EE11000000000000000000F4 /* Localizable.strings */ = {
+			isa = PBXVariantGroup;
+			children = (
+				EE11000000000000000000F5 /* es */,
+			);
+			name = Localizable.strings;
+			sourceTree = "<group>";
+		};
+/* End PBXVariantGroup section */
 
 /* Begin XCBuildConfiguration section */
 		A7C887E9DA81A62A558B473E /* Debug */ = {
