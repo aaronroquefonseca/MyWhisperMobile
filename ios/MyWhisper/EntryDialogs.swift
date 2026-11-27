@@ -28,6 +28,7 @@ struct SttEntryForm: View {
     @State private var provider: String
     @State private var apiKey: String
     @State private var streaming: Bool
+    @State private var enabled: Bool
 
     init(entry: SttChainEntry, onSave: @escaping (SttChainEntry) -> Void) {
         self.entry = entry
@@ -39,6 +40,7 @@ struct SttEntryForm: View {
         _provider = State(initialValue: entry.provider)
         _apiKey = State(initialValue: entry.apiKey)
         _streaming = State(initialValue: entry.streaming)
+        _enabled = State(initialValue: entry.enabled)
     }
 
     init(kind: SttEntryKind, onSave: @escaping (SttChainEntry) -> Void) {
@@ -51,35 +53,57 @@ struct SttEntryForm: View {
         _provider = State(initialValue: kind == .cloud ? "OpenAI" : "")
         _apiKey = State(initialValue: "")
         _streaming = State(initialValue: true)
+        _enabled = State(initialValue: true)
+    }
+
+    /// Android's form rules: a model, a valid URL, and a key for cloud providers.
+    private var problem: LocalizedStringKey? {
+        if let reason = ProviderTest.blockedReason(kind: kind.rawValue, url: url, model: model) { return reason }
+        if kind == .cloud, apiKey.trimmingCharacters(in: .whitespaces).isEmpty { return "Enter the provider's API key." }
+        return nil
     }
 
     var body: some View {
         NavigationStack {
             Form {
-                Section("Entry") {
-                    TextField("Name", text: $name)
-                    Text(kind.rawValue).font(.caption).foregroundStyle(.secondary)
+                Section {
+                    LabeledField(label: "Name", text: $name, prompt: "Optional")
+                    Toggle("Enabled", isOn: $enabled)
+                } header: {
+                    if kind == .selfHosted { Text("Self-hosted server") } else { Text(LocalizedStringKey(kind.rawValue)) }
                 }
                 if kind == .selfHosted {
-                    Section("Server") {
-                        TextField("URL", text: $url)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                        TextField("Model", text: $model)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                        Toggle("Streaming protocol", isOn: $streaming)
+                    Section {
+                        LabeledField(label: "URL", text: $url, prompt: "http(s) or ws(s)", isURL: true)
+                        LabeledField(label: "Model", text: $model, prompt: "Required")
+                        LabeledField(label: "API key", text: $apiKey, prompt: "Optional", isSecure: true)
+                        Toggle("Streaming (ws servers)", isOn: $streaming)
+                    } header: {
+                        Text("Server")
+                    } footer: {
+                        Text("Self-hosted means any OpenAI-compatible speech endpoint, including the server bundled with MyWhisper desktop. http(s) URLs always use request/response; ws(s) URLs use the sherpa-onnx streaming protocol.")
                     }
                 }
                 if kind == .cloud {
-                    Section("Provider") {
+                    Section {
                         Picker("Provider", selection: $provider) {
                             ForEach(Self.cloudProviders, id: \.self) { Text($0) }
                         }
-                        TextField("Model", text: $model)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                        SecureField("API key", text: $apiKey)
+                        LabeledField(label: "Model", text: $model, prompt: "Required")
+                        LabeledField(label: "API key", text: $apiKey, prompt: "Required", isSecure: true)
+                        LabeledField(label: "Base URL", text: $url, prompt: "Vendor default", isURL: true)
+                    } header: {
+                        Text("Provider")
+                    } footer: {
+                        if provider == "Gemini" { Text(geminiUnsupportedCopy) }
+                    }
+                }
+                if kind != .local {
+                    Section {
+                        if let problem { Text(problem).font(.caption).foregroundStyle(.secondary) }
+                        ProviderTestButton(blockedReason: ProviderTest.blockedReason(kind: kind.rawValue, url: url, model: model)) {
+                            await ProviderTest.speech(url: url, model: model, apiKey: apiKey)
+                        }
                     }
                 }
                 if kind == .local {
@@ -95,7 +119,7 @@ struct SttEntryForm: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { save() }.disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    Button("Save") { save() }.disabled(problem != nil)
                 }
             }
         }
@@ -115,11 +139,36 @@ struct SttEntryForm: View {
         }
         let result = SttChainEntry(
             id: entry?.id ?? "stt-\(UUID().uuidString)", name: resolvedName, kind: kind,
-            enabled: entry?.enabled ?? true, provider: provider, url: url,
-            model: model, apiKey: apiKey, streaming: streaming
+            enabled: enabled, provider: provider, url: url.trimmingCharacters(in: .whitespaces),
+            model: model.trimmingCharacters(in: .whitespaces), apiKey: apiKey.trimmingCharacters(in: .whitespaces), streaming: streaming
         )
         onSave(result)
         dismiss()
+    }
+}
+
+/// A form row like iOS Settings: the label stays visible on the left once the field has a value.
+struct LabeledField: View {
+    let label: LocalizedStringKey
+    @Binding var text: String
+    var prompt: LocalizedStringKey = ""
+    var isURL = false
+    var isSecure = false
+
+    var body: some View {
+        LabeledContent(label) {
+            Group {
+                if isSecure {
+                    SecureField(label, text: $text, prompt: Text(prompt))
+                } else {
+                    TextField(label, text: $text, prompt: Text(prompt))
+                }
+            }
+            .multilineTextAlignment(.trailing)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .keyboardType(isURL ? .URL : .default)
+        }
     }
 }
 
@@ -139,6 +188,9 @@ struct LlmEntryForm: View {
     @State private var model: String
     @State private var provider: String
     @State private var apiKey: String
+    @State private var enabled: Bool
+    @State private var keepAlive: String
+    @State private var thinking: Bool?
 
     init(entry: Cleanup.Entry, onSave: @escaping (Cleanup.Entry) -> Void) {
         self.entry = entry
@@ -149,6 +201,9 @@ struct LlmEntryForm: View {
         _model = State(initialValue: entry.model)
         _provider = State(initialValue: entry.provider)
         _apiKey = State(initialValue: entry.apiKey)
+        _enabled = State(initialValue: entry.enabled)
+        _keepAlive = State(initialValue: entry.keepAlive)
+        _thinking = State(initialValue: entry.thinking)
     }
 
     init(kind: Cleanup.EntryKind, onSave: @escaping (Cleanup.Entry) -> Void) {
@@ -160,23 +215,46 @@ struct LlmEntryForm: View {
         _model = State(initialValue: "")
         _provider = State(initialValue: kind == .cloud ? "OpenAI" : "")
         _apiKey = State(initialValue: "")
+        _enabled = State(initialValue: true)
+        _keepAlive = State(initialValue: "")
+        _thinking = State(initialValue: nil)
+    }
+
+    /// Ollama keep-alive values core understands; a custom one from another device stays listed.
+    private var keepAliveChoices: [String] {
+        let standard = ["", "-1", "0", "5m", "15m", "30m", "2h", "5h", "24h"]
+        return standard.contains(keepAlive) ? standard : standard + [keepAlive]
+    }
+
+    private func keepAliveLabel(_ value: String) -> Text {
+        switch value {
+        case "": return Text("Server default")
+        case "-1": return Text("Always")
+        case "0": return Text("Unload after each use")
+        default: return Text(verbatim: value)
+        }
+    }
+
+    private var problem: LocalizedStringKey? {
+        if let reason = ProviderTest.blockedReason(kind: CleanupChain.capitalizedKind(kind), url: url, model: model) { return reason }
+        if kind == .cloud, apiKey.trimmingCharacters(in: .whitespaces).isEmpty { return "Enter the provider's API key." }
+        return nil
     }
 
     var body: some View {
         NavigationStack {
             Form {
-                Section("Entry") {
-                    TextField("Name", text: $name)
-                    Text(CleanupChain.capitalizedKind(kind)).font(.caption).foregroundStyle(.secondary)
+                Section {
+                    LabeledField(label: "Name", text: $name, prompt: "Optional")
+                    Toggle("Enabled", isOn: $enabled)
+                } header: {
+                    Text(LocalizedStringKey(CleanupChain.capitalizedKind(kind)))
                 }
                 if kind == .ollama {
                     Section("Server") {
-                        TextField("URL", text: $url)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                        TextField("Model", text: $model)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
+                        LabeledField(label: "URL", text: $url, prompt: "Required", isURL: true)
+                        LabeledField(label: "Model", text: $model, prompt: "Required")
+                        LabeledField(label: "API key", text: $apiKey, prompt: "Optional", isSecure: true)
                     }
                 }
                 if kind == .cloud {
@@ -184,10 +262,35 @@ struct LlmEntryForm: View {
                         Picker("Provider", selection: $provider) {
                             ForEach(Self.cloudProviders, id: \.self) { Text($0) }
                         }
-                        TextField("Model", text: $model)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                        SecureField("API key", text: $apiKey)
+                        LabeledField(label: "Model", text: $model, prompt: "Required")
+                        LabeledField(label: "API key", text: $apiKey, prompt: "Required", isSecure: true)
+                        LabeledField(label: "Base URL", text: $url, prompt: "Vendor default", isURL: true)
+                    }
+                }
+                if kind != .local {
+                    Section {
+                        // Core sends it to Ollama as `think`, to Claude and Gemini as their budget; others ignore it.
+                        Picker("Thinking", selection: $thinking) {
+                            Text("Model default").tag(Bool?.none)
+                            Text("On").tag(Bool?.some(true))
+                            Text("Off").tag(Bool?.some(false))
+                        }
+                        if kind == .ollama {
+                            Picker("Keep model loaded", selection: $keepAlive) {
+                                ForEach(keepAliveChoices, id: \.self) { keepAliveLabel($0).tag($0) }
+                            }
+                        }
+                    } header: {
+                        Text("Model behavior")
+                    } footer: {
+                        Text("Thinking off is usually faster for cleanup.")
+                    }
+                    Section {
+                        if let problem { Text(problem).font(.caption).foregroundStyle(.secondary) }
+                        let kindName = CleanupChain.capitalizedKind(kind)
+                        ProviderTestButton(blockedReason: ProviderTest.blockedReason(kind: kindName, url: url, model: model)) {
+                            await ProviderTest.cleanup(kind: kindName, url: url, model: model, apiKey: apiKey)
+                        }
                     }
                 }
                 if kind == .local {
@@ -203,7 +306,7 @@ struct LlmEntryForm: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { save() }.disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    Button("Save") { save() }.disabled(problem != nil)
                 }
             }
         }
@@ -223,14 +326,16 @@ struct LlmEntryForm: View {
         }
         let result = Cleanup.Entry(
             id: entry?.id ?? "lm-\(UUID().uuidString)", name: resolvedName, kind: kind,
-            enabled: entry?.enabled ?? true, url: url, model: model, provider: provider, apiKey: apiKey
+            enabled: enabled, url: url.trimmingCharacters(in: .whitespaces), model: model.trimmingCharacters(in: .whitespaces),
+            provider: provider, apiKey: apiKey.trimmingCharacters(in: .whitespaces),
+            keepAlive: keepAlive, thinking: thinking
         )
         onSave(result)
         dismiss()
     }
 }
 
-// MARK: - Word + snippet forms
+// MARK: - Snippet form
 
 /// User-facing text for `DictionaryError` (forms show it inline).
 func dictionaryErrorText(_ error: DictionaryError) -> String {
@@ -238,45 +343,6 @@ func dictionaryErrorText(_ error: DictionaryError) -> String {
     case .emptyWord: return "Enter a word."
     case .emptyTrigger: return "Enter a trigger."
     case .emptyReplacement: return "Enter a replacement."
-    }
-}
-
-/// Add-word sheet; validation via `DictionaryStore.validateWord`.
-struct WordForm: View {
-    var onSave: (String) -> Void
-    @Environment(\.dismiss) private var dismiss
-    @State private var word = ""
-    @State private var error: String?
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                TextField("Word", text: $word)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                if let error = error {
-                    Text(error).foregroundStyle(.red).font(.caption)
-                }
-            }
-            .navigationTitle("Add word")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        do {
-                            let valid = try DictionaryStore.validateWord(word)
-                            onSave(valid)
-                            dismiss()
-                        } catch let validation as DictionaryError {
-                            error = dictionaryErrorText(validation)
-                        } catch {
-                            error = error.localizedDescription
-                        }
-                    }
-                }
-            }
-        }
     }
 }
 
@@ -328,7 +394,7 @@ struct SnippetForm: View {
                         } catch let validation as DictionaryError {
                             error = dictionaryErrorText(validation)
                         } catch {
-                            error = error.localizedDescription
+                            self.error = error.localizedDescription
                         }
                     }
                 }

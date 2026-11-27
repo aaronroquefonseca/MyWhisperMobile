@@ -17,7 +17,8 @@ import SwiftUI
 /// `Transcription.swift` deliver-on-main pattern. This is a struct,
 /// so closures capture it by value: no capture lists, no cycles.
 struct DevicesView: View {
-    var core: SyncCore = UnavailableSyncCore()
+    @Environment(\.scenePhase) private var scenePhase
+    var core: SyncCore = BridgeSyncCore()
     @StateObject private var store = DiscoveryStore()
 
     @State private var status: SyncStatus?
@@ -31,12 +32,22 @@ struct DevicesView: View {
 
     private let workers = DispatchQueue(label: "devices-sync", qos: .userInitiated)
 
-    init(core: SyncCore = UnavailableSyncCore()) {
+    @State private var syncEnabled = false
+    @State private var deviceNameDraft = ""
+    @State private var portDraft = ""
+    @State private var advertise = true
+    @State private var shownName = ""
+    @State private var visible = false
+
+    init(core: SyncCore = BridgeSyncCore()) {
         self.core = core
     }
 
     private var rows: [SyncPeer] {
-        SyncDiscovery.mergedRows(storePeers: peers, discovered: store.discovery.discovered)
+        // Bonjour can resolve this phone's own service while sync restarts; never list it.
+        let own = status?.nodeId ?? store.discovery.ownNodeId
+        return SyncDiscovery.mergedRows(storePeers: peers, discovered: store.discovery.discovered)
+            .filter { own.isEmpty || $0.nodeId != own }
     }
 
     var body: some View {
@@ -60,6 +71,7 @@ struct DevicesView: View {
                     Text(advertiseError).font(.footnote)
                 }
             }
+            settingsSection
             trustedSection
             requestsSection
             nearbySection
@@ -68,13 +80,34 @@ struct DevicesView: View {
                 Section { Text(banner).font(.footnote) }
             }
         }
-        .navigationTitle("Devices")
+        .whisperListStyle()
+        .navigationTitle(OnboardingStrings.current(languageCode: Locale.current.language.languageCode?.identifier).devices)
+        .navigationBarTitleDisplayMode(.inline)
         .onAppear {
+            visible = true
             store.discovery.startBrowsing()
+            loadSyncSettings()
             pullState()
         }
         .onDisappear {
+            visible = false
             store.discovery.stopBrowsing()
+        }
+        // Android polls every 5 s while this screen is open, so requests, accepts and syncs
+        // from other devices show up without a tap. Cancelled when the screen goes away.
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(5))
+                if visible, !busy, scenePhase == .active { pullState(quiet: true) }
+            }
+        }
+        .refreshable { pullState() }
+        .onChange(of: scenePhase) { _, phase in
+            // AppFlow restarts the sync listener; Bonjour browsing also stops in the background.
+            guard phase == .active, visible else { return }
+            store.discovery.stopBrowsing()
+            store.discovery.startBrowsing()
+            pullState()
         }
     }
 
@@ -89,10 +122,83 @@ struct DevicesView: View {
                 LabeledContent("Port", value: String(status.port))
                 LabeledContent("LAN IP", value: status.lanIp.isEmpty ? "—" : status.lanIp)
             } else {
-                Text("status unavailable — core sync FFI not exposed yet")
+                Text("Sync is off. Turn it on below to pair with your other devices.")
                     .font(.footnote)
             }
         }
+    }
+
+    /// Android's sync settings (`sync.*`). iOS runs sync only while MyWhisper is open.
+    private var settingsSection: some View {
+        Section {
+            Toggle("Sync", isOn: Binding(get: { syncEnabled }, set: { on in
+                syncEnabled = on
+                saveSync { $0["enabled"] = on }
+                if on { startTapped() } else { stopTapped() }
+            }))
+            TextField(shownName.isEmpty ? "Device name" : "Device name (\(shownName))", text: $deviceNameDraft)
+                .onSubmit { saveSync { $0["device_name"] = deviceNameDraft.trimmingCharacters(in: .whitespaces) }; restartIfRunning() }
+            LabeledContent("Port") {
+                TextField("42973", text: $portDraft)
+                    .keyboardType(.numberPad)
+                    .multilineTextAlignment(.trailing)
+                    .frame(maxWidth: 90)
+                    .onSubmit(savePort)
+            }
+            Toggle(isOn: Binding(get: { advertise }, set: { on in
+                advertise = on
+                saveSync { $0["advertise"] = on }
+                restartIfRunning()
+            })) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Visible on the network")
+                    Text("Off = invisible, still sees others.").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Button("Save name and port") {
+                saveSync { $0["device_name"] = deviceNameDraft.trimmingCharacters(in: .whitespaces) }
+                savePort()
+            }
+        } header: {
+            Text("Settings")
+        } footer: {
+            Text("iPhone syncs while MyWhisper is open; your other devices catch up when you return.")
+        }
+    }
+
+    private func loadSyncSettings() {
+        let sync = (try? CoreBridge.getSettings())?["sync"] as? [String: Any] ?? [:]
+        syncEnabled = sync["enabled"] as? Bool ?? false
+        deviceNameDraft = sync["device_name"] as? String ?? ""
+        portDraft = String((sync["listen_port"] as? NSNumber)?.intValue ?? 42973)
+        advertise = sync["advertise"] as? Bool ?? true
+        shownName = core.displayName()
+        // iOS can't keep a listener alive in the background: resume on every visit when enabled.
+        if syncEnabled, status?.running != true { startTapped() }
+    }
+
+    private func savePort() {
+        let port = min(Int(portDraft.filter(\.isNumber).prefix(5)) ?? 42973, 65_535)
+        portDraft = String(port)
+        saveSync { $0["listen_port"] = port }
+        restartIfRunning()
+    }
+
+    private func saveSync(_ change: (inout [String: Any]) -> Void) {
+        do {
+            var settings = try CoreBridge.getSettings()
+            var sync = settings["sync"] as? [String: Any] ?? [:]
+            change(&sync)
+            settings["sync"] = sync
+            try CoreBridge.putSettings(settings)
+        } catch {
+            banner = CoreError.displayMessage(for: error)
+        }
+    }
+
+    private func restartIfRunning() {
+        guard status?.running == true else { return }
+        startTapped()
     }
 
     private var trustedSection: some View {
@@ -157,7 +263,6 @@ struct DevicesView: View {
                     Button("Request") { requestTapped(peer) }.disabled(busy)
                 }
             }
-            Button("Refresh", action: pullState).disabled(busy)
         }
     }
 
@@ -338,36 +443,34 @@ struct DevicesView: View {
     /// foreground advertising from the reported id/port (no-op until
     /// the bridge exposes status) and always records the own id so
     /// self-observations are filtered.
-    private func pullState() {
-        busy = true
+    /// `quiet`: a background poll, which leaves the buttons enabled.
+    private func pullState(quiet: Bool = false) {
+        if !quiet { busy = true }
         workers.async {
             var nextStatus: SyncStatus?
-            var nextPeers: [SyncPeer] = []
+            var nextPeers: [SyncPeer]?
             var deviceName = ""
             do {
                 nextStatus = try self.core.syncStatus()
             } catch {
                 nextStatus = nil
             }
-            do {
-                nextPeers = try self.core.syncPeers()
-            } catch {
-                nextPeers = []
-            }
+            // A failed read keeps the last list: an empty one would drop trusted rows into Nearby.
+            nextPeers = try? self.core.syncPeers()
             deviceName = self.core.displayName()
             DispatchQueue.main.async {
                 self.status = nextStatus
-                self.peers = nextPeers
+                if let nextPeers { self.peers = nextPeers }
                 self.applyAdvertise(status: nextStatus, name: deviceName)
-                self.busy = false
+                if !quiet { self.busy = false }
             }
         }
     }
 
     private func applyAdvertise(status: SyncStatus?, name: String) {
         guard let status = status, status.running, status.port > 0, !status.nodeId.isEmpty else {
+            // Keep ownNodeId: the id never changes, and clearing it lets this phone list itself.
             store.discovery.unpublish()
-            store.discovery.ownNodeId = ""
             return
         }
         store.discovery.ownNodeId = status.nodeId

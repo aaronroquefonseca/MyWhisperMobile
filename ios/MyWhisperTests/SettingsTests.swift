@@ -64,13 +64,13 @@ final class SettingsTests: XCTestCase {
 
     func testSttSelfHostedAndCloudShapes() {
         let hostedJSON = #"{"id":"s1","name":"Self-hosted (m)","kind":"SelfHosted","enabled":true,"# +
-            #"provider":"","url":"http://x:8000","model":"m","api_key":"","streaming":false}"#
+            #""provider":"","url":"http://x:8000","model":"m","api_key":"","streaming":false}"#
         let hosted = SttChainEntry(dict: dict(hostedJSON))
         XCTAssertEqual(hosted?.kind, .selfHosted)
         XCTAssertEqual(hosted?.streaming, false)
         XCTAssertEqual(hosted?.summary, "http://x:8000 · m")
         let cloudJSON = #"{"id":"c1","name":"OpenAI (whisper-1)","kind":"Cloud","enabled":false,"# +
-            #"provider":"OpenAI","url":"","model":"whisper-1","api_key":"k"}"#
+            #""provider":"OpenAI","url":"","model":"whisper-1","api_key":"k"}"#
         let cloud = SttChainEntry(dict: dict(cloudJSON))
         XCTAssertEqual(cloud?.kind, .cloud)
         XCTAssertEqual(cloud?.enabled, false)
@@ -150,10 +150,15 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(Set(CleanupChain.toDict(cleanupEntry(id: "x", kind: .ollama)).keys), CleanupChain.schemaKeys)
     }
 
+    func testOllamaCleanupRowWritesAProviderCoreAccepts() {
+        // Core rejects the whole settings save when `provider` isn't a cloud vendor.
+        XCTAssertEqual(CleanupChain.toDict(cleanupEntry(id: "x", kind: .ollama))["provider"] as? String, "OpenAI")
+    }
+
     func testCleanupRoundTripToDesktopSchema() {
         let entry = Cleanup.Entry(dict: [
             "id": "lm-1", "name": "Ollama (m)", "kind": "Ollama", "enabled": true,
-            "url": "http://127.0.0.1:11434", "model": "m", "provider": "", "api_key": ""
+            "url": "http://127.0.0.1:11434", "model": "m", "provider": "OpenAI", "api_key": ""
         ])
         XCTAssertNotNil(entry)
         guard let entry, let reparsed = Cleanup.Entry(dict: CleanupChain.toDict(entry)) else { return }
@@ -161,10 +166,43 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(CleanupChain.toDict(entry)["kind"] as? String, "Ollama")
     }
 
-    func testCleanupCapitalizedKindsMatchSerde() {
+    func testCleanupThinkingAndKeepAliveRoundTripAndDefaultClearsStoredValue() {
+        let stored: [String: Any] = [
+            "id": "lm-1", "name": "PC", "kind": "Ollama", "enabled": true, "url": "http://pc:11434",
+            "model": "gemma", "provider": "OpenAI", "api_key": "", "keep_alive": "30m", "thinking": false, "num_ctx": 2048
+        ]
+        guard var entry = Cleanup.Entry(dict: stored) else { return XCTFail("parses") }
+        XCTAssertEqual(entry.thinking, false)
+        XCTAssertEqual(entry.keepAlive, "30m")
+        entry.thinking = nil
+        let written = preservingUnknownKeys([CleanupChain.toDict(entry)], from: [stored])[0]
+        // Model default must overwrite the stored `false`, and fields iOS doesn't edit survive.
+        XCTAssertTrue(written["thinking"] is NSNull)
+        XCTAssertEqual(written["keep_alive"] as? String, "30m")
+        XCTAssertEqual(written["num_ctx"] as? Int, 2048)
+    }
+
+        func testCleanupCapitalizedKindsMatchSerde() {
         XCTAssertEqual(CleanupChain.capitalizedKind(.ollama), "Ollama")
         XCTAssertEqual(CleanupChain.capitalizedKind(.local), "Local")
         XCTAssertEqual(CleanupChain.capitalizedKind(.cloud), "Cloud")
+    }
+
+    func testCleanupApplyingKeepsFieldsThisAppDoesNotEdit() {
+        // keep_alive and thinking are edited here now, so they come from the entry; num_ctx isn't.
+        var entry = cleanupEntry(id: "a", kind: .ollama)
+        entry.keepAlive = "10m"
+        entry.thinking = true
+        let draft = CleanupSettingsDraft(enabled: true, customPrompt: "", entries: [entry])
+        let stored: [String: Any] = ["language_models": ["entries": [
+            ["id": "a", "kind": "Ollama", "keep_alive": "5m", "num_ctx": 8192, "thinking": false, "model": "old"],
+        ]]]
+        let models = CleanupChain.applying(draft, to: stored)["language_models"] as? [String: Any]
+        let row = (models?["entries"] as? [[String: Any]])?.first
+        XCTAssertEqual(row?["keep_alive"] as? String, "10m")
+        XCTAssertEqual(row?["num_ctx"] as? Int, 8192)
+        XCTAssertEqual(row?["thinking"] as? Bool, true)
+        XCTAssertEqual(row?["model"] as? String, cleanupEntry(id: "a", kind: .ollama).model)
     }
 
     func testCleanupApplyingPreservesSections() {

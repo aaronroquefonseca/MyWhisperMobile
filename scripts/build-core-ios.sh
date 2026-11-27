@@ -23,11 +23,19 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/ios/Libs"
 
-# The sim leg follows the host arch (arm64 on Apple Silicon,
-# x86_64 on Intel Macs).
+# Match the Xcode target (IPHONEOS_DEPLOYMENT_TARGET = 17.0). Rust's
+# default Apple deployment target is ancient; modern Xcode toolchains
+# (16+, and Xcode 26 on CI) cannot link the cdylib against it
+# (missing compiler-rt symbols like ___chkstk_darwin). Pinning the same
+# floor the app targets keeps device + sim links working.
+export IPHONEOS_DEPLOYMENT_TARGET=17.0
+
+# The sim leg follows the host arch (arm64 on Apple Silicon).
+# NOTE: for x86_64 the simulator triple is x86_64-apple-ios itself —
+# there is no -sim suffix (it never shipped as a separate target).
 SIM_TRIPLE="aarch64-apple-ios-sim"
 if [ "$(uname -m)" = "x86_64" ]; then
-  SIM_TRIPLE="x86_64-apple-ios-sim"
+  SIM_TRIPLE="x86_64-apple-ios"
 fi
 DEVICE_TRIPLE="aarch64-apple-ios"
 
@@ -55,11 +63,18 @@ DEVICE_LIB="$ROOT/core/target/$DEVICE_TRIPLE/release/libmywhisper_core.a"
 SIM_LIB="$ROOT/core/target/$SIM_TRIPLE/release/libmywhisper_core.a"
 
 mkdir -p "$OUT"
-# -create-xcframework refuses when the output already exists.
+# -create-xcframework refuses when the output already exists, and refuses
+# a single headers dir shared by both slices ("item couldn't be saved").
+# Stage the same header per slice in temp dirs instead.
+DEVICE_HEADERS="$(mktemp -d)"
+SIM_HEADERS="$(mktemp -d)"
+trap 'rm -rf "$DEVICE_HEADERS" "$SIM_HEADERS"' EXIT
+cp "$OUT/mywhisper_core.h" "$DEVICE_HEADERS/"
+cp "$OUT/mywhisper_core.h" "$SIM_HEADERS/"
 rm -rf "$OUT/libmywhisper_core.xcframework"
 xcodebuild -create-xcframework \
-  -library "$DEVICE_LIB" -headers "$OUT" \
-  -library "$SIM_LIB" -headers "$OUT" \
+  -library "$DEVICE_LIB" -headers "$DEVICE_HEADERS" \
+  -library "$SIM_LIB" -headers "$SIM_HEADERS" \
   -output "$OUT/libmywhisper_core.xcframework"
 
 echo "build-core-ios: staged $OUT/libmywhisper_core.xcframework"

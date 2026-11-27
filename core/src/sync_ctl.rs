@@ -119,7 +119,7 @@ pub fn sync_start(dir: PathBuf) -> Result<String, String> {
     };
 
     // mDNS advertise + browse.
-    match net::start_mdns(
+    let mdns = match net::start_mdns(
         &identity.node_id,
         &name,
         port,
@@ -128,29 +128,37 @@ pub fn sync_start(dir: PathBuf) -> Result<String, String> {
     ) {
         Ok(handles) => {
             push_report(&reports, "mDNS discovery on".to_string());
-            let mgr = SyncManager {
-                creds,
-                db_path,
-                stop,
-                mdns: Some(handles),
-                discovered,
-                port,
-                reports,
-                listener,
-            };
-            mgr.spawn_loops(&name);
-            let summary = format!("sync on (port {port})");
-            *slot().lock().unwrap() = Some(mgr);
-            Ok(summary)
+            Some(handles)
+        }
+        // IOS PORT: raw multicast needs an entitlement sideloaded builds
+        // lack. The app advertises and browses with Bonjour instead, so
+        // the listener and trusted-peer rounds still run.
+        Err(e) if cfg!(target_os = "ios") => {
+            push_report(&reports, format!("mDNS off ({e}); using Bonjour"));
+            None
         }
         Err(e) => {
             stop.store(true, Ordering::Relaxed);
             if let Some(listener) = listener {
                 let _ = listener.join();
             }
-            Err(format!("mDNS: {e}"))
+            return Err(format!("mDNS: {e}"));
         }
-    }
+    };
+    let mgr = SyncManager {
+        creds,
+        db_path,
+        stop,
+        mdns,
+        discovered,
+        port,
+        reports,
+        listener,
+    };
+    mgr.spawn_loops(&name);
+    let summary = format!("sync on (port {port})");
+    *slot().lock().unwrap() = Some(mgr);
+    Ok(summary)
 }
 
 impl SyncManager {

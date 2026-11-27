@@ -88,13 +88,14 @@ final class HistoryTests: XCTestCase {
 
     func testHistoryItemParsesCoreShape() {
         let dict: [String: Any] = [
-            "uuid": "u-1", "text": "hi there", "rawText": "hi there",
+            "uuid": "u-1", "text": "hi there", "rawText": "hi their",
             "dateLabel": "Today", "wordCount": 2, "durationSecs": 30,
             "recordedAt": 1_700_000_000, "discarded": false
         ]
         let parsed = HistoryItem(dict: dict)
         XCTAssertEqual(parsed?.uuid, "u-1")
         XCTAssertEqual(parsed?.text, "hi there")
+        XCTAssertEqual(parsed?.rawText, "hi their")
         XCTAssertEqual(parsed?.wordCount, 2)
         XCTAssertEqual(parsed?.durationSecs, 30)
         XCTAssertEqual(parsed?.recordedAt, 1_700_000_000)
@@ -110,7 +111,23 @@ final class HistoryTests: XCTestCase {
         XCTAssertEqual(parsed?.wordCount, 1)
         XCTAssertEqual(parsed?.recordedAt, 1_700_000_000)
         XCTAssertEqual(parsed?.dateLabel, "")
+        XCTAssertNil(parsed?.rawText)
         XCTAssertEqual(parsed?.discarded, false)
+    }
+
+    func testHistoryGroupsMostRecentLocalDayFirstAndKeepsLegacyRows() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 3_600)!
+        let items = [
+            item(uuid: "recent", recordedAt: 86_400),
+            item(uuid: "same-day", recordedAt: 86_399),
+            item(uuid: "older", recordedAt: 82_799),
+            item(uuid: "legacy", recordedAt: 0)
+        ]
+
+        let groups = HistoryDay.group(items, calendar: calendar)
+        XCTAssertEqual(groups.map { $0.items.map(\.uuid) }, [["recent", "same-day"], ["older"], ["legacy"]])
+        XCTAssertNil(groups.last?.id)
     }
 
     func testHistoryItemRejectsMissingIdentity() {
@@ -135,6 +152,29 @@ final class HistoryTests: XCTestCase {
         XCTAssertEqual(StatsStore.filterItems(rows, query: "ali").map { $0.uuid }, ["b"])
         XCTAssertEqual(StatsStore.filterItems(rows, query: "MILK").map { $0.uuid }, ["a"])
         XCTAssertTrue(StatsStore.filterItems(rows, query: "zzz").isEmpty)
+    }
+
+    func testSearchMatchesOriginalTranscription() {
+        let row = HistoryItem(uuid: "a", text: "Alice", rawText: "all is", dateLabel: "", wordCount: 1,
+                              durationSecs: 5, recordedAt: 200, discarded: false)
+        XCTAssertEqual(StatsStore.filterItems([row], query: "ALL IS"), [row])
+    }
+
+    func testStreakCountsLocalDaysThroughYesterdayAndIgnoresDiscarded() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 3_600)!
+        let rows = [
+            item(uuid: "today-discarded", recordedAt: 345_600, discarded: true),
+            item(uuid: "yesterday", recordedAt: 342_000 - 1),
+            item(uuid: "yesterday-duplicate", recordedAt: 300_000),
+            item(uuid: "day-before", recordedAt: 255_600 - 1),
+            item(uuid: "gap", recordedAt: 82_800 - 1)
+        ]
+
+        let today = Date(timeIntervalSince1970: 345_600)
+        let tomorrow = Date(timeIntervalSince1970: 432_000)
+        XCTAssertEqual(StatsStore.usageStats(rows, now: today, calendar: calendar).streakDays, 2)
+        XCTAssertEqual(StatsStore.usageStats(rows, now: tomorrow, calendar: calendar).streakDays, 0)
     }
 
     // MARK: - Usage stats (core `usage_stats` semantics)
@@ -253,6 +293,17 @@ final class HistoryTests: XCTestCase {
         XCTAssertEqual(Set(try backend.list(limit: 200).map { $0.uuid }), ["boundary", "fresh"])
     }
 
+    func testPagesContinueAfterTheLastRowAndFilter() throws {
+        let backend = FileHistoryBackend(directory: try tmpDir())
+        for index in 1...5 { try backend.insert(item(uuid: "u\(index)", recordedAt: Int64(index * 10))) }
+        let first = try backend.page(limit: 2, before: nil, query: "")
+        XCTAssertEqual(first.map(\.uuid), ["u5", "u4"])
+        let second = try backend.page(limit: 2, before: first.last, query: "")
+        XCTAssertEqual(second.map(\.uuid), ["u3", "u2"])
+        XCTAssertEqual(try backend.page(limit: 2, before: second.last, query: "").map(\.uuid), ["u1"])
+        XCTAssertTrue(try backend.page(limit: 2, before: nil, query: "no such words").isEmpty)
+    }
+
     func testFileBackendPurgeKeepForever() throws {
         let backend = FileHistoryBackend(directory: try tmpDir())
         try backend.insert(item(uuid: "a", recordedAt: 100))
@@ -275,5 +326,33 @@ final class HistoryTests: XCTestCase {
         XCTAssertTrue(footer.contains("History is off"))
         XCTAssertTrue(footer.contains("7 days"))
         XCTAssertTrue(footer.contains("Cancelled recordings are kept"))
+    }
+
+    func testFastScrollerRowsEstimateTheUnloadedDaysFromDailyCounts() {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        guard let twoDaysAgo = calendar.date(byAdding: .day, value: -2, to: today),
+              let fiveDaysAgo = calendar.date(byAdding: .day, value: -5, to: today) else { return XCTFail("dates") }
+        let at = { (day: Date) in Int64(day.timeIntervalSince1970) + 3600 }
+        // Loaded: 2 today, 1 of the 3 from two days ago.
+        let days = HistoryDay.group([
+            item(uuid: "a", recordedAt: at(today)), item(uuid: "b", recordedAt: at(today)),
+            item(uuid: "c", recordedAt: at(twoDaysAgo)),
+        ])
+        let activity = [
+            DailyBucket(dayStart: Int64(today.timeIntervalSince1970), words: 4, utterances: 2),
+            DailyBucket(dayStart: Int64(twoDaysAgo.timeIntervalSince1970), words: 6, utterances: 3),
+            DailyBucket(dayStart: Int64(fiveDaysAgo.timeIntervalSince1970), words: 2, utterances: 1),
+        ]
+        let older = HistoryDay(id: twoDaysAgo, items: []).title
+        let oldest = HistoryDay(id: fiveDaysAgo, items: []).title
+        XCTAssertEqual(
+            HistoryFastScroller.rows(days: days, activity: activity, estimateRest: true),
+            ["Today", "Today", older, older, older, oldest]
+        )
+        // Everything loaded, or a search: only the loaded rows.
+        XCTAssertEqual(HistoryFastScroller.rows(days: days, activity: activity, estimateRest: false), ["Today", "Today", older])
+        XCTAssertEqual(HistoryFastScroller.row(at: 1, rows: 6), 5)
+        XCTAssertEqual(HistoryFastScroller.fraction(of: 0, rows: 6), 0)
     }
 }

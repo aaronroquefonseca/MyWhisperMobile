@@ -17,7 +17,7 @@ import SwiftUI
 enum CleanupChain {
     /// Desktop schema key set written by `toDict` (golden in SettingsTests).
     static let schemaKeys: Set<String> = [
-        "id", "name", "kind", "enabled", "url", "model", "provider", "api_key"
+        "id", "name", "kind", "enabled", "url", "model", "provider", "api_key", "keep_alive", "thinking"
     ]
 
     static func capitalizedKind(_ kind: Cleanup.EntryKind) -> String {
@@ -32,7 +32,10 @@ enum CleanupChain {
         [
             "id": entry.id, "name": entry.name, "kind": capitalizedKind(entry.kind),
             "enabled": entry.enabled, "url": entry.url, "model": entry.model,
-            "provider": entry.provider, "api_key": entry.apiKey
+            // Core types `provider` as a cloud vendor even on Ollama rows; Android writes OpenAI there too.
+            "provider": entry.provider.isEmpty ? "OpenAI" : entry.provider, "api_key": entry.apiKey,
+            // null clears a stored preference back to the model default.
+            "keep_alive": entry.keepAlive, "thinking": entry.thinking.map { $0 as Any } ?? NSNull()
         ]
     }
 
@@ -41,7 +44,7 @@ enum CleanupChain {
         var models = settings["language_models"] as? [String: Any] ?? [:]
         models["cleanup_enabled"] = config.enabled
         models["cleanup_prompt"] = config.customPrompt
-        models["entries"] = config.entries.map { toDict($0) }
+        models["entries"] = preservingUnknownKeys(config.entries.map { toDict($0) }, from: models["entries"])
         settings["language_models"] = models
         return settings
     }
@@ -112,7 +115,7 @@ final class CleanupSettingsStore: ObservableObject {
             draft = CleanupSettingsDraft.from(Cleanup.configuration(settings: try CoreBridge.getSettings()))
             error = nil
         } catch {
-            self.error = error.localizedDescription
+            self.error = CoreError.displayMessage(for: error)
         }
     }
 
@@ -122,7 +125,7 @@ final class CleanupSettingsStore: ObservableObject {
             try CoreBridge.putSettings(settings)
             error = nil
         } catch {
-            self.error = error.localizedDescription
+            self.error = CoreError.displayMessage(for: error)
         }
     }
 
@@ -143,11 +146,7 @@ final class CleanupSettingsStore: ObservableObject {
 
     func setEntryEnabled(_ entry: Cleanup.Entry, enabled: Bool) {
         guard let index = draft.entries.firstIndex(where: { $0.id == entry.id }) else { return }
-        let current = draft.entries[index]
-        draft.entries[index] = Cleanup.Entry(
-            id: current.id, name: current.name, kind: current.kind, enabled: enabled,
-            url: current.url, model: current.model, provider: current.provider, apiKey: current.apiKey
-        )
+        draft.entries[index].enabled = enabled
         persist()
     }
 
@@ -185,6 +184,9 @@ struct CleanupSettingsView: View {
     @State private var pendingDelete: Cleanup.Entry?
     @State private var guardBlocked = false
     @State private var whyText: String?
+    @State private var promptExpanded = false
+    /// The core's own default (what actually runs), with the app's copy as a fallback.
+    private static let builtInPrompt = (try? CoreBridge.defaultCleanupPrompt()) ?? Cleanup.defaultPrompt
     @State private var promptDraft = ""
     @State private var promptEditing = false
 
@@ -199,7 +201,7 @@ struct CleanupSettingsView: View {
                     Text(error).foregroundStyle(.red).font(.caption)
                 }
             }
-            Section("Cleanup") {
+            Section {
                 Toggle("Enable cleanup", isOn: Binding(get: { store.draft.enabled }, set: { store.setEnabled($0) }))
                 if store.draft.enabled {
                     let runnable = Cleanup.runnableChain(store.draft.entries)
@@ -209,44 +211,40 @@ struct CleanupSettingsView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            Section("Custom prompt") {
+            Section {
                 if promptEditing {
                     TextEditor(text: $promptDraft)
-                        .frame(minHeight: 120)
-                        .font(.body)
-                    HStack {
-                        Button("Save") {
-                            store.setCustomPrompt(promptDraft)
-                            promptEditing = false
-                        }
-                        Button("Cancel", role: .cancel) { promptEditing = false }
-                        Spacer()
-                        Button("Reset to default") { store.resetPrompt() }
+                        .frame(minHeight: 160)
+                    Button("Save prompt") {
+                        store.setCustomPrompt(promptDraft)
+                        promptEditing = false
                     }
-                    .buttonStyle(.borderless)
+                    Button("Cancel", role: .cancel) { promptEditing = false }
                 } else {
-                    Text(store.draft.customPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        ? "(Default prompt)" : store.draft.customPrompt)
-                        .font(.caption)
+                    let usesDefault = store.draft.customPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    Text(usesDefault ? Self.builtInPrompt : store.draft.customPrompt)
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
-                        .lineLimit(6)
-                    HStack {
-                        Button("Edit custom prompt") {
-                            promptDraft = store.draft.customPrompt
-                            promptEditing = true
-                        }
-                        if store.draft.customPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
-                            Button("Reset to default") { store.resetPrompt() }
-                        }
+                        .lineLimit(promptExpanded ? nil : 4)
+                        .textSelection(.enabled)
+                    Button(promptExpanded ? "Show less" : "Read prompt") { promptExpanded.toggle() }
+                    Button(usesDefault ? "Write a custom prompt" : "Edit custom prompt") {
+                        // Start from the prompt in use, like Android, rather than an empty box.
+                        promptDraft = usesDefault ? Self.builtInPrompt : store.draft.customPrompt
+                        promptEditing = true
                     }
-                    .buttonStyle(.borderless)
+                    if !usesDefault {
+                        Button("Reset to default", role: .destructive) { store.resetPrompt() }
+                    }
+                }
+            } header: {
+                if store.draft.customPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text("Prompt · built-in")
+                } else {
+                    Text("Prompt · custom")
                 }
             }
-            Section("LLM chain") {
-                if store.draft.entries.isEmpty {
-                    Text("No LLM entries yet — add Ollama or a cloud entry below.")
-                        .foregroundStyle(.secondary)
-                }
+            Section {
                 ForEach(store.draft.entries, id: \.id) { entry in
                     CleanupRow(
                         entry: entry,
@@ -260,19 +258,24 @@ struct CleanupSettingsView: View {
                         onWhy: { whyText = $0 }
                     )
                 }
-            }
-            Section {
-                Button("Add Ollama entry") { sheet = .add(.ollama) }
-                Button("Add cloud entry") { sheet = .add(.cloud) }
-                if CleanupChain.canAddLocal(store.draft.entries) {
-                    Button("Add Local entry") { store.upsert(Cleanup.localFallbackEntry()) }
+                Menu {
+                    Button("Ollama") { sheet = .add(.ollama) }
+                    Button("Cloud provider") { sheet = .add(.cloud) }
+                } label: {
+                    Label("Add provider", systemImage: "plus.circle.fill")
                 }
+            } header: {
+                WhisperSectionHeading("Cleanup providers")
             } footer: {
-                Text("Enabled entries run top-down until one answers. Local rows are skipped (no on-device engine).")
+                if store.draft.entries.isEmpty {
+                    Text("Add a provider to clean up transcripts.")
+                } else {
+                    Text("Enabled providers run in order until one answers.")
+                }
             }
         }
-        .navigationTitle("Cleanup")
-        .onAppear { if store.draft.entries.isEmpty { store.load() } }
+        .whisperListStyle()
+        .onAppear(perform: store.load)
         .sheet(item: $sheet) { kind in
             switch kind {
             case .add(let preset):
@@ -343,29 +346,28 @@ private struct CleanupRow: View {
     var onWhy: (String) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Toggle(entry.name, isOn: Binding(get: { entry.enabled }, set: onToggle))
-                Button("Up", action: onMoveUp).disabled(!canMoveUp)
-                Button("Down", action: onMoveDown).disabled(!canMoveDown)
+        WhisperProviderRow(
+            name: entry.name,
+            summary: "\(CleanupChain.capitalizedKind(entry.kind)) · \(entry.model)",
+            enabled: Binding(get: { entry.enabled }, set: onToggle),
+            canMoveUp: canMoveUp,
+            canMoveDown: canMoveDown,
+            onMoveUp: onMoveUp,
+            onMoveDown: onMoveDown,
+            onEdit: onEdit,
+            onDelete: onDelete,
+            testBlockedReason: ProviderTest.blockedReason(kind: CleanupChain.capitalizedKind(entry.kind), url: entry.url, model: entry.model),
+            test: entry.kind == .local ? nil : {
+                await ProviderTest.cleanup(kind: CleanupChain.capitalizedKind(entry.kind), url: entry.url, model: entry.model, apiKey: entry.apiKey)
             }
-            .buttonStyle(.borderless)
-            Text("\(CleanupChain.capitalizedKind(entry.kind)) · \(entry.model)").font(.caption).foregroundStyle(.secondary)
-            HStack(spacing: 12) {
-                if CleanupChain.isSkippedLocal(entry) {
-                    Button("Why skipped?") { onWhy(localSkippedCleanupCopy) }
-                }
-                if CleanupChain.isGeminiLike(entry) {
-                    Button("Why errors?") { onWhy(geminiCleanupCopy) }
-                }
-                Button("Edit", action: onEdit)
-                Button("Delete", role: .destructive, action: onDelete)
+        ) {
+            if CleanupChain.isSkippedLocal(entry) {
+                Button("Why skipped?") { onWhy(localSkippedCleanupCopy) }
             }
-            .font(.caption)
-            .buttonStyle(.borderless)
+            if CleanupChain.isGeminiLike(entry) {
+                Button("Why errors?") { onWhy(geminiCleanupCopy) }
+            }
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(entry.name), \(entry.enabled ? "enabled" : "disabled")")
     }
 }
 

@@ -13,6 +13,7 @@ struct HistoryItem: Equatable, Identifiable, Codable {
     var id: String { uuid }
     let uuid: String
     let text: String
+    let rawText: String?
     let dateLabel: String
     let wordCount: Int
     let durationSecs: Int64
@@ -22,6 +23,7 @@ struct HistoryItem: Equatable, Identifiable, Codable {
     init(
         uuid: String,
         text: String,
+        rawText: String? = nil,
         dateLabel: String,
         wordCount: Int,
         durationSecs: Int64,
@@ -30,6 +32,7 @@ struct HistoryItem: Equatable, Identifiable, Codable {
     ) {
         self.uuid = uuid
         self.text = text
+        self.rawText = rawText
         self.dateLabel = dateLabel
         self.wordCount = wordCount
         self.durationSecs = durationSecs
@@ -45,6 +48,7 @@ struct HistoryItem: Equatable, Identifiable, Codable {
         self.init(
             uuid: uuid,
             text: text,
+            rawText: dict["rawText"] as? String,
             dateLabel: dict["dateLabel"] as? String ?? "",
             wordCount: HistoryItem.intValue(dict["wordCount"]) ?? 0,
             durationSecs: HistoryItem.int64Value(dict["durationSecs"]) ?? 0,
@@ -128,12 +132,12 @@ struct UsageStats: Equatable {
     let wordsSpoken: UInt64
     let dictations: UInt64
     let wordsPerMinute: Double
+    let streakDays: Int
 }
 
 /// One per-day aggregate for the activity list: local-midnight `dayStart`
 /// (unix seconds, Android `Day.dayStart` parity), summed `words`, and the
-/// dictation `utterances` count. The full heatmap grid is deferred — this
-/// is the flat recent-first list the Activity section renders.
+/// dictation `utterances` count.
 struct DailyBucket: Equatable {
     let dayStart: Int64
     let words: Int
@@ -159,7 +163,7 @@ enum StatsStore {
             return items
         }
         let lower = needle.lowercased()
-        return items.filter { $0.text.lowercased().contains(lower) }
+        return items.filter { $0.text.lowercased().contains(lower) || $0.rawText?.lowercased().contains(lower) == true }
     }
 
     // MARK: - Retention predicate (core `purge_old_history` parity)
@@ -189,7 +193,7 @@ enum StatsStore {
     /// Totals over non-discarded rows (core `usage_stats` WHERE clause:
     /// `deleted = 0 AND discarded = 0`). Bridge rows are already
     /// non-deleted; the discarded filter is applied here.
-    static func usageStats(_ items: [HistoryItem]) -> UsageStats {
+    static func usageStats(_ items: [HistoryItem], now: Date = .now, calendar: Calendar = .current) -> UsageStats {
         let kept = items.filter { $0.discarded == false }
         let words = kept.reduce(0) { $0 + max($1.wordCount, 0) }
         let measuredWords = kept
@@ -207,14 +211,39 @@ enum StatsStore {
         return UsageStats(
             wordsSpoken: UInt64(max(words, 0)),
             dictations: UInt64(kept.count),
-            wordsPerMinute: wpm
+            wordsPerMinute: wpm,
+            streakDays: streakDays(kept, now: now, calendar: calendar)
         )
+    }
+
+    private static func streakDays(_ items: [HistoryItem], now: Date, calendar: Calendar) -> Int {
+        let activeDays = Set(items.compactMap { item -> Date? in
+            guard item.recordedAt > 0 else { return nil }
+            return calendar.startOfDay(for: Date(timeIntervalSince1970: TimeInterval(item.recordedAt)))
+        })
+        let today = calendar.startOfDay(for: now)
+        var day: Date? = activeDays.contains(today) ? today : calendar.date(byAdding: .day, value: -1, to: today)
+        var streak = 0
+        while let current = day, activeDays.contains(current) {
+            streak += 1
+            day = calendar.date(byAdding: .day, value: -1, to: current)
+        }
+        return streak
     }
 
     // MARK: - Daily aggregates (pure, no bridge)
 
     /// Local-midnight day start (unix seconds) for a timestamp, matching
     /// the core's `… 'localtime'` grouping.
+    /// The core buckets by calendar date (days since 1970-01-01); the app keys days by local midnight.
+    static func localDayStart(epochDay: Int64, calendar: Calendar = Calendar.current) -> Int64 {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        let parts = utc.dateComponents([.year, .month, .day], from: Date(timeIntervalSince1970: TimeInterval(epochDay * 86_400)))
+        let local = calendar.date(from: parts) ?? Date(timeIntervalSince1970: TimeInterval(epochDay * 86_400))
+        return Int64(calendar.startOfDay(for: local).timeIntervalSince1970)
+    }
+
     static func dayStart(for recordedAt: Int64, calendar: Calendar = Calendar.current) -> Int64 {
         let date = Date(timeIntervalSince1970: TimeInterval(recordedAt))
         let start = calendar.startOfDay(for: date)
@@ -223,8 +252,7 @@ enum StatsStore {
 
     /// Per-day aggregates over the trailing `days` window, ascending by
     /// day (core `daily_aggregates` order). Discarded rows are excluded;
-    /// empty days are omitted (the heatmap grid that needs them is
-    /// deferred — callers render this flat list).
+    /// empty days are omitted.
     static func dailyAggregates(
         _ items: [HistoryItem],
         days: UInt32,
@@ -273,11 +301,34 @@ protocol HistoryBackend {
     /// Returns the core's removed-row count (file backend: rows deleted).
     @discardableResult
     func clear() throws -> Int
+    /// Whole-history totals and a year of daily buckets from the core; nil computes them from listed rows.
+    func coreStats() -> (UsageStats, [DailyBucket])?
+}
+
+extension HistoryBackend {
+    func coreStats() -> (UsageStats, [DailyBucket])? { nil }
+
+    /// Newest first: `limit` rows older than `before` (nil = from the newest) that match `query`.
+    /// The live backend pages in the database; this default pages the listed rows.
+    func page(limit: Int, before: HistoryItem?, query: String) throws -> [HistoryItem] {
+        let rows = try list(limit: Int32.max).filter { row in
+            guard let before else { return true }
+            return row.recordedAt < before.recordedAt || (row.recordedAt == before.recordedAt && row.uuid < before.uuid)
+        }
+        return Array(StatsStore.filterItems(rows, query: query).prefix(limit))
+    }
 }
 
 /// Live backend: thin wrapper over the frozen `CoreBridge` history API.
 /// Purge needs no method — the core auto-redacts on open + after finish.
 struct BridgeHistoryBackend: HistoryBackend {
+    func page(limit: Int, before: HistoryItem?, query: String) throws -> [HistoryItem] {
+        let rows = try CoreBridge.historyPage(
+            limit: Int32(clamping: limit), before: before.map { ($0.recordedAt, $0.uuid) }, query: query
+        )
+        return rows.compactMap { HistoryItem(dict: $0) }
+    }
+
     func list(limit: Int32 = 200) throws -> [HistoryItem] {
         let rows = try CoreBridge.history(limit: limit)
         return rows.compactMap { HistoryItem(dict: $0) }
@@ -290,6 +341,26 @@ struct BridgeHistoryBackend: HistoryBackend {
     @discardableResult
     func clear() throws -> Int {
         try CoreBridge.clearHistory()
+    }
+
+    func coreStats() -> (UsageStats, [DailyBucket])? {
+        guard let totals = try? CoreBridge.usageStats(),
+              let rows = try? CoreBridge.dailyActivity(days: 371) else { return nil }
+        func number(_ key: String, _ dict: [String: Any]) -> NSNumber { dict[key] as? NSNumber ?? 0 }
+        let stats = UsageStats(
+            wordsSpoken: number("wordsSpoken", totals).uint64Value,
+            dictations: number("dictations", totals).uint64Value,
+            wordsPerMinute: number("wordsPerMinute", totals).doubleValue,
+            streakDays: number("streakDays", totals).intValue
+        )
+        let buckets = rows.map { row in
+            DailyBucket(
+                dayStart: StatsStore.localDayStart(epochDay: number("dayStart", row).int64Value / 86_400),
+                words: number("words", row).intValue,
+                utterances: number("utterances", row).intValue
+            )
+        }
+        return (stats, buckets)
     }
 }
 

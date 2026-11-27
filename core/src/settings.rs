@@ -93,6 +93,8 @@ pub enum MicKind {
     BuiltIn,
     /// Headset-profile mics (SCO / LE Audio); switches earbuds to call mode.
     Bluetooth,
+    /// The car's microphone over CarPlay (iOS only; Android ignores it).
+    CarPlay,
 }
 
 /// Matches pre-setting routing: wired/USB wins, Bluetooth never reached.

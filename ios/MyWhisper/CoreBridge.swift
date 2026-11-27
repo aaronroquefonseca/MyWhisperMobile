@@ -35,6 +35,9 @@ enum CoreBridge {
         -> UnsafeMutablePointer<CChar>?
     @_silgen_name("mywhisper_get_history") private static func ffiGetHistory(_ limit: Int32)
         -> UnsafeMutablePointer<CChar>?
+    @_silgen_name("mywhisper_get_history_page") private static func ffiGetHistoryPage(
+        _ limit: Int32, _ beforeTs: Int64, _ beforeUuid: UnsafePointer<CChar>?, _ query: UnsafePointer<CChar>?
+    ) -> UnsafeMutablePointer<CChar>?
     @_silgen_name("mywhisper_clear_history") private static func ffiClearHistory()
         -> UnsafeMutablePointer<CChar>?
     @_silgen_name("mywhisper_delete_history") private static func ffiDeleteHistory(
@@ -56,6 +59,34 @@ enum CoreBridge {
     @_silgen_name("mywhisper_delete_snippet") private static func ffiDeleteSnippet(
         _ trigger: UnsafePointer<CChar>?
     ) -> UnsafeMutablePointer<CChar>?
+    @_silgen_name("mywhisper_purge_history") private static func ffiPurgeHistory(_ days: Int32)
+        -> UnsafeMutablePointer<CChar>?
+    @_silgen_name("mywhisper_default_cleanup_prompt") private static func ffiDefaultCleanupPrompt()
+        -> UnsafeMutablePointer<CChar>?
+    @_silgen_name("mywhisper_usage_stats") private static func ffiUsageStats()
+        -> UnsafeMutablePointer<CChar>?
+    @_silgen_name("mywhisper_daily_activity") private static func ffiDailyActivity(_ days: Int32)
+        -> UnsafeMutablePointer<CChar>?
+    @_silgen_name("mywhisper_display_name") private static func ffiDisplayName()
+        -> UnsafeMutablePointer<CChar>?
+    @_silgen_name("mywhisper_sync_start") private static func ffiSyncStart()
+        -> UnsafeMutablePointer<CChar>?
+    @_silgen_name("mywhisper_sync_stop") private static func ffiSyncStop()
+        -> UnsafeMutablePointer<CChar>?
+    @_silgen_name("mywhisper_sync_status") private static func ffiSyncStatus()
+        -> UnsafeMutablePointer<CChar>?
+    @_silgen_name("mywhisper_sync_peers") private static func ffiSyncPeers()
+        -> UnsafeMutablePointer<CChar>?
+    @_silgen_name("mywhisper_sync_add") private static func ffiSyncAdd(
+        _ nodeId: UnsafePointer<CChar>?, _ address: UnsafePointer<CChar>?, _ name: UnsafePointer<CChar>?
+    ) -> UnsafeMutablePointer<CChar>?
+    @_silgen_name("mywhisper_sync_trust") private static func ffiSyncTrust(
+        _ nodeId: UnsafePointer<CChar>?, _ accept: Bool
+    ) -> UnsafeMutablePointer<CChar>?
+    @_silgen_name("mywhisper_sync_now") private static func ffiSyncNow(_ nodeId: UnsafePointer<CChar>?)
+        -> UnsafeMutablePointer<CChar>?
+    @_silgen_name("mywhisper_sync_all_now") private static func ffiSyncAllNow()
+        -> UnsafeMutablePointer<CChar>?
 
     /// Take ownership of a core-returned C string (frees via the core).
     private static func take(_ ptr: UnsafeMutablePointer<CChar>?) throws -> String {
@@ -163,6 +194,15 @@ enum CoreBridge {
         return arr
     }
 
+    /// Newest first, `limit` rows before the `before` row (nil = first page), filtered in the database.
+    static func historyPage(limit: Int32, before: (recordedAt: Int64, uuid: String)?, query: String) throws -> [[String: Any]] {
+        let raw = try call(ffiGetHistoryPage(max(limit, 1), before?.recordedAt ?? 0, before?.uuid ?? "", query))
+        guard let arr = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [[String: Any]] else {
+            throw CoreError.badReply("history not an array")
+        }
+        return arr
+    }
+
     static func clearHistory() throws -> Int {
         guard let obj = try dataOf(call(ffiClearHistory())) as? [String: Any],
               let removed = obj["removed"] as? Int
@@ -218,6 +258,101 @@ enum CoreBridge {
         _ = try dataOf(withCString(trigger) { try call(ffiDeleteSnippet($0)) })
     }
 
+    // MARK: - Stats and retention (Android CoreBridge.kt parity)
+
+    /// Whole-history totals: `wordsSpoken`, `dictations`, `wordsPerMinute`, `streakDays`.
+    static func usageStats() throws -> [String: Any] {
+        guard let obj = try dataOf(call(ffiUsageStats())) as? [String: Any] else {
+            throw CoreError.badReply("bad stats reply")
+        }
+        return obj
+    }
+
+    /// `[{dayStart, words, utterances}]` for the trailing `days` days (dayStart: epoch seconds).
+    static func dailyActivity(days: Int32) throws -> [[String: Any]] {
+        guard let rows = try dataOf(call(ffiDailyActivity(days))) as? [[String: Any]] else {
+            throw CoreError.badReply("bad activity reply")
+        }
+        return rows
+    }
+
+    /// Deletes history older than `days`; returns the removed count.
+    @discardableResult
+    static func purgeHistory(olderThanDays days: Int32) throws -> Int {
+        guard let obj = try dataOf(call(ffiPurgeHistory(days))) as? [String: Any],
+              let removed = obj["removed"] as? Int
+        else { throw CoreError.badReply("bad purge reply") }
+        return removed
+    }
+
+    /// The built-in cleanup prompt the core uses when the custom one is empty.
+    static func defaultCleanupPrompt() throws -> String {
+        guard let prompt = try dataOf(call(ffiDefaultCleanupPrompt())) as? String else {
+            throw CoreError.badReply("bad prompt reply")
+        }
+        return prompt
+    }
+
+    // MARK: - Sync (Android CoreBridge.kt parity; blocking calls belong off the main thread)
+
+    static func displayName() throws -> String {
+        guard let name = try dataOf(call(ffiDisplayName())) as? String else {
+            throw CoreError.badReply("bad name reply")
+        }
+        return name
+    }
+
+    @discardableResult
+    static func syncStart() throws -> String {
+        try dataOf(call(ffiSyncStart())) as? String ?? ""
+    }
+
+    static func syncStop() {
+        _ = try? call(ffiSyncStop())
+    }
+
+    /// Raw status object; an error envelope throws.
+    static func syncStatus() throws -> [String: Any] {
+        let raw = try call(ffiSyncStatus())
+        guard let obj = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any] else {
+            throw CoreError.badReply("bad sync status")
+        }
+        if obj["ok"] as? Bool == false { throw CoreError.coreError(obj["error"] as? String ?? "sync status failed") }
+        return obj
+    }
+
+    static func syncPeers() throws -> [[String: Any]] {
+        let raw = try call(ffiSyncPeers())
+        guard let rows = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [[String: Any]] else {
+            throw CoreError.badReply("peers not an array")
+        }
+        return rows
+    }
+
+    @discardableResult
+    static func syncAdd(nodeId: String, address: String, name: String) throws -> String {
+        let raw = try withCString(nodeId) { idPtr in
+            try withCString(address) { addressPtr in
+                try withCString(name) { namePtr in try call(ffiSyncAdd(idPtr, addressPtr, namePtr)) }
+            }
+        }
+        return try dataOf(raw) as? String ?? ""
+    }
+
+    @discardableResult
+    static func syncTrust(nodeId: String, accept: Bool) throws -> String {
+        try dataOf(withCString(nodeId) { try call(ffiSyncTrust($0, accept)) }) as? String ?? ""
+    }
+
+    @discardableResult
+    static func syncNow(nodeId: String) throws -> String {
+        try dataOf(withCString(nodeId) { try call(ffiSyncNow($0)) }) as? String ?? ""
+    }
+
+    static func syncAllNow() throws -> [String] {
+        try dataOf(call(ffiSyncAllNow())) as? [String] ?? []
+    }
+
     // MARK: - Key (Keychain-backed, shared via App Group Keychain sharing)
 
     /// 64-hex-char DB key, created once in the app Keychain. Same
@@ -251,7 +386,7 @@ enum CoreBridge {
         add.removeValue(forKey: kSecMatchLimit as String)
         let status = SecItemAdd(add as CFDictionary, nil)
         if status == errSecDuplicateItem { return try dbKeyHex() }
-        guard status == errSecSuccess else { throw CoreError.coreError("keychain store failed") }
+        guard status == errSecSuccess else { throw CoreError.coreError("keychain store failed (\(status))") }
         return hex
     }
 
@@ -324,4 +459,19 @@ enum CoreError: Error, Equatable {
     case coreError(String)
     case badReply(String)
     case nullReply
+
+    /// User-facing message: avoids leaking `String(describing:)` output
+    /// like `coreError("...")` into the UI (see `AppFlow.coreError`).
+    var message: String {
+        switch self {
+        case .coreError(let text), .badReply(let text):
+            return text
+        case .nullReply:
+            return "empty reply from speech engine"
+        }
+    }
+
+    static func displayMessage(for error: Error) -> String {
+        (error as? CoreError)?.message ?? error.localizedDescription
+    }
 }

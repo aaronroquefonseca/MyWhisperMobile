@@ -19,6 +19,19 @@ import Foundation
 /// `nativeDefaultCleanupPrompt` / `nativeLocalLlmPrompt`), so the default
 /// prompt is embedded here byte-for-byte and `CleanupTests` cross-checks it
 /// against `core/src/engine.rs` whenever the source tree is reachable.
+/// Entry rows written back over the stored ones, keeping fields this app doesn't edit
+/// (`keep_alive`, `num_ctx`, `thinking`, …) so saving here never drops values set on Android or desktop.
+func preservingUnknownKeys(_ entries: [[String: Any]], from stored: Any?) -> [[String: Any]] {
+    var previous: [String: [String: Any]] = [:]
+    for row in stored as? [[String: Any]] ?? [] {
+        if let id = row["id"] as? String, !id.isEmpty { previous[id] = row }
+    }
+    return entries.map { row in
+        guard let id = row["id"] as? String, let old = previous[id] else { return row }
+        return old.merging(row) { _, new in new }
+    }
+}
+
 enum Cleanup {
     // MARK: - Default prompt
 
@@ -95,11 +108,15 @@ OUTPUT: Return only the cleaned transcript. No preamble, tags, explanations, ans
         let id: String
         let name: String
         let kind: EntryKind
-        let enabled: Bool
+        var enabled: Bool
         let url: String
         let model: String
         let provider: String
         let apiKey: String
+        /// Ollama `keep_alive`: "" = server default.
+        var keepAlive = ""
+        /// nil = model default; core `thinking`.
+        var thinking: Bool?
 
         init?(dict: [String: Any]) {
             guard let kindRaw = dict["kind"] as? String, let kind = EntryKind(raw: kindRaw) else {
@@ -113,11 +130,14 @@ OUTPUT: Return only the cleaned transcript. No preamble, tags, explanations, ans
             model = dict["model"] as? String ?? ""
             provider = dict["provider"] as? String ?? ""
             apiKey = dict["api_key"] as? String ?? ""
+            keepAlive = dict["keep_alive"] as? String ?? ""
+            thinking = dict["thinking"] as? Bool
         }
 
         init(
             id: String, name: String, kind: EntryKind, enabled: Bool,
-            url: String, model: String, provider: String, apiKey: String
+            url: String, model: String, provider: String, apiKey: String,
+            keepAlive: String = "", thinking: Bool? = nil
         ) {
             self.id = id
             self.name = name
@@ -127,6 +147,8 @@ OUTPUT: Return only the cleaned transcript. No preamble, tags, explanations, ans
             self.model = model
             self.provider = provider
             self.apiKey = apiKey
+            self.keepAlive = keepAlive
+            self.thinking = thinking
         }
     }
 

@@ -292,21 +292,6 @@ final class SttPipelineTests: XCTestCase {
         XCTAssertTrue(shouldSurfaceSttError(failure))
     }
 
-    // MARK: - Render mapping (silence never red)
-
-    func testRoutineDropRendersEmpty() {
-        let silence = SttFailure(category: .routineDrop, userMessage: silenceEmptyCopy, raw: "silence")
-        XCTAssertEqual(ResultView.displayContent(for: .failure(silence)), .empty)
-        let server = SttFailure(category: .server, userMessage: "server 500: boom", raw: "server 500: boom")
-        XCTAssertEqual(ResultView.displayContent(for: .failure(server)), .failure(server))
-        XCTAssertEqual(
-            ResultView.displayContent(for: .result(text: "hi", engine: "stub")),
-            .result(text: "hi", engine: "stub")
-        )
-        XCTAssertEqual(ResultView.displayContent(for: .working), .working)
-        XCTAssertEqual(ResultView.displayContent(for: .empty), .empty)
-    }
-
     // MARK: - Spanish twins (Android values-es parity)
 
     func testSttStringsSpanishTwins() {

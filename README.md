@@ -1,10 +1,11 @@
 <div align="center">
   <img src="assets/icons/readme-icon.png" alt="MyWhisperMobile icon" width="112" />
   <h1>MyWhisperMobile</h1>
-  <p>Voice typing for Android, powered by the MyWhisper engine.</p>
+  <p>Voice typing for Android and iOS, powered by the MyWhisper engine.</p>
 </div>
 
-Dictate into other apps using a floating microphone button. Configure
+Dictate into other apps using a floating microphone button on Android, or
+the MyWhisper keyboard on iPhone. Configure
 speech recognition, text cleanup, and other settings from the app. Your
 dictionary and history sync over your LAN with
 [MyWhisper for desktop](https://github.com/aaronroquefonseca/MyWhisper)
@@ -29,6 +30,26 @@ Stable and nightly are the same app, so you can switch between them by
 installing another APK over it, keeping your settings. Android only installs an equal
 or newer version, so going from a nightly back to stable waits for the next
 release.
+
+### iPhone (first preview, 0.1.0)
+
+The iOS app is not on the App Store yet. Each change to `main` builds an
+unsigned IPA, `MyWhisper-unsigned-icon`, attached to the
+[iOS workflow run](https://github.com/aaronroquefonseca/MyWhisperMobile/actions/workflows/ios.yml)
+(sign in to GitHub to download it). Install it with
+[SideStore](https://sidestore.io) or [AltStore](https://altstore.io), which
+sign it with your Apple ID.
+
+Then follow the app's setup: add MyWhisper Keyboard in Settings → General →
+Keyboard → Keyboards, and allow Full Access so the keyboard can use the
+microphone and reach your speech provider. Typing works without it.
+
+Differences from Android, because of what iOS allows:
+
+- Dictation happens from the MyWhisper keyboard instead of a floating button.
+- Sync runs only while the app is open; iOS doesn't let it listen in the
+  background or start at boot.
+- No on-device models yet: use a server or cloud provider.
 
 ## Floating button
 
@@ -138,6 +159,10 @@ otherwise on the CPU; the app measures this per device.
   Verbatim desktop ports (`settings`, `audio`, `textnorm`, `store`)
   plus mobile-only `server_stt`, `engine`, JNI in `lib.rs`.
 - `android/` — Kotlin app (Compose config, floating button, accessibility service).
+- `ios/` — SwiftUI app (`MyWhisper`) and its custom keyboard extension
+  (`Keyboard`), calling the engine through the C API in `core/src/capple.rs`.
+- `scripts/build-core-ios.sh` — builds `ios/Libs/libmywhisper_core.xcframework`
+  (device + simulator).
 - `scripts/build-core.sh` — `cargo ndk` release build for
   `arm64-v8a` + `x86_64` into `jniLibs` (runs automatically via the
   `buildRustCore` Gradle task).
@@ -159,6 +184,20 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 Then open the app and follow setup to configure speech recognition and
 enable the floating button.
+
+### iOS
+
+Prerequisites: a Mac with Xcode 26 and Rust targets `aarch64-apple-ios` +
+`aarch64-apple-ios-sim`.
+
+```bash
+./scripts/build-core-ios.sh
+open ios/MyWhisper.xcodeproj
+```
+
+Run the `MyWhisper` scheme on a device or simulator; unit tests run with
+`xcodebuild test -project ios/MyWhisper.xcodeproj -scheme MyWhisper
+-destination "platform=iOS Simulator,name=iPhone 17 Pro"`.
 
 ## F-Droid listing
 

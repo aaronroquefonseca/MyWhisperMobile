@@ -11,11 +11,8 @@ import UIKit
 ///   the time `transcriptionDidFinish` fires the row is already durable.
 ///   No separate call is needed; `recentHistory` below is just a reader.
 ///
-/// NO direct-insert: iOS sandboxes apps — there is no API for one app to
-/// commit text into another app's focused field (no
-/// `InputConnection.commitText` equivalent outside a custom keyboard
-/// extension, which this v1 does not ship). Copy/share + in-app result is
-/// the whole delivery surface, by platform constraint rather than choice.
+/// Recording runs in the app. Copy and share let users move its output
+/// into other apps.
 enum Delivery {
     /// Copy text to the general pasteboard. Returns false for blank input
     /// (nothing to copy) so callers can disable the button instead.

@@ -1,0 +1,161 @@
+name: iOS
+
+on:
+  pull_request:
+    paths: [ios/**, core/**, scripts/build-core-ios.sh, .github/workflows/ios.yml]
+  push:
+    branches: [main]
+    paths: [ios/**, core/**, scripts/build-core-ios.sh, .github/workflows/ios.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Rust iOS targets
+        run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+
+      - name: Select Xcode 26
+        run: |
+          ls /Applications | grep -i xcode
+          XCODE=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          if [ -z "$XCODE" ]; then XCODE=/Applications/Xcode.app; fi
+          echo "Using $XCODE"
+          sudo xcode-select --switch "$XCODE/Contents/Developer"
+          xcodebuild -version
+
+      - name: Build core xcframework
+        run: ./scripts/build-core-ios.sh
+
+      - name: Run iOS unit tests
+        # Runner images don't always ship an "iPhone 17 Pro": fall back to any available iPhone.
+        run: |
+          UDID=$(xcrun simctl list devices available -j | python3 -c "
+          import json,sys
+          devs = json.load(sys.stdin)['devices']
+          cands = [d for ds in devs.values() for d in ds if d.get('isAvailable') and 'iPhone' in d.get('name', '')]
+          if not cands: raise SystemExit('no available iPhone simulator')
+          pick = next((d for d in cands if d['name'] == 'iPhone 17 Pro'), cands[0])
+          print(pick['udid'])
+          ")
+          xcodebuild test -project ios/MyWhisper.xcodeproj \
+            -scheme MyWhisper -configuration Debug \
+            -sdk iphonesimulator \
+            -destination "id=$UDID" \
+            EXCLUDED_ARCHS=x86_64 \
+            CODE_SIGNING_ALLOWED=NO
+
+  build:
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Rust iOS targets
+        run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+
+      - name: Select Xcode 26
+        run: |
+          ls /Applications | grep -i xcode
+          XCODE=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          if [ -z "$XCODE" ]; then XCODE=/Applications/Xcode.app; fi
+          echo "Using $XCODE"
+          sudo xcode-select --switch "$XCODE/Contents/Developer"
+          xcodebuild -version
+
+      - name: Build core xcframework
+        run: ./scripts/build-core-ios.sh
+
+      - name: Archive (unsigned)
+        run: >
+          xcodebuild -project ios/MyWhisper.xcodeproj
+          -scheme MyWhisper -configuration Release
+          -destination "generic/platform=iOS"
+          -archivePath build/MyWhisper.xcarchive
+          CODE_SIGNING_ALLOWED=NO archive
+
+      - name: Package unsigned IPA
+        run: |
+          cd build
+          rm -rf Payload MyWhisper-unsigned-icon.ipa
+          mkdir Payload
+          cp -R MyWhisper.xcarchive/Products/Applications/MyWhisper.app Payload/
+          # Give SideStore the shared-group declaration to carry into provisioning.
+          codesign --force --sign - --entitlements ../ios/Keyboard/Keyboard.entitlements Payload/MyWhisper.app/PlugIns/MyWhisperKeyboard.appex
+          codesign --force --sign - --entitlements ../ios/Keyboard/Keyboard.entitlements Payload/MyWhisper.app
+          codesign --verify --deep --strict Payload/MyWhisper.app
+          test -s Payload/MyWhisper.app/PlugIns/MyWhisperKeyboard.appex/emoji.json
+          for lexicon in swipe-en_US.txt swipe-en_GB.txt swipe-es.txt SwipeWords-NOTICE.txt; do
+            test -s "Payload/MyWhisper.app/PlugIns/MyWhisperKeyboard.appex/$lexicon"
+          done
+          zip -qry MyWhisper-unsigned-icon.ipa Payload
+          ls -l MyWhisper-unsigned-icon.ipa
+          unzip -l MyWhisper-unsigned-icon.ipa
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: MyWhisper-unsigned-icon
+          path: build/MyWhisper-unsigned-icon.ipa
+          if-no-files-found: error
+
+      - name: Simulator screenshots (glass check)
+        run: |
+          xcodebuild -project ios/MyWhisper.xcodeproj \
+            -scheme MyWhisper -configuration Debug \
+            -sdk iphonesimulator \
+            -derivedDataPath build/sim \
+            EXCLUDED_ARCHS=x86_64 \
+            CODE_SIGNING_ALLOWED=NO build
+          APP=$(ls -d "$PWD"/build/sim/Build/Products/Debug-iphonesimulator/MyWhisper.app)
+          UDID=$(xcrun simctl list devices available -j | python3 -c "
+          import json,sys
+          devs = json.load(sys.stdin)['devices']
+          cands = [d for ds in devs.values() for d in ds if d.get('isAvailable') and 'iPhone' in d.get('name', '')]
+          if not cands: raise SystemExit('no available iPhone simulator')
+          pick = next((d for d in cands if d['name'] == 'iPhone 17 Pro'), cands[0])
+          print(pick['udid'])
+          ")
+          echo "Simulator: $UDID"
+          # Boot first: screenshots during first boot only catch the Apple logo.
+          # boot fails with 405 when already booted — not an error here.
+          xcrun simctl boot "$UDID" || true
+          xcrun simctl bootstatus "$UDID"
+          xcrun simctl install "$UDID" "$APP"
+          shot() {
+            xcrun simctl launch --terminate-running-process "$UDID" com.mywhisper.mobile "$@" >/dev/null
+            sleep 5
+            xcrun simctl io "$UDID" screenshot "build/sim-$1.png"
+          }
+          shot activity -mwSkipOnboarding
+          shot providers -mwSkipOnboarding -mwTab providers
+          shot dictionary -mwSkipOnboarding -mwTab dictionary
+          shot settings -mwSkipOnboarding -mwTab settings
+          shot cleanup -mwSkipOnboarding -mwTab cleanup
+          # The keyboard's side button opens this link; keyboard settings must open in the Settings tab.
+          # (simctl openurl stops at an "Open in MyWhisper?" prompt, so call the handler directly.)
+          shot keyboard-settings-link -mwSkipOnboarding -mwOpenURL mywhisper://keyboard-settings
+          for route in keyboardLanguages microphone appearance finishSetup; do
+            shot "route-$route" -mwSkipOnboarding -mwRoute "$route"
+          done
+          for page in 0 1 2; do
+            shot "onboarding-$page" -mwOnboardingPage "$page"
+          done
+          ls -l build/sim-*.png
+
+      - name: Upload screenshots
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sim-screenshots
+          path: build/sim-*.png
+          if-no-files-found: error

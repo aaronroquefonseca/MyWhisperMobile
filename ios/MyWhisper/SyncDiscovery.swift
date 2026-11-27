@@ -217,6 +217,29 @@ protocol SyncCore {
     func displayName() -> String
 }
 
+/// The live adapter over the core's sync controls (`CoreBridge` sync calls).
+final class BridgeSyncCore: SyncCore {
+    private func mapped<T>(_ body: () throws -> T) throws -> T {
+        do {
+            return try body()
+        } catch let error as CoreError {
+            throw SyncError.coreError(error.message)
+        }
+    }
+
+    func syncStatus() throws -> SyncStatus { try mapped { SyncStatus(dict: try CoreBridge.syncStatus()) } }
+    func syncPeers() throws -> [SyncPeer] { try mapped { try CoreBridge.syncPeers().map(SyncPeer.init(dict:)) } }
+    func setTrust(nodeId: String, accept: Bool) throws -> String { try mapped { try CoreBridge.syncTrust(nodeId: nodeId, accept: accept) } }
+    func addPeer(nodeId: String, address: String, name: String) throws -> String {
+        try mapped { try CoreBridge.syncAdd(nodeId: nodeId, address: address, name: name) }
+    }
+    func syncNow(nodeId: String) throws -> String { try mapped { try CoreBridge.syncNow(nodeId: nodeId) } }
+    func syncAllNow() throws -> [String] { try mapped { try CoreBridge.syncAllNow() } }
+    func startSync() throws -> String { try mapped { try CoreBridge.syncStart() } }
+    func stopSync() { CoreBridge.syncStop() }
+    func displayName() -> String { (try? CoreBridge.displayName()) ?? "" }
+}
+
 /// Placeholder while the iOS bridge has no sync FFI. Every mutating
 /// call names the missing symbol so QA/logs point at the bridge gap,
 /// not at the UI.
@@ -432,8 +455,8 @@ extension SyncDiscovery: NetServiceDelegate {
         onMain { [weak self] in
             guard let strong = self else { return }
             strong.resolving.removeAll(where: { $0 === sender })
-            guard let txt = sender.txtRecordData(),
-                let record = NetService.dictionary(fromTXTRecord: txt) else { return }
+            guard let txt = sender.txtRecordData() else { return }
+            let record = NetService.dictionary(fromTXTRecord: txt)
             guard let nodeData = record[syncTxtNodeKey],
                 let nodeId = String(data: nodeData, encoding: .utf8),
                 !nodeId.isEmpty,
