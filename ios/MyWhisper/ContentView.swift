@@ -15,6 +15,7 @@ struct ContentView: View {
     @State private var voiceCleanup = false
     @State private var settingsPath: [SettingsRoute] = []
     @State private var backgrounded = false
+    @State private var activityReselects = 0
     @State private var showOnboarding = {
         #if DEBUG
         if CommandLine.arguments.contains("-mwSkipOnboarding") { return false }
@@ -48,7 +49,11 @@ struct ContentView: View {
     }
 
     private var mainView: some View {
-        TabView(selection: $selectedTab) {
+        // TabView sets the same tab again on a repeat tap: scroll Activity to the top ourselves.
+        TabView(selection: Binding(get: { selectedTab }, set: { tab in
+            if tab == selectedTab, tab == .activity { activityReselects += 1 }
+            selectedTab = tab
+        })) {
             ForEach(AppTab.allCases, id: \.self) { tab in
                 Group {
                     if tab == .settings {
@@ -77,7 +82,7 @@ struct ContentView: View {
     private func tabRoot(_ tab: AppTab) -> some View {
         switch tab {
         case .activity:
-            ActivityView(flow: flow, keyboardStrings: keyboardStrings, onOpenProviders: openSpeechProviders, onOpenSettings: openSettings)
+            ActivityView(flow: flow, keyboardStrings: keyboardStrings, onOpenProviders: openSpeechProviders, onOpenSettings: openSettings, scrollToTop: activityReselects)
                 .navigationTitle(tab.title(using: tabStrings))
         case .providers:
             Group {

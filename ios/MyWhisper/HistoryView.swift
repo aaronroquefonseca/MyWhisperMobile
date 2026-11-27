@@ -15,6 +15,8 @@ struct ActivityView: View {
     let keyboardStrings: OnboardingStrings
     let onOpenProviders: () -> Void
     let onOpenSettings: (SettingsRoute) -> Void
+    /// Bumped when the Activity tab is tapped again.
+    var scrollToTop = 0
 
     /// Not observed here: a scroll redraws only the fast scroller.
     @State private var scrollTracker = HistoryScrollTracker()
@@ -26,6 +28,12 @@ struct ActivityView: View {
                     HistoryFastScroller(tracker: scrollTracker, model: model, proxy: proxy)
                         .padding(.top, 8)
                         .padding(.bottom, 24)
+                }
+                // Animated jumps through lazy rows land off; a final exact jump fixes that.
+                .onChange(of: scrollToTop) { _, _ in
+                    withAnimation { proxy.scrollTo(Self.topID, anchor: .top) } completion: {
+                        proxy.scrollTo(Self.topID, anchor: .top)
+                    }
                 }
         }
         .confirmationDialog("Delete all saved dictations?", isPresented: $confirmingClear, titleVisibility: .visible) {
@@ -56,6 +64,8 @@ struct ActivityView: View {
             historySections
         }
         .whisperListStyle()
+        // The fast scroller replaces the system indicator, which jumps as lazy rows size.
+        .scrollIndicators(.hidden)
     }
 
     private func reload() {
@@ -65,35 +75,40 @@ struct ActivityView: View {
         setup = .current(settings: flow.settings)
     }
 
+    private static let topID = "activity-top"
+
     /// Android's setup card until everything is in place; then a shortcut to the keyboard's settings.
     @ViewBuilder
     private var inputSection: some View {
         Section {
-            if let error = flow.coreError {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Couldn't start the speech engine.")
-                    Text(error).font(.footnote).foregroundStyle(.secondary).textSelection(.enabled)
-                    Button("Retry", action: flow.openCore).buttonStyle(.borderless)
+            Group {
+                if let error = flow.coreError {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Couldn't start the speech engine.")
+                        Text(error).font(.footnote).foregroundStyle(.secondary).textSelection(.enabled)
+                        Button("Retry", action: flow.openCore).buttonStyle(.borderless)
+                    }
+                } else if !setup.isComplete {
+                    Button { onOpenSettings(.finishSetup) } label: {
+                        WhisperDestinationLabel(
+                            title: String(localized: "Finish setup"),
+                            summary: String(localized: "\(setup.doneCount) of 4 steps done"),
+                            symbol: "checklist"
+                        )
+                    }
+                    .foregroundStyle(.primary)
+                } else {
+                    Button { onOpenSettings(.keyboard) } label: {
+                        WhisperDestinationLabel(
+                            title: keyboardStrings.keyboardTitle,
+                            summary: keyboardStrings.keyboardSummary,
+                            symbol: "keyboard"
+                        )
+                    }
+                    .foregroundStyle(.primary)
                 }
-            } else if !setup.isComplete {
-                Button { onOpenSettings(.finishSetup) } label: {
-                    WhisperDestinationLabel(
-                        title: String(localized: "Finish setup"),
-                        summary: String(localized: "\(setup.doneCount) of 4 steps done"),
-                        symbol: "checklist"
-                    )
-                }
-                .foregroundStyle(.primary)
-            } else {
-                Button { onOpenSettings(.keyboard) } label: {
-                    WhisperDestinationLabel(
-                        title: keyboardStrings.keyboardTitle,
-                        summary: keyboardStrings.keyboardSummary,
-                        symbol: "keyboard"
-                    )
-                }
-                .foregroundStyle(.primary)
             }
+            .id(Self.topID)
         }
     }
 
