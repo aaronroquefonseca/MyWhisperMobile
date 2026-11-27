@@ -5,6 +5,7 @@ All notable changes to this project are documented here.
 ## [Unreleased]
 
 ### Added
+- iPhone app, first usable preview (iOS 0.1.0, unsigned IPA from CI for SideStore or AltStore). Dictate from the MyWhisper keyboard, which also types with swipe, predictions, auto-correction, emoji and English/Spanish layouts. The app has the same Activity, Providers, Dictionary and Settings tabs as Android, with history, stats, speech and cleanup providers, dictionary, snippets and LAN sync. Sync runs only while the app is open, and on-device models are not available on iOS yet.
 - Foldables: an optional "Different settings for cover and inner screen" switch in Floating button settings. When on, Grab point, size, Extra small, When idle, Start reduced in search fields and position are saved separately for each screen and follow you when you fold or unfold. Off by default.
 
 ### Fixed
@@ -162,6 +163,7 @@ with on-device STT/LLM held experimental and default-off.
 ## [Unreleased]
 
 ### Added
+- iPhone app, first usable preview (iOS 0.1.0, unsigned IPA from CI for SideStore or AltStore). Dictate from the MyWhisper keyboard, which also types with swipe, predictions, auto-correction, emoji and English/Spanish layouts. The app has the same Activity, Providers, Dictionary and Settings tabs as Android, with history, stats, speech and cleanup providers, dictionary, snippets and LAN sync. Sync runs only while the app is open, and on-device models are not available on iOS yet.
 - Release pipeline groundwork: versionCode/versionName scheme via `gradle.properties`.
 - Release buildType with R8 (`minifyEnabled`) + `shrinkResources` check.
 - Documented `signingConfig` via env vars (unsigned build by default).
