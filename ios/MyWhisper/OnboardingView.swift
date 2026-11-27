@@ -330,6 +330,7 @@ struct KeyboardSetupView: View {
             }
         }
         .whisperListStyle()
+        .scrollDismissesKeyboard(.interactively)
         // The languages page saves on its own; pick up its changes when coming back.
         .onAppear { preferences = KeyboardPreferences.load() }
         .onChange(of: preferences) { _, updated in

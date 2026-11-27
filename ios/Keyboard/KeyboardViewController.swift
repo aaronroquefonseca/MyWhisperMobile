@@ -231,6 +231,17 @@ class KeyboardViewController: UIInputViewController {
         heightConstraint?.isActive = true
         applySettings(KeyboardPreferences.load())
         refreshLayout()
+        CFNotificationCenterAddObserver(
+            CFNotificationCenterGetDarwinNotifyCenter(), Unmanaged.passUnretained(self).toOpaque(),
+            { _, observer, _, _, _ in
+                // Delivered on the main run loop; removed in viewDidDisappear, so self is alive.
+                guard let observer else { return }
+                let controller = Unmanaged<KeyboardViewController>.fromOpaque(observer).takeUnretainedValue()
+                controller.applySettings(KeyboardPreferences.load())
+                controller.refreshLayout()
+            },
+            KeyboardPreferences.changedNotification.rawValue, nil, .deliverImmediately
+        )
         updateAutomaticShift()
         scheduleSuggestions()
         preloadSwipeWords()
@@ -246,6 +257,10 @@ class KeyboardViewController: UIInputViewController {
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
         visible = false
+        CFNotificationCenterRemoveObserver(
+            CFNotificationCenterGetDarwinNotifyCenter(), Unmanaged.passUnretained(self).toOpaque(),
+            KeyboardPreferences.changedNotification, nil
+        )
         microphonePreview?.reset()
         setStripNoticeVisible(false)
         transfer = nil

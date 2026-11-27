@@ -164,6 +164,7 @@ struct KeyboardPreferences: Codable, Equatable {
         guard let url = Self.sharedURL, let data = try? JSONEncoder().encode(self) else { return false }
         do {
             try data.write(to: url, options: .atomic)
+            CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), Self.changedNotification, nil, nil, true)
             return true
         } catch {
             return false
@@ -171,6 +172,8 @@ struct KeyboardPreferences: Codable, Equatable {
     }
 
     static let sharedURL: URL? = sharedContainerURL?.appendingPathComponent("keyboard-preferences.json")
+    /// Posted after the app saves, so a keyboard already on screen (the Try it field) applies the change.
+    static let changedNotification = CFNotificationName("com.mywhisper.keyboard-preferences-changed" as CFString)
 
     /// The app group container shared by MyWhisper and its keyboard.
     static let sharedContainerURL: URL? = {
