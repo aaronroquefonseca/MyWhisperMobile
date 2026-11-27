@@ -169,11 +169,15 @@ final class KeyboardMicPreview: UIView {
         let waveWidth = KeyboardBarsView.width
         let cancelWidth: CGFloat = 44
         let endWidth = phase == .locked ? cancelWidth : Self.hintWidth + 8
+        // Like Android's TOGGLE_CANCEL_INNER_INSET_DP: the cross has no visible box, so trim its empty
+        // padding from the gap to match the bars-to-button gap.
+        let crossWidth = cancelButton.currentImage?.size.width ?? 15
+        let crossInset = phase == .locked ? (cancelWidth - crossWidth) / 2 : 0
         let open = phase == .held || phase == .locked
-        let pillWidth = min(bounds.width, open ? side + gap + waveWidth + gap + endWidth : side)
+        let pillWidth = min(bounds.width, open ? side + gap + waveWidth + gap - crossInset + endWidth : side)
         pill.frame = CGRect(x: dockedLeading ? 0 : bounds.width - pillWidth, y: 2, width: pillWidth, height: bounds.height - 4)
         let endX = dockedLeading ? pillWidth - endWidth : 0
-        let waveX = dockedLeading ? side + gap : endWidth + gap
+        let waveX = dockedLeading ? side + gap : endWidth + gap - crossInset
         waveform.frame = CGRect(x: waveX, y: (pill.bounds.height - 24) / 2, width: waveWidth, height: 24)
         // While sliding to cancel, the cross sits over the bars rather than on top of the hints.
         let cancelX = phase == .held ? waveform.frame.midX - cancelWidth / 2 : endX
