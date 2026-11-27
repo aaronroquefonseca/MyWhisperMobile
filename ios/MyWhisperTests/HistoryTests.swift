@@ -327,4 +327,32 @@ final class HistoryTests: XCTestCase {
         XCTAssertTrue(footer.contains("7 days"))
         XCTAssertTrue(footer.contains("Cancelled recordings are kept"))
     }
+
+    func testFastScrollerRowsEstimateTheUnloadedDaysFromDailyCounts() {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        guard let twoDaysAgo = calendar.date(byAdding: .day, value: -2, to: today),
+              let fiveDaysAgo = calendar.date(byAdding: .day, value: -5, to: today) else { return XCTFail("dates") }
+        let at = { (day: Date) in Int64(day.timeIntervalSince1970) + 3600 }
+        // Loaded: 2 today, 1 of the 3 from two days ago.
+        let days = HistoryDay.group([
+            item(uuid: "a", recordedAt: at(today)), item(uuid: "b", recordedAt: at(today)),
+            item(uuid: "c", recordedAt: at(twoDaysAgo)),
+        ])
+        let activity = [
+            DailyBucket(dayStart: Int64(today.timeIntervalSince1970), words: 4, utterances: 2),
+            DailyBucket(dayStart: Int64(twoDaysAgo.timeIntervalSince1970), words: 6, utterances: 3),
+            DailyBucket(dayStart: Int64(fiveDaysAgo.timeIntervalSince1970), words: 2, utterances: 1),
+        ]
+        let older = HistoryDay(id: twoDaysAgo, items: []).title
+        let oldest = HistoryDay(id: fiveDaysAgo, items: []).title
+        XCTAssertEqual(
+            HistoryFastScroller.rows(days: days, activity: activity, estimateRest: true),
+            ["Today", "Today", older, older, older, oldest]
+        )
+        // Everything loaded, or a search: only the loaded rows.
+        XCTAssertEqual(HistoryFastScroller.rows(days: days, activity: activity, estimateRest: false), ["Today", "Today", older])
+        XCTAssertEqual(HistoryFastScroller.row(at: 1, rows: 6), 5)
+        XCTAssertEqual(HistoryFastScroller.fraction(of: 0, rows: 6), 0)
+    }
 }

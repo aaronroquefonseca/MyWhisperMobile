@@ -16,7 +16,29 @@ struct ActivityView: View {
     let onOpenProviders: () -> Void
     let onOpenSettings: (SettingsRoute) -> Void
 
+    /// Not observed here: a scroll redraws only the fast scroller.
+    @State private var scrollTracker = HistoryScrollTracker()
+
     var body: some View {
+        ScrollViewReader { proxy in
+            list
+                .overlay(alignment: .topTrailing) {
+                    HistoryFastScroller(tracker: scrollTracker, model: model, proxy: proxy)
+                        .padding(.top, 8)
+                        .padding(.bottom, 24)
+                }
+        }
+        .confirmationDialog("Delete all saved dictations?", isPresented: $confirmingClear, titleVisibility: .visible) {
+            Button("Delete everything", role: .destructive, action: model.clearAll)
+        }
+        .onAppear(perform: reload)
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { reload() }
+        }
+        .sensoryFeedback(.success, trigger: lastCopied)
+    }
+
+    private var list: some View {
         List {
             inputSection
             if let issue { issueSection(issue) }
@@ -34,14 +56,6 @@ struct ActivityView: View {
             historySections
         }
         .whisperListStyle()
-        .confirmationDialog("Delete all saved dictations?", isPresented: $confirmingClear, titleVisibility: .visible) {
-            Button("Delete everything", role: .destructive, action: model.clearAll)
-        }
-        .onAppear(perform: reload)
-        .onChange(of: scenePhase) { _, phase in
-            if phase == .active { reload() }
-        }
-        .sensoryFeedback(.success, trigger: lastCopied)
     }
 
     private func reload() {
@@ -244,6 +258,8 @@ struct ActivityView: View {
         Section {
             if !model.items.isEmpty || !model.searchText.isEmpty {
                 WhisperSearchField(text: $model.searchText, prompt: "Search transcripts")
+                    .onAppear { scrollTracker.header(shown: true) }
+                    .onDisappear { scrollTracker.header(shown: false) }
             } else if model.isBusy {
                 ProgressView()
             } else if model.errorMessage == nil {
@@ -285,7 +301,12 @@ struct ActivityView: View {
             Section {
                 ForEach(day.items) { item in
                     historyRow(item)
-                        .onAppear { if item.id == model.items.last?.id { model.loadMore() } }
+                        .id(item.id)
+                        .onAppear {
+                            scrollTracker.row(item.id, shown: true)
+                            if item.id == model.items.last?.id { model.loadMore() }
+                        }
+                        .onDisappear { scrollTracker.row(item.id, shown: false) }
                 }
             } header: {
                 WhisperSectionHeading(day.title)
@@ -548,7 +569,7 @@ final class HistoryViewModel: ObservableObject {
     private let workers = DispatchQueue(label: "com.mywhisper.history", qos: .userInitiated)
     private var screenGen: Int64 = 0
     private var searchTask: Task<Void, Never>?
-    private var loadingMore = false
+    @Published private(set) var loadingMore = false
 
     init(backend: HistoryBackend = BridgeHistoryBackend()) {
         self.backend = backend
@@ -602,25 +623,29 @@ final class HistoryViewModel: ObservableObject {
         }
     }
 
-    /// The next page, when the list nears its end.
-    func loadMore() {
-        guard !reachedEnd, !loadingMore, !isBusy, let last = items.last else { return }
+    /// The next page when the list nears its end, or at least `count` more rows for the fast
+    /// scroller in one go. False when it can't start (busy, already loading, or nothing left).
+    @discardableResult
+    func loadMore(atLeast count: Int = pageSize) -> Bool {
+        guard !reachedEnd, !loadingMore, !isBusy, let last = items.last else { return false }
+        let size = max(count, Self.pageSize)
         loadingMore = true
         let gen = screenGen
         let query = searchText
         let backend = backend
         workers.async { [weak self] in
-            let more = (try? backend.page(limit: HistoryViewModel.pageSize, before: last, query: query)) ?? []
+            let more = (try? backend.page(limit: size, before: last, query: query)) ?? []
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.loadingMore = false
                 // A refresh or search since then replaced the list.
                 guard CoreBridge.SettingsJobs.jobApplies(currentGen: self.screenGen, jobGen: gen) else { return }
                 self.items += more
-                self.reachedEnd = more.count < Self.pageSize
+                self.reachedEnd = more.count < size
                 self.applyFilter()
             }
         }
+        return true
     }
 
     func deleteItem(_ item: HistoryItem) {
