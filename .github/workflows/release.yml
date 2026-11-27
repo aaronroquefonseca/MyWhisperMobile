@@ -1,23 +1,24 @@
 name: release
 
-# Stable: tag push (v*) builds the signed APK, creates the GitHub
-# release with the CHANGELOG section, and hands the APK to the F-Droid
+# Stable: tag push (android-v*) builds the signed APK, creates the GitHub
+# release with the android/CHANGELOG.md section, and hands the APK to the F-Droid
 # repo (uploads to R2 incoming/, then starts aaronroquefonseca/fdroid's publish).
 # Nightly: every push to main does the same with the `nightly` build type,
 # replaces the rolling `nightly` GitHub prerelease, and syncs the F-Droid
 # listing (fastlane/metadata/android). F-Droid marks nightlies as Beta.
-# Manual re-run of a stable release via workflow_dispatch with an existing tag.
+# Manual re-run of a stable release via workflow_dispatch with an existing tag
+# (android-vX.Y.Z, or vX.Y.Z for releases up to 1.4.0).
 # The on-device AI runtime pack is NOT in the APK: it is published once per
 # build-input hash as its own prerelease (tag localai-<hash>) and the APK
 # pins its URL + SHA-256; the app downloads it with the first local model.
 on:
   push:
-    tags: ["v*"]
+    tags: ["android-v*"]
     branches: [main]
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing version tag to release (e.g. v1.0.0)
+        description: Existing version tag to release (e.g. android-v1.5.0)
         type: string
         required: true
 
@@ -55,14 +56,14 @@ jobs:
           GRADLE_VERSION="$(grep '^mywhisper\.versionName=' android/gradle.properties | cut -d= -f2 | tr -d ' ')"
           test -n "$GRADLE_VERSION"
           if [[ "$REF_TYPE" == tag ]]; then
-            VERSION="${TAG#v}"
+            VERSION="${TAG#android-}"; VERSION="${VERSION#v}"
             if [[ "$GRADLE_VERSION" != "$VERSION" ]]; then
               echo "tag $TAG != gradle versionName $GRADLE_VERSION" >&2; exit 1
             fi
-            if ! grep -q "^## \\[$VERSION\\]" CHANGELOG.md; then
-              echo "CHANGELOG.md lacks a [${VERSION}] section (only Unreleased?)" >&2; exit 1
+            if ! grep -q "^## \\[$VERSION\\]" android/CHANGELOG.md; then
+              echo "android/CHANGELOG.md lacks a [${VERSION}] section (only Unreleased?)" >&2; exit 1
             fi
-            awk -v ver="$VERSION" 'index($0, "## [" ver "]") == 1 {flag=1; next} /^## / {flag=0} flag' CHANGELOG.md | sed -e '/^[[:space:]]*$/d' > notes.md
+            awk -v ver="$VERSION" 'index($0, "## [" ver "]") == 1 {flag=1; next} /^## / {flag=0} flag' android/CHANGELOG.md | sed -e '/^[[:space:]]*$/d' > notes.md
             test -s notes.md || { echo "empty notes for $TAG" >&2; exit 1; }
             { echo "CHANNEL=stable"; echo "BUILD_TYPE=Release"; echo "NIGHTLY_NUMBER=0"; } >> "$GITHUB_ENV"
           else
@@ -156,7 +157,9 @@ jobs:
         run: |
           set -euo pipefail
           ARGS=(--title "$TAG" --notes-file notes.md)
-          [[ "$TAG" == *-* ]] && ARGS+=(--prerelease)
+          # Prerelease only for a version suffix (1.5.0-beta.1); the android- prefix has a dash too.
+          VERSION="${TAG#android-}"
+          [[ "$VERSION" == *-* ]] && ARGS+=(--prerelease)
           gh release create "$TAG" dist/*.apk "${ARGS[@]}"
       - name: Replace rolling nightly prerelease
         if: env.CHANNEL == 'nightly'
@@ -166,7 +169,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          LAST_TAG="$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)"
+          LAST_TAG="$(git describe --tags --abbrev=0 --match 'android-v*' --match 'v*' 2>/dev/null || true)"
           {
             echo "Nightly build ${VERSION_NAME} (versionCode ${VERSION_CODE}) from ${GITHUB_SHA::7}."
             echo

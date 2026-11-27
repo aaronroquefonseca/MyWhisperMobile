@@ -1,9 +1,13 @@
 name: iOS
 
+# Pull requests and main: test and build the unsigned IPA.
+# Tag ios-vX.Y.Z: the same, then a GitHub release with that IPA and the
+# ios/CHANGELOG.md section. The tag must match MARKETING_VERSION.
 on:
   pull_request:
     paths: [ios/**, core/**, scripts/build-core-ios.sh, .github/workflows/ios.yml]
   push:
+    tags: ["ios-v*"] # paths below don't apply to tag pushes
     branches: [main]
     paths: [ios/**, core/**, scripts/build-core-ios.sh, .github/workflows/ios.yml]
   workflow_dispatch:
@@ -159,3 +163,44 @@ jobs:
           name: sim-screenshots
           path: build/sim-*.png
           if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/ios-v')
+    needs: [test, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write # create the GitHub release
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Check version and changelog
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#ios-v}"
+          # One project-level MARKETING_VERSION covers the app and the keyboard.
+          MARKETING="$(grep -o 'MARKETING_VERSION = [^;]*' ios/MyWhisper.xcodeproj/project.pbxproj | cut -d' ' -f3 | sort -u)"
+          if [[ "$MARKETING" != "$VERSION" ]]; then
+            echo "tag $TAG != MARKETING_VERSION $MARKETING" >&2; exit 1
+          fi
+          awk -v ver="$VERSION" 'index($0, "## [" ver "]") == 1 {flag=1; next} /^## / {flag=0} flag' ios/CHANGELOG.md | sed -e '/^[[:space:]]*$/d' > notes.md
+          test -s notes.md || { echo "ios/CHANGELOG.md lacks a [${VERSION}] section" >&2; exit 1; }
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: MyWhisper-unsigned-icon
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mv MyWhisper-unsigned-icon.ipa "MyWhisper-ios-${VERSION}-unsigned.ipa"
+          # Never "Latest": that stays the Android release.
+          ARGS=(--title "iOS $VERSION" --notes-file notes.md --latest=false)
+          [[ "$VERSION" == *-* ]] && ARGS+=(--prerelease)
+          gh release create "$TAG" "MyWhisper-ios-${VERSION}-unsigned.ipa" "${ARGS[@]}"
