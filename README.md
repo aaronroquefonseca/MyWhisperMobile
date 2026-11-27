@@ -31,10 +31,12 @@ installing another APK over it, keeping your settings. Android only installs an 
 or newer version, so going from a nightly back to stable waits for the next
 release.
 
-### iPhone (first preview, 0.1.0)
+### iPhone (0.9.0)
 
-The iOS app is not on the App Store yet. Each change to `main` builds an
-unsigned IPA, `MyWhisper-unsigned-icon`, attached to the
+The iOS app is not on the App Store yet. Download the unsigned IPA,
+`MyWhisper-ios-<version>-unsigned.ipa`, from the latest `ios-v` release on the
+[releases page](https://github.com/aaronroquefonseca/MyWhisperMobile/releases).
+Every change to `main` also builds one, attached to its
 [iOS workflow run](https://github.com/aaronroquefonseca/MyWhisperMobile/actions/workflows/ios.yml)
 (sign in to GitHub to download it). Install it with
 [SideStore](https://sidestore.io) or [AltStore](https://altstore.io), which
