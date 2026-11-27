@@ -1,8 +1,10 @@
 name: iOS
 
 on:
+  pull_request:
+    paths: [ios/**, core/**, scripts/build-core-ios.sh, .github/workflows/ios.yml]
   push:
-    branches: [feat/ios-keyboard-prototype]
+    branches: [main]
     paths: [ios/**, core/**, scripts/build-core-ios.sh, .github/workflows/ios.yml]
   workflow_dispatch:
 
@@ -12,8 +14,11 @@ permissions:
 jobs:
   test:
     runs-on: macos-26
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Rust iOS targets
         run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim
@@ -31,18 +36,30 @@ jobs:
         run: ./scripts/build-core-ios.sh
 
       - name: Run iOS unit tests
-        run: >
-          xcodebuild test -project ios/MyWhisper.xcodeproj
-          -scheme MyWhisper -configuration Debug
-          -sdk iphonesimulator
-          -destination "platform=iOS Simulator,name=iPhone 17 Pro"
-          EXCLUDED_ARCHS=x86_64
-          CODE_SIGNING_ALLOWED=NO
+        # Runner images don't always ship an "iPhone 17 Pro": fall back to any available iPhone.
+        run: |
+          UDID=$(xcrun simctl list devices available -j | python3 -c "
+          import json,sys
+          devs = json.load(sys.stdin)['devices']
+          cands = [d for ds in devs.values() for d in ds if d.get('isAvailable') and 'iPhone' in d.get('name', '')]
+          if not cands: raise SystemExit('no available iPhone simulator')
+          pick = next((d for d in cands if d['name'] == 'iPhone 17 Pro'), cands[0])
+          print(pick['udid'])
+          ")
+          xcodebuild test -project ios/MyWhisper.xcodeproj \
+            -scheme MyWhisper -configuration Debug \
+            -sdk iphonesimulator \
+            -destination "id=$UDID" \
+            EXCLUDED_ARCHS=x86_64 \
+            CODE_SIGNING_ALLOWED=NO
 
   build:
     runs-on: macos-26
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Rust iOS targets
         run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim
@@ -86,7 +103,7 @@ jobs:
           unzip -l MyWhisper-unsigned-icon.ipa
 
       - name: Upload IPA
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: MyWhisper-unsigned-icon
           path: build/MyWhisper-unsigned-icon.ipa
@@ -137,7 +154,7 @@ jobs:
           ls -l build/sim-*.png
 
       - name: Upload screenshots
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: sim-screenshots
           path: build/sim-*.png
