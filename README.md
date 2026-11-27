@@ -31,10 +31,12 @@ installing another APK over it, keeping your settings. Android only installs an 
 or newer version, so going from a nightly back to stable waits for the next
 release.
 
-### iPhone (first preview, 0.1.0)
+### iPhone (0.9.0)
 
-The iOS app is not on the App Store yet. Each change to `main` builds an
-unsigned IPA, `MyWhisper-unsigned-icon`, attached to the
+The iOS app is not on the App Store yet. Download the unsigned IPA,
+`MyWhisper-ios-<version>-unsigned.ipa`, from the latest `ios-v` release on the
+[releases page](https://github.com/aaronroquefonseca/MyWhisperMobile/releases).
+Every change to `main` also builds one, attached to its
 [iOS workflow run](https://github.com/aaronroquefonseca/MyWhisperMobile/actions/workflows/ios.yml)
 (sign in to GitHub to download it). Install it with
 [SideStore](https://sidestore.io) or [AltStore](https://altstore.io), which
@@ -206,14 +208,20 @@ The F-Droid store text, icon and screenshots live in
 edit `title.txt`, `short_description.txt` and `full_description.txt`, and
 pick screenshots by adding or removing symlinks in `images/phoneScreenshots`
 (shown in file-name order). Merging to `main` publishes the listing; each
-release adds its CHANGELOG section as the "What's new" text.
+release adds its `android/CHANGELOG.md` section as the "What's new" text.
 
 ## Releasing
 
+Android and iOS have their own version numbers, changelogs and tags, so each
+app is released on its own.
+
+### Android
+
 1. In `android/gradle.properties`, bump `mywhisper.versionCode` by 1 and set
    `mywhisper.versionName`; add a matching `## [x.y.z]` section to
-   `CHANGELOG.md`.
-2. Merge to `main`, then push the tag `vx.y.z`. The release workflow signs
+   `android/CHANGELOG.md`.
+2. Merge to `main`, then push the tag `android-vx.y.z` (releases up to 1.4.0
+   used `vx.y.z`). The release workflow signs
    the APK, creates the GitHub release, and sends it to F-Droid. The
    on-device AI runtime pack is rebuilt only when its inputs change and is
    published as its own `localai-<hash>` prerelease.
@@ -221,6 +229,16 @@ release adds its CHANGELOG section as the "What's new" text.
 The real versionCode is `mywhisper.versionCode × 1000`. Every push to `main`
 builds a nightly numbered from the last bump (e.g. 51003), so nightlies sit
 between one release and the next.
+
+### iOS
+
+1. In Xcode, set the project's Version (`MARKETING_VERSION`, shared by the
+   app and the keyboard) and raise Build (`CURRENT_PROJECT_VERSION`) by 1; add
+   a matching `## [x.y.z]` section to `ios/CHANGELOG.md`.
+2. Merge to `main`, then push the tag `ios-vx.y.z`. The iOS workflow checks
+   the tag against the project version, builds the unsigned IPA and attaches
+   it to a GitHub release. The release is never marked Latest, so Latest
+   stays the Android one.
 
 ## Bringing desktop updates over
 
